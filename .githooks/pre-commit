@@ -1,0 +1,12 @@
+#!/bin/sh
+# Repo-local pre-commit hook: runs the project gates.
+# Bypass once with: git commit --no-verify
+set -e
+eval "$(opam env --switch=rd)" >/dev/null 2>&1
+echo "pre-commit: dune build @fmt"
+opam exec -- dune build @fmt
+echo "pre-commit: dune build --profile release"
+opam exec -- dune build --profile release
+echo "pre-commit: dune runtest --profile release"
+opam exec -- dune runtest --profile release
+echo "pre-commit: all gates pass"
