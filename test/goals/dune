@@ -1,0 +1,13 @@
+; sc_01.ml .. sc_05.ml are byte-identical copies of
+; .agent-tasks/task-d9e845d5c429/tests/sc-01.ml .. sc-05.ml.
+; copy_files cannot escape the directory, so the copies are checked in.
+
+(executable
+ (name sc_all)
+ (libraries alcotest)
+ (modules sc_all sc_01 sc_02 sc_03 sc_04 sc_05))
+
+(rule
+ (alias goals)
+ (action
+  (run ./sc_all.exe)))

@@ -1,0 +1,6 @@
+(data_only_dirs .references)
+
+(env
+ (release
+  (flags
+   (:standard -warn-error +a))))
