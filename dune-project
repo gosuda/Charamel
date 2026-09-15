@@ -30,6 +30,11 @@
   ptime
   digestif
   base64
+  cohttp-eio
+  tls-eio
+  ca-certs
+  mirage-crypto-rng
+  uri
   (alcotest :with-test)))
 
 (package
@@ -51,6 +56,8 @@
   mirage-crypto-ec
   mirage-crypto-rng
   x509
+  base64
+  digestif
   (alcotest :with-test)))
 
 (package

@@ -21,6 +21,8 @@ depends: [
   "mirage-crypto-ec"
   "mirage-crypto-rng"
   "x509"
+  "base64"
+  "digestif"
   "alcotest" {with-test}
   "odoc" {with-doc}
 ]

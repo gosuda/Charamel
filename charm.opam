@@ -24,6 +24,11 @@ depends: [
   "ptime"
   "digestif"
   "base64"
+  "cohttp-eio"
+  "tls-eio"
+  "ca-certs"
+  "mirage-crypto-rng"
+  "uri"
   "alcotest" {with-test}
   "odoc" {with-doc}
 ]
