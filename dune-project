@@ -45,6 +45,7 @@
   fmt
   logs
   (jsont (>= 0.4))
+  charm
   (awa (>= 0.6.1))
   (mirage-crypto (>= 2.4.1))
   mirage-crypto-ec
