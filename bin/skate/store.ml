@@ -33,7 +33,26 @@ let is_valid_db db =
   && not (has_dotdot db)
 
 let validate_db db = if is_valid_db db then Ok () else Error (`Invalid_db db)
-let db_path root db = Eio.Path.(root / (db ^ ".json"))
+
+(* Map a database name to one filename component injectively, so names that
+   differ only in case stay distinct on case-insensitive filesystems such
+   as macOS volumes. '_' escapes as "__" and an uppercase letter as '_'
+   followed by its lowercase form; the map is injective because every '_'
+   in an encoded name starts an escape. *)
+let encode_db db =
+  let buf = Buffer.create (String.length db) in
+  String.iter
+    (fun c ->
+      match c with
+      | '_' -> Buffer.add_string buf "__"
+      | 'A' .. 'Z' ->
+          Buffer.add_char buf '_';
+          Buffer.add_char buf (Char.lowercase_ascii c)
+      | _ -> Buffer.add_char buf c)
+    db;
+  Buffer.contents buf
+
+let db_path root db = Eio.Path.(root / (encode_db db ^ ".json"))
 
 (* Generic JSON value helpers, matching the [Jsont.Json] convention already
    used elsewhere in this project (see lib/fantasy/anthropic_codec.ml). *)
