@@ -1,0 +1,25 @@
+(test
+ (name test_huh)
+ (package charm)
+ (modules test_huh test_accessible test_spinner)
+ (libraries
+  charm.huh
+  charm.tea
+  charm.bubbles
+  charm.lipgloss
+  charm.ansi
+  eio
+  eio.unix
+  unix
+  eio_main
+  eio.mock
+  alcotest
+  fmt)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))

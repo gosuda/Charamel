@@ -1,0 +1,46 @@
+(library
+ (name charm_huh)
+ (public_name charm.huh)
+ (modules
+  charm_huh
+  key
+  results
+  dyn
+  validate
+  keymap
+  styles
+  theme
+  env
+  field_msg
+  accessible
+  field_impl
+  field_input
+  field_text
+  field_select
+  field_multiselect
+  field_confirm
+  field_note
+  field_file
+  group
+  layout
+  form
+  run
+  spinner)
+ (libraries
+  charm.ansi
+  charm.lipgloss
+  charm.tea
+  charm.bubbles
+  eio
+  eio.unix
+  fmt
+  logs
+  unix)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
