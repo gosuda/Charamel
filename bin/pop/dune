@@ -1,0 +1,58 @@
+(library
+ (name pop_core)
+ (wrapped true)
+ (modules mime smtp pop_lib send preview forms)
+ (libraries
+  charm.cli
+  charm.huh
+  charm.glamour
+  cmarkit
+  cohttp-eio
+  cohttp
+  http
+  tls
+  tls-eio
+  ca-certs
+  domain-name
+  eio
+  eio.unix
+  fmt
+  jsont
+  jsont.bytesrw
+  base64
+  digestif
+  ptime
+  unix
+  uri)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
+
+(executable
+ (name main)
+ (public_name pop)
+ (package pop)
+ (modules main)
+ (libraries
+  pop_core
+  charm.cli
+  charm.huh
+  cmdliner
+  eio
+  eio.unix
+  eio_main
+  fmt
+  mirage-crypto-rng.unix)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))

@@ -1,0 +1,26 @@
+(test
+ (name test_pop)
+ (package pop)
+ (modules test_pop test_mime test_smtp test_cli fixture_smtp)
+ (libraries
+  pop_core
+  charm.cli
+  charm.huh
+  charm.glamour
+  cmarkit
+  eio
+  eio.unix
+  eio_main
+  fmt
+  ptime
+  alcotest
+  eio.mock
+  mirage-crypto-rng.unix)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
