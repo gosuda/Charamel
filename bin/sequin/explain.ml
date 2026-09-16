@@ -384,7 +384,10 @@ let describe_mouse ~final params =
         if mods = [] then "" else Fmt.str " modifiers=%s" (String.concat "+" mods)
       in
       let action =
-        if final = 'M' then if motion then "motion" else "press" else "release"
+        match (final = 'M', motion) with
+        | true, true -> "motion"
+        | true, false -> "press"
+        | false, _ -> "release"
       in
       Fmt.str "Mouse %s button=%s%s x=%d y=%d" action button mods_str x y
   | _ -> "Unknown"

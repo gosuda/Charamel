@@ -46,8 +46,10 @@ let canonical path =
   else
     let components = canonical_components path in
     let body = String.concat "/" components in
-    if has_leading_slash path then if String.equal body "" then "/" else "/" ^ body
-    else body
+    match (has_leading_slash path, String.equal body "") with
+    | true, true -> "/"
+    | true, false -> "/" ^ body
+    | false, _ -> body
 
 let append_to_base ~base path =
   if String.equal path "" || has_leading_slash path then path

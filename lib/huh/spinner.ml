@@ -42,7 +42,7 @@ let run ?(title = "Loading...") ?style ?(accessible = false) ?theme ~clock actio
   let theme = Option.value theme ~default:default_theme in
   if forced_accessible then begin
     Eio.Flow.copy_string (title ^ "\n") base#stdout;
-    match action () with Ok value -> Ok value | Error error -> Error (`Failed error)
+    Result.map_error (fun error -> `Failed error) (action ())
   end
   else
     Eio.Switch.run (fun sw ->

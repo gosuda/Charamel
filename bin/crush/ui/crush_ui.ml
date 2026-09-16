@@ -899,8 +899,7 @@ let command m text =
       m.status <- "unknown command; /help for commands";
       Cmd.none
 
-let dialog_key key =
-  match Huh.Form.key key with None -> None | Some value -> Some (Dialog_msg value)
+let dialog_key key = Option.map (fun value -> Dialog_msg value) (Huh.Form.key key)
 
 let selected_value answers header =
   match List.find_opt (fun answer -> answer.Tool.header = header) answers with

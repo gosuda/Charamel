@@ -124,9 +124,11 @@ let normalize_path path =
       | value -> stack := value :: !stack)
     components;
   let body = String.concat "/" (List.rev !stack) in
-  if is_absolute then if body = "" then "/" else "/" ^ body
-  else if body = "" then "."
-  else body
+  match (is_absolute, body = "") with
+  | true, true -> "/"
+  | true, false -> "/" ^ body
+  | false, true -> "."
+  | false, false -> body
 
 let home_dir ctx =
   match ctx.env "HOME" with Some home when home <> "" -> home | _ -> ctx.cwd

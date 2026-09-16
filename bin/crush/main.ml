@@ -230,16 +230,10 @@ let make_events common =
         | _ -> ())
 
 let make_ask common =
-  match common.bridge with
-  | None -> None
-  | Some bridge -> Some (fun questions -> Crush_ui.Bridge.ask bridge questions)
+  Option.map (fun bridge questions -> Crush_ui.Bridge.ask bridge questions) common.bridge
 
 let make_permission common (config : Config.t) (options : cli) =
-  let asker =
-    match common.bridge with
-    | None -> None
-    | Some bridge -> Some (permission_asker bridge)
-  in
+  let asker = Option.map permission_asker common.bridge in
   let on_decision request outcome =
     match common.bridge with
     | None -> ()
@@ -620,11 +614,11 @@ let run_tui env options =
                 | Error (`Oauth message) -> Error message
                 | Error (`Io (path, message)) -> Error (Fmt.str "%s: %s" path message)
                 | Error (`Parse (path, message)) -> Error (Fmt.str "%s: %s" path message)
-                | Ok () -> (
+                | Ok () ->
                     let session = Agent.session !agent_ref in
-                    match replace_agent runtime options ~agent_ref session with
-                    | Ok _ -> Ok ()
-                    | Error message -> Error message)
+                    Result.map
+                      (fun _ -> ())
+                      (replace_agent runtime options ~agent_ref session)
             in
             let backend : Crush_ui.backend =
               {

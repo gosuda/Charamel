@@ -144,10 +144,10 @@ let request_auth = function Api_key _ -> Request.Api_key | Oauth _ -> Request.Oa
 
 let fresh_auth t ~sw ~clock ~net : (auth, Error.t) result =
   match (t.kind, t.auth) with
-  | `Anthropic, Oauth credential -> (
-      match Oauth.Anthropic.ensure_fresh ~sw ~clock ~net credential with
-      | Ok credential -> Ok (Oauth credential)
-      | Error error -> Error error)
+  | `Anthropic, Oauth credential ->
+      Result.map
+        (fun credential -> Oauth credential)
+        (Oauth.Anthropic.ensure_fresh ~sw ~clock ~net credential)
   | _ -> Ok t.auth
 
 let auth_headers ~kind ~auth =

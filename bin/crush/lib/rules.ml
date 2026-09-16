@@ -168,7 +168,10 @@ let canonical_path path =
   in
   let components = push [] (String.split_on_char '/' path) |> List.rev in
   let body = String.concat "/" components in
-  if absolute then if String.equal body "" then "/" else "/" ^ body else body
+  match (absolute, String.equal body "") with
+  | true, true -> "/"
+  | true, false -> "/" ^ body
+  | false, _ -> body
 
 let absolute_path ~cwd path =
   canonical_path (if Filename.is_relative path then Filename.concat cwd path else path)
