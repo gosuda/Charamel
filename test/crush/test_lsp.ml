@@ -79,13 +79,13 @@ let config_with_server script =
     options = { base.Config.options with auto_lsp = false };
   }
 
-let with_lsp script f =
+let with_lsp ?(cwd = "/tmp") script f =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let path = Filename.temp_file "crush-lsp" ".ml" in
   Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(env#fs / path) source_text;
   let lsp =
-    Lsp.create ~sw ~proc_mgr:env#process_mgr ~clock:env#clock ~fs:env#fs ~cwd:"/tmp"
+    Lsp.create ~sw ~proc_mgr:env#process_mgr ~clock:env#clock ~fs:env#fs ~cwd
       ~config:(config_with_server script)
   in
   Fun.protect
@@ -172,9 +172,15 @@ let malformed_frame () =
       | values ->
           Alcotest.failf "unexpected malformed server state count %d" (List.length values))
 
+let root_slash_matches () =
+  with_lsp ~cwd:"/" fixture_script (fun _env lsp path ->
+      Alcotest.(check (option string))
+        "fixture handle under root" (Some "fixture") (Lsp.handles lsp ~path))
+
 let cases =
   [
     Alcotest.test_case "real child JSON-RPC" `Quick protocol_round_trip;
     Alcotest.test_case "UTF-16 Unicode workspace edit" `Quick unicode_edit;
     Alcotest.test_case "malformed frame" `Quick malformed_frame;
+    Alcotest.test_case "root slash matches" `Quick root_slash_matches;
   ]
