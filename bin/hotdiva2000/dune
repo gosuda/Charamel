@@ -1,0 +1,37 @@
+(library
+ (name hotdiva_core)
+ (modules name words)
+ (libraries fmt)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
+
+(executable
+ (name main)
+ (public_name hotdiva2000)
+ (package hotdiva2000)
+ (modules main)
+ (libraries
+  hotdiva_core
+  charm.cli
+  cmdliner
+  eio
+  eio.unix
+  eio_main
+  fmt
+  mirage-crypto-rng
+  mirage-crypto-rng.unix
+  unix)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
