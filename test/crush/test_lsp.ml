@@ -76,7 +76,7 @@ let config_with_server script =
   {
     base with
     lsp = [ ("fixture", server) ];
-    options = { base.options with auto_lsp = false };
+    options = { base.Config.options with auto_lsp = false };
   }
 
 let with_lsp script f =
@@ -95,9 +95,9 @@ let with_lsp script f =
       Eio.Path.unlink ~missing_ok:true Eio.Path.(env#fs / path))
 
 let check_location expected (actual : Lsp.location) =
-  Alcotest.(check string) "location path" expected actual.path;
-  Alcotest.(check int) "location line" 1 actual.line;
-  Alcotest.(check int) "location column" 1 actual.col
+  Alcotest.(check string) "location path" expected actual.Lsp.path;
+  Alcotest.(check int) "location line" 1 actual.Lsp.line;
+  Alcotest.(check int) "location column" 1 actual.Lsp.col
 
 let protocol_round_trip () =
   with_lsp fixture_script (fun _env lsp path ->
@@ -107,7 +107,7 @@ let protocol_round_trip () =
       let values = Lsp.diagnostics lsp ~path ~wait:0.5 in
       Alcotest.(check int) "diagnostic count" 1 (List.length values);
       Alcotest.(check string)
-        "diagnostic message" "fixture warning" (List.hd values).message;
+        "diagnostic message" "fixture warning" (List.hd values).Lsp.message;
       (match Lsp.definition lsp ~path ~line:1 ~col:1 with
       | Error error -> Alcotest.failf "definition failed: %a" Lsp.pp_error error
       | Ok locations ->
@@ -119,18 +119,19 @@ let protocol_round_trip () =
       (match Lsp.document_symbols lsp ~path with
       | Error error -> Alcotest.failf "symbols failed: %a" Lsp.pp_error error
       | Ok [ symbol ] ->
-          Alcotest.(check string) "symbol path fallback" path symbol.range.path;
-          Alcotest.(check string) "symbol kind" "Function" symbol.kind
+          Alcotest.(check string) "symbol path fallback" path symbol.Lsp.range.Lsp.path;
+          Alcotest.(check string) "symbol kind" "Function" symbol.Lsp.kind
       | Ok _ -> Alcotest.fail "unexpected symbols");
       (match Lsp.find_symbol lsp ~path ~name:"fixture" with
       | Error error -> Alcotest.failf "find symbol failed: %a" Lsp.pp_error error
       | Ok None -> Alcotest.fail "symbol was not found"
-      | Ok (Some symbol) -> Alcotest.(check string) "found symbol" "fixture" symbol.name);
+      | Ok (Some symbol) ->
+          Alcotest.(check string) "found symbol" "fixture" symbol.Lsp.name);
       match Lsp.rename lsp ~path ~line:1 ~col:1 ~new_name:"renamed" with
       | Error error -> Alcotest.failf "rename failed: %a" Lsp.pp_error error
       | Ok [ (changed_path, [ edit ]) ] ->
           Alcotest.(check string) "rename path" path changed_path;
-          Alcotest.(check string) "rename text" "z" edit.new_text
+          Alcotest.(check string) "rename text" "z" edit.Lsp.new_text
       | Ok _ -> Alcotest.fail "unexpected rename edits")
 
 let unicode_edit () =

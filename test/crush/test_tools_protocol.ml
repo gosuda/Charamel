@@ -17,7 +17,7 @@ let required name schema =
   | _ -> false
 
 let names_and_order () =
-  let names = List.map (fun (tool : Tool.t) -> tool.name) Tools_lsp.all in
+  let names = List.map (fun (tool : Tool.t) -> tool.Tool.name) Tools_lsp.all in
   Alcotest.(check (list string))
     "LSP order"
     [
@@ -30,8 +30,8 @@ let names_and_order () =
     ]
     names;
   Alcotest.(check bool)
-    "diagnostics are read-only" true Tools_lsp.lsp_diagnostics.read_only;
-  Alcotest.(check bool) "rename is mutable" false Tools_lsp.lsp_rename.read_only
+    "diagnostics are read-only" true Tools_lsp.lsp_diagnostics.Tool.read_only;
+  Alcotest.(check bool) "rename is mutable" false Tools_lsp.lsp_rename.Tool.read_only
 
 let schemas_are_typed () =
   Alcotest.(check bool)
@@ -39,10 +39,10 @@ let schemas_are_typed () =
     (object_schema Tools_lsp.lsp_diagnostics);
   Alcotest.(check bool)
     "navigation symbol required" true
-    (required "symbol" Tools_lsp.lsp_definition.schema);
+    (required "symbol" Tools_lsp.lsp_definition.Tool.schema);
   Alcotest.(check bool)
     "rename replacement required" true
-    (required "new_name" Tools_lsp.lsp_rename.schema)
+    (required "new_name" Tools_lsp.lsp_rename.Tool.schema)
 
 let dynamic_mcp_name_and_schema () =
   let schema =
@@ -67,14 +67,14 @@ let dynamic_mcp_name_and_schema () =
     { server = "my server"; name = "echo"; description = "Echo"; schema }
   in
   let tool = Tools_mcp.mcp_tool definition in
-  let expected = Mcp.tool_name ~server:definition.server definition.name in
-  Alcotest.(check string) "sanitized MCP name" expected tool.name;
-  Alcotest.(check bool) "dynamic tool is mutable" false tool.read_only;
-  Alcotest.(check bool) "schema retained" true (Jsont.Json.equal schema tool.schema);
+  let expected = Mcp.tool_name ~server:definition.Mcp.server definition.Mcp.name in
+  Alcotest.(check string) "sanitized MCP name" expected tool.Tool.name;
+  Alcotest.(check bool) "dynamic tool is mutable" false tool.Tool.read_only;
+  Alcotest.(check bool) "schema retained" true (Jsont.Json.equal schema tool.Tool.schema);
   Alcotest.(check bool)
-    "resource list is read-only" true Tools_mcp.list_mcp_resources.read_only;
+    "resource list is read-only" true Tools_mcp.list_mcp_resources.Tool.read_only;
   Alcotest.(check bool)
-    "resource read is read-only" true Tools_mcp.read_mcp_resource.read_only
+    "resource read is read-only" true Tools_mcp.read_mcp_resource.Tool.read_only
 
 let cases =
   [

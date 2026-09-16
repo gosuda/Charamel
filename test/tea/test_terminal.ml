@@ -37,17 +37,18 @@ let test_custom_io_boundary () =
           ~env:(function "TERM" -> Some "xterm-256color" | _ -> None)
           ~is_tty:true
       in
-      Alcotest.(check bool) "custom tty flag" true terminal.is_tty;
-      Alcotest.(check (pair int int)) "custom size" (13, 47) (terminal.size ());
+      Alcotest.(check bool) "custom tty flag" true terminal.Terminal.is_tty;
+      Alcotest.(check (pair int int)) "custom size" (13, 47) (terminal.Terminal.size ());
       Alcotest.(check (option string))
-        "custom environment" (Some "xterm-256color") (terminal.env "TERM");
+        "custom environment" (Some "xterm-256color")
+        (terminal.Terminal.env "TERM");
       Alcotest.(check bool)
         "custom resize stream" true
-        (Option.is_some terminal.on_resize);
-      terminal.enter ();
-      terminal.leave ();
-      check_source "custom input" terminal.input "input";
-      Eio.Flow.copy_string "output" terminal.output;
+        (Option.is_some terminal.Terminal.on_resize);
+      terminal.Terminal.enter ();
+      terminal.Terminal.leave ();
+      check_source "custom input" terminal.Terminal.input "input";
+      Eio.Flow.copy_string "output" terminal.Terminal.output;
       Alcotest.(check string) "custom output" "output" (Buffer.contents output_buffer))
 
 let test_local_pipe_boundary () =
@@ -62,21 +63,21 @@ let test_local_pipe_boundary () =
           in
           let stdout_terminal = Terminal.local local_env in
           let stderr_terminal = Terminal.local ~output:`Stderr local_env in
-          Alcotest.(check bool) "pipe is not tty" false stdout_terminal.is_tty;
-          check_resource_fd "local input" stdout_terminal.input
+          Alcotest.(check bool) "pipe is not tty" false stdout_terminal.Terminal.is_tty;
+          check_resource_fd "local input" stdout_terminal.Terminal.input
             (Eio_unix.Resource.fd input);
-          check_resource_fd "stdout output" stdout_terminal.output
+          check_resource_fd "stdout output" stdout_terminal.Terminal.output
             (Eio_unix.Resource.fd stdout_sink);
-          check_resource_fd "stderr output" stderr_terminal.output
+          check_resource_fd "stderr output" stderr_terminal.Terminal.output
             (Eio_unix.Resource.fd stderr_sink);
-          stdout_terminal.enter ();
-          stdout_terminal.leave ();
-          stdout_terminal.leave ();
-          let rows, cols = stdout_terminal.size () in
+          stdout_terminal.Terminal.enter ();
+          stdout_terminal.Terminal.leave ();
+          stdout_terminal.Terminal.leave ();
+          let rows, cols = stdout_terminal.Terminal.size () in
           Alcotest.(check bool) "pipe fallback rows" true (rows > 0);
           Alcotest.(check bool) "pipe fallback columns" true (cols > 0);
-          Eio.Flow.copy_string "stdout" stdout_terminal.output;
-          Eio.Flow.copy_string "stderr" stderr_terminal.output;
+          Eio.Flow.copy_string "stdout" stdout_terminal.Terminal.output;
+          Eio.Flow.copy_string "stderr" stderr_terminal.Terminal.output;
           check_source "stdout data" stdout_source "stdout";
           check_source "stderr data" stderr_source "stderr"))
 
@@ -106,24 +107,24 @@ let test_local_pty_lifecycle () =
           let before = Eio_unix.Pty.Tc.getattr slave_fd in
           let terminal = Terminal.local local_env in
           let after_create = Eio_unix.Pty.Tc.getattr slave_fd in
-          Alcotest.(check bool) "pty detected" true terminal.is_tty;
+          Alcotest.(check bool) "pty detected" true terminal.Terminal.is_tty;
           Alcotest.(check bool)
             "constructor leaves termios unchanged" true (before = after_create);
-          let rows, cols = terminal.size () in
+          let rows, cols = terminal.Terminal.size () in
           Alcotest.(check (pair int int)) "pty dimensions" (31, 73) (rows, cols);
-          Fun.protect ~finally:terminal.leave (fun () ->
-              terminal.enter ();
+          Fun.protect ~finally:terminal.Terminal.leave (fun () ->
+              terminal.Terminal.enter ();
               let raw = Eio_unix.Pty.Tc.getattr slave_fd in
-              Alcotest.(check bool) "raw canonical" false raw.c_icanon;
-              Alcotest.(check bool) "raw echo" false raw.c_echo;
-              Alcotest.(check bool) "raw signals" false raw.c_isig;
-              Alcotest.(check bool) "raw output processing" false raw.c_opost;
-              Alcotest.(check bool) "raw software flow control" false raw.c_ixon;
-              Alcotest.(check int) "raw minimum bytes" 1 raw.c_vmin;
-              Alcotest.(check int) "raw timeout" 0 raw.c_vtime;
-              terminal.enter ();
-              terminal.leave ();
-              terminal.leave ();
+              Alcotest.(check bool) "raw canonical" false raw.Unix.c_icanon;
+              Alcotest.(check bool) "raw echo" false raw.Unix.c_echo;
+              Alcotest.(check bool) "raw signals" false raw.Unix.c_isig;
+              Alcotest.(check bool) "raw output processing" false raw.Unix.c_opost;
+              Alcotest.(check bool) "raw software flow control" false raw.Unix.c_ixon;
+              Alcotest.(check int) "raw minimum bytes" 1 raw.Unix.c_vmin;
+              Alcotest.(check int) "raw timeout" 0 raw.Unix.c_vtime;
+              terminal.Terminal.enter ();
+              terminal.Terminal.leave ();
+              terminal.Terminal.leave ();
               let restored = Eio_unix.Pty.Tc.getattr slave_fd in
               Alcotest.(check bool)
                 "leave restores initial termios" true (before = restored))))

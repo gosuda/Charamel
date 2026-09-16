@@ -194,17 +194,17 @@ let permission_string kind perm =
 let entry_of_name fs current_directory (kind, name) =
   let path = Eio.Path.(fs / path_join current_directory name) in
   let lstat = Eio.Path.stat ~follow:false path in
-  let is_symlink = kind = `Symbolic_link || lstat.kind = `Symbolic_link in
+  let is_symlink = kind = `Symbolic_link || lstat.Eio.File.Stat.kind = `Symbolic_link in
   let target = if is_symlink then Eio.Path.read_link path else "" in
   let stat = if is_symlink then Eio.Path.stat ~follow:true path else lstat in
-  let is_dir = stat.kind = `Directory in
+  let is_dir = stat.Eio.File.Stat.kind = `Directory in
   {
     name;
     is_dir;
     is_symlink;
     symlink_target = target;
-    perm = permission_string lstat.kind lstat.perm;
-    size = Optint.Int63.to_int lstat.size;
+    perm = permission_string lstat.Eio.File.Stat.kind lstat.Eio.File.Stat.perm;
+    size = Optint.Int63.to_int lstat.Eio.File.Stat.size;
   }
 
 let read_directory m path =

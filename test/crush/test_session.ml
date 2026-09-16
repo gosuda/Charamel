@@ -149,8 +149,8 @@ let event_round_trip () =
                 "title restored from index" "roundtrip" (Session.title reopened);
               Alcotest.(check (list string)) "all event variants" expected actual;
               let usage, cost = Session.usage_total reopened in
-              Alcotest.(check int) "usage input" 10 usage.input;
-              Alcotest.(check int) "usage output" 20 usage.output;
+              Alcotest.(check int) "usage input" 10 usage.Charm_fantasy.Usage.input;
+              Alcotest.(check int) "usage output" 20 usage.Charm_fantasy.Usage.output;
               Alcotest.(check (float 1e-12)) "usage cost" 0.125 cost;
               let messages = Session.messages reopened in
               Alcotest.(check int) "summary replay and suffix" 3 (List.length messages);
@@ -191,7 +191,8 @@ let index_and_concurrent_append () =
               begin match Session.list store with
               | Error error -> Alcotest.failf "list failed: %a" Session.pp_error error
               | Ok [ entry ] ->
-                  Alcotest.(check int) "index message count" 24 entry.message_count
+                  Alcotest.(check int)
+                    "index message count" 24 entry.Session.message_count
               | Ok entries ->
                   Alcotest.failf "expected one index row, got %d" (List.length entries)
               end

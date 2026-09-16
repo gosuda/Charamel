@@ -38,7 +38,9 @@ let map_mcp_error = function
   | `Transport (server, message) -> `Io (server, message)
 
 let truncate_output (ctx : Tool.ctx) text =
-  let content, artifact = Artifact.truncate ctx.artifacts ~random:ctx.random text in
+  let content, artifact =
+    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
+  in
   Tool.ok ?artifact content
 
 let run_resources (ctx : Tool.ctx) input =
@@ -47,12 +49,12 @@ let run_resources (ctx : Tool.ctx) input =
     Tool.request ctx ~read_only:true ~tool:"list_mcp_resources" ~action:server ~path:""
       ~description:(Fmt.str "List resources from MCP server %s" server)
   in
-  match Mcp.resources ctx.mcp ~server with
+  match Mcp.resources ctx.Tool.mcp ~server with
   | Error error -> Error (map_mcp_error error)
   | Ok resources ->
       let line (resource : Mcp.resource) =
-        Fmt.str "%s\t%s\t%s" resource.Mcp.uri resource.name
-          (Option.value resource.mime ~default:"")
+        Fmt.str "%s\t%s\t%s" resource.Mcp.uri resource.Mcp.name
+          (Option.value resource.Mcp.mime ~default:"")
       in
       let text =
         match resources with
@@ -67,7 +69,7 @@ let run_read_resource (ctx : Tool.ctx) input =
     Tool.request ctx ~read_only:true ~tool:"read_mcp_resource" ~action:server ~path:""
       ~description:(Fmt.str "Read MCP resource %s" uri)
   in
-  match Mcp.read_resource ctx.mcp ~server ~uri with
+  match Mcp.read_resource ctx.Tool.mcp ~server ~uri with
   | Error error -> Error (map_mcp_error error)
   | Ok content -> Ok (truncate_output ctx (Mcp.content_text content))
 
@@ -172,12 +174,14 @@ let run_dynamic (definition : Mcp.tool) (ctx : Tool.ctx) input =
     | Ok () -> Ok ()
     | Error message -> Error (`Invalid_input message)
   in
-  let name = Mcp.tool_name ~server:definition.server definition.name in
+  let name = Mcp.tool_name ~server:definition.Mcp.server definition.Mcp.name in
   let* () =
     Tool.request ctx ~read_only:false ~tool:name ~action:name ~path:""
       ~description:(Fmt.str "Call MCP tool %s" name)
   in
-  match Mcp.call ctx.mcp ~server:definition.server ~tool:definition.name ~input with
+  match
+    Mcp.call ctx.Tool.mcp ~server:definition.Mcp.server ~tool:definition.Mcp.name ~input
+  with
   | Error error -> Error (map_mcp_error error)
   | Ok (content, is_error) ->
       let output = truncate_output ctx (Mcp.content_text content) in
@@ -185,9 +189,9 @@ let run_dynamic (definition : Mcp.tool) (ctx : Tool.ctx) input =
 
 let mcp_tool (definition : Mcp.tool) =
   {
-    Tool.name = Mcp.tool_name ~server:definition.server definition.name;
-    description = definition.description;
-    schema = definition.schema;
+    Tool.name = Mcp.tool_name ~server:definition.Mcp.server definition.Mcp.name;
+    description = definition.Mcp.description;
+    schema = definition.Mcp.schema;
     read_only = false;
     run = run_dynamic definition;
   }

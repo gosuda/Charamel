@@ -698,7 +698,7 @@ let changed_regions (patch : Patch.patch) =
       | Patch.Insert_before { line; body } -> add_body line body
       | Patch.Insert_after { line; body } -> add_body (max 1 (line + 1)) body
       | Patch.Cut _ -> ())
-    patch.ops;
+    patch.Patch.ops;
   let rows = List.rev !rows in
   String.concat "\n" rows
 
@@ -714,7 +714,7 @@ let run_edit ctx json =
       begin match Patch.parse patch_text with
       | Error message -> Error (`Invalid_input message)
       | Ok patch ->
-          let absolute = Tool.absolute ctx patch.path in
+          let absolute = Tool.absolute ctx patch.Patch.path in
           let target_result = Tool.canonical ctx absolute in
           let request_path =
             match target_result with Ok target -> target | Error _ -> absolute
@@ -741,9 +741,9 @@ let run_edit ctx json =
                         protect_io target (fun () -> Eio.Path.load target_path)
                       with
                       | Error error -> Error error
-                      | Ok content when Hashline.tag content <> patch.tag ->
+                      | Ok content when Hashline.tag content <> patch.Patch.tag ->
                           let anchor =
-                            match patch.ops with
+                            match patch.Patch.ops with
                             | [] -> 1
                             | op :: _ -> first_patch_line op
                           in

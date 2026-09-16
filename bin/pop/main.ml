@@ -126,7 +126,7 @@ let options_of_cli (cli : cli) : Pop_lib.options =
 
 let form_values_of_options ~cwd (options : Pop_lib.options) : Forms.values =
   let body =
-    match (options.body, options.body_file) with
+    match (options.Pop_lib.body, options.Pop_lib.body_file) with
     | Some body, _ -> body
     | None, None -> ""
     | None, Some path -> (
@@ -135,11 +135,11 @@ let form_values_of_options ~cwd (options : Pop_lib.options) : Forms.values =
         | Error error -> Charm_cli.error (error_message Pop_lib.pp_error error))
   in
   {
-    to_ = String.concat ", " (Pop_lib.split_addresses options.to_);
-    cc = String.concat ", " (Pop_lib.split_addresses options.cc);
-    bcc = String.concat ", " (Pop_lib.split_addresses options.bcc);
-    from = Option.value options.from ~default:"";
-    subject = Option.value options.subject ~default:"";
+    to_ = String.concat ", " (Pop_lib.split_addresses options.Pop_lib.to_);
+    cc = String.concat ", " (Pop_lib.split_addresses options.Pop_lib.cc);
+    bcc = String.concat ", " (Pop_lib.split_addresses options.Pop_lib.bcc);
+    from = Option.value options.Pop_lib.from ~default:"";
+    subject = Option.value options.Pop_lib.subject ~default:"";
     body;
   }
 
@@ -147,12 +147,12 @@ let options_of_form (options : Pop_lib.options) (values : Forms.values) : Pop_li
     =
   {
     options with
-    to_ = [ values.to_ ];
-    cc = [ values.cc ];
-    bcc = [ values.bcc ];
-    from = Some values.from;
-    subject = Some values.subject;
-    body = Some values.body;
+    to_ = [ values.Forms.to_ ];
+    cc = [ values.Forms.cc ];
+    bcc = [ values.Forms.bcc ];
+    from = Some values.Forms.from;
+    subject = Some values.Forms.subject;
+    body = Some values.Forms.body;
     body_file = None;
   }
 
@@ -188,7 +188,7 @@ let run env cli =
             (error_message Forms.pp_error error)
       | Error (`Compose error) -> Charm_cli.error (error_message Pop_lib.pp_error error)
       | Ok prepared -> (
-          if cli.preview then Preview.write env#stdout prepared.message
+          if cli.preview then Preview.write env#stdout prepared.Pop_lib.message
           else
             let resend_key =
               match Sys.getenv_opt "RESEND_API_KEY" with
@@ -205,9 +205,9 @@ let run env cli =
             in
             match
               Send.deliver ~sw ~clock:env#clock ~net:env#net ~resend_key ~smtp
-                prepared.message
+                prepared.Pop_lib.message
             with
-            | Ok () -> Eio.Flow.copy_string (summary prepared.message) env#stdout
+            | Ok () -> Eio.Flow.copy_string (summary prepared.Pop_lib.message) env#stdout
             | Error error -> Charm_cli.error (error_message Send.pp_error error)))
 
 let default env =

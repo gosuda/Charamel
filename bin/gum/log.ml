@@ -243,12 +243,14 @@ let make_styles ~level_style ~time_style ~prefix_style ~message_style ~key_style
   let level_style = Gum_style.inline level_style in
   let levels level =
     if level = emitted then
-      Charm_lipgloss.Style.inherit_ ~parent:(defaults.levels level) level_style
-    else defaults.levels level
+      Charm_lipgloss.Style.inherit_
+        ~parent:(defaults.Charm_log.Styles.levels level)
+        level_style
+    else defaults.Charm_log.Styles.levels level
   in
   {
     Charm_log.Styles.timestamp = Gum_style.inline time_style;
-    caller = defaults.caller;
+    caller = defaults.Charm_log.Styles.caller;
     prefix = Gum_style.inline prefix_style;
     message = Gum_style.inline message_style;
     key = Gum_style.inline key_style;

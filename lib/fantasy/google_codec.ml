@@ -114,12 +114,12 @@ and properties_of j = List.map (fun (k, v) -> (k, convert_schema v)) (object_mem
 
 let google_schema (tool : Tool.t) =
   let properties =
-    match oopt tool.schema "properties" with
+    match oopt tool.Tool.schema "properties" with
     | Some v when is_object v -> properties_of v
     | _ -> []
   in
   let required =
-    match oopt tool.schema "required" with
+    match oopt tool.Tool.schema "required" with
     | Some v -> ( match strings_of_json v with Some l -> l | None -> [])
     | None -> []
   in
@@ -130,8 +130,8 @@ let google_schema (tool : Tool.t) =
   in
   obj
     [
-      (n "name", str tool.name);
-      (n "description", str tool.description);
+      (n "name", str tool.Tool.name);
+      (n "description", str tool.Tool.description);
       (n "parameters", obj parameters);
     ]
 
@@ -198,13 +198,13 @@ let tool_parts (ps : Message.part list) =
     ps
 
 let content_of_message (m : Message.t) =
-  let role = match m.role with Message.Assistant -> "model" | _ -> "user" in
+  let role = match m.Message.role with Message.Assistant -> "model" | _ -> "user" in
   let parts =
-    match m.role with
+    match m.Message.role with
     | Message.System -> []
-    | Message.User -> user_parts m.parts
-    | Message.Assistant -> assistant_parts ~signature:None [] m.parts
-    | Message.Tool -> tool_parts m.parts
+    | Message.User -> user_parts m.Message.parts
+    | Message.Assistant -> assistant_parts ~signature:None [] m.Message.parts
+    | Message.Tool -> tool_parts m.Message.parts
   in
   if parts = [] then None else Some (obj [ (n "role", str role); (n "parts", arr parts) ])
 
@@ -234,12 +234,15 @@ let thinking_config = function
       Some [ (n "includeThoughts", bool true); (n "thinkingBudget", int 32768) ]
 
 let generation_config (r : Request.t) =
-  let cap = if r.max_tokens > 0 then r.max_tokens else r.model.default_max_tokens in
+  let cap =
+    if r.Request.max_tokens > 0 then r.Request.max_tokens
+    else r.Request.model.Model.default_max_tokens
+  in
   let temperature =
-    match r.temperature with Some t -> [ (n "temperature", num t) ] | None -> []
+    match r.Request.temperature with Some t -> [ (n "temperature", num t) ] | None -> []
   in
   let thinking =
-    match thinking_config r.reasoning with
+    match thinking_config r.Request.reasoning with
     | Some c -> [ (n "thinkingConfig", obj c) ]
     | None -> []
   in
@@ -257,17 +260,22 @@ let encode (r : Request.t) =
   let message_system =
     List.concat_map
       (fun (m : Message.t) ->
-        match m.role with
+        match m.Message.role with
         | Message.System ->
-            List.filter_map (function Message.Text s -> Some s | _ -> None) m.parts
+            List.filter_map
+              (function Message.Text s -> Some s | _ -> None)
+              m.Message.parts
         | Message.User | Message.Assistant | Message.Tool -> [])
-      r.messages
+      r.Request.messages
   in
-  let system = r.system @ message_system in
+  let system = r.Request.system @ message_system in
   obj
     (system_instruction system
-    @ [ (n "contents", contents r.messages); (n "generationConfig", generation_config r) ]
-    @ tools_member r.tools)
+    @ [
+        (n "contents", contents r.Request.messages);
+        (n "generationConfig", generation_config r);
+      ]
+    @ tools_member r.Request.tools)
 
 (* Response decoding *)
 

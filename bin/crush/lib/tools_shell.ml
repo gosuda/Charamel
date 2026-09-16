@@ -278,7 +278,9 @@ let is_read_only command =
       segments
 
 let output_with_artifact (ctx : Tool.ctx) text =
-  let content, artifact = Artifact.truncate ctx.artifacts ~random:ctx.random text in
+  let content, artifact =
+    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
+  in
   Tool.ok ?artifact content
 
 let output_with_status ctx ~status text =
@@ -317,15 +319,15 @@ let fd_of_sink sink =
 
 let run_foreground (ctx : Tool.ctx) ~cwd ~command =
   Eio.Switch.run @@ fun process_sw ->
-  let stdout_r, stdout_w = Eio.Process.pipe ~sw:process_sw ctx.proc_mgr in
-  let stderr_r, stderr_w = Eio.Process.pipe ~sw:process_sw ctx.proc_mgr in
+  let stdout_r, stdout_w = Eio.Process.pipe ~sw:process_sw ctx.Tool.proc_mgr in
+  let stderr_r, stderr_w = Eio.Process.pipe ~sw:process_sw ctx.Tool.proc_mgr in
   let null_unix =
     Eio_unix.run_in_systhread (fun () -> Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0)
   in
   let null_stdin = Eio_unix.Fd.of_unix ~sw:process_sw ~close_unix:true null_unix in
   let process =
-    Eio_unix.Process.spawn_unix ~sw:process_sw ctx.proc_mgr
-      ~cwd:Eio.Path.(ctx.fs / cwd)
+    Eio_unix.Process.spawn_unix ~sw:process_sw ctx.Tool.proc_mgr
+      ~cwd:Eio.Path.(ctx.Tool.fs / cwd)
       ~pgid:0
       ~fds:
         [
@@ -410,7 +412,7 @@ let bash =
             let cwd =
               match params.working_dir with
               | Some path when String.trim path <> "" -> Tool.absolute ctx path
-              | _ -> ctx.cwd
+              | _ -> ctx.Tool.cwd
             in
             if String.trim command = "" then
               Error (`Invalid_input "command must not be empty")
@@ -430,7 +432,9 @@ let bash =
                   if blocked_command command then
                     Error (`Unavailable "command is blocked by the shell safety policy")
                   else if run_in_background then
-                    let job_id = Jobs.start ctx.jobs ~cwd ~command ~env:[] ~timeout_s in
+                    let job_id =
+                      Jobs.start ctx.Tool.jobs ~cwd ~command ~env:[] ~timeout_s
+                    in
                     Ok (output_with_artifact ctx (Fmt.str "started %s" job_id))
                   else
                     try
@@ -473,13 +477,13 @@ let job_output =
             else
               match
                 Tool.request ctx ~read_only:true ~tool:"job_output" ~action:job_id
-                  ~path:ctx.cwd
+                  ~path:ctx.Tool.cwd
                   ~description:(Fmt.str "Read output for %s" job_id)
               with
               | Error error -> Error error
               | Ok () -> (
                   match
-                    Jobs.output ctx.jobs ~id:job_id
+                    Jobs.output ctx.Tool.jobs ~id:job_id
                       ~wait:(Option.value params.wait ~default:false)
                   with
                   | Error (`Not_found id) -> Error (`Not_found id)
@@ -518,7 +522,7 @@ let job_kill =
               with
               | Error error -> Error error
               | Ok () -> (
-                  match Jobs.kill ctx.jobs ~id:job_id with
+                  match Jobs.kill ctx.Tool.jobs ~id:job_id with
                   | Ok () -> Ok (output_with_artifact ctx (Fmt.str "killed %s" job_id))
                   | Error (`Not_found id) -> Error (`Not_found id))));
   }

@@ -315,7 +315,7 @@ let server_reply method_name id =
   | "roots/list" -> response_json id (json_object [ ("roots", json_list []) ])
   | _ -> error_response_json id (-32_601) "method not found"
 
-let timeout_seconds server = max 0. (float_of_int server.config.timeout_s)
+let timeout_seconds server = max 0. (float_of_int server.config.Config.timeout_s)
 
 let write_stdio (server : server) (stdio : stdio) value =
   let line = string_of_json value ^ "\n" in
@@ -921,7 +921,7 @@ let initialize (server : server) =
   Ok ()
 
 let setup_http (server : server) (config : Config.mcp) =
-  match config.url with
+  match config.Config.url with
   | None -> Error "HTTP MCP server has no URL"
   | Some url -> (
       let uri = Uri.of_string url in
@@ -964,7 +964,7 @@ let setup_http (server : server) (config : Config.mcp) =
                    {
                      client;
                      uri;
-                     headers = config.headers;
+                     headers = config.Config.headers;
                      session_id = None;
                      protocol_version;
                      session_lock = Eio.Mutex.create ();
@@ -993,7 +993,7 @@ let merged_environment overrides =
   |> Array.of_list
 
 let spawn_stdio (server : server) (config : Config.mcp) =
-  match config.command with
+  match config.Config.command with
   | None -> Error "stdio MCP server has no command"
   | Some command -> (
       try
@@ -1002,13 +1002,13 @@ let spawn_stdio (server : server) (config : Config.mcp) =
           Eio.Process.pipe ~sw:server.sw server.proc_mgr
         in
         let command_line =
-          String.concat " " (List.map Filename.quote (command :: config.args))
+          String.concat " " (List.map Filename.quote (command :: config.Config.args))
         in
         let shell = "cd -- " ^ Filename.quote server.cwd ^ " && exec " ^ command_line in
         let process =
           Eio.Process.spawn ~sw:server.sw server.proc_mgr ~stdin:child_input
             ~stdout:child_output ~stderr:Eio.Flow.null
-            ~env:(merged_environment config.env)
+            ~env:(merged_environment config.Config.env)
             [ "/bin/sh"; "-c"; shell ]
         in
         close_flow child_input;
@@ -1031,7 +1031,7 @@ let spawn_stdio (server : server) (config : Config.mcp) =
 
 let run_server (server : server) =
   if connect_server server then
-    match server.config.transport with
+    match server.config.Config.transport with
     | Config.Stdio -> (
         match spawn_stdio server server.config with
         | Error message -> fail_server server message
@@ -1109,7 +1109,7 @@ let create ~sw ~proc_mgr ~net ~clock ~cwd ~(config : Config.t) =
           closed = false;
           tools = [];
         })
-      config.mcp
+      config.Config.mcp
   in
   let client = { lock = Eio.Mutex.create (); closed = false; servers } in
   List.iter (fun server -> Eio.Fiber.fork ~sw (fun () -> run_server server)) servers;

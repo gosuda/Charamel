@@ -44,12 +44,13 @@ let discovers_and_resolves_uri () =
         | Some skill -> skill
         | None -> Alcotest.fail "skill was not discovered"
       in
-      Alcotest.check Alcotest.string "description" "Read files safely" skill.description;
-      Alcotest.check Alcotest.string "body" "Use the read tool.\n" skill.body;
+      Alcotest.check Alcotest.string "description" "Read files safely"
+        skill.Skills.description;
+      Alcotest.check Alcotest.string "body" "Use the read tool.\n" skill.Skills.body;
       Alcotest.check Alcotest.string "index" "- alpha: Read files safely"
         (Skills.index_text skills);
       (match Skills.resolve_uri skills ~fs "skill://alpha" with
-      | Ok body -> Alcotest.check Alcotest.string "body URI" skill.body body
+      | Ok body -> Alcotest.check Alcotest.string "body URI" skill.Skills.body body
       | Error (`Not_found uri) -> Alcotest.failf "URI not found: %s" uri);
       (match Skills.resolve_uri skills ~fs "skill://alpha/example.txt" with
       | Ok body -> Alcotest.check Alcotest.string "file URI" "example\n" body
@@ -74,11 +75,13 @@ let configured_precedes_user_and_defaults_name () =
       let skills = Skills.load ~fs ~config ~home in
       (match Skills.find skills "same" with
       | Some skill ->
-          Alcotest.check Alcotest.string "configured wins" "configured body" skill.body
+          Alcotest.check Alcotest.string "configured wins" "configured body"
+            skill.Skills.body
       | None -> Alcotest.fail "configured skill missing");
       match Skills.find skills "useronly" with
       | Some skill ->
-          Alcotest.check Alcotest.string "directory default name" "useronly" skill.name
+          Alcotest.check Alcotest.string "directory default name" "useronly"
+            skill.Skills.name
       | None -> Alcotest.fail "user skill missing")
 
 let oversized_files_are_not_indexed () =

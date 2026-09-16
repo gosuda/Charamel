@@ -96,20 +96,20 @@ let oauth_system = "You are Claude Code, Anthropic's official CLI for Claude."
 
 let system_texts (r : Request.t) =
   let prefix =
-    match r.auth with Request.Oauth -> [ oauth_system ] | Request.Api_key -> []
+    match r.Request.auth with Request.Oauth -> [ oauth_system ] | Request.Api_key -> []
   in
   let from_messages =
     List.concat_map
       (fun (m : Message.t) ->
-        match m.role with
+        match m.Message.role with
         | Message.System ->
             List.filter_map
               (fun p -> match p with Message.Text s -> Some s | _ -> None)
-              m.parts
+              m.Message.parts
         | Message.User | Message.Assistant | Message.Tool -> [])
-      r.messages
+      r.Request.messages
   in
-  prefix @ r.system @ from_messages
+  prefix @ r.Request.system @ from_messages
 
 let system_json (r : Request.t) =
   match system_texts r with
@@ -119,7 +119,7 @@ let system_json (r : Request.t) =
       [ jm "system" (jlist (List.mapi (fun i s -> text_item s (i = last)) texts)) ]
 
 let wire_role (m : Message.t) =
-  match m.role with
+  match m.Message.role with
   | Message.System -> None
   | Message.User | Message.Tool -> Some true
   | Message.Assistant -> Some false
@@ -139,7 +139,9 @@ let rec group acc = function
 
 let content_of is_user ms =
   let one (m : Message.t) =
-    List.concat_map (fun p -> if is_user then user_part p else assistant_part p) m.parts
+    List.concat_map
+      (fun p -> if is_user then user_part p else assistant_part p)
+      m.Message.parts
   in
   List.concat_map one ms
 
@@ -153,7 +155,9 @@ let message_json is_user items cache =
     ]
 
 let messages_json (r : Request.t) =
-  let wire_messages = List.filter (fun m -> Option.is_some (wire_role m)) r.messages in
+  let wire_messages =
+    List.filter (fun m -> Option.is_some (wire_role m)) r.Request.messages
+  in
   let turns =
     group [] wire_messages
     |> List.filter_map (fun (is_user, ms) ->
@@ -186,9 +190,9 @@ let tools_json (tools : Tool.t list) =
                   jobj
                     (with_cache
                        [
-                         jm "name" (jstr t.name);
-                         jm "description" (jstr t.description);
-                         jm "input_schema" t.schema;
+                         jm "name" (jstr t.Tool.name);
+                         jm "description" (jstr t.Tool.description);
+                         jm "input_schema" t.Tool.schema;
                        ]
                        (i = last)))
                 tools));
@@ -201,10 +205,11 @@ let budget = function
   | Request.High -> Some 32768
 
 let effective_max_tokens (r : Request.t) =
-  if r.max_tokens > 0 then r.max_tokens else r.model.default_max_tokens
+  if r.Request.max_tokens > 0 then r.Request.max_tokens
+  else r.Request.model.Model.default_max_tokens
 
 let thinking_budget (r : Request.t) =
-  match budget r.reasoning with
+  match budget r.Request.reasoning with
   | None -> None
   | Some requested ->
       let clamped = min requested (effective_max_tokens r - 1) in
@@ -217,7 +222,7 @@ let thinking_json (r : Request.t) =
       [ jm "thinking" (jobj [ jm "type" (jstr "enabled"); jm "budget_tokens" (jint b) ]) ]
 
 let temperature_json (r : Request.t) =
-  match (thinking_budget r, r.temperature) with
+  match (thinking_budget r, r.Request.temperature) with
   | Some _, _ -> []
   | None, None -> []
   | None, Some t -> [ jm "temperature" (jfloat t) ]
@@ -225,12 +230,12 @@ let temperature_json (r : Request.t) =
 let encode (r : Request.t) =
   jobj
     ([
-       jm "model" (jstr r.model.id);
+       jm "model" (jstr r.Request.model.Model.id);
        jm "max_tokens" (jint (effective_max_tokens r));
        jm "stream" jtrue;
        jm "messages" (jlist (messages_json r));
      ]
-    @ system_json r @ tools_json r.tools @ thinking_json r @ temperature_json r)
+    @ system_json r @ tools_json r.Request.tools @ thinking_json r @ temperature_json r)
 
 type tool_block = { id : string; mutable arguments : string; mutable closed : bool }
 type block = Text | Thinking | Tool of tool_block
@@ -288,11 +293,12 @@ let reasoning_of (j : Jsont.json) current =
 
 let snapshot_usage (u : Usage.t) (j : Jsont.json) =
   {
-    Usage.input = replace_present u.input (int_mem "input_tokens" j);
-    output = replace_present u.output (int_mem "output_tokens" j);
-    cache_write = replace_present u.cache_write (int_mem "cache_creation_input_tokens" j);
-    cache_read = replace_present u.cache_read (int_mem "cache_read_input_tokens" j);
-    reasoning = reasoning_of j u.reasoning;
+    Usage.input = replace_present u.Usage.input (int_mem "input_tokens" j);
+    output = replace_present u.Usage.output (int_mem "output_tokens" j);
+    cache_write =
+      replace_present u.Usage.cache_write (int_mem "cache_creation_input_tokens" j);
+    cache_read = replace_present u.Usage.cache_read (int_mem "cache_read_input_tokens" j);
+    reasoning = reasoning_of j u.Usage.reasoning;
   }
 
 let usage_part t = if t.have_usage then [ Stream_part.Usage t.usage ] else []

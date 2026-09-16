@@ -682,13 +682,14 @@ let key (m : t) (key : Key.t) =
     else if matches m.keymap.next_suggestion then Some Next_suggestion
     else if matches m.keymap.prev_suggestion then Some Prev_suggestion
     else if
-      key.mods.ctrl || key.mods.alt || key.mods.meta || key.mods.super || key.mods.hyper
+      key.Key.mods.Key.ctrl || key.Key.mods.Key.alt || key.Key.mods.Key.meta
+      || key.Key.mods.Key.super || key.Key.mods.Key.hyper
     then None
     else
       let text =
-        if key.text <> "" then key.text
+        if key.Key.text <> "" then key.Key.text
         else
-          match key.code with
+          match key.Key.code with
           | Key.Char u ->
               let b = Buffer.create 4 in
               Buffer.add_utf_8_uchar b u;

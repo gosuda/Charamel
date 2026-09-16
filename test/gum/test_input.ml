@@ -24,11 +24,11 @@ let password_mode () =
     }
   in
   let model = Input.make options in
-  let view = (Input.app options).view model in
+  let view = (Input.app options).Charm_tea.view model in
   Alcotest.(check string) "password value retained" "secret" (Input.value model);
   Alcotest.(check bool)
     "masked frame differs" true
-    (not (String.equal view.content "secret"))
+    (not (String.equal view.Charm_tea.View.content "secret"))
 
 let cases =
   [

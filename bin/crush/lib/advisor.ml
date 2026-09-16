@@ -20,9 +20,9 @@ type t = {
 
 let create (config : Config.advisor) =
   {
-    enabled = config.enabled;
-    _model = config.model;
-    _every_n_turns = max 1 config.every_n_turns;
+    enabled = config.Config.enabled;
+    _model = config.Config.model;
+    _every_n_turns = max 1 config.Config.every_n_turns;
     previous = None;
     consecutive = 0;
     quarantined = false;
@@ -110,7 +110,8 @@ let review t ~sw ~clock ~net (model : Models.resolved) ~context ~last_turn =
   else
     let user = render_last_turn last_turn in
     let stream =
-      Charm_fantasy.Provider.stream model.provider ~sw ~clock ~net ~model:model.model
+      Charm_fantasy.Provider.stream model.Models.provider ~sw ~clock ~net
+        ~model:model.Models.model
         ~system:[ Prompt_advisor.text; context ]
         ~max_tokens:512
         [ Charm_fantasy.Message.text Charm_fantasy.Message.User user ]

@@ -39,12 +39,16 @@ let print_stderr env text = write env#stderr text
 let with_data_dir (config : Config.t) (options : cli) =
   let data_dir =
     match options.data_dir with
-    | None -> config.options.data_dir
+    | None -> config.Config.options.Config.data_dir
     | Some value when String.trim value <> "" -> value
     | Some _ -> Charm_cli.error "--data-dir must not be empty"
   in
   let options =
-    { config.options with data_dir; debug = config.options.debug || options.debug }
+    {
+      config.Config.options with
+      data_dir;
+      debug = config.Config.options.Config.debug || options.debug;
+    }
   in
   { config with options }
 
@@ -91,13 +95,14 @@ let create_common env sw (options : cli) ~interactive ~bridge =
   let rules = Rules.load ~fs:env#fs ~cwd ~config in
   let skills = Skills.load ~fs:env#fs ~config ~home:(home_directory ()) in
   let hooks =
-    Hooks.create ~config:config.hooks ~proc_mgr:env#process_mgr ~clock:env#clock ~cwd
+    Hooks.create ~config:config.Config.hooks ~proc_mgr:env#process_mgr ~clock:env#clock
+      ~cwd
   in
   let mcp =
     Mcp.create ~sw ~proc_mgr:env#process_mgr ~net:env#net ~clock:env#clock ~cwd ~config
   in
   let lsp =
-    if config.options.auto_lsp then
+    if config.Config.options.Config.auto_lsp then
       Some
         (Lsp.create ~sw ~proc_mgr:env#process_mgr ~clock:env#clock ~fs:env#fs ~cwd ~config)
     else None
@@ -122,7 +127,10 @@ let create_common env sw (options : cli) ~interactive ~bridge =
   }
 
 let model_ref (model : Models.resolved) =
-  { Session.provider = model.provider_id; model = model.model.id }
+  {
+    Session.provider = model.Models.provider_id;
+    model = model.Models.model.Charm_fantasy.Model.id;
+  }
 
 let selected_model config target ~fs ~auth ~env =
   let split_target value =
@@ -143,7 +151,8 @@ let selected_model config target ~fs ~auth ~env =
           (fun (provider, models, _) ->
             match
               List.find_opt
-                (fun (model : Charm_fantasy.Model.t) -> String.equal model.id target)
+                (fun (model : Charm_fantasy.Model.t) ->
+                  String.equal model.Charm_fantasy.Model.id target)
                 models
             with
             | Some _ -> Some (provider, target)
@@ -169,7 +178,7 @@ let config_for_model common (options : cli) =
           Ok
             {
               common.config with
-              models = { common.config.models with large = Some selected };
+              models = { common.config.Config.models with large = Some selected };
             })
 
 let session_for common (options : cli) large =
@@ -213,8 +222,8 @@ let make_events common =
       fun event ->
         match event with
         | Agent.Text_delta text -> print_stdout common.env text
-        | Agent.Tool_finished { output; name; _ } when output.is_error ->
-            print_stderr common.env (Fmt.str "tool %s: %s@." name output.content)
+        | Agent.Tool_finished { output; name; _ } when output.Tool.is_error ->
+            print_stderr common.env (Fmt.str "tool %s: %s@." name output.Tool.content)
         | Agent.Failed error ->
             print_stderr common.env (Fmt.str "ERROR: %a@." Agent.pp_error error)
         | Agent.Turn_done _ -> print_stdout common.env "\n"
@@ -237,7 +246,8 @@ let make_permission common (config : Config.t) (options : cli) =
     | Some bridge ->
         Crush_ui.Bridge.push bridge (Agent.Permission_resolved (request, outcome))
   in
-  Permission.create ~config:config.permissions ~yolo:options.yolo ?asker ~cwd:common.cwd
+  Permission.create ~config:config.Config.permissions ~yolo:options.yolo ?asker
+    ~cwd:common.cwd
     ~plans_dir:(Filename.concat (Config.data_dir config ~cwd:common.cwd) "plans")
     ~on_decision ()
 
@@ -388,10 +398,10 @@ let model_rows runtime =
               {
                 Crush_ui.id = model.Charm_fantasy.Model.id;
                 provider;
-                context_window = model.context_window;
-                max_tokens = model.default_max_tokens;
-                can_reason = model.can_reason;
-                supports_attachments = model.supports_attachments;
+                context_window = model.Charm_fantasy.Model.context_window;
+                max_tokens = model.Charm_fantasy.Model.default_max_tokens;
+                can_reason = model.Charm_fantasy.Model.can_reason;
+                supports_attachments = model.Charm_fantasy.Model.supports_attachments;
               })
             models)
         rows
@@ -404,11 +414,11 @@ let session_rows runtime =
         (fun (row : Session.index_entry) ->
           {
             Crush_ui.id = row.Session.id;
-            title = row.title;
+            title = row.Session.title;
             (* The session index does not persist the model; the column stays
                empty until the index gains a model_ref field. *)
             model = "";
-            created_ms = row.created_ms;
+            created_ms = row.Session.created_ms;
           })
         rows
 
@@ -422,7 +432,7 @@ let model_config runtime ~agent target =
       let config =
         {
           runtime.common.config with
-          models = { runtime.common.config.models with large = Some selected };
+          models = { runtime.common.config.Config.models with large = Some selected };
         }
       in
       match
@@ -714,8 +724,9 @@ let list_models env options =
       List.iter
         (fun (model : Charm_fantasy.Model.t) ->
           print_stdout env
-            (Fmt.str "  %s\t%d\t%d\n" model.Charm_fantasy.Model.id model.context_window
-               model.default_max_tokens))
+            (Fmt.str "  %s\t%d\t%d\n" model.Charm_fantasy.Model.id
+               model.Charm_fantasy.Model.context_window
+               model.Charm_fantasy.Model.default_max_tokens))
         models)
     rows
 
@@ -727,7 +738,7 @@ let list_sessions env options =
   | Ok rows ->
       List.iter
         (fun (row : Session.index_entry) ->
-          print_stdout env (Fmt.str "%s\t%s\n" row.Session.id row.title))
+          print_stdout env (Fmt.str "%s\t%s\n" row.Session.id row.Session.title))
         rows
 
 let update_providers env source =

@@ -135,13 +135,17 @@ let textarea_styles (options : options) : Textarea.styles =
   let cursor =
     {
       (match Gum_style.foreground options.cursor_style with
-      | None -> styles.cursor
-      | Some color -> { styles.cursor with color })
+      | None -> styles.Textarea.cursor
+      | Some color -> { styles.Textarea.cursor with color })
       with
       blink = options.cursor_mode = Blink;
     }
   in
-  { focused = map_state styles.focused; blurred = map_state styles.blurred; cursor }
+  {
+    focused = map_state styles.Textarea.focused;
+    blurred = map_state styles.Textarea.blurred;
+    cursor;
+  }
 
 let keymap =
   let insert_newline = Key_binding.v ~help:("ctrl+j", "insert newline") [ "ctrl+j" ] in

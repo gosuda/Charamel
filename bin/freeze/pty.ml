@@ -20,7 +20,7 @@ let read_pty source output =
 let terminal_size () =
   try
     let size = Eio_unix.Pty.get_window_size Eio_unix.Fd.stdout in
-    (size.cols, size.rows)
+    (size.Eio_unix.Pty.cols, size.Eio_unix.Pty.rows)
   with Unix.Unix_error _ -> (80, 24)
 
 let with_term ~env width height =

@@ -34,7 +34,7 @@ let strip out = Charm_ansi.Text.strip out
 
 let test_text_error_level () =
   let out =
-    with_reporter ~format:Text (fun () ->
+    with_reporter ~format:Charm_log.Text (fun () ->
         Log.err (fun m -> m ~tags:(Logs.Tag.add user_tag "alice" Logs.Tag.empty) "boom"))
   in
   Alcotest.(check string)
@@ -44,13 +44,15 @@ let test_text_level_padding () =
   (* [Info]'s label "INFO" pads to width 5 as "INFO ", and the next field's own leading
      separator adds a second space: reproduces charmbracelet/log's own layout via
      {!Charm_lipgloss.Style}'s [width], not an error. *)
-  let out = with_reporter ~format:Text (fun () -> Log.info (fun m -> m "ready")) in
+  let out =
+    with_reporter ~format:Charm_log.Text (fun () -> Log.info (fun m -> m "ready"))
+  in
   Alcotest.(check string)
     "label padded to width 5" "INFO  charm.log.test: ready\n" (strip out)
 
 let test_text_quoted_tag () =
   let out =
-    with_reporter ~format:Text (fun () ->
+    with_reporter ~format:Charm_log.Text (fun () ->
         Log.err (fun m ->
             m ~tags:(Logs.Tag.add note_tag "has space" Logs.Tag.empty) "boom"))
   in
@@ -58,13 +60,16 @@ let test_text_quoted_tag () =
     "quoted tag value" "ERROR charm.log.test: boom note=\"has space\"\n" (strip out)
 
 let test_text_app_no_label () =
-  let out = with_reporter ~format:Text (fun () -> Log.app (fun m -> m "launched")) in
+  let out =
+    with_reporter ~format:Charm_log.Text (fun () -> Log.app (fun m -> m "launched"))
+  in
   Alcotest.(check string)
     "app renders without a level label" "charm.log.test: launched\n" (strip out)
 
 let test_text_caller_default_off () =
   let out =
-    with_reporter ~format:Text (fun () -> Log.err (fun m -> m ~header:"foo.ml:10" "boom"))
+    with_reporter ~format:Charm_log.Text (fun () ->
+        Log.err (fun m -> m ~header:"foo.ml:10" "boom"))
   in
   Alcotest.(check bool)
     "caller hidden when report_caller is off" false
@@ -72,7 +77,7 @@ let test_text_caller_default_off () =
 
 let test_text_caller_on () =
   let out =
-    with_reporter ~format:Text ~report_caller:true (fun () ->
+    with_reporter ~format:Charm_log.Text ~report_caller:true (fun () ->
         Log.err (fun m -> m ~header:"foo.ml:10" "boom"))
   in
   Alcotest.(check string)
@@ -82,7 +87,7 @@ let test_text_caller_on () =
 let test_text_timestamp () =
   Eio_mock.Clock.set_time clock 0.0;
   let out =
-    with_reporter ~format:Text ~report_timestamp:true (fun () ->
+    with_reporter ~format:Charm_log.Text ~report_timestamp:true (fun () ->
         Log.err (fun m -> m "boom"))
   in
   Alcotest.(check string)
@@ -90,7 +95,9 @@ let test_text_timestamp () =
     "1970/01/01 00:00:00 ERROR charm.log.test: boom\n" (strip out)
 
 let test_text_no_timestamp_by_default () =
-  let out = with_reporter ~format:Text (fun () -> Log.err (fun m -> m "boom")) in
+  let out =
+    with_reporter ~format:Charm_log.Text (fun () -> Log.err (fun m -> m "boom"))
+  in
   Alcotest.(check bool)
     "no time field by default" false
     (contains ~needle:"1970" (strip out))
@@ -98,13 +105,15 @@ let test_text_no_timestamp_by_default () =
 (* {1 Logfmt format} *)
 
 let test_logfmt_basic () =
-  let out = with_reporter ~format:Logfmt (fun () -> Log.info (fun m -> m "hello")) in
+  let out =
+    with_reporter ~format:Charm_log.Logfmt (fun () -> Log.info (fun m -> m "hello"))
+  in
   Alcotest.(check string)
     "level, prefix, msg" "level=info prefix=charm.log.test msg=hello\n" out
 
 let test_logfmt_quoting () =
   let out =
-    with_reporter ~format:Logfmt (fun () ->
+    with_reporter ~format:Charm_log.Logfmt (fun () ->
         Log.info (fun m ->
             m ~tags:(Logs.Tag.add note_tag "a \"quote\"" Logs.Tag.empty) "hi there"))
   in
@@ -113,7 +122,9 @@ let test_logfmt_quoting () =
     "level=info prefix=charm.log.test msg=\"hi there\" note=\"a \\\"quote\\\"\"\n" out
 
 let test_logfmt_app_no_level () =
-  let out = with_reporter ~format:Logfmt (fun () -> Log.app (fun m -> m "launched")) in
+  let out =
+    with_reporter ~format:Charm_log.Logfmt (fun () -> Log.app (fun m -> m "launched"))
+  in
   Alcotest.(check bool) "no level key for App" false (contains ~needle:"level=" out)
 
 (* {1 Json format} *)
@@ -130,7 +141,9 @@ let decode_object line =
   | Error msg -> Alcotest.fail ("json decode failed: " ^ msg)
 
 let test_json_basic () =
-  let out = with_reporter ~format:Json (fun () -> Log.info (fun m -> m "hello")) in
+  let out =
+    with_reporter ~format:Charm_log.Json (fun () -> Log.info (fun m -> m "hello"))
+  in
   Alcotest.(check int) "exactly one line" 1 (count_char '\n' out);
   let members = decode_object (String.trim out) in
   Alcotest.(check (option string)) "level" (Some "info") (json_member members "level");
@@ -140,14 +153,16 @@ let test_json_basic () =
   Alcotest.(check (option string)) "msg" (Some "hello") (json_member members "msg")
 
 let test_json_app_no_level () =
-  let out = with_reporter ~format:Json (fun () -> Log.app (fun m -> m "launched")) in
+  let out =
+    with_reporter ~format:Charm_log.Json (fun () -> Log.app (fun m -> m "launched"))
+  in
   let members = decode_object (String.trim out) in
   Alcotest.(check (option string)) "no level member" None (json_member members "level")
 
 let test_json_tag_round_trip () =
   let value = "a \"quote\"\nand a newline" in
   let out =
-    with_reporter ~format:Json (fun () ->
+    with_reporter ~format:Charm_log.Json (fun () ->
         Log.info (fun m -> m ~tags:(Logs.Tag.add note_tag value Logs.Tag.empty) "hi"))
   in
   let members = decode_object (String.trim out) in
@@ -159,7 +174,7 @@ let test_json_tag_round_trip () =
 
 let test_profile_true_color_keeps_index () =
   let out =
-    with_reporter ~format:Text ~profile:Charm_colorprofile.True_color (fun () ->
+    with_reporter ~format:Charm_log.Text ~profile:Charm_colorprofile.True_color (fun () ->
         Log.info (fun m -> m "x"))
   in
   Alcotest.(check bool)
@@ -168,7 +183,7 @@ let test_profile_true_color_keeps_index () =
 
 let test_profile_ascii_drops_color () =
   let out =
-    with_reporter ~format:Text ~profile:Charm_colorprofile.Ascii (fun () ->
+    with_reporter ~format:Charm_log.Text ~profile:Charm_colorprofile.Ascii (fun () ->
         Log.info (fun m -> m "x"))
   in
   Alcotest.(check bool)
@@ -178,7 +193,7 @@ let test_profile_ascii_drops_color () =
 
 let test_profile_no_tty_drops_color () =
   let out =
-    with_reporter ~format:Text ~profile:Charm_colorprofile.No_tty (fun () ->
+    with_reporter ~format:Charm_log.Text ~profile:Charm_colorprofile.No_tty (fun () ->
         Log.info (fun m -> m "x"))
   in
   Alcotest.(check bool)
@@ -189,7 +204,7 @@ let test_profile_no_tty_drops_color () =
 let test_single_invocation () =
   let calls = ref 0 in
   let out =
-    with_reporter ~format:Text (fun () ->
+    with_reporter ~format:Charm_log.Text (fun () ->
         Log.info (fun m ->
             incr calls;
             m "once"))

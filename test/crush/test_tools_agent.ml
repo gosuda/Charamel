@@ -22,7 +22,7 @@ let has_default name expected schema =
   | _ -> false
 
 let schema_contract () =
-  let schema = Tools_agent.agent.schema in
+  let schema = Tools_agent.agent.Crush_core.Tool.schema in
   Alcotest.(check bool)
     "agent schema is an object" true
     (match schema with Jsont.Object _ -> true | _ -> false);
@@ -31,8 +31,9 @@ let schema_contract () =
   Alcotest.(check bool) "bounded default" true (has_default "max_active" 8 schema)
 
 let metadata () =
-  Alcotest.(check string) "agent tool name" "agent" Tools_agent.agent.name;
-  Alcotest.(check bool) "delegation is mutable" false Tools_agent.agent.read_only
+  Alcotest.(check string) "agent tool name" "agent" Tools_agent.agent.Crush_core.Tool.name;
+  Alcotest.(check bool)
+    "delegation is mutable" false Tools_agent.agent.Crush_core.Tool.read_only
 
 let cases =
   [

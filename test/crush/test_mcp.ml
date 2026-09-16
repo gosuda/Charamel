@@ -258,7 +258,7 @@ let run_stdio () =
       let tools = Mcp.tools client in
       Alcotest.(check (list string))
         "stdio tool names" [ "echo" ]
-        (List.map (fun (tool : Mcp.tool) -> tool.name) tools);
+        (List.map (fun (tool : Mcp.tool) -> tool.Mcp.name) tools);
       Alcotest.(check string)
         "tool name" "mcp_fixture_echo"
         (Mcp.tool_name ~server:"fixture" "echo");

@@ -75,13 +75,13 @@ let textinput_styles (options : options) : Textinput.styles =
   let styles = Textinput.default_styles ~is_dark:true in
   let prompt = Gum_style.to_style options.prompt_style in
   let placeholder = Gum_style.to_style options.placeholder_style in
-  let focused = { styles.focused with prompt; placeholder } in
-  let blurred = { styles.blurred with prompt; placeholder } in
+  let focused = { styles.Textinput.focused with prompt; placeholder } in
+  let blurred = { styles.Textinput.blurred with prompt; placeholder } in
   let cursor =
     {
       (match Gum_style.foreground options.cursor_style with
-      | None -> styles.cursor
-      | Some color -> { styles.cursor with color })
+      | None -> styles.Textinput.cursor
+      | Some color -> { styles.Textinput.cursor with color })
       with
       blink = options.cursor_mode = Blink;
     }

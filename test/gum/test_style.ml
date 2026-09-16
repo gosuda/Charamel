@@ -1,8 +1,12 @@
 let side_equal (expected : Charm_lipgloss.Sides.t) (actual : Charm_lipgloss.Sides.t) =
-  Alcotest.(check int) "top" expected.top actual.top;
-  Alcotest.(check int) "right" expected.right actual.right;
-  Alcotest.(check int) "bottom" expected.bottom actual.bottom;
-  Alcotest.(check int) "left" expected.left actual.left
+  Alcotest.(check int)
+    "top" expected.Charm_lipgloss.Sides.top actual.Charm_lipgloss.Sides.top;
+  Alcotest.(check int)
+    "right" expected.Charm_lipgloss.Sides.right actual.Charm_lipgloss.Sides.right;
+  Alcotest.(check int)
+    "bottom" expected.Charm_lipgloss.Sides.bottom actual.Charm_lipgloss.Sides.bottom;
+  Alcotest.(check int)
+    "left" expected.Charm_lipgloss.Sides.left actual.Charm_lipgloss.Sides.left
 
 let trims_each_line () =
   Alcotest.(check string)

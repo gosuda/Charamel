@@ -486,13 +486,13 @@ type context = {
 let style_of_block (b : Theme.block) =
   let open Charm_lipgloss.Style in
   let s = empty in
-  let s = match b.color with None -> s | Some c -> foreground c s in
-  let s = match b.background with None -> s | Some c -> background c s in
-  let s = bold b.bold s in
-  let s = italic b.italic s in
-  let s = underline b.underline s in
-  let s = faint b.faint s in
-  strikethrough b.strike s
+  let s = match b.Theme.color with None -> s | Some c -> foreground c s in
+  let s = match b.Theme.background with None -> s | Some c -> background c s in
+  let s = bold b.Theme.bold s in
+  let s = italic b.Theme.italic s in
+  let s = underline b.Theme.underline s in
+  let s = faint b.Theme.faint s in
+  strikethrough b.Theme.strike s
 
 let style_text (b : Theme.block) text =
   if text = "" then "" else Charm_lipgloss.Style.render (style_of_block b) text
@@ -579,7 +579,7 @@ let plain s = Charm_ansi.Text.strip s
 
 let inline_text ctx text =
   let text = if ctx.emoji then replace_emoji text else text in
-  style_text ctx.theme.text text
+  style_text ctx.theme.Theme.text text
 
 let link_destination ctx link =
   match Cmarkit.Inline.Link.reference_definition ctx.defs link with
@@ -621,21 +621,22 @@ let rec render_inline ctx (inline : Cmarkit.Inline.t) =
       | `Hard -> "\n"
       | `Soft -> if ctx.preserve_newlines then "\n" else " ")
   | Cmarkit.Inline.Code_span (code, _) ->
-      let b = ctx.theme.code in
+      let b = ctx.theme.Theme.code in
       style_text b (Cmarkit.Inline.Code_span.code code)
   | Cmarkit.Inline.Emphasis (emph, _) ->
-      style_text ctx.theme.emph (render_inline ctx (Cmarkit.Inline.Emphasis.inline emph))
+      style_text ctx.theme.Theme.emph
+        (render_inline ctx (Cmarkit.Inline.Emphasis.inline emph))
   | Cmarkit.Inline.Strong_emphasis (strong, _) ->
-      style_text ctx.theme.strong
+      style_text ctx.theme.Theme.strong
         (render_inline ctx (Cmarkit.Inline.Emphasis.inline strong))
   | Cmarkit.Inline.Ext_strikethrough (strike, _) ->
-      style_text ctx.theme.strike
+      style_text ctx.theme.Theme.strike
         (render_inline ctx (Cmarkit.Inline.Strikethrough.inline strike))
   | Cmarkit.Inline.Raw_html (lines, _) ->
       let text = String.concat "\n" (List.map Cmarkit.Block_line.tight_to_string lines) in
-      style_text ({ ctx.theme.html_span with faint = true } : Theme.block) text
+      style_text ({ ctx.theme.Theme.html_span with faint = true } : Theme.block) text
   | Cmarkit.Inline.Ext_math_span (math, _) ->
-      style_text ctx.theme.code (Cmarkit.Inline.Math_span.tex math)
+      style_text ctx.theme.Theme.code (Cmarkit.Inline.Math_span.tex math)
   | Cmarkit.Inline.Autolink (autolink, _) ->
       let raw_url = fst (Cmarkit.Inline.Autolink.link autolink) in
       let is_email = Cmarkit.Inline.Autolink.is_email autolink in
@@ -649,13 +650,13 @@ let rec render_inline ctx (inline : Cmarkit.Inline.t) =
       in
       if ctx.in_table then begin
         add_table_link ctx { content = label; href = resolved; image = false };
-        style_text ctx.theme.link_text label
+        style_text ctx.theme.Theme.link_text label
         ^ "["
         ^ string_of_int (List.length ctx.table_links)
         ^ "]"
       end
-      else if is_email then style_text ctx.theme.link_text label
-      else hyperlink resolved (style_text ctx.theme.link resolved)
+      else if is_email then style_text ctx.theme.Theme.link_text label
+      else hyperlink resolved (style_text ctx.theme.Theme.link resolved)
   | Cmarkit.Inline.Link (link, _) -> (
       let text = render_inline ctx (Cmarkit.Inline.Link.text link) in
       match footnote_of_link ctx link with
@@ -672,16 +673,16 @@ let rec render_inline ctx (inline : Cmarkit.Inline.t) =
           let resolved = resolve_url ~base_url:ctx.base_url href in
           if ctx.in_table then begin
             add_table_link ctx { content = plain text; href = resolved; image = false };
-            style_text ctx.theme.link_text text
+            style_text ctx.theme.Theme.link_text text
             ^ "["
             ^ string_of_int (List.length ctx.table_links)
             ^ "]"
           end
           else
-            let text = style_text ctx.theme.link_text text in
+            let text = style_text ctx.theme.Theme.link_text text in
             if url_is_valid resolved then
               hyperlink resolved text ^ " ("
-              ^ hyperlink resolved (style_text ctx.theme.link resolved)
+              ^ hyperlink resolved (style_text ctx.theme.Theme.link resolved)
               ^ ")"
             else text)
   | Cmarkit.Inline.Image (image, _) ->
@@ -693,15 +694,15 @@ let rec render_inline ctx (inline : Cmarkit.Inline.t) =
       in
       if ctx.in_table then begin
         add_table_link ctx { content = alt; href = resolved; image = true };
-        style_text ctx.theme.image_text alt
+        style_text ctx.theme.Theme.image_text alt
         ^ "["
         ^ string_of_int (List.length ctx.table_links)
         ^ "]"
       end
       else
-        let text = style_text ctx.theme.image_text alt in
+        let text = style_text ctx.theme.Theme.image_text alt in
         if url_is_valid resolved then
-          text ^ " " ^ hyperlink resolved (style_text ctx.theme.image resolved)
+          text ^ " " ^ hyperlink resolved (style_text ctx.theme.Theme.image resolved)
         else text
   | _ -> invalid_arg "charm.glamour: unsupported inline extension"
 
@@ -710,34 +711,40 @@ let merge_block ?(inherit_affixes = false) (parent : Theme.block) (child : Theme
   let choose_text a b = if b = "" then a else b in
   {
     prefix =
-      (if inherit_affixes then choose_text parent.prefix child.prefix else child.prefix);
+      (if inherit_affixes then choose_text parent.Theme.prefix child.Theme.prefix
+       else child.Theme.prefix);
     suffix =
-      (if inherit_affixes then choose_text parent.suffix child.suffix else child.suffix);
-    indent = (if child.indent = 0 then parent.indent else child.indent);
-    margin = (if child.margin = 0 then parent.margin else child.margin);
-    color = (match child.color with Some _ as c -> c | None -> parent.color);
+      (if inherit_affixes then choose_text parent.Theme.suffix child.Theme.suffix
+       else child.Theme.suffix);
+    indent = (if child.Theme.indent = 0 then parent.Theme.indent else child.Theme.indent);
+    margin = (if child.Theme.margin = 0 then parent.Theme.margin else child.Theme.margin);
+    color = (match child.Theme.color with Some _ as c -> c | None -> parent.Theme.color);
     background =
-      (match child.background with Some _ as b -> b | None -> parent.background);
-    bold = parent.bold || child.bold;
-    italic = parent.italic || child.italic;
-    underline = parent.underline || child.underline;
-    faint = parent.faint || child.faint;
-    strike = parent.strike || child.strike;
+      (match child.Theme.background with
+      | Some _ as b -> b
+      | None -> parent.Theme.background);
+    bold = parent.Theme.bold || child.Theme.bold;
+    italic = parent.Theme.italic || child.Theme.italic;
+    underline = parent.Theme.underline || child.Theme.underline;
+    faint = parent.Theme.faint || child.Theme.faint;
+    strike = parent.Theme.strike || child.Theme.strike;
     block_prefix =
-      (if inherit_affixes then choose_text parent.block_prefix child.block_prefix
-       else child.block_prefix);
+      (if inherit_affixes then
+         choose_text parent.Theme.block_prefix child.Theme.block_prefix
+       else child.Theme.block_prefix);
     block_suffix =
-      (if inherit_affixes then choose_text parent.block_suffix child.block_suffix
-       else child.block_suffix);
+      (if inherit_affixes then
+         choose_text parent.Theme.block_suffix child.Theme.block_suffix
+       else child.Theme.block_suffix);
   }
 
 let render_wrapped ctx (b : Theme.block) ~indent content =
   let available =
-    if ctx.width < 1 then 0 else max 1 (ctx.width - indent - (2 * b.margin))
+    if ctx.width < 1 then 0 else max 1 (ctx.width - indent - (2 * b.Theme.margin))
   in
-  let styled = style_text b (b.prefix ^ content ^ b.suffix) in
+  let styled = style_text b (b.Theme.prefix ^ content ^ b.Theme.suffix) in
   let wrapped = wrap_text available styled in
-  b.block_prefix ^ wrapped ^ b.block_suffix
+  b.Theme.block_prefix ^ wrapped ^ b.Theme.block_suffix
 
 let render_paragraph ctx ~indent paragraph =
   let content = render_inline ctx (Cmarkit.Block.Paragraph.inline paragraph) in
@@ -751,25 +758,26 @@ let render_paragraph ctx ~indent paragraph =
     if is_description then String.sub content 2 (String.length content - 2) else content
   in
   let style =
-    if is_description then ctx.theme.definition_description
-    else merge_block ctx.theme.document ctx.theme.paragraph
+    if is_description then ctx.theme.Theme.definition_description
+    else merge_block ctx.theme.Theme.document ctx.theme.Theme.paragraph
   in
   render_wrapped ctx style ~indent content
 
 let heading_style (theme : Theme.t) level : Theme.block =
   let level_style =
     match level with
-    | 1 -> theme.h1
-    | 2 -> theme.h2
-    | 3 -> theme.h3
-    | 4 -> theme.h4
-    | 5 -> theme.h5
-    | _ -> theme.h6
+    | 1 -> theme.Theme.h1
+    | 2 -> theme.Theme.h2
+    | 3 -> theme.Theme.h3
+    | 4 -> theme.Theme.h4
+    | 5 -> theme.Theme.h5
+    | _ -> theme.Theme.h6
   in
   let merged : Theme.block =
-    merge_block ~inherit_affixes:true theme.heading level_style
+    merge_block ~inherit_affixes:true theme.Theme.heading level_style
   in
-  if level = 6 && not level_style.bold then ({ merged with bold = false } : Theme.block)
+  if level = 6 && not level_style.Theme.bold then
+    ({ merged with bold = false } : Theme.block)
   else merged
 
 let render_heading ctx ~indent heading =
@@ -788,7 +796,7 @@ let render_code_block ctx ~indent code_block =
         Option.map fst
           (Cmarkit.Block.Code_block.language_of_info_string (String.trim info))
   in
-  let block, code_theme = ctx.theme.code_block in
+  let block, code_theme = ctx.theme.Theme.code_block in
   let highlighted =
     match language with
     | Some lang -> (
@@ -797,7 +805,7 @@ let render_code_block ctx ~indent code_block =
         | None -> style_text block code)
     | None -> style_text block code
   in
-  let left = indent + block.margin in
+  let left = indent + block.Theme.margin in
   let lines = split_lines highlighted in
   String.concat "\n" (List.map (fun line -> spaces left ^ line) lines)
 
@@ -834,7 +842,7 @@ and render_list ctx ~indent list =
     | `Ordered (start, _) -> (true, start)
     | `Unordered _ -> (false, 1)
   in
-  let _, level_indent = ctx.theme.list in
+  let _, level_indent = ctx.theme.Theme.list in
   let items = Cmarkit.Block.List'.items list in
   items
   |> List.mapi (fun index (item, _) ->
@@ -843,10 +851,10 @@ and render_list ctx ~indent list =
         | None -> None
         | Some (u, _) -> (
             match Cmarkit.Block.List_item.task_status_of_task_marker u with
-            | `Checked -> Some ctx.theme.task_ticked
-            | `Unchecked -> Some ctx.theme.task_unticked
-            | `Cancelled -> Some ctx.theme.task_unticked
-            | `Other _ -> Some ctx.theme.task_unticked)
+            | `Checked -> Some ctx.theme.Theme.task_ticked
+            | `Unchecked -> Some ctx.theme.Theme.task_unticked
+            | `Cancelled -> Some ctx.theme.Theme.task_unticked
+            | `Other _ -> Some ctx.theme.Theme.task_unticked)
       in
       let marker =
         match task_marker with
@@ -854,9 +862,12 @@ and render_list ctx ~indent list =
         | None ->
             if ordered then
               style_text
-                (Theme.block ~block_prefix:ctx.theme.enumeration ())
-                (string_of_int (start + index) ^ ctx.theme.enumeration)
-            else style_text (Theme.block ~block_prefix:ctx.theme.item ()) ctx.theme.item
+                (Theme.block ~block_prefix:ctx.theme.Theme.enumeration ())
+                (string_of_int (start + index) ^ ctx.theme.Theme.enumeration)
+            else
+              style_text
+                (Theme.block ~block_prefix:ctx.theme.Theme.item ())
+                ctx.theme.Theme.item
       in
       let marker_width = max 1 (width_of marker) in
       let body = render_list_item ctx ~indent ~marker_width ~level_indent item in
@@ -877,9 +888,10 @@ and render_block ctx ~indent block =
   | Cmarkit.Block.Paragraph (paragraph, _) -> render_paragraph ctx ~indent paragraph
   | Cmarkit.Block.Heading (heading, _) -> render_heading ctx ~indent heading
   | Cmarkit.Block.Block_quote (quote, _) ->
-      let marker = ctx.theme.block_quote.block_prefix in
+      let marker = ctx.theme.Theme.block_quote.Theme.block_prefix in
       let marker_width =
-        if marker = "" then max 1 ctx.theme.block_quote.indent else width_of marker
+        if marker = "" then max 1 ctx.theme.Theme.block_quote.Theme.indent
+        else width_of marker
       in
       let rendered =
         render_block ctx ~indent:(indent + marker_width)
@@ -888,19 +900,20 @@ and render_block ctx ~indent block =
       let marker = if marker = "" then spaces marker_width else marker in
       rendered |> split_lines
       |> List.map (fun line ->
-          spaces indent ^ marker ^ style_text ctx.theme.block_quote line)
+          spaces indent ^ marker ^ style_text ctx.theme.Theme.block_quote line)
       |> String.concat "\n"
   | Cmarkit.Block.List (list, _) -> render_list ctx ~indent list
   | Cmarkit.Block.Code_block (code, _) -> render_code_block ctx ~indent code
   | Cmarkit.Block.Thematic_break _ ->
-      let b = ctx.theme.hr in
-      style_text b (if b.prefix <> "" then b.prefix else "--------")
+      let b = ctx.theme.Theme.hr in
+      style_text b (if b.Theme.prefix <> "" then b.Theme.prefix else "--------")
   | Cmarkit.Block.Html_block (lines, _) ->
       let text = String.concat "\n" (List.map Cmarkit.Block_line.to_string lines) in
-      style_text ({ ctx.theme.html_block with faint = true } : Theme.block) text
+      style_text ({ ctx.theme.Theme.html_block with faint = true } : Theme.block) text
   | Cmarkit.Block.Link_reference_definition _ -> ""
   | Cmarkit.Block.Ext_math_block (code, _) ->
-      style_text (fst ctx.theme.code_block)
+      style_text
+        (fst ctx.theme.Theme.code_block)
         (code_text (Cmarkit.Block.Code_block.code code))
   | Cmarkit.Block.Ext_table (table, _) -> render_table ctx ~indent table
   | Cmarkit.Block.Ext_footnote_definition _ -> ""
@@ -920,7 +933,7 @@ and render_table ctx ~indent table =
       | `Data cells -> rows := !rows @ [ add_cells cells ]
       | `Sep cells -> alignments := List.map (fun ((alignment, _), _) -> alignment) cells)
     (Cmarkit.Block.Table.rows table);
-  let table_block, separator = ctx.theme.table in
+  let table_block, separator = ctx.theme.Theme.table in
   let border =
     if separator = "|" then Charm_lipgloss.Border.ascii
     else if separator = "│" || separator = "" then Charm_lipgloss.Border.normal
@@ -958,7 +971,7 @@ and render_table ctx ~indent table =
   in
   let width =
     if ctx.width < 1 then None
-    else Some (max 1 (ctx.width - indent - (2 * table_block.margin)))
+    else Some (max 1 (ctx.width - indent - (2 * table_block.Theme.margin)))
   in
   let headers, rows =
     match (width, ctx.table_wrap) with
@@ -985,9 +998,10 @@ and render_table ctx ~indent table =
   in
   let rendered = Charm_lipgloss.Table.render tbl in
   let rendered =
-    table_block.block_prefix
-    ^ style_text table_block (table_block.prefix ^ rendered ^ table_block.suffix)
-    ^ table_block.block_suffix
+    table_block.Theme.block_prefix
+    ^ style_text table_block
+        (table_block.Theme.prefix ^ rendered ^ table_block.Theme.suffix)
+    ^ table_block.Theme.block_suffix
   in
   let body =
     String.concat "\n"
@@ -999,7 +1013,8 @@ and render_table ctx ~indent table =
         let href = resolve_url ~base_url:ctx.base_url link.href in
         let label = link.content in
         Printf.sprintf "[%d]: %s%s" (i + 1) label
-          (if href = "" then "" else " " ^ hyperlink href (style_text ctx.theme.link href)))
+          (if href = "" then ""
+           else " " ^ hyperlink href (style_text ctx.theme.Theme.link href)))
     |> String.concat "\n"
   in
   ctx.in_table <- old_in_table;
@@ -1045,13 +1060,15 @@ let render ?(width = 80) ?(theme = (Theme.dark : Theme.t)) ?(base_url = "")
             Some (Printf.sprintf "[%d]: %s" number content))
   in
   let body = if footers = [] then body else body ^ "\n\n" ^ String.concat "\n" footers in
-  let document = (theme : Theme.t).document in
+  let document = (theme : Theme.t).Theme.document in
   let body =
     if body = "" then ""
-    else document.block_prefix ^ style_text document body ^ document.block_suffix
+    else
+      document.Theme.block_prefix ^ style_text document body ^ document.Theme.block_suffix
   in
-  if document.margin <= 0 then body
+  if document.Theme.margin <= 0 then body
   else
     body |> split_lines
-    |> List.map (fun line -> if line = "" then line else spaces document.margin ^ line)
+    |> List.map (fun line ->
+        if line = "" then line else spaces document.Theme.margin ^ line)
     |> String.concat "\n"

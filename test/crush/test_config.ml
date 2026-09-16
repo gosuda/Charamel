@@ -72,20 +72,22 @@ let check_layered_load () =
       | Error error -> Alcotest.failf "layered load failed: %a" Config.pp_error error
       | Ok (config, files) -> (
           Alcotest.(check int) "three files contribute" 3 (List.length files);
-          Alcotest.(check bool) "root scalar wins" true config.options.debug;
+          Alcotest.(check bool) "root scalar wins" true config.Config.options.Config.debug;
           Alcotest.(check string)
-            "options values are not expanded" "$DATA" config.options.data_dir;
+            "options values are not expanded" "$DATA"
+            config.Config.options.Config.data_dir;
           Alcotest.(check (list string))
             "list merge deduplicates in order" [ "A.md"; "B.md"; "C.md" ]
-            config.context_paths;
+            config.Config.context_paths;
           Alcotest.(check (list string))
             "permission lists concatenate" [ "read"; "edit" ]
-            config.permissions.allowed_tools;
-          match List.assoc_opt "anthropic" config.providers with
+            config.Config.permissions.Config.allowed_tools;
+          match List.assoc_opt "anthropic" config.Config.providers with
           | None -> Alcotest.fail "home provider missing"
           | Some provider ->
               Alcotest.(check (option string))
-                "environment expands api key" (Some "secret-token") provider.api_key))
+                "environment expands api key" (Some "secret-token")
+                provider.Config.api_key))
 
 let check_invalid_config () =
   match
@@ -113,13 +115,13 @@ let check_opaque_map_keys () =
   match Jsont_bytesrw.decode_string Config.jsont json with
   | Error message -> Alcotest.failf "opaque header key was rejected: %s" message
   | Ok config -> (
-      match List.assoc_opt "demo" config.providers with
+      match List.assoc_opt "demo" config.Config.providers with
       | None -> Alcotest.fail "provider was not decoded"
       | Some provider ->
           Alcotest.(check (list (pair string string)))
             "header key remains arbitrary"
             [ ("X-Test", "ok") ]
-            provider.headers)
+            provider.Config.headers)
 
 let check_jsonx_presence () =
   match Crush_core.Jsonx.json_of_string "{\"present\":null,\"number\":3}" with

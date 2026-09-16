@@ -417,21 +417,24 @@ let valid_permission_entry value =
   | _ -> false
 
 let validate_model (model : Charm_fantasy.Model.t) =
-  let* () = nonempty "model id" model.id in
-  let* () = nonempty "model name" model.name in
-  if model.context_window <= 0 then Error "model context_window must be positive"
-  else if model.default_max_tokens <= 0 then
+  let* () = nonempty "model id" model.Charm_fantasy.Model.id in
+  let* () = nonempty "model name" model.Charm_fantasy.Model.name in
+  if model.Charm_fantasy.Model.context_window <= 0 then
+    Error "model context_window must be positive"
+  else if model.Charm_fantasy.Model.default_max_tokens <= 0 then
     Error "model default_max_tokens must be positive"
   else if
     not
-      (Float.is_finite model.cost_in
-      && Float.is_finite model.cost_out
-      && Float.is_finite model.cost_cache_read
-      && Float.is_finite model.cost_cache_write)
+      (Float.is_finite model.Charm_fantasy.Model.cost_in
+      && Float.is_finite model.Charm_fantasy.Model.cost_out
+      && Float.is_finite model.Charm_fantasy.Model.cost_cache_read
+      && Float.is_finite model.Charm_fantasy.Model.cost_cache_write)
   then Error "model costs must be finite"
   else if
-    model.cost_in < 0. || model.cost_out < 0. || model.cost_cache_read < 0.
-    || model.cost_cache_write < 0.
+    model.Charm_fantasy.Model.cost_in < 0.
+    || model.Charm_fantasy.Model.cost_out < 0.
+    || model.Charm_fantasy.Model.cost_cache_read < 0.
+    || model.Charm_fantasy.Model.cost_cache_write < 0.
   then Error "model costs must be non-negative"
   else Ok ()
 

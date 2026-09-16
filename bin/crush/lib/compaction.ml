@@ -112,8 +112,9 @@ let run ~sw ~clock ~net ~(small : Models.resolved) ~auth session =
     let rendered = render_prefix events through in
     let messages = [ Charm_fantasy.Message.text Charm_fantasy.Message.User rendered ] in
     let stream =
-      Charm_fantasy.Provider.stream small.provider ~sw ~clock ~net ~model:small.model
-        ~system:[ Prompt_summarize.text ] ~max_tokens:4096 messages
+      Charm_fantasy.Provider.stream small.Models.provider ~sw ~clock ~net
+        ~model:small.Models.model ~system:[ Prompt_summarize.text ] ~max_tokens:4096
+        messages
     in
     let summary = Buffer.create 1024 in
     let usage = ref Charm_fantasy.Usage.zero in
@@ -133,7 +134,12 @@ let run ~sw ~clock ~net ~(small : Models.resolved) ~auth session =
       | Finish (`Stop | `Length | `Content_filter | `Tool_calls) -> (
           let text = String.trim (Buffer.contents summary) in
           let ms = int_of_float (Eio.Time.now clock *. 1000.) in
-          let model = { Session.provider = small.provider_id; model = small.model.id } in
+          let model =
+            {
+              Session.provider = small.Models.provider_id;
+              model = small.Models.model.Charm_fantasy.Model.id;
+            }
+          in
           let persist_usage () =
             if Charm_fantasy.Usage.total !usage = 0 then Ok ()
             else
@@ -142,7 +148,7 @@ let run ~sw ~clock ~net ~(small : Models.resolved) ~auth session =
                    {
                      ms;
                      usage = !usage;
-                     cost_usd = Models.cost small.model !usage;
+                     cost_usd = Models.cost small.Models.model !usage;
                      model;
                    })
           in

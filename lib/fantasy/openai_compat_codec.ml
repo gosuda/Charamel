@@ -196,14 +196,14 @@ let string_or_parts = function
 (* System-role conversation messages are hoisted by [system_parts], so a
    [System] message here contributes nothing in place. *)
 let message_of (m : Message.t) : Jsont.json list =
-  match m.role with
+  match m.Message.role with
   | Message.System -> []
   | Message.User -> (
-      match user_parts m.parts with
+      match user_parts m.Message.parts with
       | [] -> []
       | parts -> [ obj [ (n "role", str "user"); (n "content", string_or_parts parts) ] ])
   | Message.Assistant -> (
-      let content, calls, reasoning = assistant_parts m.parts in
+      let content, calls, reasoning = assistant_parts m.Message.parts in
       match (content, calls) with
       | [], [] -> (
           (* A reasoning-only turn serializes with neither content nor tool
@@ -219,7 +219,7 @@ let message_of (m : Message.t) : Jsont.json list =
           | Some r -> ms := !ms @ [ (n "reasoning_content", str r) ]
           | None -> ());
           [ obj !ms ])
-  | Message.Tool -> tool_result_parts m.parts
+  | Message.Tool -> tool_result_parts m.Message.parts
 
 let tools_json (tools : Tool.t list) =
   match tools with
@@ -236,9 +236,9 @@ let tools_json (tools : Tool.t list) =
                      ( n "function",
                        obj
                          [
-                           (n "name", str t.name);
-                           (n "description", str t.description);
-                           (n "parameters", t.schema);
+                           (n "name", str t.Tool.name);
+                           (n "description", str t.Tool.description);
+                           (n "parameters", t.Tool.schema);
                          ] );
                    ])
                tools) );
@@ -261,40 +261,40 @@ let system_parts (r : Request.t) =
   let from_messages =
     List.concat_map
       (fun (m : Message.t) ->
-        match m.role with
+        match m.Message.role with
         | Message.System ->
             List.filter_map
               (fun p -> match p with Message.Text s -> Some s | _ -> None)
-              m.parts
+              m.Message.parts
         | Message.User | Message.Assistant | Message.Tool -> [])
-      r.messages
+      r.Request.messages
   in
-  match List.filter (fun s -> String.trim s <> "") (r.system @ from_messages) with
+  match List.filter (fun s -> String.trim s <> "") (r.Request.system @ from_messages) with
   | [] -> []
   | blocks ->
       [ obj [ (n "role", str "system"); (n "content", str (String.concat "\n" blocks)) ] ]
 
 let encode (r : Request.t) =
-  let reasoning = reasoning_effort r.reasoning in
-  let ms = ref [ (n "model", str r.model.id); (n "stream", jtrue) ] in
+  let reasoning = reasoning_effort r.Request.reasoning in
+  let ms = ref [ (n "model", str r.Request.model.Model.id); (n "stream", jtrue) ] in
   (match reasoning with
   | Some effort -> ms := !ms @ [ (n "reasoning_effort", str effort) ]
   | None -> ());
-  (match (r.temperature, reasoning) with
+  (match (r.Request.temperature, reasoning) with
   | Some t, None -> ms := !ms @ [ (n "temperature", num t) ]
   | Some _, Some _ | None, _ -> ());
   (* Reasoning models take the cap as [max_completion_tokens]; the
      [max_tokens] member is rejected there (language_model.go:321-327). *)
   (match reasoning with
-  | None -> ms := !ms @ [ (n "max_tokens", int r.max_tokens) ]
-  | Some _ -> ms := !ms @ [ (n "max_completion_tokens", int r.max_tokens) ]);
+  | None -> ms := !ms @ [ (n "max_tokens", int r.Request.max_tokens) ]
+  | Some _ -> ms := !ms @ [ (n "max_completion_tokens", int r.Request.max_tokens) ]);
   (* The usage chunk is only sent when the request asks for it. *)
   ms := !ms @ [ (n "stream_options", obj [ (n "include_usage", jtrue) ]) ];
-  let messages = system_parts r @ List.concat_map message_of r.messages in
+  let messages = system_parts r @ List.concat_map message_of r.Request.messages in
   (match messages with
   | [] -> ()
   | messages -> ms := !ms @ [ (n "messages", arr messages) ]);
-  ms := !ms @ tools_json r.tools;
+  ms := !ms @ tools_json r.Request.tools;
   obj !ms
 
 (* Stream decoding *)

@@ -223,12 +223,14 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
     ?script (app : ('model, 'msg) App.t) =
   if fps <= 0 then invalid_arg "fps must be positive";
   let fps = min 120 fps in
-  let rows, cols = terminal.size () in
+  let rows, cols = terminal.Terminal.size () in
   if rows <= 0 || cols <= 0 then invalid_arg "terminal size must be positive";
   let screen = Screen.create ~rows ~cols in
   let output_mutex = Eio.Mutex.create () in
-  let profile = Charm_colorprofile.detect ~is_tty:terminal.is_tty ~env:terminal.env in
-  let writer = Charm_colorprofile.Writer.create ~profile terminal.output in
+  let profile =
+    Charm_colorprofile.detect ~is_tty:terminal.Terminal.is_tty ~env:terminal.Terminal.env
+  in
+  let writer = Charm_colorprofile.Writer.create ~profile terminal.Terminal.output in
   let entered = ref false in
   let old_handlers : (Sys.signal * Sys.signal_behavior) list ref = ref [] in
   let state_ref : ('model, 'msg) runtime_state option ref = ref None in
@@ -252,7 +254,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
       (fun () ->
         Eio.Cancel.protect (fun () ->
             Fun.protect
-              ~finally:(fun () -> if !entered then terminal.leave ())
+              ~finally:(fun () -> if !entered then terminal.Terminal.leave ())
               (fun () ->
                 match !state_ref with
                 | None -> ()
@@ -266,15 +268,15 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
   try
     Fun.protect ~finally:cleanup (fun () ->
         entered := true;
-        terminal.enter ();
+        terminal.Terminal.enter ();
         Eio.Switch.run (fun sw ->
             let fork_daemon f =
               Eio.Fiber.fork_daemon ~sw (fun () ->
                   f ();
                   `Stop_daemon)
             in
-            let initial_model, initial_cmd = app.init () in
-            let initial_view = app.view initial_model in
+            let initial_model, initial_cmd = app.App.init () in
+            let initial_view = app.App.view initial_model in
             let state =
               {
                 queue = Eio.Stream.create 256;
@@ -295,7 +297,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                 dirty = false;
                 paused = false;
                 anchor = Fresh_line;
-                last_frame = Charm_ansi.Text.strip initial_view.content;
+                last_frame = Charm_ansi.Text.strip initial_view.View.content;
                 timers = [];
                 renderer_stop = false;
                 backlog = Queue.create ();
@@ -339,15 +341,17 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               if desired_size <> !screen_size then begin
                 Screen.resize screen ~rows:desired_rows ~cols:desired_cols;
                 screen_size := desired_size;
-                if (not view.alt_screen) && anchor = No_anchor then
+                if (not view.View.alt_screen) && anchor = No_anchor then
                   update_anchor state Column_start
               end;
-              if (not !last_rendered_alt) && (not view.alt_screen) && anchor = No_anchor
+              if
+                (not !last_rendered_alt) && (not view.View.alt_screen)
+                && anchor = No_anchor
               then update_anchor state Column_start;
               let current_anchor =
                 Eio.Mutex.use_ro state.mutex (fun () -> state.anchor)
               in
-              if not view.alt_screen then begin
+              if not view.View.alt_screen then begin
                 (match current_anchor with
                 | Fresh_line -> write_output_locked "\r\n"
                 | Column_start -> write_output_locked "\r"
@@ -358,9 +362,9 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               end;
               let bytes = Screen.render screen view in
               write_output_locked bytes;
-              last_rendered_alt := view.alt_screen;
+              last_rendered_alt := view.View.alt_screen;
               Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                  state.last_frame <- Charm_ansi.Text.strip view.content)
+                  state.last_frame <- Charm_ansi.Text.strip view.View.content)
             in
             let render_with_rate ~immediate =
               if not immediate then
@@ -384,7 +388,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   Eio.Promise.resolve resolver ()
               | Output_print (text, resolver) ->
                   let view = Eio.Mutex.use_ro state.mutex (fun () -> state.view) in
-                  if not view.alt_screen then begin
+                  if not view.View.alt_screen then begin
                     let anchor = Eio.Mutex.use_ro state.mutex (fun () -> state.anchor) in
                     (match anchor with
                     | Fresh_line -> write_output_locked "\r\n"
@@ -476,7 +480,9 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                           if generation <> !reader_generation || state.stop_requested then
                             ()
                           else begin
-                            let count = Eio.Flow.single_read terminal.input buffer in
+                            let count =
+                              Eio.Flow.single_read terminal.Terminal.input buffer
+                            in
                             if count <= 0 then finish_input ()
                             else begin
                               let bytes =
@@ -527,7 +533,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   with Eio.Cancel.Cancelled _ -> ())
             in
             let sync_subscriptions () =
-              let handlers = collect_sub (app.subscriptions state.model) in
+              let handlers = collect_sub (app.App.subscriptions state.model) in
               List.iter
                 (fun (interval, _) ->
                   ignore (valid_delay "subscription interval" interval))
@@ -565,10 +571,10 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               end
             in
             let set_view model =
-              let view = app.view model in
+              let view = app.App.view model in
               Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
                   state.view <- view;
-                  state.last_frame <- Charm_ansi.Text.strip view.content;
+                  state.last_frame <- Charm_ansi.Text.strip view.View.content;
                   if state.initial_events_left = 0 then state.dirty <- true;
                   Eio.Condition.broadcast state.condition)
             in
@@ -660,7 +666,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               match filter state.model message with
               | None -> ()
               | Some message ->
-                  let model, command = app.update message state.model in
+                  let model, command = app.App.update message state.model in
                   state.model <- model;
                   set_view model;
                   sync_subscriptions ();
@@ -671,7 +677,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               let messages =
                 match event with
                 | Event.Key key -> (
-                    match key.event with
+                    match key.Key.event with
                     | Key.Release ->
                         List.map (fun handler -> handler key) handlers.key_release
                     | Key.Press | Key.Repeat ->
@@ -679,7 +685,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                 | Event.Mouse mouse ->
                     let enabled =
                       Eio.Mutex.use_ro state.mutex (fun () ->
-                          match state.view.mouse with
+                          match state.view.View.mouse with
                           | View.Mouse_off -> false
                           | _ -> true)
                     in
@@ -687,20 +693,23 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                     else []
                 | Event.Paste text ->
                     let enabled =
-                      Eio.Mutex.use_ro state.mutex (fun () -> state.view.bracketed_paste)
+                      Eio.Mutex.use_ro state.mutex (fun () ->
+                          state.view.View.bracketed_paste)
                     in
                     if enabled then List.map (fun handler -> handler text) handlers.paste
                     else []
                 | Event.Focus ->
                     let enabled =
-                      Eio.Mutex.use_ro state.mutex (fun () -> state.view.report_focus)
+                      Eio.Mutex.use_ro state.mutex (fun () ->
+                          state.view.View.report_focus)
                     in
                     if enabled then
                       List.map (fun handler -> handler `Focused) handlers.focus
                     else []
                 | Event.Blur ->
                     let enabled =
-                      Eio.Mutex.use_ro state.mutex (fun () -> state.view.report_focus)
+                      Eio.Mutex.use_ro state.mutex (fun () ->
+                          state.view.View.report_focus)
                     in
                     if enabled then
                       List.map (fun handler -> handler `Blurred) handlers.focus
@@ -744,7 +753,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               end
             in
             let resume_after_foreign () =
-              terminal.enter ();
+              terminal.Terminal.enter ();
               Screen.reset screen;
               update_anchor state Fresh_line;
               set_paused state false;
@@ -761,7 +770,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   with_output (fun () ->
                       let bytes = Screen.restore screen in
                       write_output_locked bytes;
-                      terminal.leave ();
+                      terminal.Terminal.leave ();
                       fn ()))
             in
             let handle_effect action resolver =
@@ -788,7 +797,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   Eio.Promise.resolve resolver ()
               | Effect_print text ->
                   let alt_screen =
-                    Eio.Mutex.use_ro state.mutex (fun () -> state.view.alt_screen)
+                    Eio.Mutex.use_ro state.mutex (fun () -> state.view.View.alt_screen)
                   in
                   if alt_screen then begin
                     Queue.add text state.backlog;
@@ -803,7 +812,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               | Effect_query query ->
                   enqueue_output (Output_bytes (query_bytes query, resolver))
               | Effect_window_size ->
-                  let rows, cols = terminal.size () in
+                  let rows, cols = terminal.Terminal.size () in
                   dispatch_event (Event.Resize { rows; cols });
                   Eio.Promise.resolve resolver ()
             in
@@ -849,7 +858,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                       with Eio.Cancel.Cancelled _ -> ())
                 in
                 watch winch winch_pending (fun () ->
-                    let rows, cols = terminal.size () in
+                    let rows, cols = terminal.Terminal.size () in
                     queue_external state (Queued_event (Event.Resize { rows; cols })));
                 watch interrupt interrupt_pending (fun () ->
                     queue_external state (Queued_stop `Interrupted));
@@ -862,7 +871,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               end
             in
             let setup_resize_stream () =
-              match terminal.on_resize with
+              match terminal.Terminal.on_resize with
               | None -> ()
               | Some stream ->
                   fork_daemon (fun () ->
@@ -871,7 +880,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                           let notify = Eio.Stream.take stream in
                           notify ();
                           if not state.stop_requested then begin
-                            let rows, cols = terminal.size () in
+                            let rows, cols = terminal.Terminal.size () in
                             queue_external state
                               (Queued_event (Event.Resize { rows; cols }))
                           end
@@ -972,8 +981,8 @@ let run ?terminal ?fps ?filter ~clock app env =
     | [] -> invalid_arg "exec requires a command"
     | _ -> (
         try
-          Eio.Process.run (Eio.Stdenv.process_mgr env) ~stdin:terminal.input
-            ~stdout:terminal.output ~stderr:terminal.output argv;
+          Eio.Process.run (Eio.Stdenv.process_mgr env) ~stdin:terminal.Terminal.input
+            ~stdout:terminal.Terminal.output ~stderr:terminal.Terminal.output argv;
           0
         with
         | Eio.Io (Eio.Process.E (Eio.Process.Child_error (`Exited code)), _) -> code
@@ -981,7 +990,7 @@ let run ?terminal ?fps ?filter ~clock app env =
             128 + signal)
   in
   let suspend () =
-    if terminal.is_tty then Unix.kill (Unix.getpid ()) Sys.sigstop
+    if terminal.Terminal.is_tty then Unix.kill (Unix.getpid ()) Sys.sigstop
     else invalid_arg "suspend requires a local terminal"
   in
   match

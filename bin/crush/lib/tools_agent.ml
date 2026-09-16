@@ -38,7 +38,9 @@ let schema =
     ]
 
 let truncate_output (ctx : Tool.ctx) text =
-  let content, artifact = Artifact.truncate ctx.artifacts ~random:ctx.random text in
+  let content, artifact =
+    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
+  in
   Tool.ok ?artifact content
 
 let validate_request ({ prompt; tasks; max_active } : request) =
@@ -57,7 +59,7 @@ let validate_request ({ prompt; tasks; max_active } : request) =
     | Some _, None -> Error (`Invalid_input "prompt must not be empty")
 
 let run_children (ctx : Tool.ctx) ~max_active prompts =
-  match ctx.run_subagent with
+  match ctx.Tool.run_subagent with
   | None -> Error (`Unavailable "agent delegation is unavailable")
   | Some run_subagent ->
       let count = List.length prompts in
@@ -85,7 +87,7 @@ let run_children (ctx : Tool.ctx) ~max_active prompts =
       in
       let workers = min max_active count in
       let promises =
-        Array.init workers (fun _ -> Eio.Fiber.fork_promise ~sw:ctx.sw worker)
+        Array.init workers (fun _ -> Eio.Fiber.fork_promise ~sw:ctx.Tool.sw worker)
       in
       Array.iter (fun promise -> ignore (Eio.Promise.await promise)) promises;
       let missing = Error "child worker returned no result" in

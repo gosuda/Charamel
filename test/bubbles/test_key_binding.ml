@@ -29,7 +29,8 @@ let disabled_and_unbound () =
   Alcotest.(check bool)
     "unbind disables" false
     (Charm_bubbles.Key_binding.enabled unbound);
-  Alcotest.(check (pair string string)) "unbind clears help" ("", "") unbound.help;
+  Alcotest.(check (pair string string))
+    "unbind clears help" ("", "") unbound.Charm_bubbles.Key_binding.help;
   let rebound = Charm_bubbles.Key_binding.set_enabled true unbound in
   Alcotest.(check bool)
     "empty keys remain disabled" false
@@ -58,7 +59,8 @@ let of_keys_and_updates () =
   Alcotest.(check bool)
     "updated key matches" true
     (Charm_bubbles.Key_binding.matches second binding);
-  Alcotest.(check (pair string string)) "help is replaced" ("up", "move") binding.help
+  Alcotest.(check (pair string string))
+    "help is replaced" ("up", "move") binding.Charm_bubbles.Key_binding.help
 
 let matches_any () =
   let bindings =

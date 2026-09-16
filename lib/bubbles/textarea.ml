@@ -1345,13 +1345,14 @@ let key (m : t) (key : Key.t) =
     else if hit m.keymap.select_all then Some (Key_action Select_all)
     else if hit m.keymap.copy_selection then Some (Copy_request (selected_text m))
     else if
-      key.mods.ctrl || key.mods.alt || key.mods.meta || key.mods.super || key.mods.hyper
+      key.Key.mods.Key.ctrl || key.Key.mods.Key.alt || key.Key.mods.Key.meta
+      || key.Key.mods.Key.super || key.Key.mods.Key.hyper
     then None
     else
       let text =
-        if key.text <> "" then key.text
+        if key.Key.text <> "" then key.Key.text
         else
-          match key.code with
+          match key.Key.code with
           | Key.Char u ->
               let b = Buffer.create 4 in
               Buffer.add_utf_8_uchar b u;

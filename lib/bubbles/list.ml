@@ -21,12 +21,12 @@ type filter = string -> string list -> rank list
 
 let default_filter term targets =
   Stdlib.List.map
-    (fun (m : Fuzzy.match_) -> { index = m.index; matched = m.matched })
+    (fun (m : Fuzzy.match_) -> { index = m.Fuzzy.index; matched = m.Fuzzy.matched })
     (Fuzzy.find ~pattern:term targets)
 
 let unsorted_filter term targets =
   Stdlib.List.map
-    (fun (m : Fuzzy.match_) -> { index = m.index; matched = m.matched })
+    (fun (m : Fuzzy.match_) -> { index = m.Fuzzy.index; matched = m.Fuzzy.matched })
     (Fuzzy.find_unsorted ~pattern:term targets)
 
 type keymap = {
@@ -199,7 +199,9 @@ let default_item_styles ~is_dark =
   }
 
 let style_padding_width style =
-  match Style.get_padding style with Some p -> p.left + p.right | None -> 0
+  match Style.get_padding style with
+  | Some p -> p.Charm_lipgloss.Sides.left + p.Charm_lipgloss.Sides.right
+  | None -> 0
 
 let default_delegate ?(show_description = true) ?(height = 2) ?(spacing = 1) ?styles
     ?(is_dark = true) ~title ?description () =
@@ -294,12 +296,12 @@ type 'a t = {
 
 let input_styles ~is_dark styles =
   let input = Textinput.default_styles ~is_dark in
-  let focused = { input.focused with prompt = styles.filter_prompt } in
-  let blurred = { input.blurred with prompt = styles.filter_prompt } in
+  let focused = { input.Textinput.focused with prompt = styles.filter_prompt } in
+  let blurred = { input.Textinput.blurred with prompt = styles.filter_prompt } in
   let cursor =
     match Style.get_foreground styles.filter_cursor with
-    | Some color -> { input.cursor with color }
-    | None -> input.cursor
+    | Some color -> { input.Textinput.cursor with color }
+    | None -> input.Textinput.cursor
   in
   ({ focused; blurred; cursor } : Textinput.styles)
 

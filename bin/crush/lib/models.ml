@@ -261,16 +261,18 @@ let credential_for ~auth ~config ~env provider_id =
 
 let selection_for_role config role =
   match role with
-  | `Large -> config.Config.models.large
-  | `Small -> config.Config.models.small
+  | `Large -> config.Config.models.Config.large
+  | `Small -> config.Config.models.Config.small
 
 let resolve ~fs config ~auth ~env ~role =
   let providers = catalog ~fs config in
-  let inherited_small = role = `Small && Option.is_none config.Config.models.small in
+  let inherited_small =
+    role = `Small && Option.is_none config.Config.models.Config.small
+  in
   let configured =
     match selection_for_role config role with
     | Some selected -> Some selected
-    | None when inherited_small -> config.Config.models.large
+    | None when inherited_small -> config.Config.models.Config.large
     | None -> None
   in
   let default_selection () =
@@ -386,9 +388,11 @@ let with_auth ~fs config ~env resolved provider_auth =
 
 let cost (model : Charm_fantasy.Model.t) (usage : Charm_fantasy.Usage.t) =
   ((float_of_int usage.Charm_fantasy.Usage.input *. model.Charm_fantasy.Model.cost_in)
-  +. (float_of_int usage.output *. model.cost_out)
-  +. (float_of_int usage.cache_read *. model.cost_cache_read)
-  +. (float_of_int usage.cache_write *. model.cost_cache_write))
+  +. (float_of_int usage.Charm_fantasy.Usage.output *. model.Charm_fantasy.Model.cost_out)
+  +. float_of_int usage.Charm_fantasy.Usage.cache_read
+     *. model.Charm_fantasy.Model.cost_cache_read
+  +. float_of_int usage.Charm_fantasy.Usage.cache_write
+     *. model.Charm_fantasy.Model.cost_cache_write)
   /. 1_000_000.
 
 let list ~fs config ~auth ~env =

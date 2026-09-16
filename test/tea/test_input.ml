@@ -59,7 +59,7 @@ let test_legacy_modifiers_and_kitty_extensions () =
   | [ Event.Key first; Event.Key second ] ->
       Alcotest.(check string) "colon modifier" "alt+shift+down" (Key.to_string first);
       Alcotest.(check string) "kitty repeat" "down" (Key.to_string second);
-      Alcotest.(check bool) "repeat event" true (second.event = Key.Repeat)
+      Alcotest.(check bool) "repeat event" true (second.Key.event = Key.Repeat)
   | _ -> Alcotest.fail "legacy extension sequence did not produce two keys"
 
 let test_kitty_keyboard () =
@@ -67,12 +67,12 @@ let test_kitty_keyboard () =
   match decode input with
   | [ Event.Key shifted; Event.Key keypad; Event.Key ctrl ] ->
       Alcotest.(check string) "shifted code" "shift+a" (Key.to_string shifted);
-      Alcotest.(check bool) "shifted alternate" true (Option.is_some shifted.shifted);
-      Alcotest.(check bool) "shifted base" true (Option.is_some shifted.base);
-      Alcotest.(check bool) "release" true (shifted.event = Key.Release);
+      Alcotest.(check bool) "shifted alternate" true (Option.is_some shifted.Key.shifted);
+      Alcotest.(check bool) "shifted base" true (Option.is_some shifted.Key.base);
+      Alcotest.(check bool) "release" true (shifted.Key.event = Key.Release);
       Alcotest.(check string) "keypad" "kp_0" (Key.to_string keypad);
       Alcotest.(check string) "ctrl key has no text" "ctrl+a" (Key.to_string ctrl);
-      Alcotest.(check bool) "ctrl text is empty" true (ctrl.text = "")
+      Alcotest.(check bool) "ctrl text is empty" true (ctrl.Key.text = "")
   | _ -> Alcotest.fail "Kitty keyboard sequence did not produce three keys"
 
 let test_alt_and_timeout () =
@@ -125,13 +125,15 @@ let test_mouse_focus_and_reports () =
    Event.Kitty_flags flags;
    Event.Mode_report report;
   ] ->
-      Alcotest.(check int) "release x" 9 release.x;
-      Alcotest.(check int) "release y" 19 release.y;
+      Alcotest.(check int) "release x" 9 release.Charm_tea.Mouse.x;
+      Alcotest.(check int) "release y" 19 release.Charm_tea.Mouse.y;
       Alcotest.(check bool)
         "release action" true
-        (release.action = Charm_tea.Mouse.Release);
-      Alcotest.(check bool) "wheel action" true (wheel.action = Charm_tea.Mouse.Press);
-      Alcotest.(check int) "wheel y" 2 wheel.y;
+        (release.Charm_tea.Mouse.action = Charm_tea.Mouse.Release);
+      Alcotest.(check bool)
+        "wheel action" true
+        (wheel.Charm_tea.Mouse.action = Charm_tea.Mouse.Press);
+      Alcotest.(check int) "wheel y" 2 wheel.Charm_tea.Mouse.y;
       Alcotest.(check (pair int int)) "CPR" (11, 33) (position.row, position.col);
       Alcotest.(check int) "Kitty flags" 7 flags;
       Alcotest.(check int) "DECRPM mode" 1049 report.mode;
@@ -206,14 +208,16 @@ let test_all_protocol_chunk_boundaries () =
   | events -> Alcotest.failf "8-bit CSI produced %d events" (List.length events));
   (match feed_one_byte "\027[M\032+," with
   | [ Event.Mouse mouse ] ->
-      Alcotest.(check int) "X10 x" 10 mouse.x;
-      Alcotest.(check int) "X10 y" 11 mouse.y
+      Alcotest.(check int) "X10 x" 10 mouse.Charm_tea.Mouse.x;
+      Alcotest.(check int) "X10 y" 11 mouse.Charm_tea.Mouse.y
   | events -> Alcotest.failf "X10 produced %d events" (List.length events));
   (match feed_one_byte "\027[<32;4;5M" with
   | [ Event.Mouse mouse ] ->
-      Alcotest.(check bool) "motion" true (mouse.action = Charm_tea.Mouse.Motion);
-      Alcotest.(check int) "motion x" 3 mouse.x;
-      Alcotest.(check int) "motion y" 4 mouse.y
+      Alcotest.(check bool)
+        "motion" true
+        (mouse.Charm_tea.Mouse.action = Charm_tea.Mouse.Motion);
+      Alcotest.(check int) "motion x" 3 mouse.Charm_tea.Mouse.x;
+      Alcotest.(check int) "motion y" 4 mouse.Charm_tea.Mouse.y
   | events -> Alcotest.failf "motion produced %d events" (List.length events));
   (match feed_one_byte "\027[I\027[O\027[12;34R" with
   | [ Event.Focus; Event.Blur; Event.Cursor_position position ] ->

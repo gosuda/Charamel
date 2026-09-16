@@ -93,7 +93,7 @@ let test_json_codec () =
       | Error message -> Alcotest.failf "verdict decoding failed: %s" message
       | Ok decoded ->
           Alcotest.(check string)
-            "guidance survives codec" verdict.guidance decoded.guidance)
+            "guidance survives codec" verdict.Advisor.guidance decoded.Advisor.guidance)
 
 let test_quarantine () =
   Eio_main.run @@ fun env ->
@@ -115,7 +115,7 @@ let test_quarantine () =
   in
   (match review () with
   | Ok (Some verdict) ->
-      Alcotest.(check string) "first verdict" "same advice" verdict.guidance
+      Alcotest.(check string) "first verdict" "same advice" verdict.Advisor.guidance
   | Ok None -> Alcotest.fail "first verdict was discarded"
   | Error (`Provider message) -> Alcotest.failf "provider failed: %s" message);
   (match review () with

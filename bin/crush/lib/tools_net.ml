@@ -378,7 +378,7 @@ let make_client (ctx : Tool.ctx) =
                 let domain = Domain_name.of_string_exn host |> Domain_name.host_exn in
                 Tls_eio.client_of_flow tls_config ~host:domain flow
           in
-          Ok (Cohttp_eio.Client.make ~https:(Some https) ctx.net))
+          Ok (Cohttp_eio.Client.make ~https:(Some https) ctx.Tool.net))
 
 let response_body body = read_body body
 
@@ -442,7 +442,9 @@ let rec fetch_uri (ctx : Tool.ctx) client ~headers ~sw ~(format : output_format)
         Ok rendered
 
 let output_with_artifact (ctx : Tool.ctx) content =
-  let content, artifact = Artifact.truncate ctx.artifacts ~random:ctx.random content in
+  let content, artifact =
+    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random content
+  in
   Tool.ok ?artifact content
 
 let fetch_schema =

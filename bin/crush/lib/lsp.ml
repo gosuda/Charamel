@@ -263,7 +263,7 @@ let marker_matches fs directory marker =
   | Unix.Unix_error _ -> false
 
 let has_root_marker t server =
-  match server.config.root_markers with
+  match server.config.Config.root_markers with
   | [] -> true
   | markers ->
       let rec check directory =
@@ -274,7 +274,7 @@ let has_root_marker t server =
       check t.cwd
 
 let extension_supported server ext =
-  List.exists (fun value -> lowercase value = ext) server.config.filetypes
+  List.exists (fun value -> lowercase value = ext) server.config.Config.filetypes
 
 let server_for_path t path =
   let path = normalize_path path in
@@ -811,7 +811,7 @@ let initialize_params t server =
               ];
           ] );
       ( "initializationOptions",
-        Option.value ~default:(json_null ()) server.config.init_options );
+        Option.value ~default:(json_null ()) server.config.Config.init_options );
     ]
 
 let cleanup_streams server =
@@ -828,7 +828,7 @@ let start_server t server =
     let stdin_source, stdin_sink = Eio.Process.pipe ~sw:t.sw t.proc_mgr in
     let stdout_source, stdout_sink = Eio.Process.pipe ~sw:t.sw t.proc_mgr in
     let stderr_source, stderr_sink = Eio.Process.pipe ~sw:t.sw t.proc_mgr in
-    let argv = server.config.command :: server.config.args in
+    let argv = server.config.Config.command :: server.config.Config.args in
     let process_result =
       try
         Ok
@@ -1481,7 +1481,7 @@ let create ~sw ~proc_mgr ~clock ~fs ~cwd ~config =
   let cwd = normalize_path cwd in
   let configured =
     let defaults_by_name = defaults in
-    let base = if config.Config.options.auto_lsp then defaults_by_name else [] in
+    let base = if config.Config.options.Config.auto_lsp then defaults_by_name else [] in
     let replace name value values =
       let rec loop acc = function
         | [] -> List.rev ((name, value) :: acc)
@@ -1495,11 +1495,11 @@ let create ~sw ~proc_mgr ~clock ~fs ~cwd ~config =
       (fun values ((name, value) : string * Config.lsp) ->
         let value =
           match List.assoc_opt name defaults_by_name with
-          | Some default when value.filetypes = [] ->
+          | Some default when value.Config.filetypes = [] ->
               {
                 value with
-                filetypes = default.filetypes;
-                root_markers = default.root_markers;
+                filetypes = default.Config.filetypes;
+                root_markers = default.Config.root_markers;
               }
           | _ -> value
         in

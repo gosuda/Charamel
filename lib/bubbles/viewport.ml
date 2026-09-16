@@ -33,17 +33,19 @@ let frame_sides style =
     match (border, enabled) with Some b, Some true -> getter b | _ -> 0
   in
   let left =
-    padding.left + side_size Charm_lipgloss.Border.left_size (Style.get_border_left style)
+    padding.Charm_lipgloss.Sides.left
+    + side_size Charm_lipgloss.Border.left_size (Style.get_border_left style)
   in
   let right =
-    padding.right
+    padding.Charm_lipgloss.Sides.right
     + side_size Charm_lipgloss.Border.right_size (Style.get_border_right style)
   in
   let top =
-    padding.top + side_size Charm_lipgloss.Border.top_size (Style.get_border_top style)
+    padding.Charm_lipgloss.Sides.top
+    + side_size Charm_lipgloss.Border.top_size (Style.get_border_top style)
   in
   let bottom =
-    padding.bottom
+    padding.Charm_lipgloss.Sides.bottom
     + side_size Charm_lipgloss.Border.bottom_size (Style.get_border_bottom style)
   in
   (left, right, top, bottom)
@@ -515,7 +517,7 @@ let key m key =
 let mouse m (mouse : Charm_tea.Mouse.t) =
   if not m.mouse_wheel_enabled then None
   else
-    match mouse.button with
+    match mouse.Charm_tea.Mouse.button with
     | Charm_tea.Mouse.Wheel_up | Charm_tea.Mouse.Wheel_down | Charm_tea.Mouse.Wheel_left
     | Charm_tea.Mouse.Wheel_right ->
         Some (Wheel mouse)
@@ -533,8 +535,8 @@ let update message m =
     | Left -> scroll_left m.horizontal_step m
     | Right -> scroll_right m.horizontal_step m
     | Wheel mouse -> (
-        let shift = mouse.mods.shift in
-        match mouse.button with
+        let shift = mouse.Charm_tea.Mouse.mods.Charm_tea.Key.shift in
+        match mouse.Charm_tea.Mouse.button with
         | Charm_tea.Mouse.Wheel_down ->
             if shift then scroll_right m.horizontal_step m
             else scroll_down m.mouse_wheel_delta m

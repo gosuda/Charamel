@@ -133,7 +133,12 @@ let with_ui_backend f =
       }
     in
     let selected : Config.selected_model =
-      { provider = "anthropic"; model = model.id; reasoning = None; max_tokens = None }
+      {
+        provider = "anthropic";
+        model = model.Charm_fantasy.Model.id;
+        reasoning = None;
+        max_tokens = None;
+      }
     in
     {
       Config.default with
@@ -156,14 +161,14 @@ let with_ui_backend f =
       Session.create store ~clock:env#clock
         ~random:(fun n -> String.make n '\000')
         ~title:"UI fixture" ~cwd:root
-        ~model:{ Session.provider = "anthropic"; model = model.id }
+        ~model:{ Session.provider = "anthropic"; model = model.Charm_fantasy.Model.id }
         ()
     with
     | Ok value -> value
     | Error error -> Alcotest.failf "session setup: %a" Session.pp_error error
   in
   let permission =
-    Permission.create ~config:config.permissions ~yolo:true ~cwd:root
+    Permission.create ~config:config.Config.permissions ~yolo:true ~cwd:root
       ~plans_dir:(Filename.concat root ".crush/plans")
       ()
   in
@@ -232,12 +237,12 @@ let with_ui_backend f =
         (fun () ->
           [
             {
-              Ui.id = model.id;
-              provider = model.provider;
-              context_window = model.context_window;
-              max_tokens = model.default_max_tokens;
-              can_reason = model.can_reason;
-              supports_attachments = model.supports_attachments;
+              Ui.id = model.Charm_fantasy.Model.id;
+              provider = model.Charm_fantasy.Model.provider;
+              context_window = model.Charm_fantasy.Model.context_window;
+              max_tokens = model.Charm_fantasy.Model.default_max_tokens;
+              can_reason = model.Charm_fantasy.Model.can_reason;
+              supports_attachments = model.Charm_fantasy.Model.supports_attachments;
             };
           ]);
       select_model = (fun _ -> Ok ());
@@ -319,7 +324,8 @@ let serialized_dialogs () =
            ~size:(24, 80));
       (match Eio.Promise.await question_done with
       | Ok [ (answer : Crush_core.Tool.answer) ] ->
-          Alcotest.(check (option string)) "question answer" (Some "") answer.text
+          Alcotest.(check (option string))
+            "question answer" (Some "") answer.Crush_core.Tool.text
       | Ok _ -> Alcotest.fail "question dialog returned the wrong answer"
       | Error `Aborted -> Alcotest.fail "question dialog was overwritten or aborted"
       | Error `Not_interactive -> Alcotest.fail "question dialog was not interactive");

@@ -403,7 +403,7 @@ let test_request_encoding () =
   in
   Alcotest.(check (option string)) "messages endpoint" (Some "/v1/messages") path;
   let j = parse_body body in
-  Alcotest.(check (option string)) "model id" (Some model.id) (str_mem "model" j);
+  Alcotest.(check (option string)) "model id" (Some model.Model.id) (str_mem "model" j);
   Alcotest.(check bool)
     "streams" true
     (match mem j "stream" with Some (Jsont.Bool (true, _)) -> true | _ -> false);

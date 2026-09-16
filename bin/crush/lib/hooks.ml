@@ -156,15 +156,15 @@ let create ~config ~proc_mgr ~clock ~cwd =
   let hooks =
     List.map
       (fun (config : Config.hook) ->
-        { config; matcher = compile_matcher config.command config.matcher })
+        { config; matcher = compile_matcher config.Config.command config.Config.matcher })
       config
   in
   List.iter
     (fun hook ->
-      if hook.config.timeout_s < 1 || hook.config.timeout_s > 3_600 then
+      if hook.config.Config.timeout_s < 1 || hook.config.Config.timeout_s > 3_600 then
         invalid_arg
-          (Fmt.str "invalid hook timeout for %s: %d" hook.config.command
-             hook.config.timeout_s))
+          (Fmt.str "invalid hook timeout for %s: %d" hook.config.Config.command
+             hook.config.Config.timeout_s))
     hooks;
   { hooks; proc_mgr; clock; cwd }
 
@@ -245,23 +245,23 @@ let parse_pre_output output =
             | None -> Continue)
         | _ -> Continue)
 
-let timeout_for hook = Float.of_int hook.config.timeout_s
+let timeout_for hook = Float.of_int hook.config.Config.timeout_s
 
 let log_failure hook detail =
-  Log.warn (fun log -> log "hook %s failed: %s" hook.config.command detail)
+  Log.warn (fun log -> log "hook %s failed: %s" hook.config.Config.command detail)
 
 let run_one t hook payload =
-  run_command t ~timeout:(timeout_for hook) ~command:hook.config.command ~payload
+  run_command t ~timeout:(timeout_for hook) ~command:hook.config.Config.command ~payload
 
 let report_truncation hook stream output =
   if output.truncated then
     Log.warn (fun log ->
-        log "hook %s %s exceeded the %d-byte output limit" hook.config.command stream
-          max_output_size)
+        log "hook %s %s exceeded the %d-byte output limit" hook.config.Config.command
+          stream max_output_size)
 
 let apply_pre_hook t hook ~payload =
   match run_one t hook payload with
-  | Timeout -> Refuse (Fmt.str "hook %s timed out" hook.config.command)
+  | Timeout -> Refuse (Fmt.str "hook %s timed out" hook.config.Config.command)
   | Failed detail ->
       log_failure hook detail;
       Continue
@@ -284,8 +284,8 @@ let pre_tool t ~session ~tool ~input =
   let rec loop current = function
     | [] -> Allow current
     | hook :: rest -> (
-        if hook.config.event <> Config.Pre_tool || not (matcher_matches hook tool) then
-          loop current rest
+        if hook.config.Config.event <> Config.Pre_tool || not (matcher_matches hook tool)
+        then loop current rest
         else
           let payload = payload_pre ~session ~cwd:t.cwd ~tool ~input:current in
           match apply_pre_hook t hook ~payload with
@@ -306,13 +306,14 @@ let run_observational t hook payload =
       log_failure hook
         (Fmt.str "exited with status %d%s" code
            (if String.equal suffix "" then "" else ": " ^ suffix))
-  | Timeout -> log_failure hook (Fmt.str "timed out after %ds" hook.config.timeout_s)
+  | Timeout ->
+      log_failure hook (Fmt.str "timed out after %ds" hook.config.Config.timeout_s)
   | Failed detail -> log_failure hook detail
 
 let post_tool t ~session ~tool ~input ~output ~is_error =
   List.iter
     (fun hook ->
-      if hook.config.event = Config.Post_tool && matcher_matches hook tool then
+      if hook.config.Config.event = Config.Post_tool && matcher_matches hook tool then
         run_observational t hook
           (payload_post ~session ~cwd:t.cwd ~tool ~input ~output ~is_error))
     t.hooks
@@ -320,7 +321,7 @@ let post_tool t ~session ~tool ~input ~output ~is_error =
 let session_start t ~session =
   List.iter
     (fun hook ->
-      if hook.config.event = Config.Session_start then
+      if hook.config.Config.event = Config.Session_start then
         run_observational t hook (payload_session_start ~session ~cwd:t.cwd))
     t.hooks
 
@@ -333,10 +334,10 @@ let stop t ~session ~reason =
   in
   List.iter
     (fun hook ->
-      if hook.config.event = Config.Stop then
+      if hook.config.Config.event = Config.Stop then
         run_observational t hook
           (payload_session ~event:(event_name Config.Stop) ~session ~cwd:t.cwd
              ~reason:(Some reason_name) ~message))
     t.hooks
 
-let has t event = List.exists (fun hook -> hook.config.event = event) t.hooks
+let has t event = List.exists (fun hook -> hook.config.Config.event = event) t.hooks

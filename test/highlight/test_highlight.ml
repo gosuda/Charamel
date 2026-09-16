@@ -531,7 +531,7 @@ let alias_tests =
                 List.exists
                   (fun name ->
                     String.lowercase_ascii name = String.lowercase_ascii expected_name)
-                  spec.names
+                  spec.H.names
               in
               Alcotest.check Alcotest.bool query true matched))
     alias_cases

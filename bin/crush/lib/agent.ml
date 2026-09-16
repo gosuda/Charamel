@@ -306,7 +306,7 @@ let decode_call call =
       decoded
 
 let record_usage t (model : Models.resolved) usage =
-  let cost = Models.cost model.model usage in
+  let cost = Models.cost model.Models.model usage in
   t.usage := Charm_fantasy.Usage.add !(t.usage) usage;
   t.cost_usd := !(t.cost_usd) +. cost;
   emit t
@@ -323,7 +323,11 @@ let record_usage t (model : Models.resolved) usage =
          ms = now_ms t;
          usage;
          cost_usd = cost;
-         model = { Session.provider = model.provider_id; model = model.model.id };
+         model =
+           {
+             Session.provider = model.Models.provider_id;
+             model = model.Models.model.Charm_fantasy.Model.id;
+           };
        })
 
 let refresh_model ?(force = false) ?rejected t turn_sw role :
@@ -336,11 +340,11 @@ let refresh_model ?(force = false) ?rejected t turn_sw role :
       | Some rejected -> (
           match
             Auth.refresh ~sw:turn_sw ~net:t.deps.net ~config:t.deps.config ~env:t.deps.env
-              t.deps.auth ~provider:model.provider_id ~rejected
+              t.deps.auth ~provider:model.Models.provider_id ~rejected
           with
           | Error (`Disabled reason) -> Error (`Auth reason)
           | Error `No_credential ->
-              Error (`Auth ("no credential for " ^ model.provider_id))
+              Error (`Auth ("no credential for " ^ model.Models.provider_id))
           | Error (`Refresh provider_error) ->
               Error (`Auth (Charm_fantasy.Error.message provider_error))
           | Error error -> Error (`Auth (Fmt.str "%a" Auth.pp_refresh_error error))
@@ -348,10 +352,11 @@ let refresh_model ?(force = false) ?rejected t turn_sw role :
     else
       match
         Auth.ensure_fresh ~sw:turn_sw ~net:t.deps.net ~config:t.deps.config
-          ~env:t.deps.env t.deps.auth ~provider:model.provider_id
+          ~env:t.deps.env t.deps.auth ~provider:model.Models.provider_id
       with
       | Error (`Disabled reason) -> Error (`Auth reason)
-      | Error `No_credential -> Error (`Auth ("no credential for " ^ model.provider_id))
+      | Error `No_credential ->
+          Error (`Auth ("no credential for " ^ model.Models.provider_id))
       | Error (`Refresh provider_error) ->
           Error (`Auth (Charm_fantasy.Error.message provider_error))
       | Error error -> Error (`Auth (Fmt.str "%a" Auth.pp_refresh_error error))
@@ -420,11 +425,11 @@ let consume_stream t turn_sw (model : Models.resolved) provider_auth messages st
     let typed_error = ref None in
     let emitted = ref false in
     let stream =
-      Charm_fantasy.Provider.stream model.provider ~sw:turn_sw ~clock:t.deps.clock
-        ~net:t.deps.net ~model:model.model
+      Charm_fantasy.Provider.stream model.Models.provider ~sw:turn_sw ~clock:t.deps.clock
+        ~net:t.deps.net ~model:model.Models.model
         ~system:[ system_prompt t turn_sw ]
-        ~tools:(Toolset.fantasy t.tools) ~max_tokens:model.max_tokens
-        ~reasoning:model.reasoning
+        ~tools:(Toolset.fantasy t.tools) ~max_tokens:model.Models.max_tokens
+        ~reasoning:model.Models.reasoning
         ~on_error:(fun error -> typed_error := Some error)
         messages
     in
@@ -479,8 +484,10 @@ let consume_stream t turn_sw (model : Models.resolved) provider_auth messages st
               finish;
               calls;
               parts = state.parts;
-              prompt_tokens = latest.input + latest.cache_read + latest.cache_write;
-              completion_tokens = latest.output;
+              prompt_tokens =
+                latest.Charm_fantasy.Usage.input + latest.Charm_fantasy.Usage.cache_read
+                + latest.Charm_fantasy.Usage.cache_write;
+              completion_tokens = latest.Charm_fantasy.Usage.output;
               typed_error = !typed_error;
               emitted = !emitted;
             }
@@ -495,18 +502,19 @@ let run_tool t turn_sw (call : call) input (tool : Tool.t) =
   let ctx = tool_context t ~sw:turn_sw ~call_id:call.id in
   let output, stop_turn, hook_input =
     match
-      Hooks.pre_tool t.deps.hooks ~session:(Session.id t.session) ~tool:tool.name ~input
+      Hooks.pre_tool t.deps.hooks ~session:(Session.id t.session) ~tool:tool.Tool.name
+        ~input
     with
     | Hooks.Deny reason -> (result_output (`Denied reason), true, input)
     | Hooks.Allow input' -> (
-        match tool.run ctx input' with
+        match tool.Tool.run ctx input' with
         | Ok output -> (output, false, input')
         | Error (`Denied _ as error) -> (result_output error, true, input')
         | Error error -> (result_output error, false, input'))
   in
   let elapsed_ms = int_of_float ((Eio.Time.now t.deps.clock -. started) *. 1000.) in
-  Hooks.post_tool t.deps.hooks ~session:(Session.id t.session) ~tool:tool.name
-    ~input:hook_input ~output:output.content ~is_error:output.is_error;
+  Hooks.post_tool t.deps.hooks ~session:(Session.id t.session) ~tool:tool.Tool.name
+    ~input:hook_input ~output:output.Tool.content ~is_error:output.Tool.is_error;
   { id = call.id; name = call.name; input = hook_input; output; elapsed_ms; stop_turn }
 
 let schedule_call ?(invalid = false) t _turn_sw (call : call) input =
@@ -514,7 +522,7 @@ let schedule_call ?(invalid = false) t _turn_sw (call : call) input =
   emit t (Tool_started { id = call.id; name = call.name; input });
   { call; input; tool; invalid; promise = None }
 
-let read_only job = match job.tool with Some tool -> tool.read_only | None -> false
+let read_only job = match job.tool with Some tool -> tool.Tool.read_only | None -> false
 
 let execute_calls t turn_sw calls =
   let jobs =
@@ -642,7 +650,7 @@ let persist_executions t executions =
                      name = execution.name;
                      output = session_output execution.output;
                      elapsed_ms = execution.elapsed_ms;
-                     artifact = execution.output.artifact;
+                     artifact = execution.output.Tool.artifact;
                    })
             with
             | Error error -> Result.Error error
@@ -695,11 +703,13 @@ let post_metadata t turn_sw first_prompt state =
                        m "title persistence failed: %a" Session.pp_error error))
            | Ok _ -> ()));
     if
-      t.deps.config.options.advisor.enabled
-      && !(t.turn_count) mod max 1 t.deps.config.options.advisor.every_n_turns = 0
+      t.deps.config.Config.options.Config.advisor.Config.enabled
+      && !(t.turn_count)
+         mod max 1 t.deps.config.Config.options.Config.advisor.Config.every_n_turns
+         = 0
     then
       let role =
-        match t.deps.config.options.advisor.model with
+        match t.deps.config.Config.options.Config.advisor.Config.model with
         | `Small -> `Small
         | `Large -> `Large
       in
@@ -721,14 +731,14 @@ let post_metadata t turn_sw first_prompt state =
                 | `Concern -> "concern"
                 | `Blocker -> "blocker"
               in
-              emit t (Advisor_note { severity; guidance = verdict.guidance });
+              emit t (Advisor_note { severity; guidance = verdict.Advisor.guidance });
               append_logged t
                 (Session.Note
                    {
                      ms = now_ms t;
-                     text = Fmt.str "advisor %s: %s" severity verdict.guidance;
+                     text = Fmt.str "advisor %s: %s" severity verdict.Advisor.guidance;
                    });
-              if verdict.severity = `Blocker then
+              if verdict.Advisor.severity = `Blocker then
                 append_logged t
                   (Session.Message
                      { ms = now_ms t; message = Advisor.steering_message verdict })))
@@ -779,7 +789,7 @@ let run_turn t turn_sw first_prompt user_message attachments state =
                         stream_with_recovery fresh_model fresh_auth)
                   else if retryable then
                     match
-                      disable_oauth t model.provider_id provider_auth
+                      disable_oauth t model.Models.provider_id provider_auth
                         (provider_error_message stream_result.typed_error)
                     with
                     | Error error ->
@@ -788,7 +798,7 @@ let run_turn t turn_sw first_prompt user_message attachments state =
                         Result.Error
                           (`Auth
                              ("credential rejected by provider; log in again for "
-                            ^ model.provider_id))
+                            ^ model.Models.provider_id))
                   else Result.Ok stream_result
             in
             match stream_with_recovery model provider_auth with
@@ -844,12 +854,15 @@ let run_turn t turn_sw first_prompt user_message attachments state =
                                       else if stop_turn then Ok `Stop
                                       else if
                                         Compaction.needed
-                                          ~context_window:model.model.context_window
+                                          ~context_window:
+                                            model.Models.model
+                                              .Charm_fantasy.Model.context_window
                                           ~prompt_tokens:stream_result.prompt_tokens
                                           ~completion_tokens:
                                             stream_result.completion_tokens
                                           ~disabled:
-                                            t.deps.config.options.disable_auto_compaction
+                                            t.deps.config.Config.options
+                                              .Config.disable_auto_compaction
                                       then
                                         match refresh_model t turn_sw `Small with
                                         | Error error -> Error error
@@ -940,7 +953,11 @@ let rec run_child_agent parent ~prompt:instruction =
   match
     Session.create parent.deps.store ~clock:parent.deps.clock ~random:parent.deps.random
       ~parent:(Session.id parent.session) ~title ~cwd:parent.deps.cwd
-      ~model:{ Session.provider = model.provider_id; model = model.model.id }
+      ~model:
+        {
+          Session.provider = model.Models.provider_id;
+          model = model.Models.model.Charm_fantasy.Model.id;
+        }
       ()
   with
   | Error error -> Error (Fmt.str "%a" Session.pp_error error)
@@ -1042,7 +1059,7 @@ and create_internal ~budget ~is_subagent deps ~session ~large ~small =
       cost_usd = ref cost;
       context_tokens = ref 0;
       loop_window = ref [];
-      advisor = Advisor.create deps.config.options.advisor;
+      advisor = Advisor.create deps.config.Config.options.Config.advisor;
       turn_count = ref 0;
     }
   in
@@ -1055,7 +1072,7 @@ and create_internal ~budget ~is_subagent deps ~session ~large ~small =
 let create deps ~session ~large ~small =
   let budget =
     {
-      limit = max 0 deps.config.options.budgets.subagent_requests;
+      limit = max 0 deps.config.Config.options.Config.budgets.Config.subagent_requests;
       used = 0;
       mutex = Eio.Mutex.create ();
     }

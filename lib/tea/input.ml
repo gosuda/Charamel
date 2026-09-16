@@ -99,14 +99,14 @@ let mods_of ?(shift = false) ?(alt = false) ?(ctrl = false) ?(meta = false)
 
 let mods_or (a : Key.mods) (b : Key.mods) =
   {
-    Key.shift = a.shift || b.shift;
-    alt = a.alt || b.alt;
-    ctrl = a.ctrl || b.ctrl;
-    meta = a.meta || b.meta;
-    super = a.super || b.super;
-    hyper = a.hyper || b.hyper;
-    caps_lock = a.caps_lock || b.caps_lock;
-    num_lock = a.num_lock || b.num_lock;
+    Key.shift = a.Key.shift || b.Key.shift;
+    alt = a.Key.alt || b.Key.alt;
+    ctrl = a.Key.ctrl || b.Key.ctrl;
+    meta = a.Key.meta || b.Key.meta;
+    super = a.Key.super || b.Key.super;
+    hyper = a.Key.hyper || b.Key.hyper;
+    caps_lock = a.Key.caps_lock || b.Key.caps_lock;
+    num_lock = a.Key.num_lock || b.Key.num_lock;
   }
 
 let mods_of_kitty_bits bits =
@@ -133,7 +133,8 @@ let mods_of_legacy_bits bits =
     num_lock = bits land 128 <> 0;
   }
 
-let beyond_shift (m : Key.mods) = m.Key.alt || m.ctrl || m.meta || m.super || m.hyper
+let beyond_shift (m : Key.mods) =
+  m.Key.alt || m.Key.ctrl || m.Key.meta || m.Key.super || m.Key.hyper
 
 let printable_scalar = function
   | Some scalar when is_print_scalar (Uchar.to_int scalar) -> Some scalar
@@ -142,7 +143,7 @@ let printable_scalar = function
 let make_key ?(mods = no_mods) ?(text = "") ?shifted ?base ?(event = Key.Press) code =
   { Key.code; mods; text; shifted; base; event }
 
-let add_alt (k : Key.t) = { k with Key.mods = { k.mods with alt = true }; text = "" }
+let add_alt (k : Key.t) = { k with Key.mods = { k.Key.mods with alt = true }; text = "" }
 
 let parse_decimal s start stop =
   if start >= stop then None
@@ -492,8 +493,8 @@ let kitty_key params =
   in
   let text_mods = { mods with num_lock = false } in
   let printable =
-    (not text_mods.alt) && (not text_mods.ctrl) && (not text_mods.meta)
-    && (not text_mods.super) && not text_mods.hyper
+    (not text_mods.Key.alt) && (not text_mods.Key.ctrl) && (not text_mods.Key.meta)
+    && (not text_mods.Key.super) && not text_mods.Key.hyper
   in
   let text =
     if beyond_shift text_mods then ""
@@ -519,7 +520,8 @@ let kitty_key params =
       | Key.Char u when printable ->
           if mods = no_mods then utf8_of_uchar u
           else if Option.is_some shifted then utf8_of_uchar (Option.get shifted)
-          else if mods.shift || mods.caps_lock then utf8_of_uchar (to_upper_scalar u)
+          else if mods.Key.shift || mods.Key.caps_lock then
+            utf8_of_uchar (to_upper_scalar u)
           else utf8_of_uchar (to_lower_scalar u)
       | _ -> ""
   in
@@ -821,7 +823,7 @@ let xterm_modify_other_keys params =
           let u = Uchar.of_int n in
           let text =
             if beyond_shift mods then ""
-            else if mods.shift then utf8_of_uchar (to_upper_scalar u)
+            else if mods.Key.shift then utf8_of_uchar (to_upper_scalar u)
             else utf8_of_uchar u
           in
           (Key.Char u, text)

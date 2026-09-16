@@ -72,7 +72,7 @@ let message_tool_names messages =
         (function
           | Message.Tool_call { name; _ } | Message.Tool_result { name; _ } -> Some name
           | _ -> None)
-        message.parts)
+        message.Message.parts)
     messages
 
 let build_tool_mapping ~kind ~auth ~tools ~messages =
@@ -80,7 +80,8 @@ let build_tool_mapping ~kind ~auth ~tools ~messages =
   else
     let names =
       unique_names
-        (List.map (fun (tool : Tool.t) -> tool.name) tools @ message_tool_names messages)
+        (List.map (fun (tool : Tool.t) -> tool.Tool.name) tools
+        @ message_tool_names messages)
     in
     let reserved =
       List.fold_left
@@ -114,8 +115,8 @@ let build_tool_mapping ~kind ~auth ~tools ~messages =
 let wire_tools mapping tools =
   List.map
     (fun (tool : Tool.t) ->
-      let name = mapping.to_wire tool.name in
-      if String.equal name tool.name then tool else { tool with name })
+      let name = mapping.to_wire tool.Tool.name in
+      if String.equal name tool.Tool.name then tool else { tool with name })
     tools
 
 let wire_messages mapping messages =
@@ -129,7 +130,7 @@ let wire_messages mapping messages =
             | Message.Tool_result ({ name; _ } as result) ->
                 Message.Tool_result { result with name = mapping.to_wire name }
             | part -> part)
-          message.parts
+          message.Message.parts
       in
       { message with parts })
     messages

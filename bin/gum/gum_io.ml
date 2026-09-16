@@ -108,7 +108,7 @@ let terminal_size env =
   | Some fd -> (
       try
         let size = Eio_unix.Pty.get_window_size fd in
-        (size.rows, size.cols)
+        (size.Eio_unix.Pty.rows, size.Eio_unix.Pty.cols)
       with Unix.Unix_error (_, _, _) -> fallback_size ())
 
 let ui_terminal ?sw env =

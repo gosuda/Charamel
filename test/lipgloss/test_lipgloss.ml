@@ -12,7 +12,7 @@ let test_border_sets () =
   let b = Border.rounded in
   check_string "rounded corner" "╭" b.top_left;
   check_string "normal edge" "─" Border.normal.top;
-  check_string "half block has no middle" "" Border.outer_half_block.middle;
+  check_string "half block has no middle" "" Border.outer_half_block.Border.middle;
   check_int "wide border edge" 1 (Border.left_size b)
 
 let test_style_geometry () =

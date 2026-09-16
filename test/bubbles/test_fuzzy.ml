@@ -1,11 +1,15 @@
 let indices matches =
-  Stdlib.List.map (fun (m : Charm_bubbles.Fuzzy.match_) -> m.index) matches
+  Stdlib.List.map
+    (fun (m : Charm_bubbles.Fuzzy.match_) -> m.Charm_bubbles.Fuzzy.index)
+    matches
 
 let matched (matches : Charm_bubbles.Fuzzy.match_ list) =
-  match matches with [] -> [] | first :: _ -> first.matched
+  match matches with [] -> [] | first :: _ -> first.Charm_bubbles.Fuzzy.matched
 
 let scores matches =
-  Stdlib.List.map (fun (m : Charm_bubbles.Fuzzy.match_) -> m.score) matches
+  Stdlib.List.map
+    (fun (m : Charm_bubbles.Fuzzy.match_) -> m.Charm_bubbles.Fuzzy.score)
+    matches
 
 let basic_vectors () =
   let matches = Charm_bubbles.Fuzzy.find ~pattern:"ba" [ "foo"; "bar"; "baz" ] in

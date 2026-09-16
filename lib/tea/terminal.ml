@@ -35,7 +35,9 @@ let query_size ~env fd =
   | Some fd -> (
       try
         let ws : Eio_unix.Pty.winsize = Eio_unix.Pty.get_window_size fd in
-        if ws.rows > 0 && ws.cols > 0 then (ws.rows, ws.cols) else fallback_size env
+        if ws.Eio_unix.Pty.rows > 0 && ws.Eio_unix.Pty.cols > 0 then
+          (ws.Eio_unix.Pty.rows, ws.Eio_unix.Pty.cols)
+        else fallback_size env
       with Unix.Unix_error (_, _, _) | Invalid_argument _ -> fallback_size env)
 
 (* POSIX cfmakeraw(3): input flags IGNBRK, BRKINT, PARMRK, ISTRIP, INLCR,

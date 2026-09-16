@@ -110,17 +110,19 @@ let check_ls_skips_generated_trees () =
   let output = run_tool Tools_search.ls context (json_object []) in
   Alcotest.(check bool)
     "listing includes source file" true
-    (contains "a.ml" output.content);
+    (contains "a.ml" output.Tool.content);
   Alcotest.(check bool)
     "listing skips hidden entries" false
-    (contains ".env" output.content);
-  Alcotest.(check bool) "listing skips .git" false (contains "ignored.ml" output.content);
+    (contains ".env" output.Tool.content);
+  Alcotest.(check bool)
+    "listing skips .git" false
+    (contains "ignored.ml" output.Tool.content);
   Alcotest.(check bool)
     "listing skips build output" false
-    (contains "generated.ml" output.content);
+    (contains "generated.ml" output.Tool.content);
   Alcotest.(check bool)
     "listing skips node_modules" false
-    (contains "dependency.ml" output.content)
+    (contains "dependency.ml" output.Tool.content)
 
 let check_glob_and_direct_hidden_path () =
   with_context @@ fun env root context ->
@@ -134,20 +136,20 @@ let check_glob_and_direct_hidden_path () =
   in
   Alcotest.(check bool)
     "glob finds source files" true
-    (contains "src/a.ml" output.content);
+    (contains "src/a.ml" output.Tool.content);
   Alcotest.(check bool)
     "glob finds all source files" true
-    (contains "src/b.ml" output.content);
+    (contains "src/b.ml" output.Tool.content);
   Alcotest.(check bool)
     "glob skips generated hidden trees" false
-    (contains "ignored.ml" output.content);
+    (contains "ignored.ml" output.Tool.content);
   let direct =
     run_tool Tools_search.glob context
       (json_object [ ("pattern", Jsont.Json.string ".env") ])
   in
   Alcotest.(check bool)
     "explicit hidden glob finds the entry" true
-    (contains ".env" direct.content)
+    (contains ".env" direct.Tool.content)
 
 let check_grep_literal_regex_include_and_binary () =
   with_context @@ fun env root context ->
@@ -167,23 +169,23 @@ let check_grep_literal_regex_include_and_binary () =
   in
   Alcotest.(check bool)
     "literal grep includes matching source" true
-    (contains "src/a.ml:1:let needle = 1" literal.content);
+    (contains "src/a.ml:1:let needle = 1" literal.Tool.content);
   Alcotest.(check bool)
     "include filters nonmatching basenames" false
-    (contains "src/b.txt" literal.content);
+    (contains "src/b.txt" literal.Tool.content);
   Alcotest.(check bool)
     "grep skips binary files" false
-    (contains "binary.bin" literal.content);
+    (contains "binary.bin" literal.Tool.content);
   Alcotest.(check bool)
     "grep skips hidden trees" false
-    (contains "ignored.ml" literal.content);
+    (contains "ignored.ml" literal.Tool.content);
   let regex =
     run_tool Tools_search.grep context
       (json_object [ ("pattern", Jsont.Json.string "needle.*text") ])
   in
   Alcotest.(check bool)
     "regex grep matches text" true
-    (contains "src/b.txt:1" regex.content)
+    (contains "src/b.txt:1" regex.Tool.content)
 
 let check_grep_limit_footer () =
   with_context @@ fun env root context ->
@@ -195,10 +197,10 @@ let check_grep_limit_footer () =
   in
   Alcotest.(check bool)
     "grep emits the first result" true
-    (contains ":1:needle one" output.content);
+    (contains ":1:needle one" output.Tool.content);
   Alcotest.(check bool)
     "grep reports truncation" true
-    (contains "(truncated at 1)" output.content)
+    (contains "(truncated at 1)" output.Tool.content)
 
 let check_glob_no_match () =
   with_context @@ fun _env _root context ->
@@ -206,19 +208,21 @@ let check_glob_no_match () =
     run_tool Tools_search.glob context
       (json_object [ ("pattern", Jsont.Json.string "**/*.does-not-exist") ])
   in
-  Alcotest.(check string) "glob reports no matches" "No files found" output.content
+  Alcotest.(check string) "glob reports no matches" "No files found" output.Tool.content
 
 let check_registered_tools () =
   let tools = [ Tools_search.ls; Tools_search.glob; Tools_search.grep ] in
   Alcotest.(check (list string))
     "search tool names" [ "ls"; "glob"; "grep" ]
-    (List.map (fun (tool : Tool.t) -> tool.name) tools);
+    (List.map (fun (tool : Tool.t) -> tool.Tool.name) tools);
   List.iter
     (fun (tool : Tool.t) ->
-      Alcotest.(check bool) (tool.name ^ " is read-only metadata") true tool.read_only;
-      match tool.schema with
+      Alcotest.(check bool)
+        (tool.Tool.name ^ " is read-only metadata")
+        true tool.Tool.read_only;
+      match tool.Tool.schema with
       | Jsont.Object _ -> ()
-      | _ -> Alcotest.failf "%s schema is not an object" tool.name)
+      | _ -> Alcotest.failf "%s schema is not an object" tool.Tool.name)
     tools
 
 let cases =

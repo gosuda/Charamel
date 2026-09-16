@@ -198,7 +198,7 @@ let check_binary_and_spill () =
     run_tool Tools_fs.read context
       (json_object [ ("path", Jsont.Json.string binary_file) ])
   in
-  Alcotest.(check bool) "binary read is rejected" true binary_output.is_error;
+  Alcotest.(check bool) "binary read is rejected" true binary_output.Tool.is_error;
   let rows = List.init 500 (fun _ -> String.make 400 'x') in
   let large_file = Filename.concat root "large.txt" in
   write_file env large_file (String.concat "\n" rows);
@@ -208,7 +208,7 @@ let check_binary_and_spill () =
   in
   Alcotest.(check bool)
     "large output has an artifact" true
-    (Option.is_some large_output.artifact)
+    (Option.is_some large_output.Tool.artifact)
 
 let check_stale_tag_and_atomicity () =
   with_context @@ fun env root context ->
@@ -222,10 +222,10 @@ let check_stale_tag_and_atomicity () =
     run_tool Tools_fs.edit context
       (json_object [ ("patch", Jsont.Json.string stale_patch) ])
   in
-  Alcotest.(check bool) "stale tag is an error output" true stale.is_error;
+  Alcotest.(check bool) "stale tag is an error output" true stale.Tool.is_error;
   Alcotest.(check bool)
     "stale output reports current tag" true
-    (contains (Crush_core.Hashline.tag (load_file env file)) stale.content);
+    (contains (Crush_core.Hashline.tag (load_file env file)) stale.Tool.content);
   Alcotest.(check string)
     "stale edit leaves file unchanged" "changed\ntwo\nthree\n" (load_file env file);
   let current = load_file env file in
@@ -275,7 +275,7 @@ let check_write_guard_and_nested_create () =
            ("path", Jsont.Json.string nested); ("content", Jsont.Json.string "new content");
          ])
   in
-  Alcotest.(check bool) "nested write succeeds" false created.is_error;
+  Alcotest.(check bool) "nested write succeeds" false created.Tool.is_error;
   Alcotest.(check string)
     "nested write creates parents" "new content" (load_file env nested);
   let existing = Filename.concat root "existing.txt" in
@@ -285,7 +285,7 @@ let check_write_guard_and_nested_create () =
       (json_object
          [ ("path", Jsont.Json.string existing); ("content", Jsont.Json.string "new") ])
   in
-  Alcotest.(check bool) "unread existing write is refused" true refused.is_error;
+  Alcotest.(check bool) "unread existing write is refused" true refused.Tool.is_error;
   Alcotest.(check string)
     "refused write leaves file unchanged" "old" (load_file env existing)
 
@@ -293,15 +293,15 @@ let check_registered_tools () =
   let tools = [ Tools_fs.read; Tools_fs.write; Tools_fs.edit ] in
   Alcotest.(check (list string))
     "filesystem tool names" [ "read"; "write"; "edit" ]
-    (List.map (fun (tool : Tool.t) -> tool.name) tools);
-  Alcotest.(check bool) "read scheduling metadata" true Tools_fs.read.read_only;
-  Alcotest.(check bool) "write scheduling metadata" false Tools_fs.write.read_only;
-  Alcotest.(check bool) "edit scheduling metadata" false Tools_fs.edit.read_only;
+    (List.map (fun (tool : Tool.t) -> tool.Tool.name) tools);
+  Alcotest.(check bool) "read scheduling metadata" true Tools_fs.read.Tool.read_only;
+  Alcotest.(check bool) "write scheduling metadata" false Tools_fs.write.Tool.read_only;
+  Alcotest.(check bool) "edit scheduling metadata" false Tools_fs.edit.Tool.read_only;
   List.iter
     (fun (tool : Tool.t) ->
-      match tool.schema with
+      match tool.Tool.schema with
       | Jsont.Object _ -> ()
-      | _ -> Alcotest.failf "%s schema is not an object" tool.name)
+      | _ -> Alcotest.failf "%s schema is not an object" tool.Tool.name)
     tools
 
 let cases =

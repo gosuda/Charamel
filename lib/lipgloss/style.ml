@@ -442,13 +442,13 @@ let border_edge_width (b : Border.t) side ~top ~bottom =
   let parts =
     match side with
     | `Left ->
-        (b.left :: (if top then [ b.top_left ] else []))
-        @ if bottom then [ b.bottom_left ] else []
+        (b.Border.left :: (if top then [ b.Border.top_left ] else []))
+        @ if bottom then [ b.Border.bottom_left ] else []
     | `Right ->
-        (b.right :: (if top then [ b.top_right ] else []))
-        @ if bottom then [ b.bottom_right ] else []
-    | `Top -> [ b.top ]
-    | `Bottom -> [ b.bottom ]
+        (b.Border.right :: (if top then [ b.Border.top_right ] else []))
+        @ if bottom then [ b.Border.bottom_right ] else []
+    | `Top -> [ b.Border.top ]
+    | `Bottom -> [ b.Border.bottom ]
   in
   Stdlib.List.fold_left (fun width part -> max width (max_glyph_width part)) 0 parts
 
@@ -474,10 +474,10 @@ let border_dimensions t =
 let side_color (sides : Sides_color.t option) side =
   match (sides, side) with
   | None, _ -> None
-  | Some s, `Top -> s.top
-  | Some s, `Right -> s.right
-  | Some s, `Bottom -> s.bottom
-  | Some s, `Left -> s.left
+  | Some s, `Top -> s.Sides_color.top
+  | Some s, `Right -> s.Sides_color.right
+  | Some s, `Bottom -> s.Sides_color.bottom
+  | Some s, `Left -> s.Sides_color.left
 
 let color_text t side text =
   let foreground = side_color t.border_foreground side in
@@ -534,13 +534,14 @@ let apply_border t ls =
         let corner side top_line =
           let glyph =
             if side = `Left then
-              first_glyph (if top_line then b.top_left else b.bottom_left)
-            else first_glyph (if top_line then b.top_right else b.bottom_right)
+              first_glyph (if top_line then b.Border.top_left else b.Border.bottom_left)
+            else
+              first_glyph (if top_line then b.Border.top_right else b.Border.bottom_right)
           in
           fit_edge side (if side = `Left then left_w else right_w) glyph
         in
         let hline ~top_line =
-          let mid = if top_line then b.top else b.bottom in
+          let mid = if top_line then b.Border.top else b.Border.bottom in
           let text =
             (if left then corner `Left top_line else "")
             ^ fill_edge (cycle_glyphs mid) content_width
@@ -548,7 +549,8 @@ let apply_border t ls =
           in
           color_text t (if top_line then `Top else `Bottom) text
         in
-        let left_glyphs = cycle_glyphs b.left and right_glyphs = cycle_glyphs b.right in
+        let left_glyphs = cycle_glyphs b.Border.left
+        and right_glyphs = cycle_glyphs b.Border.right in
         let side_glyph side i =
           let gs = if side = `Left then left_glyphs else right_glyphs in
           let glyph = Stdlib.List.nth gs (i mod Stdlib.List.length gs) in
@@ -576,17 +578,19 @@ let apply_margins t ls =
         | None -> Charm_ansi.Style.default
         | Some c -> { Charm_ansi.Style.default with bg = c }
       in
-      let content_width = max_line_width ls + m.left + m.right in
+      let content_width = max_line_width ls + m.Sides.left + m.Sides.right in
       let body =
         Stdlib.List.map
           (fun line ->
-            styled_pad margin_style m.left ^ line ^ styled_pad margin_style m.right)
+            styled_pad margin_style m.Sides.left
+            ^ line
+            ^ styled_pad margin_style m.Sides.right)
           ls
       in
       let blank = apply_ansi margin_style (spaces content_width) in
-      Stdlib.List.init m.top (fun _ -> blank)
+      Stdlib.List.init m.Sides.top (fun _ -> blank)
       @ body
-      @ Stdlib.List.init m.bottom (fun _ -> blank)
+      @ Stdlib.List.init m.Sides.bottom (fun _ -> blank)
 
 let render t input =
   let input = match t.transform with None -> input | Some f -> f input in
@@ -642,7 +646,9 @@ let render t input =
     let requested_height = Option.value ~default:0 t.height - border_v in
     let input =
       if (not inline) && requested_width > 0 then
-        Charm_ansi.Text.wrap ~width:(requested_width - padding.left - padding.right) input
+        Charm_ansi.Text.wrap
+          ~width:(requested_width - padding.Sides.left - padding.Sides.right)
+          input
       else input
     in
     let te = ansi_style t in
@@ -718,17 +724,17 @@ let render t input =
       else
         Stdlib.List.map
           (fun line ->
-            styled_pad te_whitespace padding.left
+            styled_pad te_whitespace padding.Sides.left
             ^ line
-            ^ styled_pad te_whitespace padding.right)
+            ^ styled_pad te_whitespace padding.Sides.right)
           rendered
     in
     let rendered =
       if inline then rendered
       else
-        Stdlib.List.init padding.top (fun _ -> "")
+        Stdlib.List.init padding.Sides.top (fun _ -> "")
         @ rendered
-        @ Stdlib.List.init padding.bottom (fun _ -> "")
+        @ Stdlib.List.init padding.Sides.bottom (fun _ -> "")
     in
     let rendered =
       align_lines_vertical

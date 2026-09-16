@@ -314,13 +314,13 @@ let render_runs ~char_width ~line_height ~x ~y ~tab_width runs =
   (Buffer.contents backgrounds, Buffer.contents text)
 
 let read_font fs config =
-  if config.Config.font.file = "" then Ok ""
+  if config.Config.font.Config.file = "" then Ok ""
   else
     try
-      let bytes = Eio.Path.(load (fs / config.Config.font.file)) in
+      let bytes = Eio.Path.(load (fs / config.Config.font.Config.file)) in
       let encoded = Base64.encode_string bytes in
       let extension =
-        String.lowercase_ascii (Filename.extension config.Config.font.file)
+        String.lowercase_ascii (Filename.extension config.Config.font.Config.file)
       in
       let format =
         match extension with
@@ -335,13 +335,13 @@ let read_font fs config =
           (Fmt.str
              "<style>@font-face{font-family:'%s';src:url(data:font/%s;base64,%s) \
               format('%s');}</style>"
-             (xml_escape config.Config.font.family)
+             (xml_escape config.Config.font.Config.family)
              format encoded format)
     with
-    | Eio.Io _ -> Error (Fmt.str "could not read font %s" config.Config.font.file)
+    | Eio.Io _ -> Error (Fmt.str "could not read font %s" config.Config.font.Config.file)
     | Unix.Unix_error (error, function_name, argument) ->
         Error
-          (Fmt.str "could not read font %s: %s (%s %s)" config.Config.font.file
+          (Fmt.str "could not read font %s: %s (%s %s)" config.Config.font.Config.file
              (Unix.error_message error) function_name argument)
 
 let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
@@ -386,9 +386,9 @@ let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
     let padding = Config.expand_sides ~scale config.Config.padding in
     let padding = Array.copy padding in
     if config.Config.window then padding.(0) <- padding.(0) +. (15. *. scale);
-    let char_width = config.Config.font.size /. 1.68 *. scale in
+    let char_width = config.Config.font.Config.size /. 1.68 *. scale in
     let line_height =
-      max 0.1 (config.Config.font.size *. config.Config.line_height *. scale)
+      max 0.1 (config.Config.font.Config.size *. config.Config.line_height *. scale)
     in
     let text_width = float_of_int (longest + 1) *. char_width in
     let text_height = float_of_int line_count *. line_height in
@@ -417,7 +417,8 @@ let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
     let terminal_width = max 1. terminal_width in
     let terminal_height = max 1. terminal_height in
     let line_number_width =
-      if config.Config.show_line_numbers then config.Config.font.size *. 3. *. scale
+      if config.Config.show_line_numbers then
+        config.Config.font.Config.size *. 3. *. scale
       else 0.
     in
     let terminal_width =
@@ -429,7 +430,7 @@ let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
         image_width +. line_number_width
       else image_width
     in
-    let border_width = max 0. config.Config.border.width in
+    let border_width = max 0. config.Config.border.Config.width in
     let terminal_width =
       if border_width > 0. then terminal_width -. (2. *. border_width) else terminal_width
     in
@@ -461,18 +462,19 @@ let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
              (attr "width" (float terminal_width))
              (attr "height" (float terminal_height)));
         if
-          config.Config.shadow.blur > 0.
-          || config.Config.shadow.x <> 0. || config.Config.shadow.y <> 0.
+          config.Config.shadow.Config.blur > 0.
+          || config.Config.shadow.Config.x <> 0.
+          || config.Config.shadow.Config.y <> 0.
         then
           Buffer.add_string buffer
             (Fmt.str
                "<filter id=\"shadow\" \
                 filterUnits=\"userSpaceOnUse\"><feGaussianBlur%s%s/><feOffset%s%s%s/><feMerge><feMergeNode/><feMergeNode%s/></feMerge></filter>"
                (attr "in" "SourceAlpha")
-               (attr "stdDeviation" (float (config.Config.shadow.blur *. scale)))
+               (attr "stdDeviation" (float (config.Config.shadow.Config.blur *. scale)))
                (attr "result" "offsetblur")
-               (attr "dx" (float (config.Config.shadow.x *. scale)))
-               (attr "dy" (float (config.Config.shadow.y *. scale)))
+               (attr "dx" (float (config.Config.shadow.Config.x *. scale)))
+               (attr "dy" (float (config.Config.shadow.Config.y *. scale)))
                (attr "in" "SourceGraphic"));
         Buffer.add_string buffer "</defs>";
         let terminal_attrs =
@@ -487,21 +489,22 @@ let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
               |> fun color -> Option.value (color_hex color) ~default:"#171717" )
         in
         let radius =
-          if config.Config.border.radius > 0. then
-            attr "rx" (float (config.Config.border.radius *. scale))
-            ^ attr "ry" (float (config.Config.border.radius *. scale))
+          if config.Config.border.Config.radius > 0. then
+            attr "rx" (float (config.Config.border.Config.radius *. scale))
+            ^ attr "ry" (float (config.Config.border.Config.radius *. scale))
           else ""
         in
         let outline =
           if border_width > 0. then
-            attr "stroke" config.Config.border.color
+            attr "stroke" config.Config.border.Config.color
             ^ attr "stroke-width" (float border_width)
           else ""
         in
         let filter =
           if
-            config.Config.shadow.blur > 0.
-            || config.Config.shadow.x <> 0. || config.Config.shadow.y <> 0.
+            config.Config.shadow.Config.blur > 0.
+            || config.Config.shadow.Config.x <> 0.
+            || config.Config.shadow.Config.y <> 0.
           then attr "filter" "url(#shadow)"
           else ""
         in
@@ -528,10 +531,10 @@ let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
         let default_fill = if is_ansi then attr "fill" "#C4C4C4" else "" in
         Buffer.add_string buffer
           (Fmt.str "<g%s%s%s%s>"
-             (attr "font-family" config.Config.font.family)
-             (attr "font-size" (float (config.Config.font.size *. scale)))
+             (attr "font-family" config.Config.font.Config.family)
+             (attr "font-size" (float (config.Config.font.Config.size *. scale)))
              (attr "font-variant-ligatures"
-                (if config.Config.font.ligatures then "normal" else "none"))
+                (if config.Config.font.Config.ligatures then "normal" else "none"))
              default_fill);
         let offset =
           match config.Config.lines with first :: _ -> max 0 (first - 1) | [] -> 0

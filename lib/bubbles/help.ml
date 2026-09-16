@@ -81,7 +81,7 @@ let short_view t bindings =
   Stdlib.List.iter
     (fun binding ->
       if (not !finished) && enabled binding then begin
-        let key, description = (binding : Key_binding.t).help in
+        let key, description = (binding : Key_binding.t).Key_binding.help in
         let prefix = if !rendered_any then separator else "" in
         let item =
           prefix
@@ -120,7 +120,7 @@ let full_view t groups =
           let keys, descriptions =
             Stdlib.List.split
               (Stdlib.List.map
-                 (fun binding -> (binding : Key_binding.t).help)
+                 (fun binding -> (binding : Key_binding.t).Key_binding.help)
                  enabled_bindings)
           in
           let prefix = if !rendered_any then separator else "" in

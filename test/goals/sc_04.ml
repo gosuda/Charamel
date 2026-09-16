@@ -52,8 +52,8 @@ let run () =
         (String.starts_with ~prefix:"ssh-ed25519 " (Eio.Path.load pub));
       let private_bytes_before = Eio.Path.load key in
       let public_bytes_before = Eio.Path.load pub in
-      let private_mode_before = (Eio.Path.stat ~follow:false key).perm in
-      let public_mode_before = (Eio.Path.stat ~follow:false pub).perm in
+      let private_mode_before = (Eio.Path.stat ~follow:false key).Eio.File.Stat.perm in
+      let public_mode_before = (Eio.Path.stat ~follow:false pub).Eio.File.Stat.perm in
       let status = ref None in
       let stderr_buf = Buffer.create 256 in
       let (_ : string) =
@@ -77,7 +77,7 @@ let run () =
         "the public key bytes are unchanged" public_bytes_before (Eio.Path.load pub);
       Alcotest.(check int)
         "the private key mode is unchanged" private_mode_before
-        (Eio.Path.stat ~follow:false key).perm;
+        (Eio.Path.stat ~follow:false key).Eio.File.Stat.perm;
       Alcotest.(check int)
         "the public key mode is unchanged" public_mode_before
-        (Eio.Path.stat ~follow:false pub).perm)
+        (Eio.Path.stat ~follow:false pub).Eio.File.Stat.perm)

@@ -17,9 +17,9 @@ let precedence () =
   | Error _ -> Alcotest.fail "configuration should decode"
   | Ok (config, Some path) ->
       Alcotest.(check string) "path" "/work/glow.json" path;
-      Alcotest.(check string) "style" "dracula" config.style;
-      Alcotest.(check int) "width" 52 config.width;
-      Alcotest.(check bool) "pager" true config.pager
+      Alcotest.(check string) "style" "dracula" config.Config.style;
+      Alcotest.(check int) "width" 52 config.Config.width;
+      Alcotest.(check bool) "pager" true config.Config.pager
   | Ok (_, None) -> Alcotest.fail "configuration path missing"
 
 let flags_win () =
@@ -36,10 +36,10 @@ let flags_win () =
         mouse = None;
       }
   in
-  Alcotest.(check string) "style" "pink" config.style;
-  Alcotest.(check int) "width" 37 config.width;
-  Alcotest.(check bool) "pager" true config.pager;
-  Alcotest.(check bool) "line numbers" true config.line_numbers
+  Alcotest.(check string) "style" "pink" config.Config.style;
+  Alcotest.(check int) "width" 37 config.Config.width;
+  Alcotest.(check bool) "pager" true config.Config.pager;
+  Alcotest.(check bool) "line numbers" true config.Config.line_numbers
 
 let booleans () =
   List.iter

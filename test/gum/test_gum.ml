@@ -1,11 +1,15 @@
 let sides_equal (left : Charm_lipgloss.Sides.t) (right : Charm_lipgloss.Sides.t) =
-  left.top = right.top && left.right = right.right && left.bottom = right.bottom
-  && left.left = right.left
+  left.Charm_lipgloss.Sides.top = right.Charm_lipgloss.Sides.top
+  && left.Charm_lipgloss.Sides.right = right.Charm_lipgloss.Sides.right
+  && left.Charm_lipgloss.Sides.bottom = right.Charm_lipgloss.Sides.bottom
+  && left.Charm_lipgloss.Sides.left = right.Charm_lipgloss.Sides.left
 
 let sides_testable =
   Alcotest.testable
     (Fmt.of_to_string (fun (sides : Charm_lipgloss.Sides.t) ->
-         Fmt.str "(%d,%d,%d,%d)" sides.top sides.right sides.bottom sides.left))
+         Fmt.str "(%d,%d,%d,%d)" sides.Charm_lipgloss.Sides.top
+           sides.Charm_lipgloss.Sides.right sides.Charm_lipgloss.Sides.bottom
+           sides.Charm_lipgloss.Sides.left))
     sides_equal
 
 let test_env_names () =

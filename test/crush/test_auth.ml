@@ -56,7 +56,8 @@ let test_codec_roundtrip () =
       Alcotest.(check int) "entry count" 3 (List.length decoded);
       (match List.assoc_opt "anthropic" decoded with
       | Some (Auth.Oauth credential) ->
-          Alcotest.(check string) "access" "access-token" credential.access
+          Alcotest.(check string)
+            "access" "access-token" credential.Charm_fantasy__Oauth.Credential.access
       | _ -> Alcotest.fail "oauth entry did not round-trip");
       match List.assoc_opt "old" decoded with
       | Some (Auth.Disabled { reason; _ }) ->
@@ -106,7 +107,9 @@ let test_set_remove_and_reload () =
         "stable lock file exists" true
         (Eio.Path.kind ~follow:false lock = `Regular_file);
       let lock_stat = Eio.Path.stat ~follow:false lock in
-      Alcotest.(check int) "lock is private" 0o600 (lock_stat.perm land 0o777);
+      Alcotest.(check int)
+        "lock is private" 0o600
+        (lock_stat.Eio.File.Stat.perm land 0o777);
       (match Auth.create ~path ~clock:env#clock () with
       | Error error ->
           Alcotest.failf "second resource creation failed: %a" Auth.pp_error error

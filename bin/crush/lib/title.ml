@@ -20,8 +20,8 @@ let generate ~sw ~clock ~net ~(small : Models.resolved) ~first_prompt =
   let prompt = utf8_prefix first_prompt 2_000 in
   let messages = [ Charm_fantasy.Message.text Charm_fantasy.Message.User prompt ] in
   let stream =
-    Charm_fantasy.Provider.stream small.provider ~sw ~clock ~net ~model:small.model
-      ~system:[ Prompt_title.text ] ~max_tokens:40 messages
+    Charm_fantasy.Provider.stream small.Models.provider ~sw ~clock ~net
+      ~model:small.Models.model ~system:[ Prompt_title.text ] ~max_tokens:40 messages
   in
   let output = Buffer.create 128 in
   let rec consume () =

@@ -101,11 +101,11 @@ type msg =
 let tty_size _env =
   try
     let size : Eio_unix.Pty.winsize = Eio_unix.Pty.get_window_size Eio_unix.Fd.stdout in
-    (max 1 size.rows, max 1 size.cols)
+    (max 1 size.Eio_unix.Pty.rows, max 1 size.Eio_unix.Pty.cols)
   with Unix.Unix_error _ | Eio.Io _ -> (80, 24)
 
 let width_for env (config : Config.t) =
-  if config.width > 0 then config.width
+  if config.Config.width > 0 then config.Config.width
   else
     let _, columns = tty_size env in
     min 120 columns
@@ -115,9 +115,9 @@ let code_fence document =
   else "```\n" ^ document.Source.content ^ "\n```"
 
 let rendered_text ~is_dark ~width ~(config : Config.t) document =
-  let theme = theme ~is_dark config.style in
+  let theme = theme ~is_dark config.Config.style in
   Charm_glamour.render ~width ~theme ?base_url:document.Source.base_url
-    ~preserve_newlines:config.preserve_new_lines (code_fence document)
+    ~preserve_newlines:config.Config.preserve_new_lines (code_fence document)
 
 let add_line_numbers text =
   let lines = String.split_on_char '\n' text in
@@ -132,7 +132,7 @@ let content_for (pager : pager) =
     rendered_text ~is_dark:pager.is_dark ~width:pager.width ~config:pager.config
       pager.document
   in
-  if pager.config.line_numbers then add_line_numbers text else text
+  if pager.config.Config.line_numbers then add_line_numbers text else text
 
 let with_content (pager : pager) ?(keep_offset = true) () =
   let old_offset = Viewport.y_offset pager.viewport in
@@ -176,7 +176,7 @@ let relative root path =
   else path
 
 let make_browser env (config : Config.t) root ~width ~height =
-  let files = Source.discover_markdown ~root ~show_hidden:config.all in
+  let files = Source.discover_markdown ~root ~show_hidden:config.Config.all in
   let delegate =
     List_view.default_delegate
       ~is_dark:(Charm_cli.is_dark ~env:Sys.getenv_opt)
@@ -270,7 +270,7 @@ let goto_match pager index =
       }
 
 let update_search (pager : pager) (key : Key.t) =
-  match key.code with
+  match key.Key.code with
   | Key.Escape -> ({ pager with search_mode = false; status = None }, Cmd.none)
   | Key.Enter ->
       let matches = search_lines pager.query pager.document.Source.content in
@@ -282,11 +282,11 @@ let update_search (pager : pager) (key : Key.t) =
       ({ pager with query }, Cmd.none)
   | Key.Char uchar ->
       let text =
-        if key.text = "" then (
+        if key.Key.text = "" then (
           let buffer = Buffer.create 4 in
           Buffer.add_utf_8_uchar buffer uchar;
           Buffer.contents buffer)
-        else key.text
+        else key.Key.text
       in
       ({ pager with query = pager.query ^ text }, Cmd.none)
   | _ -> (pager, Cmd.none)
@@ -356,7 +356,10 @@ let pager_update (pager : pager) message =
                  {
                    pager with
                    config =
-                     { pager.config with line_numbers = not pager.config.line_numbers };
+                     {
+                       pager.config with
+                       line_numbers = not pager.config.Config.line_numbers;
+                     };
                  }
                  ()),
             Cmd.none )
@@ -411,7 +414,7 @@ let browser_view browser =
     Style.render help_style "↑/↓ select  enter open  / filter  r refresh  q quit"
   in
   View.v ~alt_screen:true
-    ~mouse:(if browser.config.mouse then View.Mouse_all else View.Mouse_off)
+    ~mouse:(if browser.config.Config.mouse then View.Mouse_all else View.Mouse_off)
     ~title:"Glow"
     (List_view.view browser.listing ^ "\n" ^ footer)
 
@@ -435,7 +438,7 @@ let pager_view (pager : pager) =
     else ""
   in
   View.v ~alt_screen:true
-    ~mouse:(if pager.config.mouse then View.Mouse_all else View.Mouse_off)
+    ~mouse:(if pager.config.Config.mouse then View.Mouse_all else View.Mouse_off)
     ~title:"Glow"
     (body ^ "\n" ^ footer ^ help ^ search)
 
@@ -448,14 +451,16 @@ let subscriptions = function
       let resize = Sub.resize (fun ~rows ~cols -> Resize (rows, cols)) in
       let key = Sub.key (fun key -> Key key) in
       let mouse =
-        if browser.config.mouse then Sub.mouse (fun value -> Mouse value) else Sub.none
+        if browser.config.Config.mouse then Sub.mouse (fun value -> Mouse value)
+        else Sub.none
       in
       Sub.batch [ resize; key; mouse ]
   | Pager pager ->
       let resize = Sub.resize (fun ~rows ~cols -> Resize (rows, cols)) in
       let key = Sub.key (fun key -> Key key) in
       let mouse =
-        if pager.config.mouse then Sub.mouse (fun value -> Mouse value) else Sub.none
+        if pager.config.Config.mouse then Sub.mouse (fun value -> Mouse value)
+        else Sub.none
       in
       Sub.batch [ resize; key; mouse ]
 

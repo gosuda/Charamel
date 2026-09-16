@@ -189,17 +189,19 @@ let system_items (r : Request.t) =
   let message_blocks =
     List.concat_map
       (fun (m : Message.t) ->
-        match m.role with
+        match m.Message.role with
         | Message.System ->
-            List.filter_map (function Message.Text s -> Some s | _ -> None) m.parts
+            List.filter_map
+              (function Message.Text s -> Some s | _ -> None)
+              m.Message.parts
         | Message.User | Message.Assistant | Message.Tool -> [])
-      r.messages
+      r.Request.messages
   in
-  let blocks = r.system @ message_blocks in
+  let blocks = r.Request.system @ message_blocks in
   match blocks with
   | [] -> []
   | blocks -> (
-      match classify_model r.model.id with
+      match classify_model r.Request.model.Model.id with
       | `Remove_system -> []
       | `Chat -> [ easy_message_item "system" (String.concat "" blocks) ]
       | `Reasoning -> [ easy_message_item "developer" (String.concat "" blocks) ])
@@ -208,12 +210,12 @@ let input_items (r : Request.t) =
   let message_items =
     List.concat_map
       (fun (m : Message.t) ->
-        match m.role with
+        match m.Message.role with
         | Message.System -> []
-        | Message.User -> user_items m.parts
-        | Message.Assistant -> assistant_items m.parts
-        | Message.Tool -> tool_items m.parts)
-      r.messages
+        | Message.User -> user_items m.Message.parts
+        | Message.Assistant -> assistant_items m.Message.parts
+        | Message.Tool -> tool_items m.Message.parts)
+      r.Request.messages
   in
   system_items r @ message_items
 
@@ -226,23 +228,26 @@ let effort = function
   | Request.High -> Some "high"
 
 let encode (r : Request.t) =
-  let cap = if r.max_tokens > 0 then r.max_tokens else r.model.default_max_tokens in
-  let is_reasoning = classify_model r.model.id = `Reasoning in
+  let cap =
+    if r.Request.max_tokens > 0 then r.Request.max_tokens
+    else r.Request.model.Model.default_max_tokens
+  in
+  let is_reasoning = classify_model r.Request.model.Model.id = `Reasoning in
   (* Summaries are never requested: the provider only sets [summary] from
      explicit caller options, and without it no reasoning text streams. *)
   let reasoning_member =
-    match (is_reasoning, effort r.reasoning) with
+    match (is_reasoning, effort r.Request.reasoning) with
     | true, Some e -> [ (n "reasoning", obj [ (n "effort", str e) ]) ]
     | _ -> []
   in
   (* A reasoning model rejects temperature alongside reasoning. *)
   let temperature =
-    match (r.temperature, is_reasoning) with
+    match (r.Request.temperature, is_reasoning) with
     | Some t, false -> [ (n "temperature", num t) ]
     | _ -> []
   in
   let tools =
-    match r.tools with
+    match r.Request.tools with
     | [] -> []
     | ts ->
         [
@@ -253,9 +258,9 @@ let encode (r : Request.t) =
                    obj
                      [
                        (n "type", str "function");
-                       (n "name", str t.name);
-                       (n "description", str t.description);
-                       (n "parameters", t.schema);
+                       (n "name", str t.Tool.name);
+                       (n "description", str t.Tool.description);
+                       (n "parameters", t.Tool.schema);
                      ])
                  ts) );
           (n "tool_choice", str "auto");
@@ -263,7 +268,7 @@ let encode (r : Request.t) =
   in
   obj
     ([
-       (n "model", str r.model.id);
+       (n "model", str r.Request.model.Model.id);
        (n "input", arr (input_items r));
        (n "max_output_tokens", int cap);
        (n "stream", bool true);

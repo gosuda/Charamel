@@ -47,22 +47,24 @@ let concat_nonempty parts =
   parts |> Stdlib.List.filter (fun s -> s <> "") |> String.concat "\n"
 
 let field_label name = String.capitalize_ascii name ^ ":"
-let field_style ctx focused = if focused then ctx.styles.focused else ctx.styles.blurred
+
+let field_style ctx focused =
+  if focused then ctx.styles.Styles.focused else ctx.styles.Styles.blurred
 
 let textinput_styles (styles : Styles.t) : Charm_bubbles.Textinput.styles =
   let defaults = Charm_bubbles.Textinput.default_styles ~is_dark:true in
   let state (custom : Styles.text_input) : Charm_bubbles.Textinput.style_state =
     {
-      text = custom.text;
-      placeholder = custom.placeholder;
-      suggestion = custom.placeholder;
-      prompt = custom.prompt;
+      text = custom.Styles.text;
+      placeholder = custom.Styles.placeholder;
+      suggestion = custom.Styles.placeholder;
+      prompt = custom.Styles.prompt;
     }
   in
   {
-    focused = state styles.focused.text_input;
-    blurred = state styles.blurred.text_input;
-    cursor = defaults.cursor;
+    focused = state styles.Styles.focused.Styles.text_input;
+    blurred = state styles.Styles.blurred.Styles.text_input;
+    cursor = defaults.Charm_bubbles.Textinput.cursor;
   }
 
 let textarea_styles (styles : Styles.t) : Charm_bubbles.Textarea.styles =
@@ -70,21 +72,25 @@ let textarea_styles (styles : Styles.t) : Charm_bubbles.Textarea.styles =
   let state (base : Charm_bubbles.Textarea.style_state) (custom : Styles.text_input) :
       Charm_bubbles.Textarea.style_state =
     {
-      base = base.base;
-      text = custom.text;
-      line_number = base.line_number;
-      cursor_line_number = base.cursor_line_number;
-      cursor_line = base.cursor_line;
-      end_of_buffer = base.end_of_buffer;
-      placeholder = custom.placeholder;
-      prompt = custom.prompt;
-      selection = base.selection;
+      base = base.Charm_bubbles.Textarea.base;
+      text = custom.Styles.text;
+      line_number = base.Charm_bubbles.Textarea.line_number;
+      cursor_line_number = base.Charm_bubbles.Textarea.cursor_line_number;
+      cursor_line = base.Charm_bubbles.Textarea.cursor_line;
+      end_of_buffer = base.Charm_bubbles.Textarea.end_of_buffer;
+      placeholder = custom.Styles.placeholder;
+      prompt = custom.Styles.prompt;
+      selection = base.Charm_bubbles.Textarea.selection;
     }
   in
   {
-    focused = state defaults.focused styles.focused.text_input;
-    blurred = state defaults.blurred styles.blurred.text_input;
-    cursor = defaults.cursor;
+    focused =
+      state defaults.Charm_bubbles.Textarea.focused
+        styles.Styles.focused.Styles.text_input;
+    blurred =
+      state defaults.Charm_bubbles.Textarea.blurred
+        styles.Styles.blurred.Styles.text_input;
+    cursor = defaults.Charm_bubbles.Textarea.cursor;
   }
 
 let render_title_description ctx ~focused ~title ~description ~error =
@@ -92,24 +98,26 @@ let render_title_description ctx ~focused ~title ~description ~error =
   let title =
     if title = "" then ""
     else
-      let rendered = Charm_lipgloss.Style.render style.title title in
+      let rendered = Charm_lipgloss.Style.render style.Styles.title title in
       match error with
       | None -> rendered
       | Some _ ->
           rendered
-          ^ Charm_lipgloss.Style.render style.error_indicator
-              style.indicators.error_indicator
+          ^ Charm_lipgloss.Style.render style.Styles.error_indicator
+              style.Styles.indicators.Styles.error_indicator
   in
   let description =
     if description = "" then ""
     else
-      Charm_lipgloss.Style.render style.description
+      Charm_lipgloss.Style.render style.Styles.description
         (Charm_ansi.Text.wrap ~width:(max 1 ctx.width) description)
   in
   concat_nonempty [ title; description ]
 
 let raw_matches key (binding : Charm_bubbles.Key_binding.t) =
-  Stdlib.List.exists (fun candidate -> Charm_tea.Key.matches key candidate) binding.keys
+  Stdlib.List.exists
+    (fun candidate -> Charm_tea.Key.matches key candidate)
+    binding.Charm_bubbles.Key_binding.keys
 
 let binding_enabled binding enabled =
   Charm_bubbles.Key_binding.set_enabled enabled binding
@@ -204,18 +212,18 @@ let input_edit _ctx message state =
 
 let input_on_key ctx key state =
   let state = { state with err = None } in
-  let km = ctx.keymap.input in
-  if raw_matches key km.prev && not ctx.position.is_first then
+  let km = ctx.keymap.Keymap.input in
+  if raw_matches key km.Keymap.prev && not ctx.position.is_first then
     (state, Charm_tea.Cmd.none, Prev)
-  else if raw_matches key km.next && not ctx.position.is_last then
+  else if raw_matches key km.Keymap.next && not ctx.position.is_last then
     match input_validate state (Charm_bubbles.Textinput.value state.textinput) with
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
     | Ok () -> (state, Charm_tea.Cmd.none, Next)
-  else if raw_matches key km.submit && ctx.position.is_last then
+  else if raw_matches key km.Keymap.submit && ctx.position.is_last then
     match input_validate state (Charm_bubbles.Textinput.value state.textinput) with
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
     | Ok () -> (state, Charm_tea.Cmd.none, Submit)
-  else if raw_matches key km.accept_suggestion then
+  else if raw_matches key km.Keymap.accept_suggestion then
     let textinput, command =
       Charm_bubbles.Textinput.update Charm_bubbles.Textinput.Accept_suggestion
         state.textinput
@@ -262,12 +270,12 @@ let input_view ctx ~focused state =
     if state.inline && title <> "" then String.concat " " [ text; input ]
     else concat_nonempty [ text; input ]
   in
-  Charm_lipgloss.Style.render (field_style ctx focused).base content
+  Charm_lipgloss.Style.render (field_style ctx focused).Styles.base content
 
 let input_key_binds ctx _state =
-  let km = ctx.keymap.input in
-  navigation_binds ctx ~prev:km.prev ~next:km.next ~submit:km.submit
-  @ [ km.accept_suggestion ]
+  let km = ctx.keymap.Keymap.input in
+  navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
+  @ [ km.Keymap.accept_suggestion ]
 
 let input_accessible ~name ctx ~out reader state =
   let title = Dyn.eval state.title ctx.results in
@@ -404,7 +412,7 @@ let text_update ctx message state =
       let state = { state with editor_path = None } in
       let read_result =
         if code = 0 then
-          try Some (Eio.Path.load Eio.Path.(ctx.env.temp_dir / path))
+          try Some (Eio.Path.load Eio.Path.(ctx.env.Env.temp_dir / path))
           with Eio.Io (Eio.Fs.E _, _) -> None
         else None
       in
@@ -419,7 +427,7 @@ let text_update ctx message state =
         | None -> state
       in
       Eio.Cancel.protect (fun () ->
-          Eio.Path.unlink ~missing_ok:true Eio.Path.(ctx.env.temp_dir / path));
+          Eio.Path.unlink ~missing_ok:true Eio.Path.(ctx.env.Env.temp_dir / path));
       (state, Charm_tea.Cmd.none)
 
 let text_make_editor_file ctx state =
@@ -429,7 +437,7 @@ let text_make_editor_file ctx state =
       let filename =
         Fmt.str "huh-%d-%d.%s" (Unix.getpid ()) counter state.editor_extension
       in
-      let path = Eio.Path.(ctx.env.temp_dir / filename) in
+      let path = Eio.Path.(ctx.env.Env.temp_dir / filename) in
       try
         Eio.Path.save ~create:(`Exclusive 0o600) path
           (Charm_bubbles.Textarea.value state.textarea);
@@ -442,23 +450,23 @@ let text_make_editor_file ctx state =
 
 let text_on_key ctx key state =
   let state = { state with err = None } in
-  let km = ctx.keymap.text in
-  if raw_matches key km.prev && not ctx.position.is_first then
+  let km = ctx.keymap.Keymap.text in
+  if raw_matches key km.Keymap.prev && not ctx.position.is_first then
     (state, Charm_tea.Cmd.none, Prev)
-  else if raw_matches key km.next && not ctx.position.is_last then
+  else if raw_matches key km.Keymap.next && not ctx.position.is_last then
     match text_validate state (Charm_bubbles.Textarea.value state.textarea) with
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
     | Ok () -> (state, Charm_tea.Cmd.none, Next)
-  else if raw_matches key km.submit && ctx.position.is_last then
+  else if raw_matches key km.Keymap.submit && ctx.position.is_last then
     match text_validate state (Charm_bubbles.Textarea.value state.textarea) with
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
     | Ok () -> (state, Charm_tea.Cmd.none, Submit)
-  else if raw_matches key km.new_line then
+  else if raw_matches key km.Keymap.new_line then
     let textarea = Charm_bubbles.Textarea.insert_string "\n" state.textarea in
     ({ state with textarea }, Charm_tea.Cmd.none, Stay)
   else if
-    raw_matches key km.editor && state.editor && state.editor_path = None
-    && ctx.env.editor <> []
+    raw_matches key km.Keymap.editor
+    && state.editor && state.editor_path = None && ctx.env.Env.editor <> []
   then
     match text_make_editor_file ctx state with
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
@@ -466,7 +474,8 @@ let text_on_key ctx key state =
         let command =
           Charm_tea.Cmd.exec
             ~argv:
-              (ctx.env.editor @ [ Eio.Path.native_exn Eio.Path.(ctx.env.temp_dir / path) ])
+              (ctx.env.Env.editor
+              @ [ Eio.Path.native_exn Eio.Path.(ctx.env.Env.temp_dir / path) ])
             (fun code -> Editor_done (path, code))
         in
         ({ state with counter; editor_path = Some path }, command, Stay)
@@ -1451,11 +1460,11 @@ let confirm_on_key ctx key state =
   else if raw_matches key km.reject && state.negative <> None then finish false
   else if raw_matches key km.toggle && state.negative <> None then
     ({ state with value = not state.value }, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.next && not ctx.position.is_last then
+  else if raw_matches key km.Keymap.next && not ctx.position.is_last then
     match confirm_validate state state.value with
     | Ok () -> (state, Charm_tea.Cmd.none, Next)
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.submit && ctx.position.is_last then
+  else if raw_matches key km.Keymap.submit && ctx.position.is_last then
     match confirm_validate state state.value with
     | Ok () -> (state, Charm_tea.Cmd.none, Submit)
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
@@ -1485,7 +1494,7 @@ let confirm_view ctx ~focused state =
   in
   let button label active =
     Charm_lipgloss.Style.render
-      (if active then style.focused_button else style.blurred_button)
+      (if active then style.Styles.focused_button else style.Styles.blurred_button)
       label
   in
   let buttons =
@@ -1504,15 +1513,15 @@ let confirm_view ctx ~focused state =
     if state.inline then concat_nonempty [ heading ^ " " ^ buttons ]
     else concat_nonempty [ heading; buttons ]
   in
-  Charm_lipgloss.Style.render style.base content
+  Charm_lipgloss.Style.render style.Styles.base content
 
 let confirm_key_binds ctx state =
-  let km = ctx.keymap.confirm in
-  navigation_binds ctx ~prev:km.prev ~next:km.next ~submit:km.submit
+  let km = ctx.keymap.Keymap.confirm in
+  navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
   @ [
-      binding_enabled km.toggle (state.negative <> None);
-      km.accept;
-      binding_enabled km.reject (state.negative <> None);
+      binding_enabled km.Keymap.toggle (state.negative <> None);
+      km.Keymap.accept;
+      binding_enabled km.Keymap.reject (state.negative <> None);
     ]
 
 let confirm_accessible ~name ctx ~out reader state =
@@ -1631,8 +1640,8 @@ let note_init _ state = (state, Charm_tea.Cmd.none)
 let note_reevaluate _ state = state
 
 let note_on_key ctx key state =
-  let km = ctx.keymap.note in
-  if raw_matches key km.prev && not ctx.position.is_first then
+  let km = ctx.keymap.Keymap.note in
+  if raw_matches key km.Keymap.prev && not ctx.position.is_first then
     (state, Charm_tea.Cmd.none, Prev)
   else if ctx.position.is_last then (state, Charm_tea.Cmd.none, Submit)
   else (state, Charm_tea.Cmd.none, Next)
@@ -1647,22 +1656,23 @@ let note_view ctx ~focused state =
   let title = Dyn.eval state.title ctx.results in
   let description = Dyn.eval state.description ctx.results |> mini_markdown in
   let card =
-    concat_nonempty [ Charm_lipgloss.Style.render style.note_title title; description ]
+    concat_nonempty
+      [ Charm_lipgloss.Style.render style.Styles.note_title title; description ]
   in
   let card =
     match state.next with
     | None -> card
-    | Some label -> card ^ "\n" ^ Charm_lipgloss.Style.render style.next label
+    | Some label -> card ^ "\n" ^ Charm_lipgloss.Style.render style.Styles.next label
   in
   let card_lines = String.split_on_char '\n' card in
   let padded =
     card_lines @ List.init (max 0 (state.height - List.length card_lines)) (fun _ -> "")
   in
-  Charm_lipgloss.Style.render style.card (String.concat "\n" padded)
+  Charm_lipgloss.Style.render style.Styles.card (String.concat "\n" padded)
 
 let note_key_binds ctx _state =
-  let km = ctx.keymap.note in
-  navigation_binds ctx ~prev:km.prev ~next:km.next ~submit:km.submit
+  let km = ctx.keymap.Keymap.note in
+  navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
 
 let note_accessible ~name:_ ctx ~out _reader state =
   let title = Dyn.eval state.title ctx.results in
@@ -1723,7 +1733,7 @@ type file_state = {
 let file_msg_id : file_message Type.Id.t = Type.Id.make ()
 
 let make_picker ctx state =
-  Charm_bubbles.Filepicker.v ~fs:ctx.env.fs ~current_directory:state.dir
+  Charm_bubbles.Filepicker.v ~fs:ctx.env.Env.fs ~current_directory:state.dir
     ~allowed_types:state.allowed ~show_permissions:state.show_permissions
     ~show_size:state.show_size ~show_hidden:state.show_hidden ~dir_allowed:state.dirs
     ~file_allowed:state.files ~height:(max 1 state.height) ()
@@ -1753,7 +1763,7 @@ let file_validate ctx state input =
       then Filename.concat state.dir input
       else input
     in
-    let path = Eio.Path.(ctx.env.fs / relative) in
+    let path = Eio.Path.(ctx.env.Env.fs / relative) in
     match Eio.Path.kind ~follow:true path with
     | `Regular_file ->
         if
@@ -1768,8 +1778,8 @@ let file_validate ctx state input =
 
 let file_on_key ctx key state =
   let state = { state with err = None } in
-  let km = ctx.keymap.file in
-  if (not state.picking) && raw_matches key km.open_ then
+  let km = ctx.keymap.Keymap.file in
+  if (not state.picking) && raw_matches key km.Keymap.open_ then
     let picker, command =
       match state.picker with
       | Some picker -> Charm_bubbles.Filepicker.init picker
@@ -1781,7 +1791,7 @@ let file_on_key ctx key state =
       Charm_tea.Cmd.map (fun message -> File_picker message) command,
       Stay )
   else if state.picking then
-    if raw_matches key km.close then
+    if raw_matches key km.Keymap.close then
       ({ state with picking = false }, Charm_tea.Cmd.none, Stay)
     else
       match state.picker with
@@ -1819,13 +1829,13 @@ let file_on_key ctx key state =
                   in
                   ({ state with picker = Some picker; err = Some error }, command, Stay)
               | None, None -> ({ state with picker = Some picker }, command, Stay)))
-  else if raw_matches key km.prev && not ctx.position.is_first then
+  else if raw_matches key km.Keymap.prev && not ctx.position.is_first then
     (state, Charm_tea.Cmd.none, Prev)
-  else if raw_matches key km.next && not ctx.position.is_last then
+  else if raw_matches key km.Keymap.next && not ctx.position.is_last then
     match file_validate ctx state state.selected with
     | Ok () -> (state, Charm_tea.Cmd.none, Next)
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.submit && ctx.position.is_last then
+  else if raw_matches key km.Keymap.submit && ctx.position.is_last then
     match file_validate ctx state state.selected with
     | Ok () -> (state, Charm_tea.Cmd.none, Submit)
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
@@ -1880,27 +1890,32 @@ let file_view ctx ~focused state =
       | Some picker -> Charm_bubbles.Filepicker.view picker
       | None -> ""
     else if state.selected <> "" then
-      Charm_lipgloss.Style.render style.selected_option state.selected
-    else Charm_lipgloss.Style.render style.text_input.placeholder "No file selected."
+      Charm_lipgloss.Style.render style.Styles.selected_option state.selected
+    else
+      Charm_lipgloss.Style.render style.Styles.text_input.Styles.placeholder
+        "No file selected."
   in
-  Charm_lipgloss.Style.render style.base (concat_nonempty [ heading; body ])
+  Charm_lipgloss.Style.render style.Styles.base (concat_nonempty [ heading; body ])
 
 let file_key_binds ctx state =
-  let km = ctx.keymap.file in
+  let km = ctx.keymap.Keymap.file in
   if state.picking then
     [
-      km.goto_top;
-      km.goto_bottom;
-      km.page_up;
-      km.page_down;
-      km.back;
-      km.select;
-      km.up;
-      km.down;
-      km.open_;
-      km.close;
+      km.Keymap.goto_top;
+      km.Keymap.goto_bottom;
+      km.Keymap.page_up;
+      km.Keymap.page_down;
+      km.Keymap.back;
+      km.Keymap.select;
+      km.Keymap.up;
+      km.Keymap.down;
+      km.Keymap.open_;
+      km.Keymap.close;
     ]
-  else navigation_binds ctx ~prev:km.prev ~next:km.next ~submit:km.submit @ [ km.open_ ]
+  else
+    navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next
+      ~submit:km.Keymap.submit
+    @ [ km.Keymap.open_ ]
 
 let file_accessible ~name ctx ~out reader state =
   let title = Dyn.eval state.title ctx.results in

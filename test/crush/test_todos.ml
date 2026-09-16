@@ -21,8 +21,9 @@ let set_get_case () =
   Todos.set state source;
   let fetched = Todos.get state in
   Alcotest.(check int) "item count" 3 (List.length fetched);
-  Alcotest.(check string) "first item" "write code" (List.hd fetched).content;
-  Alcotest.(check string) "active form" "running tests" (List.nth fetched 1).active_form
+  Alcotest.(check string) "first item" "write code" (List.hd fetched).Todos.content;
+  Alcotest.(check string)
+    "active form" "running tests" (List.nth fetched 1).Todos.active_form
 
 let transitions_case () =
   let state = Todos.create () in
@@ -56,10 +57,11 @@ let codec_case () =
       | Ok decoded ->
           Alcotest.(check int)
             "round-trip count" (List.length source) (List.length decoded);
-          Alcotest.(check string) "round-trip content" "ship" (List.nth decoded 2).content;
+          Alcotest.(check string)
+            "round-trip content" "ship" (List.nth decoded 2).Todos.content;
           Alcotest.(check bool)
             "round-trip status" true
-            (match (List.nth decoded 1).status with
+            (match (List.nth decoded 1).Todos.status with
             | Todos.In_progress -> true
             | _ -> false))
 

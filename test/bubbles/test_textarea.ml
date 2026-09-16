@@ -64,8 +64,8 @@ let view_and_real_cursor () =
   Alcotest.(check bool) "placeholder rendered" true (String.length rendered > 0);
   let area = Area.set_value "abcdefghijk" area in
   let info = Area.line_info area in
-  Alcotest.(check bool) "wrapped width" true ((Area.line_info area).width <= 6);
-  Alcotest.(check bool) "visual height" true (info.height >= 1);
+  Alcotest.(check bool) "wrapped width" true ((Area.line_info area).Area.width <= 6);
+  Alcotest.(check bool) "visual height" true (info.Area.height >= 1);
   let area = Area.set_virtual_cursor false area in
   Alcotest.(check bool) "real cursor" true (Option.is_some (Area.cursor area));
   let area = Area.set_virtual_cursor true area in

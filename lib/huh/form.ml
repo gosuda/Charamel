@@ -119,7 +119,7 @@ let reevaluate_all t =
               Array.mapi
                 (fun field_index field ->
                   Field_impl.reevaluate field (context t ~env group_index field_index))
-                group.fields
+                group.Group.fields
             in
             { group with fields })
           t.groups
@@ -144,7 +144,7 @@ let rec complete_results t results index =
       let results =
         Array.fold_left
           (fun acc field -> Field_impl.commit field acc)
-          results group.fields
+          results group.Group.fields
       in
       complete_results t results (index + 1)
 
@@ -205,7 +205,7 @@ let init_group t group_index =
                   Cmd.map
                     (fun m -> Field_msg { group = group_index; field = index; msg = m })
                     command ))
-              group.fields
+              group.Group.fields
             |> Array.split
           in
           let group =
@@ -289,7 +289,7 @@ let adjust_offset t group_index =
       let indices = visible_fields t ~env group_index in
       let line_count text = max 1 (List.length (String.split_on_char '\n' text)) in
       let separator_lines =
-        max 1 (List.length (String.split_on_char '\n' t.styles.field_separator) - 1)
+        max 1 (List.length (String.split_on_char '\n' t.styles.Styles.field_separator) - 1)
       in
       let rec positions before = function
         | [] -> (0, 1)
@@ -461,15 +461,15 @@ let raw_group_height t group_index =
                       (context t ~env group_index field_index)
                       ~focused:(group.Group.active && field_index = Group.selected group)
                   ))
-              |> Group.content_lines ~separator:t.styles.field_separator
+              |> Group.content_lines ~separator:t.styles.Styles.field_separator
         in
         let title =
           if group.Group.title = "" then ""
-          else Style.render t.styles.group_title group.Group.title
+          else Style.render t.styles.Styles.group_title group.Group.title
         in
         let description =
           if group.Group.description = "" then ""
-          else Style.render t.styles.group_description group.Group.description
+          else Style.render t.styles.Styles.group_description group.Group.description
         in
         let header =
           let text =
@@ -530,7 +530,7 @@ let update message t =
   else if not (normal_state t.state) then (t, cmd_none)
   else
     match message with
-    | Key_press key when Charm_bubbles.Key_binding.matches key t.keymap.quit ->
+    | Key_press key when Charm_bubbles.Key_binding.matches key t.keymap.Keymap.quit ->
         ({ t with state = Aborted }, cmd_none)
     | Key_press key -> dispatch_key t key
     | Paste text -> dispatch_paste t text
@@ -570,11 +570,11 @@ let trim_right text =
 let render_header t group =
   let title =
     if group.Group.title = "" then ""
-    else Style.render t.styles.group_title group.Group.title
+    else Style.render t.styles.Styles.group_title group.Group.title
   in
   let description =
     if group.Group.description = "" then ""
-    else Style.render t.styles.group_description group.Group.description
+    else Style.render t.styles.Styles.group_description group.Group.description
   in
   let text =
     String.concat "\n" (List.filter (fun value -> value <> "") [ title; description ])
@@ -601,7 +601,7 @@ let render_group t group_index =
         | Some field when Field_impl.zoom field && group.Group.active ->
             let field_index = Group.selected group in
             Field_impl.view field (context t ~env group_index field_index) ~focused:true
-        | _ -> Group.content_lines ~separator:t.styles.field_separator views
+        | _ -> Group.content_lines ~separator:t.styles.Styles.field_separator views
       in
       let header = render_header t group in
       let errors = Group.errors group in
@@ -611,7 +611,8 @@ let render_group t group_index =
         if errors <> [] then
           if show_errors then
             errors
-            |> List.map (fun error -> Style.render t.styles.focused.error_message error)
+            |> List.map (fun error ->
+                Style.render t.styles.Styles.focused.Styles.error_message error)
             |> String.concat "\n"
             |> Charm_ansi.Text.wrap ~width:(max 1 (Group.width group))
           else ""
@@ -621,7 +622,8 @@ let render_group t group_index =
           | Some field ->
               let field_index = Group.selected group in
               let help =
-                Charm_bubbles.Help.v ~width:(Group.width group) ~styles:t.styles.help ()
+                Charm_bubbles.Help.v ~width:(Group.width group)
+                  ~styles:t.styles.Styles.help ()
               in
               Charm_bubbles.Help.short_view help
                 (Field_impl.key_binds field (context t ~env group_index field_index))
@@ -641,7 +643,7 @@ let render_group t group_index =
       in
       let footer = trim_right footer in
       let group_style text =
-        if text = "" then "" else Style.render t.styles.group_base text
+        if text = "" then "" else Style.render t.styles.Styles.group_base text
       in
       {
         Layout.index = group_index;
@@ -663,7 +665,7 @@ let view t =
       rendered |> split_lines |> take_lines t.height |> String.concat "\n"
     else rendered
   in
-  Style.render t.styles.form_base rendered
+  Style.render t.styles.Styles.form_base rendered
 
 let subscriptions t =
   if not (normal_state t.state) then Sub.none

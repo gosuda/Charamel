@@ -12,7 +12,7 @@ let wrapper_exports () =
   Alcotest.(check (list int))
     "fuzzy export" [ 0 ]
     (Stdlib.List.map
-       (fun (m : Charm_bubbles.Fuzzy.match_) -> m.index)
+       (fun (m : Charm_bubbles.Fuzzy.match_) -> m.Charm_bubbles.Fuzzy.index)
        (Charm_bubbles.Fuzzy.find ~pattern:"a" [ "a" ]))
 
 let cases = [ Alcotest.test_case "wrapper exports" `Quick wrapper_exports ]

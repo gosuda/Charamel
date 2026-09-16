@@ -135,7 +135,7 @@ let rate_key = function
   | `Tcp (ip, _) -> Fmt.str "tcp:%a" Eio.Net.Ipaddr.pp ip
 
 let recipient_id (state : unit Awa.Server.t) id =
-  match Awa.Channel.lookup id state.channels with
+  match Awa.Channel.lookup id state.Awa.Server.channels with
   | Some channel -> Awa.Channel.their_id channel
   | None -> id
 

@@ -74,8 +74,8 @@ let test_markdown_safety env =
   let body = "# Hello\n\n<script>alert(1)</script>" in
   let safe = prepare_with_body env ~unsafe_html:false body in
   let unsafe = prepare_with_body env ~unsafe_html:true body in
-  let safe_html = Option.get safe.message.Mime.body_html in
-  let unsafe_html = Option.get unsafe.message.Mime.body_html in
+  let safe_html = Option.get safe.Pop_lib.message.Mime.body_html in
+  let unsafe_html = Option.get unsafe.Pop_lib.message.Mime.body_html in
   Alcotest.(check bool)
     "safe HTML removes raw script" false
     (contains safe_html "<script>");
@@ -84,7 +84,7 @@ let test_markdown_safety env =
     (contains unsafe_html "<script>");
   Alcotest.(check bool)
     "plain rendering has heading" true
-    (contains safe.message.Mime.body_text "Hello")
+    (contains safe.Pop_lib.message.Mime.body_text "Hello")
 
 let test_config_env () =
   let bindings =

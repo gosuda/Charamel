@@ -16,10 +16,16 @@ let prompt ~input ~output label current parse =
 let interactive_config (env : Eio_unix.Stdenv.base) (config : Freeze_core.Config.t) =
   let input = Eio.Buf_read.of_flow ~max_size:65_536 env#stdin in
   let output = env#stderr in
-  let background = prompt ~input ~output "Background" config.background Option.some in
-  let theme = prompt ~input ~output "Theme" config.theme Option.some in
-  let language = prompt ~input ~output "Language" config.language Option.some in
-  let output_path = prompt ~input ~output "Output" config.output Option.some in
+  let background =
+    prompt ~input ~output "Background" config.Freeze_core.Config.background Option.some
+  in
+  let theme = prompt ~input ~output "Theme" config.Freeze_core.Config.theme Option.some in
+  let language =
+    prompt ~input ~output "Language" config.Freeze_core.Config.language Option.some
+  in
+  let output_path =
+    prompt ~input ~output "Output" config.Freeze_core.Config.output Option.some
+  in
   { config with background; theme; language; output = output_path }
 
 let output_error (error : Freeze_core.Pty.error) =
@@ -58,17 +64,24 @@ let run_render (env : Eio_unix.Stdenv.base) ~sw (config : Freeze_core.Config.t) 
   if raw = "" then Charm_cli.error "No input"
   else
     let render_config : Freeze_core.Config.t =
-      if config.output = "" then { config with output = default_output } else config
+      if config.Freeze_core.Config.output = "" then
+        { config with output = default_output }
+      else config
     in
 
-    let ansi = Freeze_core.Input.is_ansi ~language:render_config.language raw in
-    let language = Freeze_core.Input.language ~override:render_config.language ~path in
+    let ansi =
+      Freeze_core.Input.is_ansi ~language:render_config.Freeze_core.Config.language raw
+    in
+    let language =
+      Freeze_core.Input.language ~override:render_config.Freeze_core.Config.language ~path
+    in
     if (not ansi) && Option.is_none language then
       Charm_cli.error "Language Unknown: specify a language with the --language flag"
     else
       let svg_fs =
-        if render_config.font.file = "" then env#cwd
-        else root_for_path env render_config.font.file
+        if render_config.Freeze_core.Config.font.Freeze_core.Config.file = "" then env#cwd
+        else
+          root_for_path env render_config.Freeze_core.Config.font.Freeze_core.Config.file
       in
       match
         Freeze_core.Svg.render ~fs:svg_fs ~config:render_config ~language ~text:raw
@@ -77,7 +90,9 @@ let run_render (env : Eio_unix.Stdenv.base) ~sw (config : Freeze_core.Config.t) 
       | Error message -> Charm_cli.error message
       | Ok ({ svg; _ } : Freeze_core.Svg.rendered) -> (
           let output =
-            if render_config.output <> "" then Some render_config.output else None
+            if render_config.Freeze_core.Config.output <> "" then
+              Some render_config.Freeze_core.Config.output
+            else None
           in
           match output with
           | None -> write_flow env#stdout svg
@@ -94,29 +109,40 @@ let run_render (env : Eio_unix.Stdenv.base) ~sw (config : Freeze_core.Config.t) 
           | Some _ -> Charm_cli.error "unsupported output format")
 
 let run (env : Eio_unix.Stdenv.base) (cli : Freeze_core.Config.cli) =
-  let config_fs = if cli.config = "user" then env#fs else root_for_path env cli.config in
-  match Freeze_core.Config.load ~fs:config_fs ~name:cli.config with
+  let config_fs =
+    if cli.Freeze_core.Config.config = "user" then env#fs
+    else root_for_path env cli.Freeze_core.Config.config
+  in
+  match Freeze_core.Config.load ~fs:config_fs ~name:cli.Freeze_core.Config.config with
   | Error message -> Charm_cli.error message
   | Ok (base : Freeze_core.Config.t) ->
       let config : Freeze_core.Config.t = Freeze_core.Config.apply_cli base cli in
       let config : Freeze_core.Config.t =
-        if config.interactive then interactive_config env config else config
+        if config.Freeze_core.Config.interactive then interactive_config env config
+        else config
       in
-      (if config.interactive && cli.config = "default" then
+      (if
+         config.Freeze_core.Config.interactive
+         && cli.Freeze_core.Config.config = "default"
+       then
          match Freeze_core.Config.save_user ~fs:env#fs config with
          | Ok () -> ()
          | Error message -> Charm_cli.error message);
       Eio.Switch.run (fun sw ->
-          let execute = String.trim config.execute in
+          let execute = String.trim config.Freeze_core.Config.execute in
           if execute <> "" then
             match
               Freeze_core.Pty.execute ~sw ~clock:env#clock ~process_mgr:env#process_mgr
                 ~env:(Unix.environment ())
                 ?width:
-                  (if config.width > 0. then Some (int_of_float config.width) else None)
+                  (if config.Freeze_core.Config.width > 0. then
+                     Some (int_of_float config.Freeze_core.Config.width)
+                   else None)
                 ?height:
-                  (if config.height > 0. then Some (int_of_float config.height) else None)
-                ~timeout:config.execute_timeout execute
+                  (if config.Freeze_core.Config.height > 0. then
+                     Some (int_of_float config.Freeze_core.Config.height)
+                   else None)
+                ~timeout:config.Freeze_core.Config.execute_timeout execute
             with
             | Error (`Timeout output) ->
                 Charm_cli.error ~code:124 (output_error (`Timeout output))
@@ -128,8 +154,11 @@ let run (env : Eio_unix.Stdenv.base) (cli : Freeze_core.Config.cli) =
                   run_render env ~sw config ~path:None ~raw:output
           else
             let source =
-              if config.input = "" || config.input = "-" then Freeze_core.Input.Stdin
-              else Freeze_core.Input.File config.input
+              if
+                config.Freeze_core.Config.input = ""
+                || config.Freeze_core.Config.input = "-"
+              then Freeze_core.Input.Stdin
+              else Freeze_core.Input.File config.Freeze_core.Config.input
             in
             let input_fs =
               match source with

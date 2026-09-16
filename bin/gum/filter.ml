@@ -209,15 +209,15 @@ let candidate_matches (options : options) candidates query =
       in
       List.filter_map
         (fun (rank : Fuzzy.match_) ->
-          match List.nth_opt source rank.index with
+          match List.nth_opt source rank.Fuzzy.index with
           | None -> None
           | Some candidate ->
               Some
                 {
                   text = candidate.text;
                   value = candidate.value;
-                  matched = rank.matched;
-                  score = rank.score;
+                  matched = rank.Fuzzy.matched;
+                  score = rank.Fuzzy.score;
                 })
         ranks
     else exact_candidate_matches ~pattern:query source
@@ -234,14 +234,14 @@ let input_styles (options : options) =
   let styles = Textinput.default_styles ~is_dark:true in
   let focused =
     {
-      styles.focused with
+      styles.Textinput.focused with
       prompt = Gum_style.to_style options.prompt_style;
       placeholder = Gum_style.to_style options.placeholder_style;
     }
   in
   let blurred =
     {
-      styles.blurred with
+      styles.Textinput.blurred with
       prompt = Gum_style.to_style options.prompt_style;
       placeholder = Gum_style.to_style options.placeholder_style;
     }

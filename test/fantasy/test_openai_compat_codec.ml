@@ -326,7 +326,7 @@ let test_encode_system_tools_and_config () =
   Alcotest.(check (option string))
     "chat completions endpoint" (Some "/chat/completions") path;
   let j = parse_body body in
-  Alcotest.(check (option string)) "model" (Some model.id) (str_mem "model" j);
+  Alcotest.(check (option string)) "model" (Some model.Model.id) (str_mem "model" j);
   Alcotest.(check (option bool)) "stream" (Some true) (bool_mem "stream" j);
   Alcotest.(check (option int)) "max_tokens" (Some 4096) (int_mem "max_tokens" j);
   Alcotest.(check (option (float 0.)))

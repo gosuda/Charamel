@@ -440,17 +440,21 @@ let view (m : ui_model) =
     (body ^ "\n\n" ^ Textarea.view m.editor ^ "\n" ^ footer ^ dialog)
 
 let make_field (question : Tool.question) =
-  let title = if question.header = "" then question.text else question.header in
-  let key_name = if question.header = "" then "answer" else question.header in
-  if question.free_text || question.options = [] then begin
+  let title =
+    if question.Tool.header = "" then question.Tool.text else question.Tool.header
+  in
+  let key_name = if question.Tool.header = "" then "answer" else question.Tool.header in
+  if question.Tool.free_text || question.Tool.options = [] then begin
     let key = Huh.Key.v key_name in
     let field = Huh.Field.input ~title:(Huh.Dyn.Const title) key in
     (Input_field (key_name, key), Huh.Group.v [ field ])
   end
-  else if question.multi then begin
+  else if question.Tool.multi then begin
     let key = Huh.Key.v key_name in
     let options =
-      List.map (fun (value, label) -> Huh.Field.option_ ~key:label value) question.options
+      List.map
+        (fun (value, label) -> Huh.Field.option_ ~key:label value)
+        question.Tool.options
     in
     let field =
       Huh.Field.multi_select ~title:(Huh.Dyn.Const title) ~options:(Huh.Dyn.Const options)
@@ -461,7 +465,9 @@ let make_field (question : Tool.question) =
   else begin
     let key = Huh.Key.v key_name in
     let options =
-      List.map (fun (value, label) -> Huh.Field.option_ ~key:label value) question.options
+      List.map
+        (fun (value, label) -> Huh.Field.option_ ~key:label value)
+        question.Tool.options
     in
     let field =
       Huh.Field.select ~title:(Huh.Dyn.Const title) ~options:(Huh.Dyn.Const options) key
@@ -535,7 +541,8 @@ let permission_dialog backend request =
     [
       {
         Tool.header = "decision";
-        text = Fmt.str "%a\n\n%s" Permission.pp_request decoded decoded.description;
+        text =
+          Fmt.str "%a\n\n%s" Permission.pp_request decoded decoded.Permission.description;
         options =
           [ ("once", "Allow once"); ("session", "Allow for session"); ("deny", "Deny") ];
         multi = false;
@@ -558,7 +565,7 @@ let oauth_dialog backend provider =
 let start_dialog m = function
   | Question_dialog_request request ->
       let dialog, command =
-        make_dialog m.backend (Questions_dialog request) request.questions
+        make_dialog m.backend (Questions_dialog request) request.Bridge.questions
       in
       m.dialog <- Some dialog;
       command
@@ -686,7 +693,7 @@ let append_agent_event (m : ui_model) = function
       append m
         {
           kind = Status;
-          text = Fmt.str "permission %s %s" decision request.tool;
+          text = Fmt.str "permission %s %s" decision request.Permission.tool;
           id = None;
           name = None;
           input = None;
@@ -899,7 +906,7 @@ let selected_value answers header =
   match List.find_opt (fun answer -> answer.Tool.header = header) answers with
   | None -> None
   | Some (answer : Tool.answer) -> (
-      match answer.selected with [] -> None | first :: _ -> Some first)
+      match answer.Tool.selected with [] -> None | first :: _ -> Some first)
 
 let history_chat backend =
   let kind (role : string) : chat_kind =

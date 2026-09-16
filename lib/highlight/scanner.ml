@@ -46,28 +46,29 @@ let compile (spec : Spec.t) =
   let words =
     List.concat
       [
-        words Spec.Keyword spec.keywords;
-        words Spec.Type spec.types;
-        words Spec.Builtin spec.builtins;
-        words Spec.Constant spec.constants;
+        words Spec.Keyword spec.Spec.keywords;
+        words Spec.Type spec.Spec.types;
+        words Spec.Builtin spec.Spec.builtins;
+        words Spec.Constant spec.Spec.constants;
       ]
   in
   let words =
-    if spec.case_sensitive then words
+    if spec.Spec.case_sensitive then words
     else List.map (fun (word, kind) -> (String.lowercase_ascii word, kind)) words
   in
   let words = dedup_words words in
   {
-    line_comments = sort_longest spec.line_comment;
-    block_comments = sort_pairs spec.block_comment;
-    strings = sort_triples spec.strings;
-    raw_strings = sort_pairs spec.raw_strings;
+    line_comments = sort_longest spec.Spec.line_comment;
+    block_comments = sort_pairs spec.Spec.block_comment;
+    strings = sort_triples spec.Spec.strings;
+    raw_strings = sort_pairs spec.Spec.raw_strings;
     words = sort_pairs words;
-    number = Re.compile (Re.longest spec.number);
-    ident = Re.compile (Re.longest spec.ident);
-    operators = sort_longest spec.operators;
-    attribute = Option.map (fun regex -> Re.compile (Re.longest regex)) spec.attribute;
-    case_sensitive = spec.case_sensitive;
+    number = Re.compile (Re.longest spec.Spec.number);
+    ident = Re.compile (Re.longest spec.Spec.ident);
+    operators = sort_longest spec.Spec.operators;
+    attribute =
+      Option.map (fun regex -> Re.compile (Re.longest regex)) spec.Spec.attribute;
+    case_sensitive = spec.Spec.case_sensitive;
   }
 
 (* One compiled record per live [Spec.t], memoized per domain. The table is

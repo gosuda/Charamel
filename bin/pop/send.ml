@@ -59,8 +59,8 @@ let resend_payload message =
       (fun (attachment : Mime.attachment) ->
         Jsont.Json.object'
           [
-            json_string_member "filename" attachment.name;
-            json_string_member "content" (Base64.encode_string attachment.data);
+            json_string_member "filename" attachment.Mime.name;
+            json_string_member "content" (Base64.encode_string attachment.Mime.data);
           ])
       message.Mime.attachments
   in

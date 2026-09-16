@@ -187,7 +187,7 @@ let message_jsont =
   Object.map (fun role parts -> { Charm_fantasy.Message.role; parts })
   |> Object.mem "role" role_jsont ~enc:(fun value -> value.Charm_fantasy.Message.role)
   |> Object.mem "parts" (list part_jsont) ~enc:(fun (value : Charm_fantasy.Message.t) ->
-      value.parts)
+      value.Charm_fantasy.Message.parts)
   |> Object.finish
 
 let model_ref_jsont =

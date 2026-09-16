@@ -33,7 +33,7 @@ let make_ctx env sw =
   let cwd = "/tmp" in
   let config = Config.default in
   let permission =
-    Permission.create ~config:config.permissions ~yolo:true ~cwd
+    Permission.create ~config:config.Config.permissions ~yolo:true ~cwd
       ~plans_dir:"/tmp/.crush/plans" ()
   in
   let hooks = Hooks.create ~config:[] ~proc_mgr:env#process_mgr ~clock:env#clock ~cwd in
@@ -77,7 +77,7 @@ let with_ctx f =
 
 let with_server (ctx : Tool.ctx) ~response ~requests f =
   let listener =
-    Eio.Net.listen ~reuse_addr:true ~backlog:4 ~sw:ctx.sw ctx.net
+    Eio.Net.listen ~reuse_addr:true ~backlog:4 ~sw:ctx.Tool.sw ctx.Tool.net
       (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
   in
   let port =
@@ -85,11 +85,11 @@ let with_server (ctx : Tool.ctx) ~response ~requests f =
     | `Tcp (_, port) -> port
     | `Unix _ -> Alcotest.fail "loopback listener did not have a TCP address"
   in
-  Eio.Fiber.fork ~sw:ctx.sw (fun () ->
+  Eio.Fiber.fork ~sw:ctx.Tool.sw (fun () ->
       let rec serve remaining =
         if remaining = 0 then ()
         else
-          let flow, _ = Eio.Net.accept ~sw:ctx.sw listener in
+          let flow, _ = Eio.Net.accept ~sw:ctx.Tool.sw listener in
           let reader = Eio.Buf_read.of_flow flow ~max_size:65_536 in
           let rec consume_headers () =
             match Eio.Buf_read.line reader with
@@ -127,28 +127,30 @@ let test_markdown_and_text () =
   in
   with_server ctx ~response ~requests:2 (fun url ->
       let markdown =
-        output_or_fail (Tools_net.fetch.run ctx (fetch_value ~format:"markdown" url))
+        output_or_fail (Tools_net.fetch.Tool.run ctx (fetch_value ~format:"markdown" url))
       in
       Alcotest.(check bool)
         "heading is converted" true
-        (contains markdown.content "# Hello");
+        (contains markdown.Tool.content "# Hello");
       Alcotest.(check bool)
         "entities are decoded" true
-        (contains markdown.content "A & B");
+        (contains markdown.Tool.content "A & B");
       Alcotest.(check bool)
         "list item is converted" true
-        (contains markdown.content "- One");
+        (contains markdown.Tool.content "- One");
       Alcotest.(check bool)
         "link is converted" true
-        (contains markdown.content "[next](/next)");
+        (contains markdown.Tool.content "[next](/next)");
       Alcotest.(check bool)
         "script is omitted" false
-        (contains markdown.content "bad-script");
+        (contains markdown.Tool.content "bad-script");
       let text =
-        output_or_fail (Tools_net.fetch.run ctx (fetch_value ~format:"text" url))
+        output_or_fail (Tools_net.fetch.Tool.run ctx (fetch_value ~format:"text" url))
       in
-      Alcotest.(check bool) "text keeps body" true (contains text.content "Hello");
-      Alcotest.(check bool) "text omits style" false (contains text.content "bad-style"))
+      Alcotest.(check bool) "text keeps body" true (contains text.Tool.content "Hello");
+      Alcotest.(check bool)
+        "text omits style" false
+        (contains text.Tool.content "bad-style"))
 
 let test_status_error () =
   with_ctx @@ fun _env ctx ->
@@ -158,7 +160,7 @@ let test_status_error () =
       (String.length body) body
   in
   with_server ctx ~response ~requests:1 (fun url ->
-      match Tools_net.fetch.run ctx (fetch_value ~timeout_s:5 url) with
+      match Tools_net.fetch.Tool.run ctx (fetch_value ~timeout_s:5 url) with
       | Error (`Unavailable message) ->
           Alcotest.(check bool) "status is reported" true (contains message "HTTP 404")
       | Error error -> Alcotest.failf "unexpected error: %a" Tool.pp_error error

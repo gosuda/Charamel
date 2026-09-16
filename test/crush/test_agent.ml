@@ -138,7 +138,12 @@ let config ~base_url (model : Charm_fantasy.Model.t) =
     }
   in
   let selected : Config.selected_model =
-    { provider = "anthropic"; model = model.id; reasoning = None; max_tokens = None }
+    {
+      provider = "anthropic";
+      model = model.Charm_fantasy.Model.id;
+      reasoning = None;
+      max_tokens = None;
+    }
   in
   {
     Config.default with
@@ -178,14 +183,18 @@ let with_agent ~queue ~fallback f =
           Session.create store ~clock:env#clock
             ~random:(fun n -> String.make n '\000')
             ~title:"fixture" ~cwd:root
-            ~model:{ Session.provider = "anthropic"; model = selected_model.id }
+            ~model:
+              {
+                Session.provider = "anthropic";
+                model = selected_model.Charm_fantasy.Model.id;
+              }
             ()
         with
         | Ok session -> session
         | Error error -> Alcotest.failf "session setup failed: %a" Session.pp_error error
       in
       let permission =
-        Permission.create ~config:config.permissions ~yolo:true ~cwd:root
+        Permission.create ~config:config.Config.permissions ~yolo:true ~cwd:root
           ~plans_dir:(Filename.concat root ".crush/plans")
           ()
       in

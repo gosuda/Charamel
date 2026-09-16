@@ -21,7 +21,7 @@ let check_replace_and_mode () =
       | Ok () -> ());
       Alcotest.(check string) "complete contents" "first\n" (Eio.Path.load target);
       let stat = Eio.Path.stat ~follow:false target in
-      Alcotest.(check int) "private mode" 0o600 (stat.perm land 0o777);
+      Alcotest.(check int) "private mode" 0o600 (stat.Eio.File.Stat.perm land 0o777);
       Alcotest.(check (list string)) "no temporary sibling remains" [] (temp_entries root);
       (match State_file.replace target "second\n" with
       | Error error ->

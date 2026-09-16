@@ -52,9 +52,9 @@ let spring =
    tightened from the upstream 1e-2 threshold to 1e-6. *)
 
 let check_vec name (expected : Projectile.vec) (actual : Projectile.vec) =
-  Alcotest.(check f (name ^ " x") expected.x actual.x);
-  Alcotest.(check f (name ^ " y") expected.y actual.y);
-  Alcotest.(check f (name ^ " z") expected.z actual.z)
+  Alcotest.(check f (name ^ " x") expected.Projectile.x actual.Projectile.x);
+  Alcotest.(check f (name ^ " y") expected.Projectile.y actual.Projectile.y);
+  Alcotest.(check f (name ^ " z") expected.Projectile.z actual.Projectile.z)
 
 let advance secs t =
   let rec loop n t = if n = 0 then t else loop (n - 1) (Projectile.update t) in

@@ -7,10 +7,10 @@ let test_child_capture () =
   with
   | Error message -> Alcotest.fail message
   | Ok result ->
-      Alcotest.(check int) "status" 0 result.status;
-      Alcotest.(check string) "stdout" "out" result.stdout;
-      Alcotest.(check string) "stderr" "err" result.stderr;
-      Alcotest.(check bool) "combined streams" true (stream_order result.output)
+      Alcotest.(check int) "status" 0 result.Spin.status;
+      Alcotest.(check string) "stdout" "out" result.Spin.stdout;
+      Alcotest.(check string) "stderr" "err" result.Spin.stderr;
+      Alcotest.(check bool) "combined streams" true (stream_order result.Spin.output)
 
 let test_child_capture_beyond_memory_buffer () =
   Eio_main.run @@ fun env ->
@@ -19,12 +19,12 @@ let test_child_capture_beyond_memory_buffer () =
   with
   | Error message -> Alcotest.fail message
   | Ok result ->
-      Alcotest.(check int) "status" 0 result.status;
-      Alcotest.(check int) "stdout bytes" 33554433 (String.length result.stdout);
-      Alcotest.(check string) "stderr" "" result.stderr;
+      Alcotest.(check int) "status" 0 result.Spin.status;
+      Alcotest.(check int) "stdout bytes" 33554433 (String.length result.Spin.stdout);
+      Alcotest.(check string) "stderr" "" result.Spin.stderr;
       Alcotest.(check bool)
         "combined bytes" true
-        (String.equal result.output result.stdout)
+        (String.equal result.Spin.output result.Spin.stdout)
 
 let run_non_tty args =
   Eio_main.run @@ fun env ->
@@ -121,19 +121,21 @@ let test_pty_geometry () =
   with
   | Error message -> Alcotest.fail message
   | Ok result ->
-      Alcotest.(check int) "status" 0 result.status;
+      Alcotest.(check int) "status" 0 result.Spin.status;
       Alcotest.(check string)
-        "stdout child terminal size" "17 53" (String.trim result.stdout);
+        "stdout child terminal size" "17 53"
+        (String.trim result.Spin.stdout);
       Alcotest.(check string)
-        "stderr child terminal size" "17 53" (String.trim result.stderr)
+        "stderr child terminal size" "17 53"
+        (String.trim result.Spin.stderr)
 
 let test_child_timeout () =
   Eio_main.run @@ fun env ->
   match Spin.run_child env ~command:[ "sh"; "-c"; "sleep 1" ] ~timeout:(Some 0.01) with
   | Error message -> Alcotest.fail message
   | Ok result ->
-      Alcotest.(check bool) "timeout" true result.timed_out;
-      Alcotest.(check int) "timeout status" 124 result.status
+      Alcotest.(check bool) "timeout" true result.Spin.timed_out;
+      Alcotest.(check int) "timeout status" 124 result.Spin.status
 
 let test_pty_stdin_passthrough () =
   Eio_main.run @@ fun env ->
@@ -162,9 +164,10 @@ let test_pty_stdin_passthrough () =
   with
   | Error message -> Alcotest.fail message
   | Ok result ->
-      Alcotest.(check int) "status" 0 result.status;
+      Alcotest.(check int) "status" 0 result.Spin.status;
       Alcotest.(check string)
-        "stdin passthrough" "GOT:hello-from-real-stdin" (String.trim result.stdout)
+        "stdin passthrough" "GOT:hello-from-real-stdin"
+        (String.trim result.Spin.stdout)
 
 let cases =
   [

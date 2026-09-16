@@ -10,7 +10,8 @@ let link_equal a b =
   match (a, b) with
   | None, None -> true
   | Some (x : Charm_ansi.Link.t), Some (y : Charm_ansi.Link.t) ->
-      String.equal x.url y.url && x.params = y.params
+      String.equal x.Charm_ansi.Link.url y.Charm_ansi.Link.url
+      && x.Charm_ansi.Link.params = y.Charm_ansi.Link.params
   | _ -> false
 
 let cell_equal a b =
@@ -300,17 +301,20 @@ let emit_mouse_change buf old_mode new_mode =
     new_modes
 
 let kitty_flags (keyboard : View.keyboard) =
-  (if keyboard.disambiguate then 1 else 0)
-  lor (if keyboard.report_events then 2 else 0)
-  lor (if keyboard.report_alternates then 4 else 0)
-  lor (if keyboard.report_all_keys then 8 else 0)
-  lor if keyboard.report_text then 16 else 0
+  (if keyboard.View.disambiguate then 1 else 0)
+  lor (if keyboard.View.report_events then 2 else 0)
+  lor (if keyboard.View.report_alternates then 4 else 0)
+  lor (if keyboard.View.report_all_keys then 8 else 0)
+  lor if keyboard.View.report_text then 16 else 0
 
 let cursor_style_code (cursor : Cursor.t) =
   let shape =
-    match cursor.shape with Cursor.Block -> 0 | Cursor.Underline -> 1 | Cursor.Bar -> 2
+    match cursor.Cursor.shape with
+    | Cursor.Block -> 0
+    | Cursor.Underline -> 1
+    | Cursor.Bar -> 2
   in
-  (shape * 2) + if cursor.blink then 1 else 2
+  (shape * 2) + if cursor.Cursor.blink then 1 else 2
 
 let clamp_byte value = max 0 (min 255 value)
 
@@ -459,7 +463,7 @@ let render_alt t buf (view : View.t) =
     t.alt_pos <- Some (0, 0)
   end;
   let new_grid =
-    pad_rows (layout ~cols:t.cols ~max_rows:t.rows view.content) t.rows t.cols
+    pad_rows (layout ~cols:t.cols ~max_rows:t.rows view.View.content) t.rows t.cols
   in
   let emitted_style = ref t.emitted_style and link_open = ref t.link_open in
   let goto row col =
@@ -494,7 +498,7 @@ let render_alt t buf (view : View.t) =
   t.alt_grid <- new_grid;
   t.emitted_style <- !emitted_style;
   t.link_open <- !link_open;
-  match view.cursor with
+  match view.View.cursor with
   | None -> ()
   | Some cursor ->
       let row = if t.rows <= 0 then 0 else max 0 (min cursor.Cursor.row (t.rows - 1)) in
@@ -522,7 +526,7 @@ let move_inline buf ~from_row ~from_col ~to_row ~to_col =
   else if to_col < !col then Buffer.add_string buf (Charm_ansi.Seq.cub (!col - to_col))
 
 let render_inline t buf (view : View.t) =
-  let new_window = layout ~cols:t.cols ~max_rows:t.rows view.content in
+  let new_window = layout ~cols:t.cols ~max_rows:t.rows view.View.content in
   let h_new = Array.length new_window in
   let h_prev = t.h_prev in
   let old_window = t.inline_grid in
@@ -561,7 +565,7 @@ let render_inline t buf (view : View.t) =
         current_row := row;
         current_col := if erased_from then lo else hi + 1
   done;
-  (match view.cursor with
+  (match view.View.cursor with
   | Some cursor ->
       let row = if h_new <= 0 then 0 else max 0 (min cursor.Cursor.row (h_new - 1)) in
       let col = if t.cols <= 0 then 0 else max 0 (min cursor.Cursor.col (t.cols - 1)) in
@@ -636,9 +640,9 @@ let cursor_visibility_and_shape buf t (cursor : Cursor.t option) =
 
 let render t (view : View.t) =
   let buf = Buffer.create 256 in
-  let entering_alt = view.alt_screen && not t.alt in
-  let leaving_alt = (not view.alt_screen) && t.alt in
-  let target_kflags = kitty_flags view.keyboard in
+  let entering_alt = view.View.alt_screen && not t.alt in
+  let leaving_alt = (not view.View.alt_screen) && t.alt in
+  let target_kflags = kitty_flags view.View.keyboard in
   if leaving_alt then begin
     if t.alt_pushed then begin
       Buffer.add_string buf Charm_ansi.Seq.kitty_pop;
@@ -659,23 +663,23 @@ let render t (view : View.t) =
     apply_kitty buf t target_kflags
   end
   else apply_kitty buf t target_kflags;
-  if view.mouse <> t.mouse then begin
-    emit_mouse_change buf t.mouse view.mouse;
-    t.mouse <- view.mouse
+  if view.View.mouse <> t.mouse then begin
+    emit_mouse_change buf t.mouse view.View.mouse;
+    t.mouse <- view.View.mouse
   end;
-  if view.bracketed_paste <> t.paste then begin
+  if view.View.bracketed_paste <> t.paste then begin
     Buffer.add_string buf
-      ((if view.bracketed_paste then Charm_ansi.Seq.decset else Charm_ansi.Seq.decrst)
+      ((if view.View.bracketed_paste then Charm_ansi.Seq.decset else Charm_ansi.Seq.decrst)
          Charm_ansi.Seq.bracketed_paste);
-    t.paste <- view.bracketed_paste
+    t.paste <- view.View.bracketed_paste
   end;
-  if view.report_focus <> t.focus then begin
+  if view.View.report_focus <> t.focus then begin
     Buffer.add_string buf
-      ((if view.report_focus then Charm_ansi.Seq.decset else Charm_ansi.Seq.decrst)
+      ((if view.View.report_focus then Charm_ansi.Seq.decset else Charm_ansi.Seq.decrst)
          Charm_ansi.Seq.focus);
-    t.focus <- view.report_focus
+    t.focus <- view.View.report_focus
   end;
-  (match (view.title, t.title) with
+  (match (view.View.title, t.title) with
   | Some title, previous when previous <> Some title ->
       Buffer.add_string buf (Charm_ansi.Seq.title title);
       t.title <- Some title
@@ -683,8 +687,8 @@ let render t (view : View.t) =
       Buffer.add_string buf (Charm_ansi.Seq.title "");
       t.title <- None
   | _ -> ());
-  let target_bg = applied_color view.background
-  and target_fg = applied_color view.foreground in
+  let target_bg = applied_color view.View.background
+  and target_fg = applied_color view.View.foreground in
   (match (target_bg, t.bg) with
   | Some color, previous
     when not (Option.equal Charm_ansi.Color.equal (Some color) previous) ->
@@ -707,12 +711,12 @@ let render t (view : View.t) =
       Buffer.add_string buf "\x1b]110\x07";
       t.fg <- None
   | _ -> ());
-  if view.progress <> t.progress then begin
-    Buffer.add_string buf (progress_osc view.progress);
-    t.progress <- view.progress
+  if view.View.progress <> t.progress then begin
+    Buffer.add_string buf (progress_osc view.View.progress);
+    t.progress <- view.View.progress
   end;
-  if view.alt_screen then render_alt t buf view else render_inline t buf view;
-  cursor_visibility_and_shape buf t view.cursor;
+  if view.View.alt_screen then render_alt t buf view else render_inline t buf view;
+  cursor_visibility_and_shape buf t view.View.cursor;
   if Buffer.length buf = 0 then ""
   else
     Charm_ansi.Seq.decset Charm_ansi.Seq.sync_output

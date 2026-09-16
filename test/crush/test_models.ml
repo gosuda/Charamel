@@ -213,7 +213,7 @@ let test_with_auth_preserves_selection () =
         {
           Config.default with
           providers = [ ("test", configured) ];
-          models = { Config.default.models with large = Some selection };
+          models = { Config.default.Config.models with large = Some selection };
         }
       in
       let path = Eio.Path.(root / "auth.json") in
@@ -243,15 +243,19 @@ let test_with_auth_preserves_selection () =
                       Alcotest.failf "provider rebind failed: %a" Models.pp_error error
                   | Ok rebound ->
                       Alcotest.(check string)
-                        "provider identity" resolved.provider_id rebound.provider_id;
+                        "provider identity" resolved.Models.provider_id
+                        rebound.Models.provider_id;
                       Alcotest.(check string)
-                        "model identity" resolved.model.id rebound.model.id;
+                        "model identity" resolved.Models.model.Charm_fantasy.Model.id
+                        rebound.Models.model.Charm_fantasy.Model.id;
                       Alcotest.(check int)
-                        "max tokens" resolved.max_tokens rebound.max_tokens;
-                      Alcotest.(check bool) "same role" true (resolved.role = rebound.role);
+                        "max tokens" resolved.Models.max_tokens rebound.Models.max_tokens;
+                      Alcotest.(check bool)
+                        "same role" true
+                        (resolved.Models.role = rebound.Models.role);
                       Alcotest.(check bool)
                         "same reasoning" true
-                        (resolved.reasoning = rebound.reasoning)))))
+                        (resolved.Models.reasoning = rebound.Models.reasoning)))))
 
 let cases =
   [

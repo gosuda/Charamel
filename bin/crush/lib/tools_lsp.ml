@@ -78,28 +78,30 @@ let canonical_or_absolute ctx path =
   match Tool.canonical ctx absolute with Ok canonical -> canonical | Error _ -> absolute
 
 let canonical_path (ctx : Tool.ctx) = function
-  | None | Some "" -> ctx.cwd
+  | None | Some "" -> ctx.Tool.cwd
   | Some path -> canonical_or_absolute ctx path
 
 let requested_paths (ctx : Tool.ctx) = function
   | Some path when path <> "" -> [ canonical_or_absolute ctx path ]
   | _ ->
-      let paths = Hashtbl.fold (fun path _ acc -> path :: acc) ctx.read_tracker [] in
+      let paths = Hashtbl.fold (fun path _ acc -> path :: acc) ctx.Tool.read_tracker [] in
       if paths = [] then [] else List.sort String.compare paths
 
 let path_for_permission (ctx : Tool.ctx) = function
   | Some path when path <> "" -> canonical_or_absolute ctx path
-  | _ -> ctx.cwd
+  | _ -> ctx.Tool.cwd
 
 let with_lsp (ctx : Tool.ctx) f =
-  match ctx.lsp with
+  match ctx.Tool.lsp with
   | None -> Error (`Unavailable "no LSP configured")
   | Some lsp -> f lsp
 
 let touch_file lsp path = if path <> "" && path <> "/" then Lsp.touch lsp ~path
 
 let truncate_output (ctx : Tool.ctx) ?diagnostics text =
-  let content, artifact = Artifact.truncate ctx.artifacts ~random:ctx.random text in
+  let content, artifact =
+    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
+  in
   Tool.ok ?artifact ?diagnostics content
 
 let severity = function
@@ -109,9 +111,9 @@ let severity = function
   | `Hint -> "hint"
 
 let format_diagnostic (diagnostic : Lsp.diagnostic) =
-  Fmt.str "%s:%d:%d %s %s" diagnostic.path diagnostic.line diagnostic.col
-    (severity diagnostic.severity)
-    diagnostic.message
+  Fmt.str "%s:%d:%d %s %s" diagnostic.Lsp.path diagnostic.Lsp.line diagnostic.Lsp.col
+    (severity diagnostic.Lsp.severity)
+    diagnostic.Lsp.message
 
 let diagnostics_text diagnostics =
   match diagnostics with
@@ -146,14 +148,14 @@ let file_uri_path path =
   else path
 
 let read_context (ctx : Tool.ctx) (location : Lsp.location) =
-  let path = file_uri_path location.path in
-  let first = max 1 (location.line - 5) in
-  let last = max first (location.end_line + 5) in
+  let path = file_uri_path location.Lsp.path in
+  let first = max 1 (location.Lsp.line - 5) in
+  let last = max first (location.Lsp.end_line + 5) in
   try
     let lines = ref [] in
     let line_number = ref 1 in
     Eio.Path.with_lines
-      Eio.Path.(ctx.fs / path)
+      Eio.Path.(ctx.Tool.fs / path)
       (fun stream ->
         let rec consume stream =
           if !line_number > last then ()
@@ -171,10 +173,10 @@ let read_context (ctx : Tool.ctx) (location : Lsp.location) =
   with Eio.Io _ -> []
 
 let format_location ctx (location : Lsp.location) =
-  let path = file_uri_path location.path in
+  let path = file_uri_path location.Lsp.path in
   let header =
-    Fmt.str "%s:%d:%d-%d:%d" path location.line location.col location.end_line
-      location.end_col
+    Fmt.str "%s:%d:%d-%d:%d" path location.Lsp.line location.Lsp.col location.Lsp.end_line
+      location.Lsp.end_col
   in
   match read_context ctx location with
   | [] -> header
@@ -188,7 +190,7 @@ let locations_text ctx locations =
 
 let locate_symbol (ctx : Tool.ctx) lsp path name =
   let source = canonical_path ctx path in
-  if source <> ctx.cwd then touch_file lsp source;
+  if source <> ctx.Tool.cwd then touch_file lsp source;
   match Lsp.find_symbol lsp ~path:source ~name with
   | Ok (Some symbol) -> Ok symbol
   | Ok None -> Error (`Not_found name)
@@ -205,7 +207,8 @@ let run_definition ctx input =
       let* symbol = locate_symbol ctx lsp path symbol in
       let location = (symbol : Lsp.symbol).Lsp.range in
       match
-        Lsp.definition lsp ~path:location.path ~line:location.line ~col:location.col
+        Lsp.definition lsp ~path:location.Lsp.path ~line:location.Lsp.line
+          ~col:location.Lsp.col
       with
       | Ok locations -> Ok (truncate_output ctx (locations_text ctx locations))
       | Error error -> Error (map_lsp_error error))
@@ -221,7 +224,8 @@ let run_references ctx input =
       let* found = locate_symbol ctx lsp path symbol in
       let location = (found : Lsp.symbol).Lsp.range in
       match
-        Lsp.references lsp ~path:location.path ~line:location.line ~col:location.col
+        Lsp.references lsp ~path:location.Lsp.path ~line:location.Lsp.line
+          ~col:location.Lsp.col
       with
       | Ok locations ->
           let limited =
@@ -234,10 +238,10 @@ let run_references ctx input =
 
 let rec symbol_lines indent (symbol : Lsp.symbol) =
   let line =
-    Fmt.str "%s%s %s (%d)" (String.make indent ' ') symbol.kind symbol.name
-      symbol.range.line
+    Fmt.str "%s%s %s (%d)" (String.make indent ' ') symbol.Lsp.kind symbol.Lsp.name
+      symbol.Lsp.range.Lsp.line
   in
-  line :: List.concat_map (symbol_lines (indent + 2)) symbol.children
+  line :: List.concat_map (symbol_lines (indent + 2)) symbol.Lsp.children
 
 let run_symbols ctx input =
   let* ({ path } : path_args) = Tool.decode symbols_codec input in
@@ -264,7 +268,7 @@ let run_symbols ctx input =
 let run_rename (ctx : Tool.ctx) input =
   let* ({ symbol; new_name; path } : rename_args) = Tool.decode rename_codec input in
   let source = canonical_path ctx path in
-  let permission_path = if Permission.plan_mode ctx.permission then "" else source in
+  let permission_path = if Permission.plan_mode ctx.Tool.permission then "" else source in
   let* () =
     Tool.request ctx ~read_only:false ~tool:"lsp_rename" ~action:"rename"
       ~path:permission_path
@@ -275,11 +279,12 @@ let run_rename (ctx : Tool.ctx) input =
       let* found = locate_symbol ctx lsp path symbol in
       let location = (found : Lsp.symbol).Lsp.range in
       match
-        Lsp.rename lsp ~path:location.path ~line:location.line ~col:location.col ~new_name
+        Lsp.rename lsp ~path:location.Lsp.path ~line:location.Lsp.line
+          ~col:location.Lsp.col ~new_name
       with
       | Error error -> Error (map_lsp_error error)
       | Ok edits -> (
-          match Lsp.apply_edits ~fs:ctx.fs edits with
+          match Lsp.apply_edits ~fs:ctx.Tool.fs edits with
           | Error error -> Error (map_lsp_error error)
           | Ok touched ->
               let diagnostics =

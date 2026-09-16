@@ -551,7 +551,8 @@ module Login = struct
                                          match
                                            Charm_fantasy.Oauth.Anthropic.extract_code
                                              ~url_or_code:(Uri.to_string uri)
-                                             ~state:login.state
+                                             ~state:
+                                               login.Charm_fantasy__Oauth.Anthropic.state
                                          with
                                          | Ok code -> Some code
                                          | Error _ -> None)
@@ -599,7 +600,7 @@ module Login = struct
               | None -> Aborted
               | Some value -> Paste value
             in
-            open_browser login.uri;
+            open_browser login.Charm_fantasy__Oauth.Anthropic.uri;
             let timeout () =
               Eio.Time.sleep t.clock 300.;
               Timeout

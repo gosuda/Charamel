@@ -39,14 +39,14 @@ let adjust_style profile style =
 
 let adjust_styles profile (s : Styles.t) : Styles.t =
   {
-    Styles.timestamp = adjust_style profile s.timestamp;
-    caller = adjust_style profile s.caller;
-    prefix = adjust_style profile s.prefix;
-    message = adjust_style profile s.message;
-    key = adjust_style profile s.key;
-    value = adjust_style profile s.value;
-    separator = adjust_style profile s.separator;
-    levels = (fun level -> adjust_style profile (s.levels level));
+    Styles.timestamp = adjust_style profile s.Styles.timestamp;
+    caller = adjust_style profile s.Styles.caller;
+    prefix = adjust_style profile s.Styles.prefix;
+    message = adjust_style profile s.Styles.message;
+    key = adjust_style profile s.Styles.key;
+    value = adjust_style profile s.Styles.value;
+    separator = adjust_style profile s.Styles.separator;
+    levels = (fun level -> adjust_style profile (s.Styles.levels level));
   }
 
 let default_time_format t =
@@ -113,21 +113,22 @@ let render_text (styles : Styles.t) ~ts ~level ~caller ~prefix ~message ~tags =
     first := false;
     Buffer.add_string buf rendered
   in
-  Option.iter (fun s -> emit (Charm_lipgloss.Style.render styles.timestamp s)) ts;
+  Option.iter (fun s -> emit (Charm_lipgloss.Style.render styles.Styles.timestamp s)) ts;
   (match level with
   | Logs.App -> ()
-  | level -> emit (Charm_lipgloss.Style.render (styles.levels level) (level_label level)));
+  | level ->
+      emit (Charm_lipgloss.Style.render (styles.Styles.levels level) (level_label level)));
   Option.iter
-    (fun c -> emit (Charm_lipgloss.Style.render styles.caller (Fmt.str "<%s>" c)))
+    (fun c -> emit (Charm_lipgloss.Style.render styles.Styles.caller (Fmt.str "<%s>" c)))
     caller;
-  emit (Charm_lipgloss.Style.render styles.prefix (prefix ^ ":"));
-  emit (Charm_lipgloss.Style.render styles.message message);
+  emit (Charm_lipgloss.Style.render styles.Styles.prefix (prefix ^ ":"));
+  emit (Charm_lipgloss.Style.render styles.Styles.message message);
   List.iter
     (fun (k, v) ->
       if k <> "" then begin
-        let key = Charm_lipgloss.Style.render styles.key k in
-        let sep = Charm_lipgloss.Style.render styles.separator "=" in
-        let value = Charm_lipgloss.Style.render styles.value (quote_value v) in
+        let key = Charm_lipgloss.Style.render styles.Styles.key k in
+        let sep = Charm_lipgloss.Style.render styles.Styles.separator "=" in
+        let value = Charm_lipgloss.Style.render styles.Styles.value (quote_value v) in
         emit (key ^ sep ^ value)
       end)
     tags;

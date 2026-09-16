@@ -127,7 +127,7 @@ let source_error = function
 let terminal_width _env =
   try
     let size : Eio_unix.Pty.winsize = Eio_unix.Pty.get_window_size Eio_unix.Fd.stdout in
-    min 120 (max 1 size.cols)
+    min 120 (max 1 size.Eio_unix.Pty.cols)
   with Unix.Unix_error _ | Eio.Io _ -> 80
 
 let render_document ~env ~is_tty:stdout_is_tty (config : Config.t) document =

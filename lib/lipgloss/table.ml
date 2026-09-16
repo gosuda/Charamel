@@ -62,12 +62,12 @@ let side_values style =
             | `Bottom -> Border.bottom_size b)
   in
   let horizontal =
-    padding.left + padding.right + margin.left + margin.right + edge_size `Left
-    + edge_size `Right
+    padding.Sides.left + padding.Sides.right + margin.Sides.left + margin.Sides.right
+    + edge_size `Left + edge_size `Right
   in
   let vertical =
-    padding.top + padding.bottom + margin.top + margin.bottom + edge_size `Top
-    + edge_size `Bottom
+    padding.Sides.top + padding.Sides.bottom + margin.Sides.top + margin.Sides.bottom
+    + edge_size `Top + edge_size `Bottom
   in
   (horizontal, vertical, margin)
 
@@ -261,8 +261,8 @@ let resize_widths columns border requested =
 
 let style_render ~column_width ~row_height style content =
   let _, _, margin = side_values style in
-  let hmargin = margin.left + margin.right in
-  let vmargin = margin.top + margin.bottom in
+  let hmargin = margin.Sides.left + margin.Sides.right in
+  let vmargin = margin.Sides.top + margin.Sides.bottom in
   let target_width = max 0 (column_width - hmargin) in
   let target_height = max 0 (row_height - vmargin) in
   style |> Style.width target_width |> Style.height target_height

@@ -386,9 +386,9 @@ let perms_case env () =
       let k = K.generate K.Ed25519 in
       write_ok "write the pair" dir "k" ~comment:"perm-test" k;
       Alcotest.check Alcotest.int "private key mode" 0o600
-        (Eio.Path.stat ~follow:true (of_dir dir "k")).perm;
+        (Eio.Path.stat ~follow:true (of_dir dir "k")).Eio.File.Stat.perm;
       Alcotest.check Alcotest.int "public key mode" 0o644
-        (Eio.Path.stat ~follow:true (of_dir dir "k.pub")).perm;
+        (Eio.Path.stat ~follow:true (of_dir dir "k.pub")).Eio.File.Stat.perm;
       Alcotest.check Alcotest.bool "private key is PEM armored" true
         (String.starts_with ~prefix:"-----BEGIN OPENSSH PRIVATE KEY-----"
            (Eio.Path.load (of_dir dir "k")));
@@ -404,9 +404,9 @@ let load_or_generate_case env () =
       in
       Alcotest.check tag_typ "an absent path is generated" `Generated tag;
       Alcotest.check Alcotest.int "generated private mode" 0o600
-        (Eio.Path.stat ~follow:true (of_dir dir "key")).perm;
+        (Eio.Path.stat ~follow:true (of_dir dir "key")).Eio.File.Stat.perm;
       Alcotest.check Alcotest.int "generated public mode" 0o644
-        (Eio.Path.stat ~follow:true (of_dir dir "key.pub")).perm;
+        (Eio.Path.stat ~follow:true (of_dir dir "key.pub")).Eio.File.Stat.perm;
       let k2, tag2 =
         expect_ok "load_or_generate on an existing path"
           (K.load_or_generate ~fs:dir ~path:"key" K.Ecdsa_p384)

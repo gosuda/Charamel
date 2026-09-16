@@ -22,7 +22,9 @@ let read_real_entries fs path =
           else
             let entry_path = path_append fs (path_join path name) in
             let lstat = Eio.Path.stat ~follow:false entry_path in
-            let is_symlink = kind = `Symbolic_link || lstat.kind = `Symbolic_link in
+            let is_symlink =
+              kind = `Symbolic_link || lstat.Eio.File.Stat.kind = `Symbolic_link
+            in
             let target = if is_symlink then Eio.Path.read_link entry_path else "" in
             let stat =
               if is_symlink then Eio.Path.stat ~follow:true entry_path else lstat
@@ -30,11 +32,11 @@ let read_real_entries fs path =
             Some
               {
                 Filepicker.name;
-                is_dir = stat.kind = `Directory;
+                is_dir = stat.Eio.File.Stat.kind = `Directory;
                 is_symlink;
                 symlink_target = target;
                 perm = "";
-                size = Optint.Int63.to_int stat.size;
+                size = Optint.Int63.to_int stat.Eio.File.Stat.size;
               })
     in
     let entries =
@@ -67,7 +69,8 @@ let read_model fs path picker =
   let entries = read_real_entries fs path in
   Filepicker.update (Filepicker.Read_dir { path; entries }) picker
 
-let names entries = Stdlib.List.map (fun (entry : Filepicker.entry) -> entry.name) entries
+let names entries =
+  Stdlib.List.map (fun (entry : Filepicker.entry) -> entry.Filepicker.name) entries
 
 let navigation_and_real_io () =
   with_directory @@ fun _env fs name root ->
@@ -82,7 +85,9 @@ let navigation_and_real_io () =
   check_bool "hidden omitted" false
     (Stdlib.List.mem ".hidden" (names (Filepicker.entries picker)));
   check_bool "directory first" true
-    (match Filepicker.entries picker with first :: _ -> first.is_dir | [] -> false);
+    (match Filepicker.entries picker with
+    | first :: _ -> first.Filepicker.is_dir
+    | [] -> false);
   let picker, _ = Filepicker.update Filepicker.Open picker in
   let picker, _ = read_model fs (Filepicker.current_directory picker) picker in
   check_string "entered directory" (name ^ "/subdir")

@@ -90,9 +90,9 @@ let force_replaces_pair env () =
         (Key.authorized_key ~comment:"second" key)
         (Eio.Path.load public_path);
       Alcotest.check Alcotest.int "private mode" 0o600
-        (Eio.Path.stat ~follow:false private_path).perm;
+        (Eio.Path.stat ~follow:false private_path).Eio.File.Stat.perm;
       Alcotest.check Alcotest.int "public mode" 0o644
-        (Eio.Path.stat ~follow:false public_path).perm)
+        (Eio.Path.stat ~follow:false public_path).Eio.File.Stat.perm)
 
 let missing_parent_is_created env () =
   fresh_dir env "missing-parent" (fun root ->
@@ -107,9 +107,9 @@ let missing_parent_is_created env () =
       Alcotest.check Alcotest.bool "parent directory exists" true
         (Eio.Path.is_directory parent);
       Alcotest.check Alcotest.int "first created directory mode" 0o700
-        (Eio.Path.stat ~follow:false (root / "nested")).perm;
+        (Eio.Path.stat ~follow:false (root / "nested")).Eio.File.Stat.perm;
       Alcotest.check Alcotest.int "last created directory mode" 0o700
-        (Eio.Path.stat ~follow:false parent).perm;
+        (Eio.Path.stat ~follow:false parent).Eio.File.Stat.perm;
       let key =
         match Key.of_openssh_private (Eio.Path.load private_path) with
         | Ok key -> key
@@ -118,9 +118,10 @@ let missing_parent_is_created env () =
       Alcotest.check Alcotest.string "generated fingerprint" fingerprint
         (Key.fingerprint_sha256 key);
       Alcotest.check Alcotest.int "private mode" 0o600
-        (Eio.Path.stat ~follow:false private_path).perm;
+        (Eio.Path.stat ~follow:false private_path).Eio.File.Stat.perm;
       Alcotest.check Alcotest.int "public mode" 0o644
-        (Eio.Path.stat ~follow:false (root / "nested" / "deeper" / "key.pub")).perm)
+        (Eio.Path.stat ~follow:false (root / "nested" / "deeper" / "key.pub"))
+          .Eio.File.Stat.perm)
 
 let default_paths () =
   match Command.home_dir () with

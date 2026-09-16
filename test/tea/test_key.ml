@@ -103,8 +103,10 @@ let check_roundtrip code mods =
   | Ok actual ->
       Alcotest.(check bool)
         printed true
-        (actual.code = expected.code && actual.mods = expected.mods && actual.text = ""
-       && actual.shifted = None && actual.base = None && actual.event = Key.Press)
+        (actual.Key.code = expected.Key.code
+        && actual.Key.mods = expected.Key.mods
+        && actual.Key.text = "" && actual.Key.shifted = None && actual.Key.base = None
+        && actual.Key.event = Key.Press)
 
 let test_named_roundtrips () =
   let all_codes = named_codes @ function_codes in
@@ -136,17 +138,17 @@ let test_lock_and_modifier_normalization () =
   let all = mods_of_bits 255 in
   let cases : (Key.code * (Key.mods -> bool)) list =
     [
-      (Key.Left_ctrl, fun mods -> not mods.ctrl);
-      (Key.Right_alt, fun mods -> not mods.alt);
-      (Key.Left_shift, fun mods -> not mods.shift);
-      (Key.Caps_lock, fun mods -> not mods.caps_lock);
-      (Key.Num_lock, fun mods -> not mods.num_lock);
+      (Key.Left_ctrl, fun mods -> not mods.Key.ctrl);
+      (Key.Right_alt, fun mods -> not mods.Key.alt);
+      (Key.Left_shift, fun mods -> not mods.Key.shift);
+      (Key.Caps_lock, fun mods -> not mods.Key.caps_lock);
+      (Key.Num_lock, fun mods -> not mods.Key.num_lock);
     ]
   in
   List.iter
     (fun (code, predicate) ->
       let key = Key.v ~mods:all code in
-      Alcotest.(check bool) (Key.to_string key) true (predicate key.mods))
+      Alcotest.(check bool) (Key.to_string key) true (predicate key.Key.mods))
     cases
 
 let test_plus_and_aliases () =
@@ -177,7 +179,8 @@ let test_aliases_and_errors () =
   List.iter
     (fun (name, code) ->
       match Key.of_string name with
-      | Ok key -> Alcotest.(check bool) name true (key.code = code && key.mods = no_mods)
+      | Ok key ->
+          Alcotest.(check bool) name true (key.Key.code = code && key.Key.mods = no_mods)
       | Error (`Msg message) -> Alcotest.failf "alias %S failed: %s" name message)
     aliases;
   List.iter

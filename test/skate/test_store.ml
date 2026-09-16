@@ -237,7 +237,7 @@ let atomic_0600 =
       with_root (fun _env root ->
           unit_ok (Store.set ~root ~db:"private" "key" "value");
           let stat = Eio.Path.stat ~follow:true Eio.Path.(root / "private.json") in
-          Alcotest.(check int) "mode" 0o600 (stat.perm land 0o777)))
+          Alcotest.(check int) "mode" 0o600 (stat.Eio.File.Stat.perm land 0o777)))
 
 let binary_not_utf8 =
   Alcotest.test_case "binary marker is persisted" `Quick (fun () ->

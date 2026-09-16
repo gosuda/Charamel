@@ -165,11 +165,11 @@ let plan_denial_locked t request =
   else None
 
 let configured_outcome_locked t request =
-  match List.find_opt (fun entry -> matches ~entry request) t.config.deny with
+  match List.find_opt (fun entry -> matches ~entry request) t.config.Config.deny with
   | Some entry -> Some (Denied ("denied by permissions.deny: " ^ entry))
   | None -> (
       match
-        List.find_opt (fun entry -> matches ~entry request) t.config.allowed_tools
+        List.find_opt (fun entry -> matches ~entry request) t.config.Config.allowed_tools
       with
       | Some _ -> Some Allowed
       | None -> if session_granted t request then Some Allowed else None)

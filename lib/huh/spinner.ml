@@ -72,9 +72,9 @@ let run ?(title = "Loading...") ?style ?(accessible = false) ?theme ~clock actio
           | Done outcome -> ({ model with outcome = Some outcome }, Charm_tea.Cmd.quit)
           | Key key ->
               if
-                key.Charm_tea.Key.mods.ctrl
+                key.Charm_tea.Key.mods.Charm_tea.Key.ctrl
                 && Uchar.equal
-                     (match key.code with
+                     (match key.Charm_tea.Key.code with
                      | Charm_tea.Key.Char c -> c
                      | _ -> Uchar.of_char '\000')
                      (Uchar.of_char 'c')

@@ -46,7 +46,7 @@ let make_ctx env sw =
   let cwd = "/tmp" in
   let config = Config.default in
   let permission =
-    Permission.create ~config:config.permissions ~yolo:true ~cwd
+    Permission.create ~config:config.Config.permissions ~yolo:true ~cwd
       ~plans_dir:"/tmp/.crush/plans" ()
   in
   let hooks = Hooks.create ~config:[] ~proc_mgr:env#process_mgr ~clock:env#clock ~cwd in
@@ -115,15 +115,15 @@ let test_foreground_capture () =
     bash_value ~command:"printf out; printf err >&2" ~description:"capture both streams"
       ()
   in
-  let output = output_or_fail (Tools_shell.bash.run ctx input) in
-  Alcotest.(check bool) "stdout is captured" true (contains output.content "out");
-  Alcotest.(check bool) "stderr is captured" true (contains output.content "err");
-  Alcotest.(check bool) "successful process is not an error" false output.is_error
+  let output = output_or_fail (Tools_shell.bash.Tool.run ctx input) in
+  Alcotest.(check bool) "stdout is captured" true (contains output.Tool.content "out");
+  Alcotest.(check bool) "stderr is captured" true (contains output.Tool.content "err");
+  Alcotest.(check bool) "successful process is not an error" false output.Tool.is_error
 
 let test_timeout () =
   with_ctx @@ fun _env ctx ->
   let input = bash_value ~timeout_s:1 ~command:"sleep 5" ~description:"deadline" () in
-  match Tools_shell.bash.run ctx input with
+  match Tools_shell.bash.Tool.run ctx input with
   | Error (`Timeout seconds) -> Alcotest.(check (float 1e-9)) "deadline" 1. seconds
   | Error error -> Alcotest.failf "unexpected timeout result: %a" Tool.pp_error error
   | Ok _ -> Alcotest.fail "sleep exceeded its deadline"
@@ -132,39 +132,39 @@ let test_background_lifecycle () =
   with_ctx @@ fun _env ctx ->
   let started =
     output_or_fail
-      (Tools_shell.bash.run ctx
+      (Tools_shell.bash.Tool.run ctx
          (bash_value ~timeout_s:5 ~run_in_background:true ~command:"printf background"
             ~description:"background output" ()))
   in
   let prefix = "started " in
   Alcotest.(check bool)
     "job id is returned" true
-    (String.starts_with ~prefix started.content);
+    (String.starts_with ~prefix started.Tool.content);
   let id =
-    String.sub started.content (String.length prefix)
-      (String.length started.content - String.length prefix)
+    String.sub started.Tool.content (String.length prefix)
+      (String.length started.Tool.content - String.length prefix)
   in
-  let output = output_or_fail (Tools_shell.job_output.run ctx (job_value id)) in
+  let output = output_or_fail (Tools_shell.job_output.Tool.run ctx (job_value id)) in
   Alcotest.(check bool)
     "background stdout is retained" true
-    (contains output.content "background");
+    (contains output.Tool.content "background");
   let killed_started =
     output_or_fail
-      (Tools_shell.bash.run ctx
+      (Tools_shell.bash.Tool.run ctx
          (bash_value ~timeout_s:5 ~run_in_background:true ~command:"sleep 30"
             ~description:"background kill" ()))
   in
   let killed_id =
-    String.sub killed_started.content (String.length prefix)
-      (String.length killed_started.content - String.length prefix)
+    String.sub killed_started.Tool.content (String.length prefix)
+      (String.length killed_started.Tool.content - String.length prefix)
   in
-  ignore (output_or_fail (Tools_shell.job_kill.run ctx (job_kill_value killed_id)));
+  ignore (output_or_fail (Tools_shell.job_kill.Tool.run ctx (job_kill_value killed_id)));
   let killed_output =
-    output_or_fail (Tools_shell.job_output.run ctx (job_value killed_id))
+    output_or_fail (Tools_shell.job_output.Tool.run ctx (job_value killed_id))
   in
   Alcotest.(check bool)
     "job kill reports killed" true
-    (contains killed_output.content "killed")
+    (contains killed_output.Tool.content "killed")
 
 let cases =
   [

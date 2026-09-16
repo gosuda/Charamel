@@ -64,7 +64,9 @@ let spills_complete_content () =
       end;
       let path = Filename.concat (Filename.concat base "artifacts") (id ^ ".txt") in
       let stat = Eio.Path.stat ~follow:false Eio.Path.(env#fs / path) in
-      Alcotest.(check int) "private artifact mode" 0o600 (stat.perm land 0o777))
+      Alcotest.(check int)
+        "private artifact mode" 0o600
+        (stat.Eio.File.Stat.perm land 0o777))
 
 let long_line_spill_is_bounded () =
   with_artifact (fun _env _base store ->
