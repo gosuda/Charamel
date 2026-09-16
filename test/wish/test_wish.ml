@@ -47,6 +47,14 @@ let send_q client socket =
   client
 
 let rec client_loop client socket output established status =
+  match step client socket output established status with
+  | exception Eio.Io _ ->
+      (* The peer may close before our next read or write; once the wire is
+         gone the last event-derived status is the outcome. *)
+      (client, output, Option.value status ~default:1)
+  | result -> result
+
+and step client socket output established status =
   let buffer = Cstruct.create 16_384 in
   let count = Eio.Flow.single_read socket buffer in
   let incoming = Cstruct.to_string ~len:count buffer in
