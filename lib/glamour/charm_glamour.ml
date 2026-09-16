@@ -502,16 +502,11 @@ let wrap_text width s =
 
 let split_lines s = String.split_on_char '\n' s
 let spaces n = if n <= 0 then "" else String.make n ' '
-
-let starts_with s prefix =
-  let lp = String.length prefix in
-  String.length s >= lp && String.sub s 0 lp = prefix
-
 let uri_of_string s = try Some (Uri.of_string s) with Invalid_argument _ -> None
 let uri_host s = match uri_of_string s with Some uri -> Uri.host uri | None -> None
 
 let resolve_url ~base_url rel =
-  if rel = "" || starts_with rel "#" then rel
+  if rel = "" || String.starts_with ~prefix:"#" rel then rel
   else
     match uri_of_string rel with
     | None -> rel
@@ -532,7 +527,7 @@ let url_is_valid url =
         code < 0x20 || code = 0x7F)
       url
   in
-  url <> "" && (not (starts_with url "#")) && not has_control
+  url <> "" && (not (String.starts_with ~prefix:"#" url)) && not has_control
 
 let hyperlink url text =
   if not (url_is_valid url) then text
@@ -639,7 +634,8 @@ let rec render_inline ctx (inline : Cmarkit.Inline.t) =
       let raw_url = fst (Cmarkit.Inline.Autolink.link autolink) in
       let is_email = Cmarkit.Inline.Autolink.is_email autolink in
       let url =
-        if is_email && not (starts_with raw_url "mailto:") then "mailto:" ^ raw_url
+        if is_email && not (String.starts_with ~prefix:"mailto:" raw_url) then
+          "mailto:" ^ raw_url
         else raw_url
       in
       let resolved = resolve_url ~base_url:ctx.base_url url in
@@ -751,7 +747,7 @@ let render_paragraph ctx ~indent paragraph =
     else String.map (fun c -> if c = '\n' then ' ' else c) content
   in
   let visible = plain content in
-  let is_description = starts_with visible ": " in
+  let is_description = String.starts_with ~prefix:": " visible in
   let content =
     if is_description then String.sub content 2 (String.length content - 2) else content
   in

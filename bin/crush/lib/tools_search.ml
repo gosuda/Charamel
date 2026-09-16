@@ -3,14 +3,6 @@ let max_glob_results = 100
 let max_grep_results = 500
 let max_file_bytes = 10 * 1024 * 1024
 
-let has_prefix s prefix =
-  let ns = String.length s and np = String.length prefix in
-  ns >= np && String.sub s 0 np = prefix
-
-let has_suffix s suffix =
-  let ns = String.length s and n = String.length suffix in
-  ns >= n && String.sub s (ns - n) n = suffix
-
 let protect_io path f =
   try Ok (f ()) with
   | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found path)
@@ -53,7 +45,7 @@ let relative_to root absolute =
   if absolute = root then "."
   else
     let prefix = if root = "/" then "/" else root ^ "/" in
-    if has_prefix absolute prefix then
+    if String.starts_with ~prefix absolute then
       String.sub absolute (String.length prefix)
         (String.length absolute - String.length prefix)
     else absolute
@@ -334,7 +326,8 @@ let pattern_mentions_generated pattern =
 
 let run_glob ctx pattern path_opt =
   let pattern =
-    if has_prefix pattern "./" then String.sub pattern 2 (String.length pattern - 2)
+    if String.starts_with ~prefix:"./" pattern then
+      String.sub pattern 2 (String.length pattern - 2)
     else pattern
   in
   match compile_glob pattern with
@@ -358,7 +351,9 @@ let run_glob ctx pattern path_opt =
           | Ok target ->
               let matches = ref [] in
               let callback file relative =
-                let candidate = if has_prefix pattern "/" then file else relative in
+                let candidate =
+                  if String.starts_with ~prefix:"/" pattern then file else relative
+                in
                 if not (Re.execp expression candidate) then Ok ()
                 else
                   match
@@ -407,7 +402,8 @@ let read_lines content =
   if content = "" then []
   else
     let lines = String.split_on_char '\n' content in
-    if has_suffix content "\n" then List.rev (List.tl (List.rev lines)) else lines
+    if String.ends_with ~suffix:"\n" content then List.rev (List.tl (List.rev lines))
+    else lines
 
 let binary content =
   let length = min 8192 (String.length content) in

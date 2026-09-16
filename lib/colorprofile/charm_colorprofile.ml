@@ -1,9 +1,6 @@
 type t = No_tty | Ascii | Ansi | Ansi256 | True_color
 type profile = t
 
-let has_prefix s prefix = String.starts_with ~prefix s
-let has_suffix s suffix = String.ends_with ~suffix s
-
 let has_substring s needle =
   let length = String.length s in
   let needle_length = String.length needle in
@@ -21,20 +18,23 @@ let truthy env name =
 let color_terminal term colorterm =
   let colorterm = String.lowercase_ascii colorterm in
   let p = ref Ansi in
-  if has_prefix term "tmux" || has_prefix term "screen" || has_suffix term "256color" then
-    p := Ansi256;
+  if
+    String.starts_with ~prefix:"tmux" term
+    || String.starts_with ~prefix:"screen" term
+    || String.ends_with ~suffix:"256color" term
+  then p := Ansi256;
   if
     has_substring term "alacritty"
     || has_substring term "contour" || has_substring term "foot"
     || has_substring term "ghostty" || has_substring term "kitty"
     || has_substring term "rio" || has_substring term "st" || has_substring term "wezterm"
-    || has_suffix term "direct"
+    || String.ends_with ~suffix:"direct" term
   then p := True_color;
   if
     (colorterm = "truecolor" || colorterm = "24bit" || colorterm = "yes"
    || colorterm = "true")
-    && (not (has_prefix term "screen"))
-    && not (has_prefix term "tmux")
+    && (not (String.starts_with ~prefix:"screen" term))
+    && not (String.starts_with ~prefix:"tmux" term)
   then p := True_color;
   !p
 

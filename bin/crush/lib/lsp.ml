@@ -145,10 +145,6 @@ let array_value value =
 let trim_ascii text = String.trim text
 let lowercase text = String.lowercase_ascii text
 
-let starts_with ~prefix text =
-  String.length text >= String.length prefix
-  && String.sub text 0 (String.length prefix) = prefix
-
 let percent_hex value =
   let digits = "0123456789ABCDEF" in
   String.init 2 (fun index -> digits.[(value lsr ((1 - index) * 4)) land 0xF])
@@ -197,9 +193,9 @@ let uri_unescape text =
 
 let path_of_uri uri =
   let raw =
-    if starts_with ~prefix:"file://" uri then
+    if String.starts_with ~prefix:"file://" uri then
       let path = String.sub uri 7 (String.length uri - 7) in
-      if starts_with ~prefix:"localhost/" path then
+      if String.starts_with ~prefix:"localhost/" path then
         String.sub path 9 (String.length path - 9)
       else path
     else uri
@@ -210,7 +206,7 @@ let uri_of_path path = "file://" ^ uri_escape path
 
 let normalize_path ~cwd path =
   let absolute =
-    if starts_with ~prefix:"/" path then path else Filename.concat cwd path
+    if String.starts_with ~prefix:"/" path then path else Filename.concat cwd path
   in
   let pieces = String.split_on_char '/' absolute in
   let result =
@@ -227,7 +223,7 @@ let normalize_path ~cwd path =
 
 let inside ~cwd root path =
   let root = normalize_path ~cwd root and path = normalize_path ~cwd path in
-  path = root || root = "/" || starts_with ~prefix:(root ^ "/") path
+  path = root || root = "/" || String.starts_with ~prefix:(root ^ "/") path
 
 let parent_path ~cwd path =
   let path = normalize_path ~cwd path in
@@ -249,7 +245,7 @@ let extension path =
 
 let marker_matches fs directory marker =
   try
-    if starts_with ~prefix:"*." marker then
+    if String.starts_with ~prefix:"*." marker then
       let suffix = String.sub marker 1 (String.length marker - 1) in
       Eio.Path.read_dir Eio.Path.(fs / directory)
       |> List.exists (fun entry ->

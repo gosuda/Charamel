@@ -135,11 +135,6 @@ let index_text t =
   |> List.map (fun skill -> "- " ^ skill.name ^ ": " ^ skill.description)
   |> String.concat "\n"
 
-let has_prefix ~prefix value =
-  let prefix_length = String.length prefix in
-  String.length value >= prefix_length
-  && String.equal (String.sub value 0 prefix_length) prefix
-
 let safe_relative_path path =
   path <> ""
   && (not (String.equal path "."))
@@ -157,7 +152,7 @@ let read_skill_relative fs skill relative =
 
 let resolve_uri t ~fs uri =
   let missing () = Error (`Not_found uri) in
-  if not (has_prefix ~prefix:"skill://" uri) then missing ()
+  if not (String.starts_with ~prefix:"skill://" uri) then missing ()
   else
     let target = String.sub uri 8 (String.length uri - 8) in
     match String.index_opt target '/' with

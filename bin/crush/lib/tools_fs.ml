@@ -3,14 +3,10 @@ let max_line_bytes = 2000
 
 type line_file = { lines : string array; trailing_newline : bool }
 
-let has_suffix s suffix =
-  let ns = String.length s and n = String.length suffix in
-  ns >= n && String.sub s (ns - n) n = suffix
-
 let split_lines s =
   if s = "" then { lines = [||]; trailing_newline = false }
   else
-    let trailing_newline = has_suffix s "\n" in
+    let trailing_newline = String.ends_with ~suffix:"\n" s in
     let parts = String.split_on_char '\n' s in
     let parts = if trailing_newline then List.rev (List.tl (List.rev parts)) else parts in
     { lines = Array.of_list parts; trailing_newline }
@@ -24,7 +20,8 @@ let split_patch_lines source =
   else
     let lines = String.split_on_char '\n' source in
     let lines =
-      if has_suffix source "\n" then List.rev (List.tl (List.rev lines)) else lines
+      if String.ends_with ~suffix:"\n" source then List.rev (List.tl (List.rev lines))
+      else lines
     in
     Array.of_list lines
 
@@ -79,7 +76,7 @@ let parse_command line =
   in
   if String.length line >= 4 && String.sub line 0 4 = "PUT " then
     let rest = String.sub line 4 (String.length line - 4) in
-    if not (has_suffix rest ":") then invalid ()
+    if not (String.ends_with ~suffix:":" rest) then invalid ()
     else
       let body = String.sub rest 0 (String.length rest - 1) in
       if body <> "" && body.[0] = '<' then

@@ -26,19 +26,19 @@ let has_uri_scheme value =
       && Char.equal value.[index + 2] '/'
   | None -> false
 
-let has_prefix prefix text =
-  let length = String.length prefix in
-  String.length text >= length && String.sub text 0 length = prefix
-
 let classify ~argument ~cwd ~stdin_is_tty =
   match argument with
   | None when not stdin_is_tty -> Ok Stdin
   | None -> Ok (Directory cwd)
   | Some "-" -> Ok Stdin
   | Some value when value = "" -> if stdin_is_tty then Ok (Directory cwd) else Ok Stdin
-  | Some value when has_prefix "http://" value || has_prefix "https://" value ->
+  | Some value
+    when String.starts_with ~prefix:"http://" value
+         || String.starts_with ~prefix:"https://" value ->
       Ok (Url value)
-  | Some value when has_prefix "github.com/" value || has_prefix "gitlab.com/" value ->
+  | Some value
+    when String.starts_with ~prefix:"github.com/" value
+         || String.starts_with ~prefix:"gitlab.com/" value ->
       Ok (Url ("https://" ^ value))
   | Some value when has_uri_scheme value ->
       Error (`Invalid (Fmt.str "unsupported URL scheme in %s" value))
@@ -57,7 +57,7 @@ let classify ~argument ~cwd ~stdin_is_tty =
       )
 
 let remove_frontmatter text =
-  if not (has_prefix "---\n" text) then text
+  if not (String.starts_with ~prefix:"---\n" text) then text
   else
     match
       Re.exec_opt
