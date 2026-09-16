@@ -49,13 +49,6 @@ their own C). Highlighting uses `re`-based data-driven lexers. Config
 files are JSON via `jsont`. Sessions are JSONL. The OCaml floor is
 `>= 5.4`. Tests use alcotest.
 
-Toolchain pins verified 2026-09-15: OCaml 5.5.1 with floor `>= 5.4`,
-dune 3.24.2, eio 1.5, cmdliner 2.1.1, fmt 0.11.0, logs 0.10.0,
-jsont 0.4.0, cmarkit 0.4.0, uucp 17.0.0, uuseg 17.0.0, uutf 1.0.4,
-re 1.14.0, mtime 2.2.0, ptime 1.2.0, tls 2.1.3, cohttp-eio 6.3.0,
-x509 1.2.0, ca-certs 1.0.3, mirage-crypto 2.4.1, digestif 1.3.1,
-base64 3.5.2, alcotest 1.9.1, awa 0.6.1, ocamlformat 0.29.0.
-
 ## Licensing
 
 - This work is Apache-2.0. Read `LICENSE` for the license body and `NOTICE`
