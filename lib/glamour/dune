@@ -1,0 +1,13 @@
+(library
+ (name charm_glamour)
+ (public_name charm.glamour)
+ (modules charm_glamour emoji)
+ (libraries charm.ansi charm.lipgloss charm.highlight cmarkit fmt uri)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
