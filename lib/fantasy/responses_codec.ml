@@ -20,44 +20,7 @@
 let log_src = Logs.Src.create "charm.fantasy.responses_codec"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
-
-(* Generic JSON access. The event surface is large and mostly irrelevant, so
-   decoding reads named members off the generic representation instead of
-   declaring a jsont codec for the whole envelope. *)
-
-let oopt (j : Jsont.json) (n : string) : Jsont.json option =
-  match j with
-  | Jsont.Object (o, _) -> (
-      match Jsont.Json.find_mem n o with Some (_, v) -> Some v | None -> None)
-  | _ -> None
-
-let is_object j = Jsont.Json.sort j = Jsont.Sort.Object
-
-let string_of_json (j : Jsont.json) =
-  match Jsont_bytesrw.encode_string ~format:Jsont.Minify Jsont.json j with
-  | Ok s -> s
-  | Error _ -> invalid_arg "Responses codec received an unencodable JSON value"
-
-let json_of_string s = Jsont_bytesrw.decode_string Jsont.json s
-
-let string_mem j n =
-  match oopt j n with Some (Jsont.String (s, _)) -> Some s | Some _ | None -> None
-
-let int_mem j n =
-  match oopt j n with Some (Jsont.Number (v, _)) -> int_of_float v | Some _ | None -> 0
-
-let int_option_mem j n =
-  match oopt j n with
-  | Some (Jsont.Number (v, _)) -> Some (int_of_float v)
-  | Some _ | None -> None
-
-let n = Jsont.Json.name
-let str = Jsont.Json.string
-let obj = Jsont.Json.object'
-let arr = Jsont.Json.list
-let num = Jsont.Json.number
-let bool = Jsont.Json.bool
-let int = Jsont.Json.int
+open Json_util
 
 (* Request: model classification.
 

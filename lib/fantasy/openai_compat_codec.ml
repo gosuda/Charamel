@@ -22,50 +22,9 @@
 let log_src = Logs.Src.create "charm.fantasy.openai_compat_codec"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
+open Json_util
 
-(* Generic JSON access. The chunk surface is large and mostly irrelevant, so
-   decoding reads named members off the generic representation instead of
-   declaring a jsont codec for the whole envelope. *)
-
-let n = Jsont.Json.name
-let str = Jsont.Json.string
-let obj = Jsont.Json.object'
-let arr = Jsont.Json.list
-let num = Jsont.Json.number
-let int = Jsont.Json.int
 let jtrue = Jsont.Json.bool true
-
-let oopt (j : Jsont.json) (k : string) : Jsont.json option =
-  match j with
-  | Jsont.Object (ms, _) -> (
-      match Jsont.Json.find_mem k ms with Some (_, v) -> Some v | None -> None)
-  | _ -> None
-
-let has_error j =
-  match oopt j "error" with
-  | Some value -> Jsont.Json.sort value <> Jsont.Sort.Null
-  | None -> false
-
-let string_mem j k =
-  match oopt j k with Some (Jsont.String (s, _)) -> Some s | Some _ | None -> None
-
-let int_mem j k =
-  match oopt j k with Some (Jsont.Number (f, _)) -> int_of_float f | Some _ | None -> 0
-
-let int_option_mem j k =
-  match oopt j k with
-  | Some (Jsont.Number (f, _)) -> Some (int_of_float f)
-  | Some _ | None -> None
-
-let array_of = function Jsont.Array (items, _) -> Some items | _ -> None
-let is_object j = Jsont.Json.sort j = Jsont.Sort.Object
-
-(* [Jsont.Json.pp] indents, which would put newlines inside a tool argument
-   string, so the minified writer is used instead. *)
-let string_of_json (j : Jsont.json) =
-  match Jsont_bytesrw.encode_string Jsont.json j with
-  | Ok s -> s
-  | Error _ -> invalid_arg "OpenAI codec received an unencodable JSON value"
 
 (* Request encoding *)
 
