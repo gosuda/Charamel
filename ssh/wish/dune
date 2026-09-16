@@ -1,0 +1,22 @@
+(library
+ (name charm_ssh_wish)
+ (public_name charm-ssh.wish)
+ (libraries
+  charm.tea
+  charm.colorprofile
+  charm-ssh.keygen
+  awa
+  eio
+  eio.unix
+  fmt
+  logs
+  cstruct
+  mtime)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))

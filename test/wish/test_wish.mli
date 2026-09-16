@@ -1,0 +1,4 @@
+(** In-process protocol tests for the Wish SSH server. *)
+
+val suites : unit -> unit Alcotest.test list
+(** [suites ()] is the behavioral Wish test suite. *)
