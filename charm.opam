@@ -18,7 +18,6 @@ depends: [
   "cmarkit" {>= "0.4"}
   "uucp" {>= "17.0.0"}
   "uuseg" {>= "17.0.0"}
-  "uutf"
   "re" {>= "1.14"}
   "mtime"
   "ptime"
@@ -29,6 +28,12 @@ depends: [
   "ca-certs"
   "mirage-crypto-rng"
   "uri"
+  "dune-build-info"
+  "bytesrw"
+  "cohttp"
+  "http"
+  "tls"
+  "domain-name"
   "alcotest" {with-test}
   "odoc" {with-doc}
 ]

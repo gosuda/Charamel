@@ -1,6 +1,7 @@
 (library
  (name charm_ansi)
  (public_name charm.ansi)
+ (libraries fmt uucp uuseg base64)
  (flags
   (:standard
    -strict-sequence

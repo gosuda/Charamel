@@ -11,7 +11,6 @@
 (package
  (name charm)
  (synopsis "Charm ecosystem in OCaml")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
@@ -24,7 +23,6 @@
   (cmarkit (>= 0.4))
   (uucp (>= 17.0.0))
   (uuseg (>= 17.0.0))
-  uutf
   (re (>= 1.14))
   mtime
   ptime
@@ -35,12 +33,19 @@
   ca-certs
   mirage-crypto-rng
   uri
+  dune-build-info
+  bytesrw
+  cohttp
+  http
+  tls
+  domain-name
+  cstruct
+  optint
   (alcotest :with-test)))
 
 (package
  (name charm-ssh)
  (synopsis "SSH libraries for the Charm ecosystem")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
@@ -58,52 +63,80 @@
   x509
   base64
   digestif
+  cstruct
+  mtime
   (alcotest :with-test)))
 
 (package
  (name gum)
  (synopsis "Glamorous shell scripts")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charm
+  cmdliner
+  eio
+  fmt
+  logs
+  re
+  ptime
+  cstruct
+  (eio_main :with-test)
   (alcotest :with-test)))
 
 (package
  (name glow)
  (synopsis "Render markdown on the CLI")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charm
+  eio
+  eio_main
+  cmdliner
+  fmt
+  jsont
+  cohttp-eio
+  cohttp
+  tls-eio
+  ca-certs
+  uri
+  domain-name
+  re
   (alcotest :with-test)))
 
 (package
  (name freeze)
  (synopsis "Generate images of code and terminal output")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charm
+  eio
+  eio_main
+  cmdliner
+  jsont
+  cstruct
+  base64
+  fmt
   (alcotest :with-test)))
 
 (package
  (name sequin)
  (synopsis "Explain terminal escape sequences")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charm
+  fmt
+  eio
+  eio_main
+  cmdliner
   (alcotest :with-test)))
 
 (package
  (name pop)
  (synopsis "Send mail from the command line")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
@@ -111,54 +144,86 @@
   cohttp-eio
   tls-eio
   ca-certs
+  cmarkit
+  cohttp
+  http
+  tls
+  domain-name
+  eio
+  fmt
+  jsont
+  base64
+  digestif
+  ptime
+  uri
+  cmdliner
+  eio_main
+  mirage-crypto-rng
   (alcotest :with-test)))
 
 (package
  (name skate)
  (synopsis "Personal key-value store")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charm
+  eio
+  fmt
+  jsont
+  base64
+  cmdliner
+  (eio_main :with-test)
   (alcotest :with-test)))
 
 (package
  (name melt)
  (synopsis "Back up and restore SSH keys with mnemonics")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charm
   charm-ssh
+  digestif
+  eio
+  eio_main
+  cmdliner
+  mirage-crypto-rng
+  fmt
   (alcotest :with-test)))
 
 (package
  (name keygen)
  (synopsis "Generate OpenSSH key pairs")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charm
   charm-ssh
+  eio
+  fmt
+  eio_main
+  cmdliner
+  mirage-crypto-rng
   (alcotest :with-test)))
 
 (package
  (name hotdiva2000)
  (synopsis "Memorable name generator")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charm
+  fmt
+  cmdliner
+  eio
+  eio_main
+  mirage-crypto-rng
   (alcotest :with-test)))
 
 (package
  (name crush)
  (synopsis "Agentic coding harness")
- (allow_empty)
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
@@ -166,4 +231,24 @@
   cohttp-eio
   tls-eio
   ca-certs
+  eio
+  jsont
+  bytesrw
+  re
+  fmt
+  logs
+  digestif
+  base64
+  cohttp
+  http
+  uri
+  mtime
+  mirage-crypto-rng
+  tls
+  domain-name
+  cstruct
+  cmdliner
+  eio_main
+  optint
+  ipaddr
   (alcotest :with-test)))

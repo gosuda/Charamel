@@ -1,5 +1,3 @@
-charm
-
 Copyright 2026 metaphorics
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,3 +11,46 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+## Third-party
+
+The MIT permission notice below covers these third-party materials:
+
+- Terminal tables and test vectors from charmbracelet/x.
+- Numerical test vectors from charmbracelet/harmonica.
+- modifiers.txt and nouns.txt from charmbracelet/hotdiva2000.
+- bip-0039/english.txt from bitcoin/bips.
+  BIP-39 authors: Marek Palatinus, Pavol Rusnak, Aaron Voisine, Sean Bowe.
+  https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
+- The 256-bit entropy vectors from trezor/python-mnemonic/vectors.json.
+  https://github.com/trezor/python-mnemonic
+- Theme values and Markdown test fixtures from charmbracelet/glamour.
+- GitHub emoji shortcodes from yuin/goldmark-emoji v1.0.5.
+- Provider and model catalog data from charmbracelet/catwalk.
+- Syntax palette color values from alecthomas/chroma.
+
+Copyright (c) 2023 Charmbracelet, Inc.
+Copyright (c) 2021-2023 Charmbracelet, Inc.
+Copyright (c) 2013-2016 Pavol Rusnak
+Copyright (c) 2019-2023 Charmbracelet, Inc
+Copyright (c) 2020 Yusuke Inuzuka
+Copyright (c) 2025 Charmbracelet, Inc
+Copyright (C) 2017 Alec Thomas
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

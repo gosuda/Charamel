@@ -1,4 +1,12 @@
 (** ANSI terminal primitives.
 
-    This module is the placeholder for the escape sequence, parser, text algorithm, and
-    width surface built in a later step. *)
+    Terminal sequences, incremental decoding, colors, styles, and Unicode text operations
+    share one grapheme-based width model. *)
+
+module Color = Color
+module Style = Style
+module Link = Link
+module Seq = Seq
+module Parser = Parser
+module Width = Width
+module Text = Text
