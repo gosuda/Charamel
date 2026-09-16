@@ -447,8 +447,10 @@ let filename_parameter name =
 let validate_for_serialise message =
   if has_header_control message.subject then
     invalid_arg "Mime.serialise: Subject contains CR/LF/NUL";
-  if Option.exists has_header_control message.message_id then
-    invalid_arg "Mime.serialise: Message-ID contains CR/LF/NUL";
+  (match message.message_id with
+  | Some id when has_header_control id ->
+      invalid_arg "Mime.serialise: Message-ID contains CR/LF/NUL"
+  | Some _ | None -> ());
   validate_address_list
     (message.from :: (message.reply_to @ message.to_ @ message.cc @ message.bcc));
   List.iter
