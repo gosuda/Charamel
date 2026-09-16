@@ -497,8 +497,6 @@ let style_of_block (b : Theme.block) =
 let style_text (b : Theme.block) text =
   if text = "" then "" else Charm_lipgloss.Style.render (style_of_block b) text
 
-let width_of s = Charm_ansi.Text.width (Charm_ansi.Text.strip s)
-
 let wrap_text width s =
   if width < 1 then s else Charm_ansi.Text.wrap ~breakpoints:" ,.;-+|" ~width s
 
@@ -869,7 +867,7 @@ and render_list ctx ~indent list =
                 (Theme.block ~block_prefix:ctx.theme.Theme.item ())
                 ctx.theme.Theme.item
       in
-      let marker_width = max 1 (width_of marker) in
+      let marker_width = max 1 (Charm_ansi.Text.width marker) in
       let body = render_list_item ctx ~indent ~marker_width ~level_indent item in
       let lines = split_lines body in
       let first_line = match lines with [] -> "" | x :: _ -> x in
@@ -891,7 +889,7 @@ and render_block ctx ~indent block =
       let marker = ctx.theme.Theme.block_quote.Theme.block_prefix in
       let marker_width =
         if marker = "" then max 1 ctx.theme.Theme.block_quote.Theme.indent
-        else width_of marker
+        else Charm_ansi.Text.width marker
       in
       let rendered =
         render_block ctx ~indent:(indent + marker_width)
