@@ -58,8 +58,7 @@ base64 3.5.2, alcotest 1.9.1, awa 0.6.1, ocamlformat 0.29.0.
 
 ## Licensing
 
-This work is Apache-2.0. Read `LICENSE` for the license body and `NOTICE`
-for copyright and third-party attributions. Behavior is re-derived from
-the upstream Charm projects, the `fantasy` project under Apache-2.0, and
-the `crush` project under the Functional Source License 1.1 with an MIT
+- This work is Apache-2.0. Read `LICENSE` for the license body and `NOTICE`
+for copyright and third-party attributions. 
+- The `crush` project under the Functional Source License 1.1 with an MIT
 future grant, which stand as prior art rather than inherited terms.
