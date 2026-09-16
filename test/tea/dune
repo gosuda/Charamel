@@ -1,0 +1,29 @@
+(test
+ (name test_tea)
+ (package charm)
+ (modules
+  test_tea
+  test_key
+  test_input
+  test_cmd_sub
+  test_screen
+  test_terminal
+  test_program)
+ (libraries
+  charm.tea
+  charm.ansi
+  alcotest
+  eio
+  eio.unix
+  eio_main
+  fmt
+  cstruct
+  unix)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
