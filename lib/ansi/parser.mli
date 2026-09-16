@@ -15,8 +15,9 @@ type action =
       (** A control sequence. [final] is the final byte. *)
   | Esc of { intermediates : string; final : char }
       (** An escape sequence, such as SS3 or the standalone two byte string terminator.
-          The [ESC \] ending an [Apc], [Pm] or [Sos] string is consumed by the string
-          itself and reports no action; after [Osc] and [Dcs] it still reports here. *)
+          The two byte [ESC] backslash terminator of an [Apc], [Pm] or [Sos] string is
+          consumed by the string itself and reports no action; after [Osc] and [Dcs] it
+          still reports here. *)
   | Osc of string list
       (** An operating system command. The payload is split on [';']. The first field is
           the command number when the payload begins with digits, and an empty payload
@@ -66,7 +67,7 @@ val feed : t -> string -> action list
     incomplete rune swallow every byte, controls included, until the length announced by
     the lead byte is reached, and an invalid rune completes as U+FFFD. In SOS, PM and APC
     a UTF-8 lead byte abandons the string, and the rune prints once it is complete. The
-    two byte string terminator [ESC \] ends an [Apc], [Pm] or [Sos] string silently,
+    two byte [ESC] backslash terminator ends an [Apc], [Pm] or [Sos] string silently,
     while after [Osc] and [Dcs] it completes as an [Esc] action. *)
 
 val flush : t -> action list
