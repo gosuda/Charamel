@@ -101,12 +101,13 @@ val rename :
     are grouped by absolute file path and are not applied. *)
 
 val apply_edits :
+  cwd:string ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   (string * text_edit list) list ->
   (string list, error) result
-(** [apply_edits ~fs edits] applies non-overlapping edits from the bottom of each file
-    upward. UTF-16 positions are converted to UTF-8 boundaries before writing. The
-    returned list contains changed paths. *)
+(** [apply_edits ~cwd ~fs edits] applies non-overlapping edits from the bottom of each
+    file upward. Relative paths resolve against [cwd]. UTF-16 positions are converted to
+    UTF-8 boundaries before writing. The returned list contains changed paths. *)
 
 val restart : t -> name:string option -> (string list * string list, error) result
 (** [restart t ~name] stops and starts one named server, or all servers when [name] is

@@ -284,7 +284,7 @@ let run_rename (ctx : Tool.ctx) input =
       with
       | Error error -> Error (map_lsp_error error)
       | Ok edits -> (
-          match Lsp.apply_edits ~fs:ctx.Tool.fs edits with
+          match Lsp.apply_edits ~cwd:ctx.Tool.cwd ~fs:ctx.Tool.fs edits with
           | Error error -> Error (map_lsp_error error)
           | Ok touched ->
               let diagnostics =

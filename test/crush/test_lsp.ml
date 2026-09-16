@@ -142,7 +142,7 @@ let unicode_edit () =
   let edit =
     { Lsp.range = { path; line = 1; col = 2; end_line = 1; end_col = 4 }; new_text = "X" }
   in
-  (match Lsp.apply_edits ~fs:env#fs [ (path, [ edit ]) ] with
+  (match Lsp.apply_edits ~cwd:(Sys.getcwd ()) ~fs:env#fs [ (path, [ edit ]) ] with
   | Error error -> Alcotest.failf "unicode edit failed: %a" Lsp.pp_error error
   | Ok [ changed ] ->
       Alcotest.(check string) "changed path" path changed;
@@ -154,7 +154,7 @@ let unicode_edit () =
   let split =
     { Lsp.range = { path; line = 1; col = 3; end_line = 1; end_col = 4 }; new_text = "Y" }
   in
-  (match Lsp.apply_edits ~fs:env#fs [ (path, [ split ]) ] with
+  (match Lsp.apply_edits ~cwd:(Sys.getcwd ()) ~fs:env#fs [ (path, [ split ]) ] with
   | Error (`Io (_, message)) ->
       Alcotest.(check bool) "surrogate boundary rejected" true (String.length message > 0)
   | Error error -> Alcotest.failf "wrong split error: %a" Lsp.pp_error error

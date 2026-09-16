@@ -208,9 +208,9 @@ let path_of_uri uri =
 
 let uri_of_path path = "file://" ^ uri_escape path
 
-let normalize_path path =
+let normalize_path ~cwd path =
   let absolute =
-    if starts_with ~prefix:"/" path then path else Filename.concat (Sys.getcwd ()) path
+    if starts_with ~prefix:"/" path then path else Filename.concat cwd path
   in
   let pieces = String.split_on_char '/' absolute in
   let result =
@@ -225,12 +225,12 @@ let normalize_path path =
   in
   "/" ^ String.concat "/" result
 
-let inside root path =
-  let root = normalize_path root and path = normalize_path path in
-  path = root || starts_with ~prefix:(root ^ "/") path
+let inside ~cwd root path =
+  let root = normalize_path ~cwd root and path = normalize_path ~cwd path in
+  path = root || root = "/" || starts_with ~prefix:(root ^ "/") path
 
-let parent_path path =
-  let path = normalize_path path in
+let parent_path ~cwd path =
+  let path = normalize_path ~cwd path in
   match String.rindex_opt path '/' with
   | None | Some 0 -> "/"
   | Some index -> String.sub path 0 index
@@ -269,7 +269,7 @@ let has_root_marker t server =
       let rec check directory =
         if List.exists (marker_matches t.fs directory) markers then true
         else if directory = "/" then false
-        else check (parent_path directory)
+        else check (parent_path ~cwd:t.cwd directory)
       in
       check t.cwd
 
@@ -277,8 +277,8 @@ let extension_supported server ext =
   List.exists (fun value -> lowercase value = ext) server.config.Config.filetypes
 
 let server_for_path t path =
-  let path = normalize_path path in
-  if not (inside t.cwd path) then None
+  let path = normalize_path ~cwd:t.cwd path in
+  if not (inside ~cwd:t.cwd t.cwd path) then None
   else
     let ext = extension path in
     List.find_opt (fun server -> extension_supported server ext) t.servers_table
@@ -480,7 +480,7 @@ let range_json value =
       else Ok (start_line, start_col, end_line, end_col)
   | _ -> Error "missing LSP range"
 
-let location_of_json ~server value =
+let location_of_json ~cwd ~server value =
   let uri =
     match (string_member "uri" value, string_member "targetUri" value) with
     | Some uri, _ -> Some uri
@@ -494,7 +494,7 @@ let location_of_json ~server value =
       | Ok (line, col, end_line, end_col) ->
           Ok
             {
-              path = normalize_path (path_of_uri uri);
+              path = normalize_path ~cwd (path_of_uri uri);
               line = line + 1;
               col = col + 1;
               end_line = end_line + 1;
@@ -502,19 +502,19 @@ let location_of_json ~server value =
             })
   | _ -> Error (`Rpc (server.name, "location has no URI or range"))
 
-let locations_of_result server value =
+let locations_of_result ~cwd server value =
   match value with
   | Jsont.Null _ -> Ok []
   | Jsont.Array (values, _) ->
       let rec collect acc = function
         | [] -> Ok (List.rev acc)
         | value :: rest ->
-            let* location = location_of_json ~server value in
+            let* location = location_of_json ~cwd ~server value in
             collect (location :: acc) rest
       in
       collect [] values
   | Jsont.Object _ ->
-      let* location = location_of_json ~server value in
+      let* location = location_of_json ~cwd ~server value in
       Ok [ location ]
   | _ -> Error (`Rpc (server.name, "invalid location response"))
 
@@ -547,7 +547,7 @@ let symbol_kind_name = function
   | 26 -> "TypeParameter"
   | value -> Fmt.str "Kind%d" value
 
-let rec symbol_of_json ~server ~path ~depth value =
+let rec symbol_of_json ~cwd ~server ~path ~depth value =
   if depth > 128 then Error (`Rpc (server.name, "symbol nesting exceeds limit"))
   else
     let* name =
@@ -565,7 +565,7 @@ let rec symbol_of_json ~server ~path ~depth value =
           | Ok (line, col, end_line, end_col) ->
               let range_path =
                 match string_member "uri" location_value with
-                | Some uri -> normalize_path (path_of_uri uri)
+                | Some uri -> normalize_path ~cwd (path_of_uri uri)
                 | None -> path
               in
               Ok
@@ -590,7 +590,9 @@ let rec symbol_of_json ~server ~path ~depth value =
           let rec collect acc = function
             | [] -> Ok (List.rev acc)
             | value :: rest ->
-                let* symbol = symbol_of_json ~server ~path ~depth:(depth + 1) value in
+                let* symbol =
+                  symbol_of_json ~cwd ~server ~path ~depth:(depth + 1) value
+                in
                 collect (symbol :: acc) rest
           in
           collect [] values
@@ -598,14 +600,14 @@ let rec symbol_of_json ~server ~path ~depth value =
     in
     Ok { name; kind; range; children }
 
-let symbols_of_result server ~path value =
+let symbols_of_result ~cwd server ~path value =
   match value with
   | Jsont.Null _ -> Ok []
   | Jsont.Array (values, _) ->
       let rec collect acc = function
         | [] -> Ok (List.rev acc)
         | value :: rest ->
-            let* symbol = symbol_of_json ~server ~path ~depth:0 value in
+            let* symbol = symbol_of_json ~cwd ~server ~path ~depth:0 value in
             collect (symbol :: acc) rest
       in
       collect [] values
@@ -633,7 +635,7 @@ let update_diagnostics t value =
       match string_member "uri" params with
       | None -> ()
       | Some uri ->
-          let path = normalize_path (path_of_uri uri) in
+          let path = normalize_path ~cwd:t.cwd (path_of_uri uri) in
           let values =
             match member "diagnostics" params with
             | Some (Jsont.Array (diagnostics, _)) ->
@@ -980,7 +982,7 @@ let send_document t server path text =
   | Error message -> fail_server t server message
 
 let touch t ~path =
-  let path = normalize_path path in
+  let path = normalize_path ~cwd:t.cwd path in
   match server_for_path t path with
   | None -> ()
   | Some server when not (has_root_marker t server) -> ()
@@ -1002,7 +1004,7 @@ let servers t =
       List.map (fun server -> (server.name, server.state)) t.servers_table)
 
 let handles t ~path =
-  match server_for_path t (normalize_path path) with
+  match server_for_path t (normalize_path ~cwd:t.cwd path) with
   | Some server -> Some server.name
   | None -> None
 
@@ -1013,7 +1015,7 @@ let diagnostic_snapshot t path =
       | Some state -> (state.values, state.serial))
 
 let diagnostics t ~path ~wait =
-  let path = normalize_path path in
+  let path = normalize_path ~cwd:t.cwd path in
   let initial_values, initial_serial = diagnostic_snapshot t path in
   let deadline = Eio.Time.now t.clock +. max 0. (min 1. wait) in
   let first_publication = ref None in
@@ -1046,7 +1048,7 @@ let position_params ~path ~line ~col =
     ]
 
 let prepare_request t path =
-  let path = normalize_path path in
+  let path = normalize_path ~cwd:t.cwd path in
   match server_for_path t path with
   | None -> Error (`No_server path)
   | Some server when not (has_root_marker t server) -> Error (`No_server path)
@@ -1063,7 +1065,7 @@ let definition t ~path ~line ~col =
       request t server ~timeout:10. ~method_:"textDocument/definition"
         ~params:(position_params ~path ~line ~col)
     in
-    locations_of_result server value
+    locations_of_result ~cwd:t.cwd server value
 
 let references t ~path ~line ~col =
   if not (valid_position line col) then Error (`Rpc ("client", "invalid position"))
@@ -1082,7 +1084,7 @@ let references t ~path ~line ~col =
     let* value =
       request t server ~timeout:10. ~method_:"textDocument/references" ~params
     in
-    locations_of_result server value
+    locations_of_result ~cwd:t.cwd server value
 
 let document_symbols t ~path =
   let* server, path = prepare_request t path in
@@ -1093,7 +1095,7 @@ let document_symbols t ~path =
   let* value =
     request t server ~timeout:10. ~method_:"textDocument/documentSymbol" ~params
   in
-  symbols_of_result server ~path value
+  symbols_of_result ~cwd:t.cwd server ~path value
 
 let rec find_exact name (symbols : symbol list) =
   match symbols with
@@ -1177,7 +1179,7 @@ let merge_group path edits groups =
   in
   loop groups
 
-let parse_workspace_edit server value =
+let parse_workspace_edit ~cwd server value =
   let groups = ref [] in
   let parse_changes changes =
     match object_value changes with
@@ -1186,7 +1188,7 @@ let parse_workspace_edit server value =
         let rec loop = function
           | [] -> Ok ()
           | ((name, _), edits) :: rest ->
-              let path = normalize_path (path_of_uri name) in
+              let path = normalize_path ~cwd (path_of_uri name) in
               let* values = parse_file_edits server path edits in
               groups := merge_group path values !groups;
               loop rest
@@ -1211,7 +1213,7 @@ let parse_workspace_edit server value =
                 | Some uri -> Ok uri
                 | None -> Error (`Rpc (server.name, "document change has no URI"))
               in
-              let path = normalize_path (path_of_uri uri) in
+              let path = normalize_path ~cwd (path_of_uri uri) in
               let* () =
                 match int_member "version" document with
                 | Some version -> (
@@ -1261,7 +1263,9 @@ let rename t ~path ~line ~col ~new_name =
         ]
     in
     let* value = request t server ~timeout:10. ~method_:"textDocument/rename" ~params in
-    match value with Jsont.Null _ -> Ok [] | _ -> parse_workspace_edit server value
+    match value with
+    | Jsont.Null _ -> Ok []
+    | _ -> parse_workspace_edit ~cwd:t.cwd server value
 
 let line_starts text =
   let starts = ref [ 0 ] in
@@ -1324,8 +1328,8 @@ let location_bytes text starts location =
     Error "edit range is reversed"
   else Ok (start_byte, end_byte)
 
-let apply_file_edits fs path edits =
-  let path = normalize_path (path_of_uri path) in
+let apply_file_edits ~cwd fs path edits =
+  let path = normalize_path ~cwd (path_of_uri path) in
   let original =
     try Ok (Eio.Path.load Eio.Path.(fs / path)) with
     | Eio.Io (_, _) as exception_ ->
@@ -1394,11 +1398,11 @@ let apply_file_edits fs path edits =
              (path, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
     | Eio.Cancel.Cancelled _ as exc -> raise exc
 
-let apply_edits ~fs grouped =
+let apply_edits ~cwd ~fs grouped =
   let rec apply acc = function
     | [] -> Ok (List.rev acc)
     | (path, edits) :: rest ->
-        let* touched = apply_file_edits fs path edits in
+        let* touched = apply_file_edits ~cwd fs path edits in
         apply (touched :: acc) rest
   in
   apply [] grouped
@@ -1478,7 +1482,9 @@ let stop_all t =
   List.iter (fun server -> stop_server t server ~final:true) t.servers_table
 
 let create ~sw ~proc_mgr ~clock ~fs ~cwd ~config =
-  let cwd = normalize_path cwd in
+  (* A relative create-time cwd anchors at the process directory; every
+     later normalization threads [t.cwd] explicitly. *)
+  let cwd = normalize_path ~cwd:(Sys.getcwd ()) cwd in
   let configured =
     let defaults_by_name = defaults in
     let base = if config.Config.options.Config.auto_lsp then defaults_by_name else [] in
