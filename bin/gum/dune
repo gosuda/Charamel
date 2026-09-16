@@ -1,0 +1,67 @@
+(library
+ (name gum_core)
+ (wrapped false)
+ (modules
+  gum_flag
+  gum_style
+  gum_io
+  gum_run
+  format
+  join
+  log
+  style_cmd
+  version_cmd
+  semver
+  template
+  choose
+  filter
+  confirm
+  input
+  write
+  pager
+  file
+  table
+  csv
+  spin)
+ (libraries
+  charm.cli
+  charm.ansi
+  charm.colorprofile
+  charm.lipgloss
+  charm.tea
+  charm.bubbles
+  charm.log
+  charm.highlight
+  charm.glamour
+  cmdliner
+  eio
+  eio.unix
+  fmt
+  logs
+  re
+  ptime
+  unix
+  cstruct)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
+
+(executable
+ (name main)
+ (public_name gum)
+ (package gum)
+ (modules main)
+ (libraries gum_core charm.cli cmdliner eio.unix)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))

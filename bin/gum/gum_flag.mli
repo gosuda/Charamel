@@ -1,0 +1,69 @@
+(** Shared command-line flag converters.
+
+    [Gum_flag] keeps command-specific environment names and typed parsing in one place.
+    Every parser is suitable for direct use in a Cmdliner term. *)
+
+val env : cmd:string -> string -> Cmdliner.Cmd.Env.info
+(** [env ~cmd name] describes the environment variable [GUM_<CMD>_<NAME>], with dots and
+    dashes converted to underscores. *)
+
+val negatable :
+  cmd:string ->
+  ?env:bool ->
+  ?env_name:string ->
+  ?short:char ->
+  default:bool ->
+  doc:string ->
+  string ->
+  bool Cmdliner.Term.t
+(** [negatable ~cmd ?env ?env_name ?short ~default ~doc name] accepts both [--name] and
+    [--no-name], plus [short] as a positive short alias. The last occurrence wins. When
+    [env] is true (the default), the environment variable [GUM_<CMD>_<NAME>] (or the
+    custom [env_name]) supplies a boolean only when no flag occurs. *)
+
+val flag :
+  cmd:string ->
+  ?env:bool ->
+  ?short:char ->
+  ?default:bool ->
+  doc:string ->
+  string ->
+  bool Cmdliner.Term.t
+(** [flag ~cmd ?env ?short ?default ~doc name] parses a positive boolean flag. [default]
+    defaults to [false]. The environment fallback is used when [env] is true (the
+    default). *)
+
+val seconds : cmd:string -> doc:string -> string -> float option Cmdliner.Term.t
+(** [seconds ~cmd ~doc name] parses a duration in seconds. Accepted values have [s], [m],
+    or [ms] suffixes, or are bare seconds; zero and omission produce [None]. The
+    environment variable is [GUM_<CMD>_<NAME>]. *)
+
+val delimiter :
+  cmd:string -> default:string -> doc:string -> string -> string Cmdliner.Term.t
+(** [delimiter ~cmd ~default ~doc name] parses a delimiter and decodes the escapes [\\n],
+    [\\t], and [\\0]. *)
+
+val parse_padding : string -> (Charm_lipgloss.Sides.t, [ `Msg of string ]) result
+(** [parse_padding text] parses one, two, three, or four integer side values. One value
+    applies to every side; two are vertical and horizontal; three are top, horizontal, and
+    bottom; four are top, right, bottom, and left. Spaces and commas separate values.
+    Malformed input is a typed [Error], never a silent zero padding. *)
+
+val padding : cmd:string -> string Cmdliner.Term.t
+(** [padding ~cmd] parses the raw [--padding] value, defaulting to ["0 0"], with
+    environment fallback [GUM_<CMD>_PADDING]. *)
+
+val align : string -> Charm_lipgloss.Position.t option
+(** [align text] maps [left] and [top] to {!Charm_lipgloss.Position.left}, [center] and
+    [middle] to [center], and [right] and [bottom] to [right]. *)
+
+val border : string -> Charm_lipgloss.Border.t option
+(** [border text] parses a named Lipgloss border. Unknown names return [None]. *)
+
+val color : string -> (Charm_ansi.Color.t option, [ `Msg of string ]) result
+(** [color text] parses an empty color as [Ok None], a decimal palette index, or a
+    [#rgb]/[#rrggbb] value. Invalid input returns a usage message. *)
+
+val enum : docv:string -> (string * 'a) list -> 'a Cmdliner.Arg.conv
+(** [enum ~docv choices] is a Cmdliner converter accepting exactly one key in [choices],
+    with a diagnostic that names the accepted values. *)

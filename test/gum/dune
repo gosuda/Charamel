@@ -1,0 +1,45 @@
+(test
+ (name test_gum)
+ (package gum)
+ (modules
+  test_gum
+  test_format
+  test_join
+  test_log
+  test_style
+  test_version
+  test_choose
+  test_filter
+  test_confirm
+  test_input
+  test_write
+  test_pager
+  test_csv
+  test_table
+  test_file
+  test_spin)
+ (libraries
+  gum_core
+  alcotest
+  charm.ansi
+  charm.cli
+  charm.bubbles
+  charm.lipgloss
+  charm.tea
+  cmdliner
+  eio
+  eio.unix
+  eio_main
+  fmt
+  logs
+  re
+  ptime
+  unix)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
