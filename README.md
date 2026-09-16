@@ -54,6 +54,7 @@ files are JSON via `jsont`. Sessions are JSONL. The OCaml floor is
 ## Licensing
 
 - This work is Apache-2.0. Read `LICENSE` for the license body and `NOTICE`
-for copyright and third-party attributions. 
-- The `crush` project under the Functional Source License 1.1 with an MIT
-future grant, which stand as prior art rather than inherited terms.
+  for copyright and third-party attributions.
+- Upstream Crush ships under the Functional Source License 1.1 with an MIT
+  future grant. Those terms stand as prior art; this port does not inherit
+  them. Every package here, crush included, is Apache-2.0 per `dune-project`.
