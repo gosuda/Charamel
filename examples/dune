@@ -1,0 +1,85 @@
+; One independent native target per example. The Tea examples depend on
+; nothing but charm.tea and the Eio stack, so building them never pulls in
+; Huh or the SSH tier.
+
+(executable
+ (name tea_counter)
+ (modules tea_counter)
+ (libraries charm.tea eio eio.unix eio_main fmt)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
+
+(executable
+ (name tea_inline)
+ (modules tea_inline)
+ (libraries charm.tea eio eio.unix eio_main fmt mtime)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
+
+(executable
+ (name huh_burger)
+ (modules huh_burger)
+ (libraries charm.huh charm.tea eio eio.unix eio_main fmt)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
+
+(executable
+ (name wish_counter)
+ (modules wish_counter)
+ (libraries
+  charm-ssh.wish
+  charm-ssh.keygen
+  charm.tea
+  eio
+  eio.unix
+  eio_main
+  fmt
+  mirage-crypto-rng.unix)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
+
+(executable
+ (name confetti)
+ (modules confetti)
+ (libraries
+  charm-ssh.wish
+  charm-ssh.keygen
+  charm.tea
+  eio
+  eio.unix
+  eio_main
+  fmt
+  mtime
+  mirage-crypto-rng.unix)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
