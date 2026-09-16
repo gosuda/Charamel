@@ -178,9 +178,10 @@ let root_slash_matches () =
         "fixture handle under root" (Some "fixture") (Lsp.handles lsp ~path))
 
 let handles_respects_cwd () =
-  with_lsp fixture_script (fun _env lsp path ->
+  with_lsp fixture_script (fun _env lsp _path ->
       Alcotest.(check (option string))
-        "inside cwd" (Some "fixture") (Lsp.handles lsp ~path);
+        "inside cwd" (Some "fixture")
+        (Lsp.handles lsp ~path:"/tmp/crush-lsp-inside.ml");
       Alcotest.(check (option string))
         "outside cwd" None
         (Lsp.handles lsp ~path:"/home/foo.ml"))
