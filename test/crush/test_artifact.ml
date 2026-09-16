@@ -1,0 +1,185 @@
+module Artifact = Crush_core.Artifact
+
+let temporary_directory prefix =
+  let path = Filename.temp_file prefix "" in
+  Unix.unlink path;
+  Unix.mkdir path 0o700;
+  path
+
+let with_artifact f =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun _sw ->
+  let base = temporary_directory "charm-artifact-" in
+  let directory = Filename.concat base "artifacts" in
+  let store = Artifact.create ~fs:env#fs ~dir:directory in
+  Fun.protect
+    (fun () -> f env base store)
+    ~finally:(fun () -> Eio.Path.rmtree ~missing_ok:true Eio.Path.(env#fs / base))
+
+let random_source () =
+  let counter = ref 0 in
+  fun length ->
+    let seed = !counter in
+    incr counter;
+    String.init length (fun index -> Char.chr ((seed + index) land 0xFF))
+
+let contains_substring text needle =
+  let rec loop offset =
+    if offset + String.length needle > String.length text then false
+    else if String.sub text offset (String.length needle) = needle then true
+    else loop (offset + 1)
+  in
+  loop 0
+
+let line number = Fmt.str "line-%03d %s" number (String.make 700 'x')
+
+let threshold_is_inline () =
+  with_artifact (fun _env _base store ->
+      let contents = String.make Artifact.max_inline_bytes 'x' in
+      let preview, id = Artifact.truncate store ~random:(random_source ()) contents in
+      Alcotest.(check string) "exact threshold is unchanged" contents preview;
+      Alcotest.(check bool) "exact threshold has no artifact" true (Option.is_none id))
+
+let spills_complete_content () =
+  with_artifact (fun env base store ->
+      let contents = String.concat "\n" (List.init 100 line) ^ "\n" in
+      let preview, id =
+        Artifact.truncate store
+          ~random:(fun length -> String.init length Char.chr)
+          contents
+      in
+      let id =
+        match id with Some id -> id | None -> Alcotest.fail "large output did not spill"
+      in
+      Alcotest.(check bool) "head retained" true (contains_substring preview "line-000");
+      Alcotest.(check bool) "tail retained" true (contains_substring preview "line-099");
+      Alcotest.(check bool) "middle omitted" false (contains_substring preview "line-050");
+      Alcotest.(check bool)
+        "artifact reference" true
+        (contains_substring preview ("artifact://" ^ id));
+      begin match Artifact.load store ~id with
+      | Error (`Not_found path) -> Alcotest.failf "artifact missing: %s" path
+      | Error (`Io (path, message)) -> Alcotest.failf "artifact read %s: %s" path message
+      | Ok saved -> Alcotest.(check string) "full content preserved" contents saved
+      end;
+      let path = Filename.concat (Filename.concat base "artifacts") (id ^ ".txt") in
+      let stat = Eio.Path.stat ~follow:false Eio.Path.(env#fs / path) in
+      Alcotest.(check int) "private artifact mode" 0o600 (stat.perm land 0o777))
+
+let long_line_spill_is_bounded () =
+  with_artifact (fun _env _base store ->
+      let contents = String.make (Artifact.max_inline_bytes + 4096) 'x' in
+      let preview, id =
+        Artifact.truncate store ~random:(fun length -> String.make length '\000') contents
+      in
+      let id =
+        match id with Some id -> id | None -> Alcotest.fail "long line did not spill"
+      in
+      Alcotest.(check bool)
+        "long-line preview is bounded" true
+        (String.length preview <= Artifact.max_inline_bytes);
+      Alcotest.(check bool)
+        "long-line preview has reference" true
+        (contains_substring preview ("artifact://" ^ id));
+      match Artifact.load store ~id with
+      | Error (`Not_found path) -> Alcotest.failf "long-line artifact missing: %s" path
+      | Error (`Io (path, message)) ->
+          Alcotest.failf "long-line artifact read %s: %s" path message
+      | Ok saved -> Alcotest.(check string) "long-line bytes preserved" contents saved)
+
+let repeated_emoji count =
+  let buffer = Buffer.create (count * 4) in
+  for _index = 1 to count do
+    Buffer.add_string buffer "\xF0\x9F\x98\x80"
+  done;
+  Buffer.contents buffer
+
+let utf8_preview_keeps_boundaries () =
+  with_artifact (fun _env _base store ->
+      let contents = repeated_emoji ((Artifact.max_inline_bytes / 4) + 1024) in
+      let preview, id =
+        Artifact.truncate store ~random:(fun length -> String.make length '\003') contents
+      in
+      let id =
+        match id with Some id -> id | None -> Alcotest.fail "UTF-8 output did not spill"
+      in
+      Alcotest.(check bool)
+        "UTF-8 preview is bounded" true
+        (String.length preview <= Artifact.max_inline_bytes);
+      Alcotest.(check bool)
+        "UTF-8 preview remains valid" true
+        (String.is_valid_utf_8 preview);
+      Alcotest.(check bool)
+        "UTF-8 preview has reference" true
+        (contains_substring preview ("artifact://" ^ id));
+      match Artifact.load store ~id with
+      | Error (`Not_found path) -> Alcotest.failf "UTF-8 artifact missing: %s" path
+      | Error (`Io (path, message)) ->
+          Alcotest.failf "UTF-8 artifact read %s: %s" path message
+      | Ok saved -> Alcotest.(check string) "UTF-8 bytes preserved" contents saved)
+
+let missing_and_invalid_ids () =
+  with_artifact (fun _env _base store ->
+      begin match Artifact.load store ~id:"../escape" with
+      | Error (`Not_found _) -> ()
+      | Ok _ -> Alcotest.fail "invalid artifact id escaped its directory"
+      | Error (`Io (path, message)) ->
+          Alcotest.failf "invalid id I/O error %s: %s" path message
+      end;
+      begin match Artifact.load store ~id:"art-ffffffff" with
+      | Error (`Not_found _) -> ()
+      | Ok _ -> Alcotest.fail "missing artifact unexpectedly loaded"
+      | Error (`Io (path, message)) ->
+          Alcotest.failf "missing artifact I/O error %s: %s" path message
+      end)
+
+let concurrent_saves_are_unique () =
+  with_artifact (fun _env _base store ->
+      let ids =
+        Eio.Fiber.List.map
+          (fun index ->
+            match
+              Artifact.save store
+                ~random:(fun _ ->
+                  String.init 4 (fun i -> Char.chr ((index + i) land 0xFF)))
+                (Fmt.str "value-%d" index)
+            with
+            | Ok id -> id
+            | Error (`Io (path, message)) -> Alcotest.failf "save %s: %s" path message)
+          (List.init 32 Fun.id)
+      in
+      let unique = List.sort_uniq String.compare ids in
+      Alcotest.(check int) "one artifact per save" 32 (List.length unique))
+
+let permission_boundary () =
+  with_artifact (fun _env base store ->
+      if Unix.getuid () = 0 then ()
+      else
+        let directory = Filename.concat base "artifacts" in
+        begin match
+          Artifact.save store ~random:(fun length -> String.make length '\001') "initial"
+        with
+        | Error (`Io (path, message)) -> Alcotest.failf "initial save %s: %s" path message
+        | Ok _ -> ()
+        end;
+        Unix.chmod directory 0o500;
+        begin match
+          Artifact.save store ~random:(fun length -> String.make length '\002') "blocked"
+        with
+        | Error (`Io _) -> ()
+        | Ok _ -> Alcotest.fail "artifact write ignored directory permissions"
+        end;
+        Unix.chmod directory 0o700)
+
+let cases =
+  [
+    Alcotest.test_case "inline threshold" `Quick threshold_is_inline;
+    Alcotest.test_case "spill keeps complete output" `Quick spills_complete_content;
+    Alcotest.test_case "long line preview is bounded" `Quick long_line_spill_is_bounded;
+    Alcotest.test_case "UTF-8 preview keeps boundaries" `Quick
+      utf8_preview_keeps_boundaries;
+    Alcotest.test_case "invalid and missing ids" `Quick missing_and_invalid_ids;
+    Alcotest.test_case "concurrent saves use unique ids" `Quick
+      concurrent_saves_are_unique;
+    Alcotest.test_case "directory permissions are enforced" `Quick permission_boundary;
+  ]
