@@ -33,7 +33,7 @@ agentic coding harness with tools, permissions, MCP, LSP, and a TUI.
 ## Build and test
 
 ```sh
-eval $(opam env --switch=rd)
+eval $(opam env --switch=rd --set-switch)
 opam install awa
 opam exec -- dune build --profile release
 opam exec -- dune runtest --profile release
@@ -42,6 +42,8 @@ opam exec -- dune build @fmt
 
 A pre-commit hook runs the same three gates. Enable it with
 `git config core.hooksPath .githooks`; bypass once with `--no-verify`.
+The hook calls `opam exec`, so commit from a shell where the switch
+above is active; `--set-switch` keeps it active.
 
 Pure OCaml in this repository: no `foreign_stubs`, no C files.
 Dependencies keep whatever they ship (`eio` and `mirage-crypto` carry
