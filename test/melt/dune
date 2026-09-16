@@ -1,0 +1,22 @@
+(test
+ (name test_melt)
+ (package melt)
+ (modules test_melt test_mnemonic test_melt_cli)
+ (libraries
+  melt_core
+  charm-ssh.keygen
+  alcotest
+  fmt
+  eio
+  eio_main
+  mirage-crypto-rng.unix
+  unix)
+ (deps %{exe:../../bin/melt/main.exe})
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
