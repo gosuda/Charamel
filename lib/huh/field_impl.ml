@@ -521,15 +521,15 @@ let text_view ctx ~focused state =
           [
             heading;
             Charm_bubbles.Textarea.view state.textarea;
-            Charm_lipgloss.Style.render style.next (Fmt.str "editing: %s" path);
+            Charm_lipgloss.Style.render style.Styles.next (Fmt.str "editing: %s" path);
           ]
   in
-  Charm_lipgloss.Style.render style.base body
+  Charm_lipgloss.Style.render style.Styles.base body
 
 let text_key_binds ctx _state =
-  let km = ctx.keymap.text in
-  navigation_binds ctx ~prev:km.prev ~next:km.next ~submit:km.submit
-  @ [ km.new_line; km.editor ]
+  let km = ctx.keymap.Keymap.text in
+  navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
+  @ [ km.Keymap.new_line; km.Keymap.editor ]
 
 let text_accessible ~name ctx ~out reader state =
   let title = Dyn.eval state.title ctx.results in
@@ -739,10 +739,10 @@ let select_validate_current state =
 
 let select_on_key ctx key state =
   let state = { state with err = None } in
-  let km = ctx.keymap.select in
+  let km = ctx.keymap.Keymap.select in
   if state.filtering then
     if
-      raw_matches key km.set_filter
+      raw_matches key km.Keymap.set_filter
       || Charm_tea.Key.matches key (Charm_tea.Key.v Charm_tea.Key.Escape)
     then
       let state =
@@ -753,12 +753,13 @@ let select_on_key ctx key state =
         else state
       in
       ({ state with filtering = false }, Charm_tea.Cmd.none, Stay)
-    else if raw_matches key km.up then
+    else if raw_matches key km.Keymap.up then
       (select_move_by (-1) state, Charm_tea.Cmd.none, Stay)
-    else if raw_matches key km.down then (select_move_by 1 state, Charm_tea.Cmd.none, Stay)
-    else if raw_matches key km.goto_top then
+    else if raw_matches key km.Keymap.down then
+      (select_move_by 1 state, Charm_tea.Cmd.none, Stay)
+    else if raw_matches key km.Keymap.goto_top then
       ({ state with cursor = 0 }, Charm_tea.Cmd.none, Stay)
-    else if raw_matches key km.goto_bottom then
+    else if raw_matches key km.Keymap.goto_bottom then
       ( { state with cursor = max 0 (Stdlib.List.length state.filtered - 1) },
         Charm_tea.Cmd.none,
         Stay )
@@ -768,11 +769,11 @@ let select_on_key ctx key state =
       | Some child ->
           let state, command = select_child_update ctx child state in
           (state, command, Stay)
-  else if state.filterable && raw_matches key km.filter then
+  else if state.filterable && raw_matches key km.Keymap.filter then
     let state = select_set_filtering state true in
     (state, Charm_tea.Cmd.none, Stay)
   else if
-    raw_matches key km.clear_filter
+    raw_matches key km.Keymap.clear_filter
     && Charm_bubbles.Textinput.value state.filter_input <> ""
   then
     let filter_input = Charm_bubbles.Textinput.set_value "" state.filter_input in
@@ -781,31 +782,33 @@ let select_on_key ctx key state =
       select_recompute ~apply_default:false { state with filter_input } all None
     in
     (state, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.prev && not ctx.position.is_first then
+  else if raw_matches key km.Keymap.prev && not ctx.position.is_first then
     (state, Charm_tea.Cmd.none, Prev)
-  else if raw_matches key km.next && not ctx.position.is_last then
+  else if raw_matches key km.Keymap.next && not ctx.position.is_last then
     match select_validate_current state with
     | Ok () -> (state, Charm_tea.Cmd.none, Next)
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.submit && ctx.position.is_last then
+  else if raw_matches key km.Keymap.submit && ctx.position.is_last then
     match select_validate_current state with
     | Ok () -> (state, Charm_tea.Cmd.none, Submit)
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-  else if state.inline && (raw_matches key km.up || raw_matches key km.down) then
-    (state, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.up then (select_move_by (-1) state, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.down then (select_move_by 1 state, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.left || raw_matches key km.right then
-    ( select_move_by (if raw_matches key km.left then -1 else 1) state,
+  else if state.inline && (raw_matches key km.Keymap.up || raw_matches key km.Keymap.down)
+  then (state, Charm_tea.Cmd.none, Stay)
+  else if raw_matches key km.Keymap.up then
+    (select_move_by (-1) state, Charm_tea.Cmd.none, Stay)
+  else if raw_matches key km.Keymap.down then
+    (select_move_by 1 state, Charm_tea.Cmd.none, Stay)
+  else if raw_matches key km.Keymap.left || raw_matches key km.Keymap.right then
+    ( select_move_by (if raw_matches key km.Keymap.left then -1 else 1) state,
       Charm_tea.Cmd.none,
       Stay )
-  else if raw_matches key km.half_page_up then
+  else if raw_matches key km.Keymap.half_page_up then
     (select_move_by (-max 1 (state.height / 2)) state, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.half_page_down then
+  else if raw_matches key km.Keymap.half_page_down then
     (select_move_by (max 1 (state.height / 2)) state, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.goto_top then
+  else if raw_matches key km.Keymap.goto_top then
     ({ state with cursor = 0 }, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.goto_bottom then
+  else if raw_matches key km.Keymap.goto_bottom then
     ( { state with cursor = max 0 (Stdlib.List.length state.filtered - 1) },
       Charm_tea.Cmd.none,
       Stay )
@@ -851,9 +854,13 @@ let select_view ctx ~focused state =
     visible
     |> Stdlib.List.map (fun (index, option_) ->
         let selected = index = state.cursor in
-        let selector = if selected then style.indicators.select_selector else "  " in
-        let row_style = if selected then style.selected_option else style.option_ in
-        Charm_lipgloss.Style.render style.select_selector selector
+        let selector =
+          if selected then style.Styles.indicators.Styles.select_selector else "  "
+        in
+        let row_style =
+          if selected then style.Styles.selected_option else style.Styles.option_
+        in
+        Charm_lipgloss.Style.render style.Styles.select_selector selector
         ^ Charm_lipgloss.Style.render row_style option_.key)
   in
   let rows =
@@ -868,33 +875,44 @@ let select_view ctx ~focused state =
   let content = String.concat "\n" rows in
   let content =
     if state.inline then
-      Charm_lipgloss.Style.render style.prev_indicator style.indicators.prev_indicator
+      Charm_lipgloss.Style.render style.Styles.prev_indicator
+        style.Styles.indicators.Styles.prev_indicator
       ^ content
-      ^ Charm_lipgloss.Style.render style.next_indicator style.indicators.next_indicator
+      ^ Charm_lipgloss.Style.render style.Styles.next_indicator
+          style.Styles.indicators.Styles.next_indicator
     else content
   in
-  Charm_lipgloss.Style.render style.base (concat_nonempty [ heading; content ])
+  Charm_lipgloss.Style.render style.Styles.base (concat_nonempty [ heading; content ])
 
 let select_key_binds ctx state =
-  let km = ctx.keymap.select in
-  let navigation = navigation_binds ctx ~prev:km.prev ~next:km.next ~submit:km.submit in
+  let km = ctx.keymap.Keymap.select in
+  let navigation =
+    navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next
+      ~submit:km.Keymap.submit
+  in
   if state.filtering then
     navigation
-    @ [ binding_enabled km.set_filter true; km.up; km.down; km.goto_top; km.goto_bottom ]
+    @ [
+        binding_enabled km.Keymap.set_filter true;
+        km.Keymap.up;
+        km.Keymap.down;
+        km.Keymap.goto_top;
+        km.Keymap.goto_bottom;
+      ]
   else
     navigation
     @ [
-        km.up;
-        km.down;
-        km.left;
-        km.right;
-        km.filter;
-        binding_enabled km.clear_filter
+        km.Keymap.up;
+        km.Keymap.down;
+        km.Keymap.left;
+        km.Keymap.right;
+        km.Keymap.filter;
+        binding_enabled km.Keymap.clear_filter
           (Charm_bubbles.Textinput.value state.filter_input <> "");
-        km.half_page_up;
-        km.half_page_down;
-        km.goto_top;
-        km.goto_bottom;
+        km.Keymap.half_page_up;
+        km.Keymap.half_page_down;
+        km.Keymap.goto_top;
+        km.Keymap.goto_bottom;
       ]
 
 let select_accessible ~name ctx ~out reader state =
@@ -1135,9 +1153,9 @@ let multi_filter_update ctx child state =
 
 let multi_on_key ctx key state =
   let state = { state with err = None } in
-  let km = ctx.keymap.multi_select in
+  let km = ctx.keymap.Keymap.multi_select in
   if state.filtering then
-    if raw_matches key km.set_filter then
+    if raw_matches key km.Keymap.set_filter then
       let state =
         if state.filtered = [] then
           let filter_input = Charm_bubbles.Textinput.set_value "" state.filter_input in
@@ -1146,30 +1164,32 @@ let multi_on_key ctx key state =
         else state
       in
       ({ state with filtering = false }, Charm_tea.Cmd.none, Stay)
-    else if raw_matches key km.up then (multi_move_by (-1) state, Charm_tea.Cmd.none, Stay)
-    else if raw_matches key km.down then (multi_move_by 1 state, Charm_tea.Cmd.none, Stay)
+    else if raw_matches key km.Keymap.up then
+      (multi_move_by (-1) state, Charm_tea.Cmd.none, Stay)
+    else if raw_matches key km.Keymap.down then
+      (multi_move_by 1 state, Charm_tea.Cmd.none, Stay)
     else
       match Charm_bubbles.Textinput.key state.filter_input key with
       | None -> (state, Charm_tea.Cmd.none, Stay)
       | Some child ->
           let state, command = multi_filter_update ctx child state in
           (state, command, Stay)
-  else if state.filterable && raw_matches key km.filter then
+  else if state.filterable && raw_matches key km.Keymap.filter then
     let filter_input = Charm_bubbles.Textinput.focus state.filter_input |> fst in
     ({ state with filtering = true; filter_input }, Charm_tea.Cmd.none, Stay)
   else if
-    raw_matches key km.clear_filter
+    raw_matches key km.Keymap.clear_filter
     && Charm_bubbles.Textinput.value state.filter_input <> ""
   then
     let filter_input = Charm_bubbles.Textinput.set_value "" state.filter_input in
     let all = Dyn.eval state.options ctx.results in
     (multi_recompute { state with filter_input } all None, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.toggle then
+  else if raw_matches key km.Keymap.toggle then
     let state = multi_toggle_current state in
     match multi_validate state with
     | Ok () -> (state, Charm_tea.Cmd.none, Stay)
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.select_all && state.limit = 0 then
+  else if raw_matches key km.Keymap.select_all && state.limit = 0 then
     let all_selected = multi_all_filtered_selected state in
     let selected =
       Stdlib.List.map
@@ -1186,7 +1206,7 @@ let multi_on_key ctx key state =
     match multi_validate state with
     | Ok () -> (state, Charm_tea.Cmd.none, Stay)
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.select_none && state.limit = 0 then
+  else if raw_matches key km.Keymap.select_none && state.limit = 0 then
     let selected =
       Stdlib.List.map
         (fun (flag, option_) ->
@@ -1202,25 +1222,27 @@ let multi_on_key ctx key state =
     match multi_validate state with
     | Ok () -> (state, Charm_tea.Cmd.none, Stay)
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.prev && not ctx.position.is_first then
+  else if raw_matches key km.Keymap.prev && not ctx.position.is_first then
     (state, Charm_tea.Cmd.none, Prev)
-  else if raw_matches key km.next && not ctx.position.is_last then
+  else if raw_matches key km.Keymap.next && not ctx.position.is_last then
     match multi_validate state with
     | Ok () -> (state, Charm_tea.Cmd.none, Next)
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.submit && ctx.position.is_last then
+  else if raw_matches key km.Keymap.submit && ctx.position.is_last then
     match multi_validate state with
     | Ok () -> (state, Charm_tea.Cmd.none, Submit)
     | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.up then (multi_move_by (-1) state, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.down then (multi_move_by 1 state, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.half_page_up then
+  else if raw_matches key km.Keymap.up then
+    (multi_move_by (-1) state, Charm_tea.Cmd.none, Stay)
+  else if raw_matches key km.Keymap.down then
+    (multi_move_by 1 state, Charm_tea.Cmd.none, Stay)
+  else if raw_matches key km.Keymap.half_page_up then
     (multi_move_by (-max 1 (state.height / 2)) state, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.half_page_down then
+  else if raw_matches key km.Keymap.half_page_down then
     (multi_move_by (max 1 (state.height / 2)) state, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.goto_top then
+  else if raw_matches key km.Keymap.goto_top then
     ({ state with cursor = 0 }, Charm_tea.Cmd.none, Stay)
-  else if raw_matches key km.goto_bottom then
+  else if raw_matches key km.Keymap.goto_bottom then
     ( { state with cursor = max 0 (List.length state.filtered - 1) },
       Charm_tea.Cmd.none,
       Stay )
@@ -1257,18 +1279,22 @@ let multi_view ctx ~focused state =
     |> Stdlib.List.map (fun (index, option_) ->
         let current = index = state.cursor in
         let selected = multi_selected_at index state in
-        let selector = if current then style.indicators.multi_select_selector else "  " in
+        let selector =
+          if current then style.Styles.indicators.Styles.multi_select_selector else "  "
+        in
         let prefix =
-          if selected then style.indicators.selected_prefix
-          else style.indicators.unselected_prefix
+          if selected then style.Styles.indicators.Styles.selected_prefix
+          else style.Styles.indicators.Styles.unselected_prefix
         in
         let prefix_style =
-          if selected then style.selected_prefix else style.unselected_prefix
+          if selected then style.Styles.selected_prefix
+          else style.Styles.unselected_prefix
         in
         let option_style =
-          if selected then style.selected_option else style.unselected_option
+          if selected then style.Styles.selected_option
+          else style.Styles.unselected_option
         in
-        Charm_lipgloss.Style.render style.multi_select_selector selector
+        Charm_lipgloss.Style.render style.Styles.multi_select_selector selector
         ^ Charm_lipgloss.Style.render prefix_style prefix
         ^ Charm_lipgloss.Style.render option_style option_.key)
   in
@@ -1281,28 +1307,28 @@ let multi_view ctx ~focused state =
     else rows @ List.init (max 0 (state.height - List.length rows)) (fun _ -> "")
   in
   let rows = if rows = [] && not state.filtering then [ "" ] else rows in
-  Charm_lipgloss.Style.render style.base
+  Charm_lipgloss.Style.render style.Styles.base
     (concat_nonempty [ heading; String.concat "\n" rows ])
 
 let multi_key_binds ctx state =
-  let km = ctx.keymap.multi_select in
+  let km = ctx.keymap.Keymap.multi_select in
   let selected_any = List.exists Fun.id state.selected in
   let all_selected = multi_all_filtered_selected state in
-  navigation_binds ctx ~prev:km.prev ~next:km.next ~submit:km.submit
+  navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
   @ [
-      km.toggle;
-      km.up;
-      km.down;
-      km.filter;
-      binding_enabled km.set_filter state.filtering;
-      binding_enabled km.clear_filter
+      km.Keymap.toggle;
+      km.Keymap.up;
+      km.Keymap.down;
+      km.Keymap.filter;
+      binding_enabled km.Keymap.set_filter state.filtering;
+      binding_enabled km.Keymap.clear_filter
         (Charm_bubbles.Textinput.value state.filter_input <> "");
-      km.half_page_up;
-      km.half_page_down;
-      km.goto_top;
-      km.goto_bottom;
-      binding_enabled km.select_all (state.limit = 0 && not all_selected);
-      binding_enabled km.select_none (state.limit = 0 && selected_any);
+      km.Keymap.half_page_up;
+      km.Keymap.half_page_down;
+      km.Keymap.goto_top;
+      km.Keymap.goto_bottom;
+      binding_enabled km.Keymap.select_all (state.limit = 0 && not all_selected);
+      binding_enabled km.Keymap.select_none (state.limit = 0 && selected_any);
     ]
 
 let multi_accessible ~name ctx ~out reader state =
@@ -1447,18 +1473,18 @@ let confirm_validate state value = state.validate value
 
 let confirm_on_key ctx key state =
   let state = { state with err = None } in
-  let km = ctx.keymap.confirm in
+  let km = ctx.keymap.Keymap.confirm in
   let finish value =
     let outcome = if ctx.position.is_last then Submit else Next in
     match confirm_validate state value with
     | Ok () -> ({ state with value }, Charm_tea.Cmd.none, outcome)
     | Error error -> ({ state with value; err = Some error }, Charm_tea.Cmd.none, Stay)
   in
-  if raw_matches key km.prev && not ctx.position.is_first then
+  if raw_matches key km.Keymap.prev && not ctx.position.is_first then
     (state, Charm_tea.Cmd.none, Prev)
-  else if raw_matches key km.accept then finish true
-  else if raw_matches key km.reject && state.negative <> None then finish false
-  else if raw_matches key km.toggle && state.negative <> None then
+  else if raw_matches key km.Keymap.accept then finish true
+  else if raw_matches key km.Keymap.reject && state.negative <> None then finish false
+  else if raw_matches key km.Keymap.toggle && state.negative <> None then
     ({ state with value = not state.value }, Charm_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.next && not ctx.position.is_last then
     match confirm_validate state state.value with
