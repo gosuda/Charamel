@@ -1,0 +1,40 @@
+(test
+ (name test_fantasy)
+ (package charm)
+ (modules
+  test_fantasy
+  fixture_server
+  test_anthropic_codec
+  test_google_codec
+  test_openai_compat_codec
+  test_responses_codec
+  test_catalog
+  test_oauth
+  test_retry
+  test_provider
+  stream_test_support)
+ (libraries
+  alcotest
+  charm.fantasy
+  eio
+  eio.unix
+  eio_main
+  fmt
+  jsont
+  jsont.bytesrw
+  base64
+  digestif
+  uri
+  cohttp
+  cohttp-eio
+  http)
+ (deps
+  (glob_files data/*))
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))

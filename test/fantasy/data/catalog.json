@@ -1,0 +1,139 @@
+[
+  {
+    "name": "Anthropic",
+    "id": "anthropic",
+    "api_key": "$ANTHROPIC_API_KEY",
+    "api_endpoint": "$ANTHROPIC_API_ENDPOINT",
+    "type": "anthropic",
+    "default_large_model_id": "claude-sonnet-4-6",
+    "default_small_model_id": "claude-haiku-4-5-20251001",
+    "models": [
+      {
+        "id": "claude-fable-5-1",
+        "name": "Claude Fable 5.1",
+        "cost_per_1m_in": 10,
+        "cost_per_1m_out": 50,
+        "cost_per_1m_in_cached": 12.5,
+        "cost_per_1m_out_cached": 0.25,
+        "context_window": 1000000,
+        "default_max_tokens": 128000,
+        "can_reason": true,
+        "reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+        "default_reasoning_effort": "high",
+        "supports_attachments": true
+      },
+      {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "cost_per_1m_in": 3,
+        "cost_per_1m_out": 15,
+        "cost_per_1m_in_cached": 3.75,
+        "cost_per_1m_out_cached": 0.3,
+        "context_window": 200000,
+        "default_max_tokens": 128000,
+        "can_reason": true,
+        "supports_attachments": true
+      },
+      {
+        "id": "claude-haiku-4-5-20251001",
+        "name": "Claude Haiku 4.5",
+        "cost_per_1m_in": 1,
+        "cost_per_1m_out": 5,
+        "cost_per_1m_in_cached": 0.125,
+        "cost_per_1m_out_cached": 0.1,
+        "context_window": 200000,
+        "default_max_tokens": 64000,
+        "can_reason": true,
+        "supports_attachments": true
+      }
+    ]
+  },
+  {
+    "name": "Groq",
+    "id": "groq",
+    "api_key": "$GROQ_API_KEY",
+    "api_endpoint": "https://api.groq.com/openai/v1",
+    "type": "openai-compat",
+    "default_large_model_id": "moonshotai/kimi-k2-instruct-0905",
+    "default_small_model_id": "qwen/qwen3-32b",
+    "models": [
+      {
+        "id": "moonshotai/kimi-k2-instruct-0905",
+        "name": "Kimi K2 0905",
+        "cost_per_1m_in": 1,
+        "cost_per_1m_out": 3,
+        "cost_per_1m_in_cached": 0.5,
+        "cost_per_1m_out_cached": 0.5,
+        "context_window": 131072,
+        "can_reason": true,
+        "reasoning_levels": ["low", "medium", "high"],
+        "default_reasoning_effort": "medium",
+        "default_max_tokens": 10000
+      },
+      {
+        "id": "qwen/qwen3-32b",
+        "name": "Qwen3 32B",
+        "cost_per_1m_in": 0.29,
+        "cost_per_1m_out": 0.59,
+        "context_window": 131072,
+        "default_max_tokens": 10000
+      }
+    ]
+  },
+  {
+    "name": "GitHub Copilot",
+    "id": "copilot",
+    "api_endpoint": "https://api.githubcopilot.com",
+    "type": "openai-compat",
+    "default_large_model_id": "gpt-5.1-codex-mini",
+    "default_small_model_id": "gpt-4.1-mini",
+    "models": [
+      {
+        "id": "gpt-5.1-codex-mini",
+        "name": "GPT-5.1-Codex-Mini",
+        "cost_per_1m_in": 0.25,
+        "cost_per_1m_out": 2,
+        "context_window": 400000,
+        "default_max_tokens": 128000,
+        "can_reason": true,
+        "supports_attachments": true
+      }
+    ]
+  },
+  {
+    "name": "OpenRouter",
+    "id": "openrouter",
+    "api_key": "$OPENROUTER_API_KEY",
+    "api_endpoint": "https://openrouter.ai/api/v1",
+    "type": "openrouter",
+    "default_headers": {
+      "HTTP-Referer": "https://github.com/sst/opencode",
+      "X-Title": "opencode"
+    },
+    "default_large_model_id": "anthropic/claude-sonnet-4.5",
+    "default_small_model_id": "qwen/qwen3-coder",
+    "models": [
+      {
+        "id": "anthropic/claude-sonnet-4.5",
+        "name": "Claude Sonnet 4.5",
+        "cost_per_1m_in": 3,
+        "cost_per_1m_out": 15,
+        "cost_per_1m_in_cached": 3.75,
+        "cost_per_1m_out_cached": 0.3,
+        "context_window": 200000,
+        "default_max_tokens": 64000,
+        "can_reason": true,
+        "supports_attachments": true,
+        "options": {
+          "temperature": 1,
+          "top_p": 0.99,
+          "provider_options": {
+            "anthropic": {
+              "thinking": { "type": "enabled", "budget_tokens": 8000 }
+            }
+          }
+        }
+      }
+    ]
+  }
+]
