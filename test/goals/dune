@@ -1,11 +1,14 @@
-; sc_01.ml .. sc_05.ml are byte-identical copies of
-; .agent-tasks/task-d9e845d5c429/tests/sc-01.ml .. sc-05.ml.
-; copy_files cannot escape the directory, so the copies are checked in.
+; sc_01.ml .. sc_05.ml and goal_fixture.ml/.mli are ocamlformatted copies of
+; .agent-tasks/task-d9e845d5c429/tests/sc-01.ml .. sc-05.ml and
+; goal_fixture.ml/.mli. The assertions are unchanged; only whitespace and the
+; module spelling (sc-01 -> sc_01) differ. copy_files cannot escape the
+; directory, so the copies are checked in. The .agent-tasks drivers remain the
+; verification authority named by GOALS.md.
 
 (executable
  (name sc_all)
- (libraries alcotest)
- (modules sc_all sc_01 sc_02 sc_03 sc_04 sc_05)
+ (libraries alcotest charm.ansi eio eio.unix eio_main unix fmt)
+ (modules sc_all sc_01 sc_02 sc_03 sc_04 sc_05 goal_fixture)
  (flags
   (:standard
    -strict-sequence
@@ -17,5 +20,10 @@
 
 (rule
  (alias goals)
+ (deps
+  %{exe:../../bin/gum/main.exe}
+  %{exe:../../bin/glow/main.exe}
+  %{exe:../../bin/keygen/main.exe}
+  %{exe:../../bin/crush/main.exe})
  (action
   (run ./sc_all.exe)))

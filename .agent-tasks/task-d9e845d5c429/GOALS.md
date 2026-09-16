@@ -13,7 +13,7 @@ Port all the charm ecosystems to Ocaml, but not just naive ports; Make it better
 ## Verification
 - SC-01: `.agent-tasks/task-d9e845d5c429/tests/sc-01.ml`, `dune build --profile release`
 - SC-02: `.agent-tasks/task-d9e845d5c429/tests/sc-02.ml`, `printf 'b\n' | dune exec bin/gum/main.exe -- choose --select-if-one`
-- SC-03: `.agent-tasks/task-d9e845d5c429/tests/sc-03.ml`, `CRUSH_TEST_PROVIDER=fake dune exec bin/crush/main.exe -- run "say hi"`
+- SC-03: `.agent-tasks/task-d9e845d5c429/tests/sc-03.ml`, `dune build @goals` (the driver runs `crush run "say hi"` against a loopback mock provider)
 - SC-04: `.agent-tasks/task-d9e845d5c429/tests/sc-04.ml`, `dune exec bin/keygen/main.exe -- -t ed25519 -f /tmp/k && ssh-keygen -l -f /tmp/k.pub`
 - SC-05: `.agent-tasks/task-d9e845d5c429/tests/sc-05.ml`, `dune exec bin/glow/main.exe -- README.md`
 
