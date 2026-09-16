@@ -41,6 +41,6 @@ Thumbs.db
 # === EMPIRICAL ===
 .references/
 k_*
-kx
+kx*
 foo.ml
 t[5-9].ml
