@@ -66,7 +66,10 @@ let test_ctrl_c_cancels_action () =
                   Eio.Promise.resolve resolver result);
               Eio.Time.sleep env#clock 0.05;
               Eio.Flow.copy_string "\003" (Eio_unix.Pty.sink pty);
-              match Eio.Promise.await promise with
+              match
+                Eio.Time.with_timeout_exn env#clock 5. (fun () ->
+                    Eio.Promise.await promise)
+              with
               | Error `Interrupted ->
                   Alcotest.(check bool) "action fiber cancelled" true !cancelled
               | Error (`Failed _) -> Alcotest.fail "ctrl-c reported action failure"
