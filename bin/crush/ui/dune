@@ -1,0 +1,27 @@
+(library
+ (name crush_ui)
+ (public_name crush.ui)
+ (modules crush_ui)
+ (libraries
+  crush.core
+  charm.ansi
+  charm.bubbles
+  charm.fantasy
+  charm.huh
+  charm.lipgloss
+  charm.tea
+  base64
+  eio
+  eio.unix
+  fmt
+  jsont
+  jsont.bytesrw
+  logs)
+ (flags
+  (:standard
+   -strict-sequence
+   -strict-formats
+   -short-paths
+   -principal
+   -w
+   +a-4-9-29-30-40..42-44..46-48-50-58-66-67)))
