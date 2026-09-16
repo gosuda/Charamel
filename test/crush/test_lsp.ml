@@ -177,10 +177,19 @@ let root_slash_matches () =
       Alcotest.(check (option string))
         "fixture handle under root" (Some "fixture") (Lsp.handles lsp ~path))
 
+let handles_respects_cwd () =
+  with_lsp fixture_script (fun _env lsp path ->
+      Alcotest.(check (option string))
+        "inside cwd" (Some "fixture") (Lsp.handles lsp ~path);
+      Alcotest.(check (option string))
+        "outside cwd" None
+        (Lsp.handles lsp ~path:"/home/foo.ml"))
+
 let cases =
   [
     Alcotest.test_case "real child JSON-RPC" `Quick protocol_round_trip;
     Alcotest.test_case "UTF-16 Unicode workspace edit" `Quick unicode_edit;
     Alcotest.test_case "malformed frame" `Quick malformed_frame;
     Alcotest.test_case "root slash matches" `Quick root_slash_matches;
+    Alcotest.test_case "handles respects cwd" `Quick handles_respects_cwd;
   ]
