@@ -64,6 +64,15 @@ val handles : t -> path:string -> string option
 (** [handles t ~path] is the first configured server that supports [path], or [None] when
     no server supports its extension or the path is outside the project. *)
 
+val normalize_path : cwd:string -> string -> string
+(** [normalize_path ~cwd path] resolves [path] against [cwd] and every dot and dot-dot
+    component lexically. Dot-dot above the root is dropped. The result is absolute. *)
+
+val inside : cwd:string -> string -> string -> bool
+(** [inside ~cwd root path] is [true] when the normalized [path] equals the normalized
+    [root], when [root] is ["/"], or when [path] lies beneath [root] at a component
+    boundary. *)
+
 val touch : t -> path:string -> unit
 (** [touch t ~path] makes the selected server observe the current contents of [path]. The
     first observation sends [textDocument/didOpen]. Later observations send a full-text

@@ -107,6 +107,31 @@ let invalid_glob_is_explicit () =
             (String.contains message 'b')
       | None -> Alcotest.fail "invalid glob was accepted")
 
+let canonical_path_pins () =
+  Alcotest.check Alcotest.string "empty stays empty" "" (Rules.canonical_path "");
+  Alcotest.check Alcotest.string "root stays root" "/" (Rules.canonical_path "/");
+  Alcotest.check Alcotest.string "dot-dot clamps at root" "/"
+    (Rules.canonical_path "/../..");
+  Alcotest.check Alcotest.string "lone dot-dot is preserved" ".."
+    (Rules.canonical_path "..");
+  Alcotest.check Alcotest.string "paired dot-dot cancels out" ""
+    (Rules.canonical_path "../..");
+  Alcotest.check Alcotest.string "third dot-dot is preserved" ".."
+    (Rules.canonical_path "../../..");
+  Alcotest.check Alcotest.string "dot is dropped" "a/b" (Rules.canonical_path "a/./b");
+  Alcotest.check Alcotest.bool "child is under root" true
+    (Rules.path_is_under ~root:"/a" "/a/b");
+  Alcotest.check Alcotest.bool "equal paths are under root" true
+    (Rules.path_is_under ~root:"/a" "/a");
+  Alcotest.check Alcotest.bool "sibling prefix is not under root" false
+    (Rules.path_is_under ~root:"/a" "/ab");
+  Alcotest.check Alcotest.bool "root contains every path" true
+    (Rules.path_is_under ~root:"/" "/x");
+  Alcotest.check Alcotest.string "mid-path dot-dot resolves" "a/c"
+    (Rules.canonical_path "a/b/../c");
+  Alcotest.check Alcotest.string "trailing slash is dropped" "/a/b"
+    (Rules.canonical_path "/a/b/")
+
 let cases =
   [
     Alcotest.test_case "always and glob context" `Quick always_and_glob_rules;
@@ -115,4 +140,5 @@ let cases =
     Alcotest.test_case "oversized rules are bounded" `Quick
       oversized_rules_are_not_indexed;
     Alcotest.test_case "invalid globs are explicit" `Quick invalid_glob_is_explicit;
+    Alcotest.test_case "canonical path pins" `Quick canonical_path_pins;
   ]

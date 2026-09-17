@@ -105,6 +105,15 @@ val within_cwd : ctx -> string -> bool
 (** [within_cwd ctx path] is [true] when [path] is lexically contained in the normalized
     project directory [ctx.cwd]. Component boundaries are respected. *)
 
+val normalize_path : string -> string
+(** [normalize_path path] resolves dot and dot-dot components lexically. Dot-dot above the
+    root is dropped and relative dot-dot components are preserved. The empty path becomes
+    ["."]. *)
+
+val component_prefix : string -> string -> bool
+(** [component_prefix root path] is [true] when [path] equals [root] or lies beneath it at
+    a component boundary. The root ["/"] prefixes every absolute path. *)
+
 val canonical : ctx -> string -> (string, error) result
 (** [canonical ctx path] resolves [path] to an existing canonical filesystem path.
     Filesystem failures retain the path and operation context. *)

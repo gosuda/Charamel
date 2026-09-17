@@ -20,3 +20,13 @@ val for_path : t -> string -> rule list
 val attach_text : t -> touched:string list -> string
 (** [attach_text t ~touched] renders each matching glob rule once, preserving index order.
 *)
+
+val canonical_path : string -> string
+(** [canonical_path path] resolves dot components lexically and drops dot-dot above the
+    root. A leading slash is preserved. A dot-dot component cancels the component before
+    it, whether literal or an earlier dot-dot; a leading run of dot-dot components is
+    preserved. The empty path stays empty. *)
+
+val path_is_under : root:string -> string -> bool
+(** [path_is_under ~root path] is [true] when [path] equals [root] or lies beneath it at a
+    component boundary. The root ["/"] contains every path. *)

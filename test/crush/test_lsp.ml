@@ -186,6 +186,27 @@ let handles_respects_cwd () =
         "outside cwd" None
         (Lsp.handles lsp ~path:"/home/foo.ml"))
 
+let normalize_path_pins () =
+  Alcotest.check Alcotest.string "empty resolves to cwd" "/proj"
+    (Lsp.normalize_path ~cwd:"/proj" "");
+  Alcotest.check Alcotest.string "dot-dot clamps at root" "/"
+    (Lsp.normalize_path ~cwd:"/proj" "/../..");
+  Alcotest.check Alcotest.string "escape above cwd reaches root" "/"
+    (Lsp.normalize_path ~cwd:"/a" "x/../../..");
+  Alcotest.check Alcotest.bool "child is inside" true (Lsp.inside ~cwd:"/a" "/a" "/a/b");
+  Alcotest.check Alcotest.bool "sibling prefix is not inside" false
+    (Lsp.inside ~cwd:"/a" "/a" "/ab");
+  Alcotest.check Alcotest.bool "root contains every absolute path" true
+    (Lsp.inside ~cwd:"/a" "/" "/x");
+  Alcotest.check Alcotest.string "bare dot-dot above cwd clamps at root" "/"
+    (Lsp.normalize_path ~cwd:"/a" "..");
+  Alcotest.check Alcotest.string "mid-path dot-dot resolves" "/p/a/c"
+    (Lsp.normalize_path ~cwd:"/p" "a/b/../c");
+  Alcotest.check Alcotest.string "trailing slash is dropped" "/a/b"
+    (Lsp.normalize_path ~cwd:"/p" "/a/b/");
+  Alcotest.check Alcotest.bool "equal paths are inside" true
+    (Lsp.inside ~cwd:"/a" "/a" "/a")
+
 let cases =
   [
     Alcotest.test_case "real child JSON-RPC" `Quick protocol_round_trip;
@@ -193,4 +214,5 @@ let cases =
     Alcotest.test_case "malformed frame" `Quick malformed_frame;
     Alcotest.test_case "root slash matches" `Quick root_slash_matches;
     Alcotest.test_case "handles respects cwd" `Quick handles_respects_cwd;
+    Alcotest.test_case "normalize path pins" `Quick normalize_path_pins;
   ]
