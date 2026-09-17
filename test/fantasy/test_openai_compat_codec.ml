@@ -62,22 +62,25 @@ let done_event = data_event "[DONE]"
 
 let provider_call ?(body = sse) ?(reasoning = `Off) ?temperature ?max_tokens
     ?(system = []) ?(tools = []) ?(messages = [ user "hi" ]) ?truncate () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let server = Fixture_server.start ~sw ~net:env#net () in
-  Fixture_server.respond server body;
-  (match truncate with Some n -> Fixture_server.trunc server n | None -> ());
-  let provider =
-    Provider.openai_compatible
-      ~base_url:(Fixture_server.base_url server)
-      ~auth:(Provider.Api_key "test-key") ()
+  let stream, observed, path, body =
+    Eio_main.run @@ fun env ->
+    Eio.Switch.run @@ fun sw ->
+    let server = Fixture_server.start ~sw ~net:env#net () in
+    Fixture_server.respond server body;
+    (match truncate with Some n -> Fixture_server.trunc server n | None -> ());
+    let provider =
+      Provider.openai_compatible
+        ~base_url:(Fixture_server.base_url server)
+        ~auth:(Provider.Api_key "test-key") ()
+    in
+    let stream =
+      Provider.stream provider ~sw ~clock:env#clock ~net:env#net ~model ?max_tokens
+        ?temperature ~reasoning ~system ~tools messages
+    in
+    let observed = drain stream in
+    (stream, observed, Fixture_server.last_path server, Fixture_server.last_body server)
   in
-  let stream =
-    Provider.stream provider ~sw ~clock:env#clock ~net:env#net ~model ?max_tokens
-      ?temperature ~reasoning ~system ~tools messages
-  in
-  let observed = drain stream in
-  (observed, Fixture_server.last_path server, Fixture_server.last_body server)
+  (observed @ Stream_test_support.drain_queued stream, path, body)
 
 let json s =
   match Jsont_bytesrw.decode_string Jsont.json s with
