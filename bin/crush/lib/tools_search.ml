@@ -179,11 +179,10 @@ let ls_entries ctx root ~ignore ~depth =
                 else
                   let directory = kind = `Directory in
                   add (current_depth + 1) name directory;
-                  if directory && current_depth < depth then
-                    begin match walk child child_relative (current_depth + 1) with
-                    | Ok () -> visit rest
-                    | Error _ as error -> error
-                    end
+                  if directory && current_depth < depth then begin
+                    let* () = walk child child_relative (current_depth + 1) in
+                    visit rest
+                  end
                   else visit rest
           in
           visit entries

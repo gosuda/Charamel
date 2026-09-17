@@ -281,19 +281,12 @@ let rec canonical_new_target ctx current components =
 
 let resolve_write_target ctx absolute =
   let target_path = path ctx absolute in
-  match protect_io absolute (fun () -> Eio.Path.kind ~follow:false target_path) with
-  | Error error -> Error error
-  | Ok `Not_found -> canonical_new_target ctx absolute []
-  | Ok `Symbolic_link ->
-      begin match Tool.canonical ctx absolute with
-      | Ok target -> Ok (Existing target)
-      | Error error -> Error error
-      end
-  | Ok _ ->
-      begin match Tool.canonical ctx absolute with
-      | Ok target -> Ok (Existing target)
-      | Error error -> Error error
-      end
+  let* kind = protect_io absolute (fun () -> Eio.Path.kind ~follow:false target_path) in
+  match kind with
+  | `Not_found -> canonical_new_target ctx absolute []
+  | _ ->
+      let* target = Tool.canonical ctx absolute in
+      Ok (Existing target)
 
 let canonical_for_read ctx absolute =
   match Tool.canonical ctx absolute with

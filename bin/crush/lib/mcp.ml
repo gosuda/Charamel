@@ -616,9 +616,10 @@ let http_exchange_raw server http ~expected_id ~on_request value =
     let _ = Eio.Buf_read.take_all reader in
     Error (`Transport (server.name, Fmt.str "HTTP %d" status))
   else
-    match response_body server expected_id ~on_request response response_body_flow with
-    | Error error -> Error error
-    | Ok parsed -> Ok { answer = parsed.answer; replies = parsed.replies }
+    let* (parsed : http_read_state) =
+      response_body server expected_id ~on_request response response_body_flow
+    in
+    Ok { answer = parsed.answer; replies = parsed.replies }
 
 let http_error_guard server thunk =
   try thunk () with

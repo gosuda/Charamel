@@ -786,65 +786,59 @@ let run_turn t turn_sw first_prompt user_message attachments state =
                 ^ model.Models.provider_id))
       else Result.Ok stream_result
     in
-    match stream_with_recovery model provider_auth with
-    | Error error -> Error error
-    | Ok stream_result -> (
-        let empty_provider_error =
-          match (stream_result.finish, stream_result.parts) with
-          | `Error message, [] -> Some message
-          | _ -> None
-        in
-        match empty_provider_error with
-        | Some message -> Error (`Provider message)
-        | None -> (
-            List.iter (fun call -> ignore (decode_call call)) stream_result.calls;
-            let assistant = assistant_message stream_result.parts in
-            let* () = append t (Session.Message { ms = now_ms t; message = assistant }) in
-            state.assistant_appended <- true;
-            state.last_turn <- state.last_turn @ [ assistant ];
-            match (stream_result.finish, stream_result.calls) with
-            | `Tool_calls, calls when calls <> [] ->
-                let executions, stop_turn, loop_detected =
-                  execute_calls t turn_sw calls
-                in
-                let results =
-                  List.map
-                    (fun execution ->
-                      (execution.id, execution.name, session_output execution.output))
-                    executions
-                in
-                if results = [] then Ok `Stop
-                else
-                  let tool_message = Charm_fantasy.Message.tool_results results in
-                  let* () =
-                    append t (Session.Message { ms = now_ms t; message = tool_message })
-                  in
-                  state.last_turn <- state.last_turn @ [ tool_message ];
-                  let* () = persist_executions t executions in
-                  if loop_detected then Ok `Loop_detected
-                  else if stop_turn then Ok `Stop
-                  else if
-                    Compaction.needed
-                      ~context_window:
-                        model.Models.model.Charm_fantasy.Model.context_window
-                      ~prompt_tokens:stream_result.prompt_tokens
-                      ~completion_tokens:stream_result.completion_tokens
-                      ~disabled:
-                        t.deps.config.Config.options.Config.disable_auto_compaction
-                  then (
-                    let* small, small_auth = refresh_model t turn_sw `Small in
-                    match
-                      Compaction.run ~sw:turn_sw ~clock:t.deps.clock ~net:t.deps.net
-                        ~small ~auth:small_auth t.session
-                    with
-                    | Error (`Provider message) -> Error (`Provider message)
-                    | Error (`Session error) -> Error (`Session error)
-                    | Ok summary ->
-                        emit t (Compacted { summary_chars = String.length summary });
-                        loop ())
-                  else loop ()
-            | `Tool_calls, [] -> Ok `Stop
-            | finish, _ -> finish_result finish))
+    let* (stream_result : stream_result) = stream_with_recovery model provider_auth in
+    let empty_provider_error =
+      match (stream_result.finish, stream_result.parts) with
+      | `Error message, [] -> Some message
+      | _ -> None
+    in
+    match empty_provider_error with
+    | Some message -> Error (`Provider message)
+    | None -> (
+        List.iter (fun call -> ignore (decode_call call)) stream_result.calls;
+        let assistant = assistant_message stream_result.parts in
+        let* () = append t (Session.Message { ms = now_ms t; message = assistant }) in
+        state.assistant_appended <- true;
+        state.last_turn <- state.last_turn @ [ assistant ];
+        match (stream_result.finish, stream_result.calls) with
+        | `Tool_calls, calls when calls <> [] ->
+            let executions, stop_turn, loop_detected = execute_calls t turn_sw calls in
+            let results =
+              List.map
+                (fun execution ->
+                  (execution.id, execution.name, session_output execution.output))
+                executions
+            in
+            if results = [] then Ok `Stop
+            else
+              let tool_message = Charm_fantasy.Message.tool_results results in
+              let* () =
+                append t (Session.Message { ms = now_ms t; message = tool_message })
+              in
+              state.last_turn <- state.last_turn @ [ tool_message ];
+              let* () = persist_executions t executions in
+              if loop_detected then Ok `Loop_detected
+              else if stop_turn then Ok `Stop
+              else if
+                Compaction.needed
+                  ~context_window:model.Models.model.Charm_fantasy.Model.context_window
+                  ~prompt_tokens:stream_result.prompt_tokens
+                  ~completion_tokens:stream_result.completion_tokens
+                  ~disabled:t.deps.config.Config.options.Config.disable_auto_compaction
+              then (
+                let* small, small_auth = refresh_model t turn_sw `Small in
+                match
+                  Compaction.run ~sw:turn_sw ~clock:t.deps.clock ~net:t.deps.net ~small
+                    ~auth:small_auth t.session
+                with
+                | Error (`Provider message) -> Error (`Provider message)
+                | Error (`Session error) -> Error (`Session error)
+                | Ok summary ->
+                    emit t (Compacted { summary_chars = String.length summary });
+                    loop ())
+              else loop ()
+        | `Tool_calls, [] -> Ok `Stop
+        | finish, _ -> finish_result finish)
   in
   let result = loop () in
   match result with

@@ -207,10 +207,8 @@ let io_of fn =
 let path_of fs path = Eio.Path.(Eio.Path.of_dir fs / path)
 
 let path_exists p =
-  match io_of (fun () -> Eio.Path.kind ~follow:false p) with
-  | Ok `Not_found -> Ok false
-  | Ok _ -> Ok true
-  | Error e -> Error e
+  let* kind = io_of (fun () -> Eio.Path.kind ~follow:false p) in
+  match kind with `Not_found -> Ok false | _ -> Ok true
 
 let write_pair p path_name pub_p pub_name private_body pub_body =
   let created = ref [] in
@@ -279,10 +277,10 @@ let load_existing ~path p =
 
 let load_or_generate ~fs ~path algorithm =
   let p = path_of fs path in
-  match io_of (fun () -> Eio.Path.kind ~follow:false p) with
-  | Error e -> Error e
-  | Ok `Not_found ->
+  let* kind = io_of (fun () -> Eio.Path.kind ~follow:false p) in
+  match kind with
+  | `Not_found ->
       let t = generate algorithm in
       let* () = write ~fs ~path t in
       Ok (t, `Generated)
-  | Ok _ -> load_existing ~path p
+  | _ -> load_existing ~path p

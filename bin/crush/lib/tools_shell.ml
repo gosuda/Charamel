@@ -459,31 +459,29 @@ let job_output =
     read_only = true;
     run =
       (fun ctx value ->
-        match Tool.decode job_output_params_jsont value with
-        | Error error -> Error error
-        | Ok params -> (
-            let job_id = String.trim params.job_id in
-            if job_id = "" then Error (`Invalid_input "job_id must not be empty")
-            else
-              let* () =
-                Tool.request ctx ~read_only:true ~tool:"job_output" ~action:job_id
-                  ~path:ctx.Tool.cwd
-                  ~description:(Fmt.str "Read output for %s" job_id)
+        let* (params : job_output_params) = Tool.decode job_output_params_jsont value in
+        let job_id = String.trim params.job_id in
+        if job_id = "" then Error (`Invalid_input "job_id must not be empty")
+        else
+          let* () =
+            Tool.request ctx ~read_only:true ~tool:"job_output" ~action:job_id
+              ~path:ctx.Tool.cwd
+              ~description:(Fmt.str "Read output for %s" job_id)
+          in
+          match
+            Jobs.output ctx.Tool.jobs ~id:job_id
+              ~wait:(Option.value params.wait ~default:false)
+          with
+          | Error (`Not_found id) -> Error (`Not_found id)
+          | Ok (captured, status) ->
+              let status_text =
+                match status with
+                | Jobs.Running -> "running"
+                | Jobs.Exited code -> Fmt.str "exited %d" code
+                | Jobs.Killed -> "killed"
               in
-              match
-                Jobs.output ctx.Tool.jobs ~id:job_id
-                  ~wait:(Option.value params.wait ~default:false)
-              with
-              | Error (`Not_found id) -> Error (`Not_found id)
-              | Ok (captured, status) ->
-                  let status_text =
-                    match status with
-                    | Jobs.Running -> "running"
-                    | Jobs.Exited code -> Fmt.str "exited %d" code
-                    | Jobs.Killed -> "killed"
-                  in
-                  let content = Fmt.str "status: %s\n%s" status_text captured in
-                  Ok (output_with_artifact ctx content)));
+              let content = Fmt.str "status: %s\n%s" status_text captured in
+              Ok (output_with_artifact ctx content));
   }
 
 let job_kill_schema =
