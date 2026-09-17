@@ -1,6 +1,7 @@
 (test
  (name test_gum)
  (package gum)
+ (deps %{exe:../../bin/gum/main.exe})
  (modules
   test_gum
   test_format
