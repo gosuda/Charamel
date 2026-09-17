@@ -1,21 +1,4 @@
-(* OpenAI-compatible Chat Completions codec.
-
-   Wire sources, all under [.references/fantasy]:
-   - [providers/openai/language_model.go], [Stream] (lines 453-771) for the
-     chunk loop and the terminal evaluation, [prepareParams] (259-363) for
-     the request, [DefaultMapFinishReasonFunc]
-     ([language_model_hooks.go:190-208]) for finish reason mapping and
-     [DefaultStreamUsageFunc] ([language_model_hooks.go:244-286]) for the
-     usage mapping.
-   - [providers/openaicompat/language_model_hooks.go] [ToPromptFunc]
-     (189-566) for message conversion, [StreamExtraFunc] (106-184) for the
-     reasoning_content rules, and the openai provider's
-     [ToolResultMediaMessages] (620-635) for media tool results.
-   - [providers/openaicompat/replay_test.go] for the DeepSeek/Kimi chunk
-     shapes this decoder must survive: interleaved parallel tool calls,
-     batched boundary chunks, reasoning replay and cut-stream suppression.
-
-   The [data] of a [File] part already holds the provider wire form
+(* The [data] of a [File] part already holds the provider wire form
    ([lib/fantasy/message.mli]), so it is copied into the request verbatim;
    re-encoding would corrupt it. *)
 
@@ -25,8 +8,6 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
 open Json
 
 let jtrue = Jsont.Json.bool true
-
-(* Request encoding *)
 
 (* One content part per text or file part; tool calls and reasoning belong
    to their own members of the assistant message, and tool results become
@@ -255,8 +236,6 @@ let encode (r : Request.t) =
   | messages -> ms := !ms @ [ (n "messages", arr messages) ]);
   ms := !ms @ tools_json r.Request.tools;
   obj !ms
-
-(* Stream decoding *)
 
 type tool_state = { id : string; mutable arguments : string }
 
