@@ -5,45 +5,15 @@ module Style = Charamel_lipgloss.Style
 module Color = Charamel_ansi.Color
 module Text = Charamel_ansi.Text
 module Width = Charamel_ansi.Width
+open Rune_util
 
-let clamp n lo hi = max lo (min hi n)
 let max_lines = 10_000
 
-let is_control u =
-  let n = Uchar.to_int u in
-  (n >= 0 && n <= 0x1f && n <> 0x09 && n <> 0x0a && n <> 0x0d) || (n >= 0x7f && n <= 0x9f)
-
 let sanitize s =
-  let out = Buffer.create (String.length s) in
-  let rec loop i =
-    if i >= String.length s then ()
-    else
-      let d = String.get_utf_8_uchar s i in
-      if not (Uchar.utf_decode_is_valid d) then loop (i + 1)
-      else
-        let u = Uchar.utf_decode_uchar d in
-        let n = Uchar.utf_decode_length d in
-        if Uchar.equal u (Uchar.of_char '\n') then Buffer.add_char out '\n'
-        else if Uchar.equal u (Uchar.of_char '\r') then
-          if i + n < String.length s && String.get s (i + n) = '\n' then ()
-          else Buffer.add_char out '\n'
-        else if Uchar.equal u (Uchar.of_char '\t') then Buffer.add_char out ' '
-        else if not (is_control u) then Buffer.add_utf_8_uchar out u;
-        loop (i + n)
-  in
-  loop 0;
-  Buffer.contents out
+  Rune_util.sanitize ~replace_tabs:" " ~replace_newlines:"\n" ~normalize_crlf:true s
 
 let string_of_clusters xs = String.concat "" xs
-
-let rec take n xs =
-  if n <= 0 then [] else match xs with [] -> [] | x :: rest -> x :: take (n - 1) rest
-
-let rec drop n xs =
-  if n <= 0 then xs else match xs with [] -> [] | _ :: rest -> drop (n - 1) rest
-
 let sub xs start len = take len (drop start xs)
-let cluster_width s = Width.grapheme_width s
 let clusters_width xs = Stdlib.List.fold_left (fun n x -> n + cluster_width x) 0 xs
 let style_inline s = Style.inline true s
 let render_style style text = Style.render (style_inline style) text
@@ -300,25 +270,15 @@ let state_prompt (st : style_state) = inherited ~parent:st.base st.prompt
 let state_eob st = inherited ~parent:st.base st.end_of_buffer
 let state_selection st = inherited ~parent:(state_base st) st.selection
 
-let cursor_mode (styles : cursor_style) virtual_cursor =
-  if not virtual_cursor then Cursor.Hide
-  else if styles.blink then Cursor.Blink
-  else Cursor.Static
-
 let sync_cursor m =
   let cs = m.styles.cursor in
-  let mode = cursor_mode cs m.virtual_cursor in
-  let st = active_style m in
-  let c = Cursor.set_style (Style.foreground cs.color Style.empty) m.cursor in
-  let c = Cursor.set_text_style (state_cursor_line st) c in
-  let c = match cs.blink_speed with Some s -> Cursor.set_blink_speed s c | None -> c in
-  let c = if Cursor.mode c = mode then c else Cursor.set_mode mode c in
-  let c =
-    if Cursor.focused c = m.focused then c
-    else if m.focused then Cursor.focus c
-    else Cursor.blur c
+  let cursor =
+    Cursor.sync_cursor ~color:cs.color ~blink:cs.blink ~blink_speed:cs.blink_speed
+      ~focused:m.focused ~virtual_cursor:m.virtual_cursor
+      ~text_style:(state_cursor_line (active_style m))
+      m.cursor
   in
-  { m with cursor = c }
+  { m with cursor }
 
 let line_split s =
   let lines = String.split_on_char '\n' s |> Stdlib.List.map Width.graphemes in
@@ -442,12 +402,6 @@ let sanitized_atoms s =
   let s = sanitize s in
   let lines = line_split s in
   atoms_of_lines lines
-
-let whitespace_cluster s =
-  if s = "" then false
-  else
-    let d = String.get_utf_8_uchar s 0 in
-    Uchar.utf_decode_is_valid d && Uucp.White.is_white_space (Uchar.utf_decode_uchar d)
 
 let rec tokenize_words start acc = function
   | [] -> Stdlib.List.rev acc
@@ -941,42 +895,6 @@ let cursor_end m = rebuild (set_cursor_column (current_line_len m) m)
 let page_up m = rebuild (move_visual (-max 1 m.height) m)
 let page_down m = rebuild (move_visual (max 1 m.height) m)
 
-let lower_string s =
-  let out = Buffer.create (String.length s) in
-  let rec loop i =
-    if i >= String.length s then ()
-    else
-      let d = String.get_utf_8_uchar s i in
-      if not (Uchar.utf_decode_is_valid d) then loop (i + 1)
-      else
-        let u = Uchar.utf_decode_uchar d in
-        let n = Uchar.utf_decode_length d in
-        (match Uucp.Case.Map.to_lower u with
-        | `Self -> Buffer.add_utf_8_uchar out u
-        | `Uchars xs -> Stdlib.List.iter (Buffer.add_utf_8_uchar out) xs);
-        loop (i + n)
-  in
-  loop 0;
-  Buffer.contents out
-
-let upper_string s =
-  let out = Buffer.create (String.length s) in
-  let rec loop i =
-    if i >= String.length s then ()
-    else
-      let d = String.get_utf_8_uchar s i in
-      if not (Uchar.utf_decode_is_valid d) then loop (i + 1)
-      else
-        let u = Uchar.utf_decode_uchar d in
-        let n = Uchar.utf_decode_length d in
-        (match Uucp.Case.Map.to_upper u with
-        | `Self -> Buffer.add_utf_8_uchar out u
-        | `Uchars xs -> Stdlib.List.iter (Buffer.add_utf_8_uchar out) xs);
-        loop (i + n)
-  in
-  loop 0;
-  Buffer.contents out
-
 let word_bounds m =
   let line = current_line m in
   let i = ref m.col in
@@ -1083,14 +1001,14 @@ let apply_action action m =
   | Word_forward -> action_move word_forward m
   | Input_begin -> action_move move_to_begin m
   | Input_end -> action_move move_to_end m
-  | Uppercase_word_forward -> transform_word upper_string m
-  | Lowercase_word_forward -> transform_word lower_string m
+  | Uppercase_word_forward -> transform_word upper m
+  | Lowercase_word_forward -> transform_word lower m
   | Capitalize_word_forward ->
       transform_word
         (fun word ->
           match Width.graphemes word with
           | [] -> ""
-          | first :: rest -> upper_string first ^ lower_string (String.concat "" rest))
+          | first :: rest -> upper first ^ lower (String.concat "" rest))
         m
   | Transpose_character_backward -> transpose m
   | Select_character_forward ->
