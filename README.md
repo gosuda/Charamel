@@ -41,15 +41,21 @@ opam exec -- dune build @fmt
 ```
 
 A pre-commit hook runs the same three gates. Enable it with
-`git config core.hooksPath .githooks`; bypass once with `--no-verify`.
-The hook calls `opam exec`, so commit from a shell where the switch
-above is active; `--set-switch` keeps it active.
+`git config core.hooksPath .githooks`. The hook calls `opam exec`, which
+resolves `dune` through `OPAMSWITCH` rather than `PATH`, so commit from a
+shell bootstrapped with `--set-switch` as above. When the hook reports
+`Command not found 'dune'`, fix the switch and retry instead of passing
+`--no-verify`.
 
 Pure OCaml in this repository: no `foreign_stubs`, no C files.
 Dependencies keep whatever they ship (`eio` and `mirage-crypto` carry
 their own C). Highlighting uses `re`-based data-driven lexers. Config
 files are JSON via `jsont`. Sessions are JSONL. The OCaml floor is
 `>= 5.4`. Tests use alcotest.
+
+Every pin above was checked at its release channel;
+`docs/adr/2026-09-16-grounded-toolchain.md` records the grounding and the
+one open follow-up.
 
 ## Licensing
 
