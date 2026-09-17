@@ -1002,7 +1002,7 @@ and render_table ctx ~indent table =
     |> List.mapi (fun i link ->
         let href = resolve_url ~base_url:ctx.base_url link.href in
         let label = link.content in
-        Printf.sprintf "[%d]: %s%s" (i + 1) label
+        Fmt.str "[%d]: %s%s" (i + 1) label
           (if href = "" then ""
            else " " ^ hyperlink href (style_text ctx.theme.Theme.link href)))
     |> String.concat "\n"
@@ -1046,7 +1046,7 @@ let render ?(width = 80) ?(theme = (Theme.dark : Theme.t)) ?(base_url = "")
             let content =
               render_block ctx ~indent:4 (Cmarkit.Block.Footnote.block fn) |> plain
             in
-            Printf.sprintf "[%d]: %s" number content)
+            Fmt.str "[%d]: %s" number content)
           (List.assoc_opt key ctx.footnotes))
   in
   let body = if footers = [] then body else body ^ "\n\n" ^ String.concat "\n" footers in

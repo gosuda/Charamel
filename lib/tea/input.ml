@@ -207,17 +207,18 @@ let parse_params s start stop =
   end;
   List.rev !fields_rev
 
+let private_marker s i stop =
+  if !i < stop && s.[!i] >= '<' && s.[!i] <= '?' then begin
+    let value = Some s.[!i] in
+    incr i;
+    value
+  end
+  else None
+
 let parse_csi_header s start =
   let len = String.length s in
   let i = ref start in
-  let prefix =
-    if !i < len && s.[!i] >= '<' && s.[!i] <= '?' then begin
-      let value = Some s.[!i] in
-      incr i;
-      value
-    end
-    else None
-  in
+  let prefix = private_marker s i len in
   let params_start = !i in
   let invalid_params = ref false in
   while !i < len && byte s !i >= 0x30 && byte s !i <= 0x3f do
@@ -677,14 +678,7 @@ type dcs_header = {
 
 let parse_dcs_header s start stop =
   let i = ref start in
-  let prefix =
-    if !i < stop && s.[!i] >= '<' && s.[!i] <= '?' then begin
-      let value = Some s.[!i] in
-      incr i;
-      value
-    end
-    else None
-  in
+  let prefix = private_marker s i stop in
   while !i < stop && byte s !i >= 0x30 && byte s !i <= 0x3f do
     incr i
   done;

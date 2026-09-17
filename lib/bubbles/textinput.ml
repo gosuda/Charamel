@@ -280,6 +280,10 @@ let handle_overflow m =
     done;
     { m with offset = !start; offset_right = !right }
 
+let validation_error m clusters =
+  Option.bind m.validate (fun f ->
+      match f (string_of_clusters clusters) with Ok () -> None | Error e -> Some e)
+
 let v ?(prompt = "> ") ?(placeholder = "") ?(echo = Normal) ?(echo_character = "*")
     ?(char_limit = 0) ?(width = 0) ?validate ?(show_suggestions = false)
     ?(suggestions = []) ?(keymap = default_keymap) ?(is_dark = true) ?styles
@@ -316,12 +320,7 @@ let v ?(prompt = "> ") ?(placeholder = "") ?(echo = Normal) ?(echo_character = "
     let xs = Width.graphemes sanitized in
     if m.char_limit > 0 then take m.char_limit xs else xs
   in
-  let error =
-    match m.validate with
-    | None -> None
-    | Some f -> (
-        match f (string_of_clusters value) with Ok () -> None | Error e -> Some e)
-  in
+  let error = validation_error m value in
   let m = { m with value; position = Stdlib.List.length value; error } in
   let matches value =
     if value = "" then []
@@ -378,10 +377,6 @@ let update_matches m =
   in
   { m with matched_suggestions = matched; current_suggestion_index = index }
 
-let validate m clusters =
-  Option.bind m.validate (fun f ->
-      match f (string_of_clusters clusters) with Ok () -> None | Error e -> Some e)
-
 let set_value s m =
   let clusters = Width.graphemes (sanitize s) in
   let old_empty = m.value = [] in
@@ -392,7 +387,8 @@ let set_value s m =
     else m.position
   in
   handle_overflow
-    (update_matches { m with value = clusters; position; error = validate m clusters })
+    (update_matches
+       { m with value = clusters; position; error = validation_error m clusters })
 
 let set_cursor pos m =
   handle_overflow { m with position = clamp pos 0 (Stdlib.List.length m.value) }
@@ -415,7 +411,7 @@ let set_char_limit limit m =
          char_limit;
          value;
          position = min m.position (Stdlib.List.length value);
-         error = validate m value;
+         error = validation_error m value;
        })
 
 let set_keymap keymap m = { m with keymap }
@@ -449,7 +445,7 @@ let delete_range start stop m =
   let before = sub_clusters m.value 0 start in
   let after = drop stop m.value in
   let value = before @ after in
-  let m = { m with value; position = start; error = validate m value } in
+  let m = { m with value; position = start; error = validation_error m value } in
   update_matches (handle_overflow m)
 
 let whitespace_cluster s =
@@ -520,7 +516,8 @@ let insert_string s m =
   else
     let value = sub_clusters m.value 0 m.position @ incoming @ drop m.position m.value in
     let position = m.position + Stdlib.List.length incoming in
-    update_matches (handle_overflow { m with value; position; error = validate m value })
+    update_matches
+      (handle_overflow { m with value; position; error = validation_error m value })
 
 let paste s m = insert_string s m
 
@@ -532,7 +529,12 @@ let accept_suggestion m =
       let value = if m.char_limit > 0 then take m.char_limit value else value in
       update_matches
         (handle_overflow
-           { m with value; position = Stdlib.List.length value; error = validate m value })
+           {
+             m with
+             value;
+             position = Stdlib.List.length value;
+             error = validation_error m value;
+           })
 
 let update message (m : t) =
   if not m.focused then (m, Cmd.none)
@@ -711,4 +713,4 @@ let cursor (m : t) =
 
 let set_validate validator m =
   let m = { m with validate = validator } in
-  { m with error = validate m m.value }
+  { m with error = validation_error m m.value }
