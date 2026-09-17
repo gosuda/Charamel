@@ -150,12 +150,8 @@ let normalize_crlf text =
   loop 0;
   Buffer.contents b
 
-let drop_last_empty = function
-  | [] -> []
-  | list -> (
-      let rec reverse acc = function [] -> acc | x :: xs -> reverse (x :: acc) xs in
-      let reversed = reverse [] list in
-      match reversed with "" :: tail -> reverse [] tail | _ -> list)
+let drop_last_empty list =
+  match List.rev list with "" :: tail -> List.rev tail | _ -> list
 
 let dot_stuffed body =
   let normalized = normalize_crlf body in
