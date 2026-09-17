@@ -41,9 +41,7 @@ let v ?(width = 40) ?colors ?(scaled = false) ?color_func ?(full = "█") ?(empt
     ?(show_percentage = true) ?(percent_format = default_percent_format)
     ?(percentage_style = Style.empty) ?(spring = (18.0, 1.0)) () =
   let colors =
-    match colors with
-    | None -> Some [ default_blend_start; default_blend_end ]
-    | Some values -> Some values
+    Some (Option.value colors ~default:[ default_blend_start; default_blend_end ])
   in
   let full_color =
     match colors with Some [ color ] -> color | _ -> default_full_color

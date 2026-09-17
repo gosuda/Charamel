@@ -114,9 +114,8 @@ let parse_runs text =
     | Some (None :: _) | Some [] | None -> None
   in
   let colon values index subindex =
-    match List.nth_opt values index with
-    | Some value -> Option.bind (List.nth_opt value subindex) Fun.id
-    | None -> None
+    Option.bind (List.nth_opt values index) (fun value ->
+        Option.bind (List.nth_opt value subindex) Fun.id)
   in
   let update_sgr values =
     let values = if values = [] then [ [ Some 0 ] ] else values in
@@ -248,9 +247,9 @@ let xml_escape text =
   Buffer.contents buffer
 
 let color_hex color =
-  match Charm_ansi.Color.to_rgb color with
-  | None -> None
-  | Some (r, g, b) -> Some (Fmt.str "#%02X%02X%02X" r g b)
+  Option.map
+    (fun (r, g, b) -> Fmt.str "#%02X%02X%02X" r g b)
+    (Charm_ansi.Color.to_rgb color)
 
 let attr name value = Fmt.str " %s=\"%s\"" name (xml_escape value)
 let float value = Fmt.str "%.2f" value

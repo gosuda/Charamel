@@ -149,67 +149,41 @@ module Writer = struct
   let rgb r g b = Charm_ansi.Color.Rgb (r, g, b)
 
   let colour_at parameters index =
+    let open Option.Syntax in
     let parameter = parameters.(index) in
+    let at offset =
+      if index + offset < Array.length parameters then
+        single_number parameters.(index + offset)
+      else None
+    in
+    let indexed slot value consumed =
+      { slot; colour = Charm_ansi.Color.Indexed value; consumed }
+    in
     match parameter.fields with
-    | first :: mode :: rest ->
-        begin match parse_nat first with
-        | None -> None
-        | Some slot_number ->
-            begin match (slot_of_number slot_number, parse_nat mode) with
-            | Some slot, Some 5 ->
-                begin match rest with
-                | [ value ] ->
-                    begin match parse_nat value with
-                    | Some value ->
-                        Some
-                          { slot; colour = Charm_ansi.Color.Indexed value; consumed = 1 }
-                    | None -> None
-                    end
-                | _ -> None
-                end
-            | Some slot, Some 2 ->
-                begin match rest with
-                | [ ""; r; g; b ] | [ r; g; b ] ->
-                    begin match (parse_nat r, parse_nat g, parse_nat b) with
-                    | Some r, Some g, Some b ->
-                        Some { slot; colour = rgb r g b; consumed = 1 }
-                    | _ -> None
-                    end
-                | _ -> None
-                end
-            | _ -> None
-            end
-        end
-    | [ first ] ->
-        begin match parse_nat first with
-        | Some first ->
-            begin match slot_of_number first with
-            | None -> None
-            | Some slot when index + 1 < Array.length parameters ->
-                begin match single_number parameters.(index + 1) with
-                | Some 5 when index + 2 < Array.length parameters ->
-                    begin match single_number parameters.(index + 2) with
-                    | Some value ->
-                        Some
-                          { slot; colour = Charm_ansi.Color.Indexed value; consumed = 3 }
-                    | None -> None
-                    end
-                | Some 2 when index + 4 < Array.length parameters ->
-                    begin match
-                      ( single_number parameters.(index + 2),
-                        single_number parameters.(index + 3),
-                        single_number parameters.(index + 4) )
-                    with
-                    | Some r, Some g, Some b ->
-                        Some { slot; colour = rgb r g b; consumed = 5 }
-                    | _ -> None
-                    end
-                | _ -> None
-                end
-            | Some _ -> None
-            end
-        | None -> None
-        end
+    | first :: mode :: rest -> (
+        let* slot = Option.bind (parse_nat first) slot_of_number in
+        match (parse_nat mode, rest) with
+        | Some 5, [ value ] ->
+            let+ value = parse_nat value in
+            indexed slot value 1
+        | Some 2, ([ ""; r; g; b ] | [ r; g; b ]) ->
+            let* r = parse_nat r in
+            let* g = parse_nat g in
+            let+ b = parse_nat b in
+            { slot; colour = rgb r g b; consumed = 1 }
+        | _ -> None)
+    | [ first ] -> (
+        let* slot = Option.bind (parse_nat first) slot_of_number in
+        match at 1 with
+        | Some 5 ->
+            let+ value = at 2 in
+            indexed slot value 3
+        | Some 2 ->
+            let* r = at 2 in
+            let* g = at 3 in
+            let+ b = at 4 in
+            { slot; colour = rgb r g b; consumed = 5 }
+        | _ -> None)
     | [] -> None
 
   let clamp_palette n = max 0 (min 255 n)

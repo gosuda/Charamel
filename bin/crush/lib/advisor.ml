@@ -58,9 +58,7 @@ let message_text { Charm_fantasy.Message.role; parts } =
 let render_last_turn messages = String.concat "\n" (List.map message_text messages)
 
 let first_json_object text =
-  match String.index_opt text '{' with
-  | None -> None
-  | Some start ->
+  Option.bind (String.index_opt text '{') (fun start ->
       let length = String.length text in
       let rec scan index depth in_string escaped =
         if index >= length then None
@@ -78,12 +76,10 @@ let first_json_object text =
             else scan (index + 1) (depth - 1) false false
           else scan (index + 1) depth false false
       in
-      scan start 0 false false
+      scan start 0 false false)
 
 let decoded_verdict text =
-  match first_json_object text with
-  | None -> None
-  | Some object_text -> (
+  Option.bind (first_json_object text) (fun object_text ->
       match Jsont_bytesrw.decode_string Jsont.json object_text with
       | Error _ -> None
       | Ok json -> (

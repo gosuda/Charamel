@@ -265,11 +265,7 @@ let cli_term =
     show_line_numbers;
   }
 
-let member name members =
-  match Jsont.Json.find_mem name members with
-  | Some (_, value) -> Some value
-  | None -> None
-
+let member name members = Option.map snd (Jsont.Json.find_mem name members)
 let as_string = function Jsont.String (value, _) -> Some value | _ -> None
 let as_bool = function Jsont.Bool (value, _) -> Some value | _ -> None
 

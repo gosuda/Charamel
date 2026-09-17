@@ -14,11 +14,11 @@ let rd_peek_string_len t =
     if n < 0 || t.pos + 4 + n > len then None else Some (t.pos + 4, n)
 
 let rd_get_string t =
-  match rd_peek_string_len t with
-  | None -> None
-  | Some (start, n) ->
+  Option.map
+    (fun (start, n) ->
       t.pos <- start + n;
-      Some (String.sub t.buf start n)
+      String.sub t.buf start n)
+    (rd_peek_string_len t)
 
 let rd_get_uint32 t =
   if t.pos + 4 > String.length t.buf then None

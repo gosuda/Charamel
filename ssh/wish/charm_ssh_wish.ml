@@ -229,9 +229,7 @@ let request_exit session code =
             if Option.is_none session.exit_requested then
               session.exit_requested <- Some code;
             if session.handler_done then
-              match session.exit_requested with
-              | Some requested -> send_exit_locked session requested
-              | None -> None
+              Option.bind session.exit_requested (send_exit_locked session)
             else None)
       in
       match promise with Some promise -> Eio.Promise.await promise | None -> ())

@@ -901,9 +901,9 @@ let command m text =
 let dialog_key key = Option.map (fun value -> Dialog_msg value) (Huh.Form.key key)
 
 let selected_value answers header =
-  match List.find_opt (fun answer -> answer.Tool.header = header) answers with
-  | None -> None
-  | Some (answer : Tool.answer) -> (
+  Option.bind
+    (List.find_opt (fun answer -> answer.Tool.header = header) answers)
+    (fun (answer : Tool.answer) ->
       match answer.Tool.selected with [] -> None | first :: _ -> Some first)
 
 let history_chat backend =

@@ -651,7 +651,7 @@ let filter_options query options =
       options
 
 let option_key_at index options =
-  match List.nth_opt options index with Some option_ -> Some option_.key | None -> None
+  Option.map (fun option_ -> option_.key) (List.nth_opt options index)
 
 let index_of_key key options =
   let rec loop index = function

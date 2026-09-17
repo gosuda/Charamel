@@ -994,9 +994,9 @@ let servers t =
       List.map (fun server -> (server.name, server.state)) t.servers_table)
 
 let handles t ~path =
-  match server_for_path t (normalize_path ~cwd:t.cwd path) with
-  | Some server -> Some server.name
-  | None -> None
+  Option.map
+    (fun server -> server.name)
+    (server_for_path t (normalize_path ~cwd:t.cwd path))
 
 let diagnostic_snapshot t path =
   Eio.Mutex.use_ro t.lock (fun () ->
@@ -1119,9 +1119,7 @@ let find_symbol t ~path ~name =
   | None -> Ok (find_suffix name symbols)
 
 let current_version server path =
-  match Hashtbl.find_opt server.documents path with
-  | Some document -> Some document.version
-  | None -> None
+  Option.map (fun document -> document.version) (Hashtbl.find_opt server.documents path)
 
 let parse_text_edit server value =
   let* range =

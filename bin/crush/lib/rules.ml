@@ -121,10 +121,10 @@ let compile_globs path globs =
     globs
 
 let make_rule path content =
-  match parse_document path content with
-  | None -> None
-  | Some (globs, always, body) ->
-      Some { value = { path; globs; always; body }; patterns = compile_globs path globs }
+  Option.map
+    (fun (globs, always, body) ->
+      { value = { path; globs; always; body }; patterns = compile_globs path globs })
+    (parse_document path content)
 
 let regular_file path = match kind path with Some `Regular_file -> true | _ -> false
 let directory path = match kind path with Some `Directory -> true | _ -> false

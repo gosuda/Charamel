@@ -503,7 +503,7 @@ let wrap_text width s =
 let split_lines s = String.split_on_char '\n' s
 let spaces n = if n <= 0 then "" else String.make n ' '
 let uri_of_string s = try Some (Uri.of_string s) with Invalid_argument _ -> None
-let uri_host s = match uri_of_string s with Some uri -> Uri.host uri | None -> None
+let uri_host s = Option.bind (uri_of_string s) Uri.host
 
 let resolve_url ~base_url rel =
   if rel = "" || String.starts_with ~prefix:"#" rel then rel
@@ -784,11 +784,9 @@ let code_text code = String.concat "\n" (List.map Cmarkit.Block_line.to_string c
 let render_code_block ctx ~indent code_block =
   let code = code_text (Cmarkit.Block.Code_block.code code_block) in
   let language =
-    match Cmarkit.Block.Code_block.info_string code_block with
-    | None -> None
-    | Some (info, _) ->
+    Option.bind (Cmarkit.Block.Code_block.info_string code_block) (fun (info, _) ->
         Option.map fst
-          (Cmarkit.Block.Code_block.language_of_info_string (String.trim info))
+          (Cmarkit.Block.Code_block.language_of_info_string (String.trim info)))
   in
   let block, code_theme = ctx.theme.Theme.code_block in
   let highlighted =
@@ -841,9 +839,7 @@ and render_list ctx ~indent list =
   items
   |> List.mapi (fun index (item, _) ->
       let task_marker =
-        match Cmarkit.Block.List_item.ext_task_marker item with
-        | None -> None
-        | Some (u, _) -> (
+        Option.bind (Cmarkit.Block.List_item.ext_task_marker item) (fun (u, _) ->
             match Cmarkit.Block.List_item.task_status_of_task_marker u with
             | `Checked -> Some ctx.theme.Theme.task_ticked
             | `Unchecked -> Some ctx.theme.Theme.task_unticked
@@ -1044,14 +1040,14 @@ let render ?(width = 80) ?(theme = (Theme.dark : Theme.t)) ?(base_url = "")
   let footers =
     ctx.used_footnotes
     |> List.filter_map (fun key ->
-        match List.assoc_opt key ctx.footnotes with
-        | None -> None
-        | Some fn ->
+        Option.map
+          (fun fn ->
             let number = Option.value (footnote_number ctx fn) ~default:1 in
             let content =
               render_block ctx ~indent:4 (Cmarkit.Block.Footnote.block fn) |> plain
             in
-            Some (Printf.sprintf "[%d]: %s" number content))
+            Printf.sprintf "[%d]: %s" number content)
+          (List.assoc_opt key ctx.footnotes))
   in
   let body = if footers = [] then body else body ^ "\n\n" ^ String.concat "\n" footers in
   let document = (theme : Theme.t).Theme.document in

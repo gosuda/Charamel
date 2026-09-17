@@ -209,11 +209,9 @@ let effective_max_tokens (r : Request.t) =
   else r.Request.model.Model.default_max_tokens
 
 let thinking_budget (r : Request.t) =
-  match budget r.Request.reasoning with
-  | None -> None
-  | Some requested ->
+  Option.bind (budget r.Request.reasoning) (fun requested ->
       let clamped = min requested (effective_max_tokens r - 1) in
-      if clamped > 0 then Some clamped else None
+      if clamped > 0 then Some clamped else None)
 
 let thinking_json (r : Request.t) =
   match thinking_budget r with

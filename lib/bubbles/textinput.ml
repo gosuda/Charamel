@@ -379,9 +379,7 @@ let update_matches m =
   { m with matched_suggestions = matched; current_suggestion_index = index }
 
 let validate m clusters =
-  match m.validate with
-  | None -> None
-  | Some f -> (
+  Option.bind m.validate (fun f ->
       match f (string_of_clusters clusters) with Ok () -> None | Error e -> Some e)
 
 let set_value s m =

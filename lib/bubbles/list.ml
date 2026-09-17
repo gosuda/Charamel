@@ -485,9 +485,9 @@ let recompute_filtered m =
         let ranks = m.filter filter_text targets in
         Stdlib.List.filter_map
           (fun (r : rank) ->
-            match Stdlib.List.nth_opt m.items r.index with
-            | None -> None
-            | Some item -> Some { index = r.index; item; matched = r.matched })
+            Option.map
+              (fun item -> { index = r.index; item; matched = r.matched })
+              (Stdlib.List.nth_opt m.items r.index))
           ranks
     in
     { m with filtered_items }

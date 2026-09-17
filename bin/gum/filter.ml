@@ -209,16 +209,15 @@ let candidate_matches (options : options) candidates query =
       in
       List.filter_map
         (fun (rank : Fuzzy.match_) ->
-          match List.nth_opt source rank.Fuzzy.index with
-          | None -> None
-          | Some candidate ->
-              Some
-                {
-                  text = candidate.text;
-                  value = candidate.value;
-                  matched = rank.Fuzzy.matched;
-                  score = rank.Fuzzy.score;
-                })
+          Option.map
+            (fun candidate ->
+              {
+                text = candidate.text;
+                value = candidate.value;
+                matched = rank.Fuzzy.matched;
+                score = rank.Fuzzy.score;
+              })
+            (List.nth_opt source rank.Fuzzy.index))
         ranks
     else exact_candidate_matches ~pattern:query source
 

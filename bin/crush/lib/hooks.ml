@@ -129,10 +129,9 @@ let run_command t ~timeout ~command ~payload =
   | Unix.Unix_error (error, function_name, argument) ->
       Failed (Fmt.str "%s(%s): %s" function_name argument (Unix.error_message error))
 
-let compile_matcher command = function
-  | None -> None
-  | Some pattern -> (
-      try Some (Re.Perl.compile_pat pattern) with
+let compile_matcher command =
+  Option.map (fun pattern ->
+      try Re.Perl.compile_pat pattern with
       | Re.Perl.Parse_error ->
           invalid_arg (Fmt.str "invalid hook matcher for %s: %s" command pattern)
       | Re.Perl.Not_supported ->

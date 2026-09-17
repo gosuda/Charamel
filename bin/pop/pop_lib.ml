@@ -216,8 +216,7 @@ let prepare ~sw:_ ~clock ~cwd ~stdin ?date options =
 let env_raw env name =
   match env name with Some value when value <> "" -> Some value | _ -> None
 
-let env_value env name =
-  match env_raw env name with Some value -> Some (String.trim value) | None -> None
+let env_value env name = Option.map String.trim (env_raw env name)
 
 let int_env env name ~default =
   match env_value env name with

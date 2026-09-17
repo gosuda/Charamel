@@ -100,13 +100,13 @@ let discover_directory fs directory =
           || not (is_regular_file (path_of fs document))
         then None
         else
-          match read_file_opt (path_of fs document) with
-          | None -> None
-          | Some content ->
+          Option.bind
+            (read_file_opt (path_of fs document))
+            (fun content ->
               Option.map
                 (fun (name, description, body) ->
                   { name; description; dir = skill_dir; body })
-                (parse_document document content ~default_name:name))
+                (parse_document document content ~default_name:name)))
       entries
 
 let load ~fs ~(config : Config.t) ~home =

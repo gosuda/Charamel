@@ -522,9 +522,7 @@ module Login = struct
                              let headers_ok = drain_headers reader in
                              if not headers_ok then None
                              else
-                               match request_path line with
-                               | None -> None
-                               | Some target -> (
+                               Option.bind (request_path line) (fun target ->
                                    let uri =
                                      Uri.of_string ("http://127.0.0.1" ^ target)
                                    in

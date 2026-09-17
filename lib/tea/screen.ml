@@ -41,16 +41,16 @@ let line_bounds ~force old_line new_line =
   let n = Array.length new_line in
   if n = 0 then if force || last_nonblank old_line >= 0 then Some (0, -1, true) else None
   else
-    match if force then Some 0 else first_diff old_line new_line n with
-    | None -> None
-    | Some first ->
+    Option.map
+      (fun first ->
         let first = if first > 0 && new_line.(first).cont then first - 1 else first in
         let old_last = last_nonblank old_line in
         let new_last = last_nonblank new_line in
         let clear_tail = force || old_last > new_last in
         let last = max first new_last in
         let last = if last < n - 1 && new_line.(last).cont then last + 1 else last in
-        Some (first, last, clear_tail)
+        (first, last, clear_tail))
+      (if force then Some 0 else first_diff old_line new_line n)
 
 let color_value = function Some n -> n | None -> 0
 
@@ -156,9 +156,7 @@ let parse_link_params s =
   else
     String.split_on_char ':' s
     |> List.filter_map (fun field ->
-        match String.index_opt field '=' with
-        | None -> None
-        | Some index ->
+        Option.bind (String.index_opt field '=') (fun index ->
             let key = String.sub field 0 index in
             let value = String.sub field (index + 1) (String.length field - index - 1) in
             if
@@ -169,7 +167,7 @@ let parse_link_params s =
               && (not (String.contains value ';'))
               && valid_parameter key && valid_parameter value
             then Some (key, value)
-            else None)
+            else None))
 
 let layout ~cols ~max_rows content =
   if cols <= 0 || max_rows <= 0 then [||]

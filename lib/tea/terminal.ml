@@ -17,9 +17,7 @@ let fd_opt resource =
   try Eio_unix.Resource.fd_opt resource with Invalid_argument _ -> None
 
 let positive_env_int env name =
-  match env name with
-  | None -> None
-  | Some raw -> (
+  Option.bind (env name) (fun raw ->
       match int_of_string_opt (String.trim raw) with
       | Some n when n > 0 -> Some n
       | _ -> None)

@@ -383,12 +383,10 @@ let error_message j =
    BLOCKLIST, SPII, OTHER); [OTHER] and any unknown value still mean blocked,
    so they are reported as a filter with the reason named. *)
 let blocked_reason j =
-  match oopt j "promptFeedback" with
-  | Some fb -> (
+  Option.bind (oopt j "promptFeedback") (fun fb ->
       match string_mem fb "blockReason" with
       | Some r when r <> "" && r <> "BLOCK_REASON_UNSPECIFIED" -> Some r
       | _ -> None)
-  | None -> None
 
 let decode_event (st : state) (j : Jsont.json) : Stream_part.t list =
   if not (is_object j) then terminal st "event is not a JSON object"

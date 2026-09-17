@@ -439,10 +439,8 @@ let tool_delta (call : tool_state) (tc : Jsont.json) : Stream_part.t list =
    upstream default [tool-call-<index>] (language_model.go:526-565). *)
 let open_tool (st : state) (index : int) (tc : Jsont.json) : Stream_part.t list * bool =
   let function' = oopt tc "function" in
-  let name = match function' with Some f -> string_mem f "name" | None -> None in
-  let arguments =
-    match function' with Some f -> string_mem f "arguments" | None -> None
-  in
+  let name = Option.bind function' (fun f -> string_mem f "name") in
+  let arguments = Option.bind function' (fun f -> string_mem f "arguments") in
   let has_name = match name with Some s -> s <> "" | None -> false in
   let has_args = match arguments with Some s -> s <> "" | None -> false in
   if (not has_name) && not has_args then ([], true)

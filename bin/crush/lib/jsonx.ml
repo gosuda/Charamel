@@ -23,10 +23,7 @@ let encode ?(minify = true) codec value =
   | Ok json -> string_of_json ~minify json
 
 let member name = function
-  | Jsont.Object (members, _) -> (
-      match Jsont.Json.find_mem name members with
-      | None -> None
-      | Some (_, value) -> Some value)
+  | Jsont.Object (members, _) -> Option.map snd (Jsont.Json.find_mem name members)
   | _ -> None
 
 let string_member name json =

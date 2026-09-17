@@ -341,9 +341,7 @@ let legacy_key_for_csi csi =
     | _ -> no_mods
   in
   let code = if final = '~' then code_of_tilde first else code_of_simple final in
-  match code with
-  | None -> None
-  | Some code ->
+  Option.bind code (fun code ->
       let valid_shape =
         List.length csi.params <= 2
         && ((final = '~' && param_is_plain (nth_opt csi.params 0))
@@ -364,7 +362,7 @@ let legacy_key_for_csi csi =
             mods_or modifiers (mods_of ~shift:true ())
           else modifiers
         in
-        Some (make_key ~mods:modifiers code)
+        Some (make_key ~mods:modifiers code))
 
 let kitty_code cp =
   match cp with

@@ -56,12 +56,10 @@ let parse_header line =
   if length < 5 || line.[0] <> '[' || line.[length - 1] <> ']' then None
   else
     let inner = String.sub line 1 (length - 2) in
-    match String.rindex_opt inner '#' with
-    | None -> None
-    | Some hash ->
+    Option.bind (String.rindex_opt inner '#') (fun hash ->
         let path = String.sub inner 0 hash in
         let tag = String.sub inner (hash + 1) (String.length inner - hash - 1) in
-        if path = "" || not (valid_tag tag) then None else Some (path, tag)
+        if path = "" || not (valid_tag tag) then None else Some (path, tag))
 
 type command =
   | Put_range_command of int * int
@@ -556,9 +554,7 @@ let run_read ctx json =
 
 let save_file ctx target content =
   let target_path = path ctx target in
-  let parent =
-    match Eio.Path.split target_path with Some (parent, _) -> Some parent | None -> None
-  in
+  let parent = Option.map fst (Eio.Path.split target_path) in
   try
     Eio.Cancel.protect (fun () ->
         begin match parent with

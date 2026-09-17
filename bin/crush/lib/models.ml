@@ -305,15 +305,14 @@ let resolve ~fs config ~auth ~env ~role =
       | Some provider -> (
           let model =
             if inherited_small then
-              match find_model provider selected.Config.model with
-              | None -> None
-              | Some large ->
-                  Some
-                    (Option.value
-                       (small_model_with_fallback selected.Config.provider
-                          provider.Charm_fantasy.Provider_info.models
-                          ~fallback_id:selected.Config.model)
-                       ~default:large)
+              Option.map
+                (fun large ->
+                  Option.value
+                    (small_model_with_fallback selected.Config.provider
+                       provider.Charm_fantasy.Provider_info.models
+                       ~fallback_id:selected.Config.model)
+                    ~default:large)
+                (find_model provider selected.Config.model)
             else find_model provider selected.Config.model
           in
           match model with

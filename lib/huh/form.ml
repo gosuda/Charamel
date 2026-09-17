@@ -153,12 +153,10 @@ let complete t =
   { t with results; state = Completed results }
 
 let first_field t group_index =
-  match t.env with
-  | None -> None
-  | Some env ->
+  Option.bind t.env (fun env ->
       Group.first_index
         ~skip:(fun index -> skip_for t ~env ~group_index index)
-        t.groups.(group_index)
+        t.groups.(group_index))
 
 let focus_field t group_index field_index =
   match t.env with
@@ -339,14 +337,12 @@ let move_within_group t group_index direction =
               group selected
         | None -> None)
   in
-  match next with
-  | None -> None
-  | Some field_index ->
+  Option.bind next (fun field_index ->
       let t =
         match direction with `Next -> blur_field t group_index selected | `Prev -> t
       in
       let t, command = focus_field t group_index field_index in
-      Some (adjust_offset t group_index, command)
+      Some (adjust_offset t group_index, command))
 
 let handle_outcome t group_index field_index outcome command =
   match outcome with

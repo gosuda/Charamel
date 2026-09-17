@@ -12,7 +12,7 @@ let variation_selector_15 = Uchar.of_int 0xFE0E
 
 let scan cluster u =
   {
-    first = (match cluster.first with Some first -> Some first | None -> Some u);
+    first = Some (Option.value cluster.first ~default:u);
     pair =
       (cluster.pair
       ||

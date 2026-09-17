@@ -121,11 +121,9 @@ let prefix_folded source position literal =
     equal 0
 
 let regex_end regex source position =
-  match Re.exec_opt ~pos:position regex source with
-  | None -> None
-  | Some groups ->
+  Option.bind (Re.exec_opt ~pos:position regex source) (fun groups ->
       let start, stop = Re.Group.offset groups 0 in
-      if start = position && stop > position then Some stop else None
+      if start = position && stop > position then Some stop else None)
 
 let line_end source position =
   let length = String.length source in
@@ -160,12 +158,12 @@ let quoted_raw_end source position =
       then bar (index + 1)
       else None
     in
-    match bar (position + 1) with
-    | None -> None
-    | Some separator ->
+    Option.map
+      (fun separator ->
         let id = String.sub source (position + 1) (separator - position - 1) in
         let closing = "|" ^ id ^ "}" in
-        Some (delimited_end source position "{" closing ~escapes:false)
+        delimited_end source position "{" closing ~escapes:false)
+      (bar (position + 1))
 
 let string_end strings source position =
   let rec find = function
@@ -414,9 +412,7 @@ let step compiled source position =
       add_candidate position 7 Spec.Punct (position + 1) candidates
     else candidates
   in
-  match choose_candidate candidates with
-  | None -> None
-  | Some (kind, stop, _) -> Some (kind, stop)
+  Option.map (fun (kind, stop, _) -> (kind, stop)) (choose_candidate candidates)
 
 let merge_text spans =
   let rec loop acc = function
