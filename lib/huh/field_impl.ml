@@ -151,9 +151,6 @@ let noop_string _ = Ok ()
 let noop_bool _ = Ok ()
 let noop_list _ = Ok ()
 
-(* -------------------------------------------------------------------------- *)
-(* Input                                                                     *)
-
 type input_message = Input_edit of Charm_bubbles.Textinput.msg
 
 type input_state = {
@@ -343,9 +340,6 @@ let input_impl key title description placeholder prompt char_limit suggestions e
     }
   in
   Field (impl, state)
-
-(* -------------------------------------------------------------------------- *)
-(* Text                                                                      *)
 
 type text_message =
   | Text_edit of Charm_bubbles.Textarea.msg
@@ -598,8 +592,6 @@ let text_impl key title description placeholder lines char_limit show_line_numbe
   in
   Field (impl, state)
 
-(* -------------------------------------------------------------------------- *)
-(* Select                                                                    *)
 type 'a option_ = { key : string; value : 'a }
 type select_message = Select_filter of Charm_bubbles.Textinput.msg
 
@@ -997,9 +989,6 @@ let select_impl key title description height inline filterable default validate 
     }
   in
   Field (impl, state)
-
-(* -------------------------------------------------------------------------- *)
-(* Multi-select                                                              *)
 
 type multi_message = Multi_filter of Charm_bubbles.Textinput.msg
 
@@ -1451,9 +1440,6 @@ let multi_impl key title description height limit filterable default validate op
   in
   Field (impl, state)
 
-(* -------------------------------------------------------------------------- *)
-(* Confirm                                                                   *)
-
 type confirm_message = unit
 
 type confirm_state = {
@@ -1605,9 +1591,6 @@ let confirm_impl key title description affirmative negative inline default valid
   in
   Field (impl, state)
 
-(* -------------------------------------------------------------------------- *)
-(* Note                                                                      *)
-
 type note_state = {
   title : string Dyn.t;
   description : string Dyn.t;
@@ -1732,9 +1715,6 @@ let note_impl title description height next =
     }
   in
   Field (impl, state)
-
-(* -------------------------------------------------------------------------- *)
-(* File                                                                      *)
 
 type file_message = File_picker of Charm_bubbles.Filepicker.msg
 
@@ -2001,9 +1981,6 @@ let file_impl key title description dir show_hidden show_size show_permissions a
     }
   in
   Field (impl, state)
-
-(* -------------------------------------------------------------------------- *)
-(* Existential operations and public constructor module                       *)
 
 let init (Field (impl, state)) ctx =
   let state, command = impl.init ctx state in

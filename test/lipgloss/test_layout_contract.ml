@@ -11,7 +11,6 @@ let check_int name expected actual = Alcotest.(check int) name expected actual
 let blank n = String.make n ' '
 let lines xs = String.concat "\n" xs
 
-(* -------------------------------------------------------------------------- *)
 (* Size and measurement. *)
 
 let test_width_uses_widest_line () = check_int "widest line" 3 (Layout.width "abc\nde\nf")
@@ -31,7 +30,6 @@ let test_size_combines_width_and_height () =
   check_int "size width" 5 w;
   check_int "size height" 2 h
 
-(* -------------------------------------------------------------------------- *)
 (* Horizontal joining. *)
 
 let test_join_horizontal_empty_and_single () =
@@ -57,7 +55,6 @@ let test_join_horizontal_uses_ansi_and_grapheme_width () =
     (Layout.join_horizontal [ "\x1b[1mhi\x1b[m"; "X" ]);
   check_string "wide cell padding" "好 \nabc" (Layout.join_vertical [ "好"; "abc" ])
 
-(* -------------------------------------------------------------------------- *)
 (* Vertical joining. *)
 
 let test_join_vertical_empty_and_single () =
@@ -78,7 +75,6 @@ let test_join_vertical_fractional_and_odd_center () =
   check_string "odd center" "  A \nBBBB"
     (Layout.join_vertical ~pos:Position.center [ "A"; "BBBB" ])
 
-(* -------------------------------------------------------------------------- *)
 (* Horizontal and vertical placement. *)
 
 let test_place_horizontal_edges_and_center () =
@@ -144,7 +140,6 @@ let test_place_composes_horizontal_then_vertical () =
     (lines [ empty; empty; row; empty; empty ])
     (Layout.place ~h:Position.center ~v:Position.center ~width:10 ~height:5 "ab")
 
-(* -------------------------------------------------------------------------- *)
 (* Whitespace patterns and styles. *)
 
 let test_whitespace_pattern_cycles_graphemes_and_partial_fills () =
@@ -164,7 +159,6 @@ let test_whitespace_style_covers_complete_fill () =
   check_string "styled fill" "a\x1b[1m···\x1b[m"
     (Layout.place_horizontal ~whitespace:("·", bold) ~width:4 ~pos:Position.left "a")
 
-(* -------------------------------------------------------------------------- *)
 (* Range styling.  Ranges are half-open terminal-cell intervals. *)
 
 let test_style_ranges_empty_and_zero_length () =
@@ -224,8 +218,6 @@ let test_style_runes_ignores_out_of_bounds_and_keeps_ansi () =
   let input = "\x1b[31mhello\x1b[m" in
   check_string "identity ANSI" input
     (Layout.style_runes Style.empty Style.empty input ~indices:[ 1 ])
-
-(* -------------------------------------------------------------------------- *)
 
 let cases : unit Alcotest.test_case list =
   [

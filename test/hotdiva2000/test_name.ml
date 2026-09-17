@@ -45,15 +45,6 @@ let expect_invalid_argument name (f : unit -> unit) =
           Alcotest.fail
             (Fmt.str "%s: expected Invalid_argument, got %s" name (Printexc.to_string exn)))
 
-(* --- Exact-output tests over a controlled entropy queue.
-
-   Byte values are hand-derived from the real word-list sizes, not sampled:
-   Words.nouns has 1107 entries, so index selection masks to 0x7FF (2047)
-   and draws 2 bytes; 0x07FF (2047) always lands on the rejected tail (2047
-   >= 1107) and 0x0000/0x0001/0x0002 always select indices 0/1/2.
-   Words.modifiers has 915 entries, masking to 0x3FF (1023); 0x03FF (1023)
-   is its rejected tail (1023 >= 915) and 0x0001 selects index 1. *)
-
 let reject_noun = be16 0x07ff (* masked value 2047 >= 1107: rejected *)
 let accept_noun0 = be16 0 (* Words.nouns.(0) = "2-Factor Auth Token" *)
 let accept_noun1 = be16 1 (* Words.nouns.(1) = "360 Review" *)
@@ -88,10 +79,6 @@ let exact_output_suite =
             [ "2-factor-auth-token"; "360-review" ]
             (Name.generate_many ~random ~count:2 ~separator:"-" ~tokens:1 ()));
     ] )
-
-(* --- Boundary validation: invalid input is rejected before [random] is
-   ever called, proved with [unreachable_random] rather than merely
-   asserting that no exception is raised in the benign case. *)
 
 let boundaries_suite =
   ( "Name boundaries",

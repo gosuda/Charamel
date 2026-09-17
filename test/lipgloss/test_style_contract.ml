@@ -20,7 +20,6 @@ let blue = Option.get (Color.rgb 0 0 255)
 let white = Option.get (Color.rgb 255 255 255)
 let dark_bg = Option.get (Color.rgb 0x11 0x11 0x11)
 
-(* ---------------------------------------------------------------------- *)
 (* Property setting/unsetting: ports .references/lipgloss/style_test.go
    TestStyleUnset (style_test.go:234-362). PaddingChar/MarginChar lines are
    dropped (no such property exists in Style.t at all: see report). The
@@ -142,7 +141,6 @@ let test_tab_width_set_unset () =
   check_int_opt "tab_width unset is None, not a default" None
     (Style.get_tab_width (Style.unset_tab_width s))
 
-(* ---------------------------------------------------------------------- *)
 (* Inheritance: ports TestStyleInherit (style_test.go:156-192) plus the
    margin_background-from-background fallback documented at style.mli:82-84. *)
 let test_inherit_copies_attributes () =
@@ -196,7 +194,6 @@ let test_inherit_margin_background_fallback () =
   check_color_opt "no fallback when neither side has a color" None
     (Style.get_margin_background (Style.inherit_ ~parent:Style.empty Style.empty))
 
-(* ---------------------------------------------------------------------- *)
 (* Underline/strikethrough family: ports TestGetUnderlineColor
    (style_test.go:54-62), TestUnderline (style_test.go:10-52) and
    TestStrikethrough (style_test.go:64-98).
@@ -272,7 +269,6 @@ let test_strikethrough_family () =
     "ab\x1b[9m \x1b[mc"
     (Style.render (Style.strikethrough_spaces true Style.empty) "ab c")
 
-(* ---------------------------------------------------------------------- *)
 (* Plain flag rendering: ports TestStyleRender (style_test.go:100-142). The
    non-underline sub-cases carry no SGR-minimization divergence and are
    reused byte for byte. The underline sub-case is re-derived per the
@@ -294,7 +290,6 @@ let test_style_render_flags () =
   check_string "faint" "\x1b[2mhello\x1b[m"
     (Style.render (Style.faint true Style.empty) "hello")
 
-(* ---------------------------------------------------------------------- *)
 (* Transform, tabs, CRLF, and inline newline stripping: ports
    TestStringTransform (style_test.go:449-492), TestTabConversion
    (style_test.go:438-447), TestCarriageReturnInRender
@@ -345,7 +340,6 @@ let test_inline_suppresses_border_padding_margin () =
   check_string "inline mode flattens newlines and skips border/padding/margin entirely"
     "xy" (Style.render style "x\ny")
 
-(* ---------------------------------------------------------------------- *)
 (* Exact width vs minimum height: ports TestWidth/TestHeight
    (style_test.go:533-581) using Layout.width/height and hand-computed
    frame sizes (Style exposes no GetHorizontalFrameSize/GetVerticalFrameSize
@@ -416,7 +410,6 @@ let test_height_never_truncates_but_pads_up () =
   check_int "height larger than content pads up to the minimum" 4
     (Layout.height (Style.render (Style.height 4 Style.empty) "a\nb"))
 
-(* ---------------------------------------------------------------------- *)
 (* Max clipping: no applicable upstream style_test.go cases exist for
    MaxWidth/MaxHeight (only present in an untestable benchmark), so these
    are derived directly from the render order documented in style.mli and
@@ -438,7 +431,6 @@ let test_max_width_truncates_after_border () =
     "\xe2\x94\x8c\xe2\x94\x80\n\xe2\x94\x82h\n\xe2\x94\x94\xe2\x94\x80"
     (Style.render (Style.max_width 2 (Style.border Border.normal Style.empty)) "hello")
 
-(* ---------------------------------------------------------------------- *)
 (* Render order (padding inside border inside margin): a fully hand-derived,
    color-free structural test. No applicable upstream literal exists (this
    combination isn't in any upstream test), so every byte below is traced
@@ -467,7 +459,6 @@ let test_render_order_padding_border_margin () =
   check_int "outermost height is content(1) + padding(2) + border(2) + margin(2)" 7
     (Layout.height rendered)
 
-(* ---------------------------------------------------------------------- *)
 (* Per-edge border colors and multicolumn (wide-glyph) borders: no
    applicable upstream test exists (borders_test.go is 100% benchmarks plus
    one internal-helper test), so these are derived from Sides_color's own
@@ -514,7 +505,6 @@ let test_border_wide_corner_consistency () =
         (Layout.width bottom)
   | _ -> Alcotest.fail "expected exactly three rendered lines (top, body, bottom)"
 
-(* ---------------------------------------------------------------------- *)
 (* color_whitespace: derived directly from style.go's own render function
    (colorWhitespace/styleWhitespace gating, .references/lipgloss/style.go
    around line 305 and 363-380), which our te_whitespace construction
@@ -542,7 +532,6 @@ let test_color_whitespace () =
   check_bool "reverse's fg-on-padding rule ignores color_whitespace" true
     (reverse_rendered <> uncolored)
 
-(* ---------------------------------------------------------------------- *)
 (* Margin-only rendering with no other property set: ports the four
    MarginLeft/MarginRight cases of TestStyleValue (style_test.go:364-431).
    The SetString-based cases from that table are dropped: Style holds no
