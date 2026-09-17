@@ -3,9 +3,9 @@
 type message =
   | Tick of Mtime.t
   | Finished
-  | Key of Charm_tea.Key.t  (** The type for inline application messages. *)
+  | Key of Charamel_tea.Key.t  (** The type for inline application messages. *)
 
-val app : (int, message) Charm_tea.app
+val app : (int, message) Charamel_tea.app
 (** [app] is the inline output application. *)
 
 val main : unit -> unit

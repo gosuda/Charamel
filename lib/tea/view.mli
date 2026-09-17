@@ -44,8 +44,8 @@ type t = {
   report_focus : bool;
   title : string option;
   keyboard : keyboard;
-  background : Charm_ansi.Color.t option;
-  foreground : Charm_ansi.Color.t option;
+  background : Charamel_ansi.Color.t option;
+  foreground : Charamel_ansi.Color.t option;
   progress : progress;
 }
 (** The type for one frame. [cursor] is [None] when the application cursor should be
@@ -59,8 +59,8 @@ val v :
   ?report_focus:bool ->
   ?title:string ->
   ?keyboard:keyboard ->
-  ?background:Charm_ansi.Color.t ->
-  ?foreground:Charm_ansi.Color.t ->
+  ?background:Charamel_ansi.Color.t ->
+  ?foreground:Charamel_ansi.Color.t ->
   ?progress:progress ->
   string ->
   t

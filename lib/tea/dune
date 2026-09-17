@@ -1,8 +1,8 @@
 (library
- (name charm_tea)
- (public_name charm.tea)
+ (name charamel_tea)
+ (public_name charamel.tea)
  (modules
-  charm_tea
+  charamel_tea
   key
   mouse
   event
@@ -17,8 +17,8 @@
   program
   test)
  (libraries
-  charm.ansi
-  charm.colorprofile
+  charamel.ansi
+  charamel.colorprofile
   eio
   eio.unix
   eio.mock

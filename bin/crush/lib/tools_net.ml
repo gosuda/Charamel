@@ -482,7 +482,7 @@ let fetch =
             let headers =
               Http.Header.of_list
                 [
-                  ("user-agent", "crush/" ^ Charm_cli.Version.current);
+                  ("user-agent", "crush/" ^ Charamel_cli.Version.current);
                   ("accept", "text/html, text/plain, text/markdown, */*");
                 ]
             in

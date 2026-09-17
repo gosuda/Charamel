@@ -1,6 +1,6 @@
 (** Huh navigation key bindings. *)
 
-type binding = Charm_bubbles.Key_binding.t
+type binding = Charamel_bubbles.Key_binding.t
 
 type input = {
   accept_suggestion : binding;

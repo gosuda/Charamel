@@ -42,7 +42,7 @@ val initial_value : Eio_unix.Stdenv.base -> options -> string
 val make : options -> model
 (** [make options] creates a focused input model. *)
 
-val app : options -> (model, msg) Charm_tea.app
+val app : options -> (model, msg) Charamel_tea.app
 (** [app options] is the scripted or terminal input application. *)
 
 val value : model -> string

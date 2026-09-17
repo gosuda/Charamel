@@ -14,24 +14,25 @@ let output_string = function
   | `Media (mime, data) -> Fmt.str "media <%s> (%d bytes)" mime (String.length data)
 
 let part_text = function
-  | Charm_fantasy.Message.Text text -> text
-  | Charm_fantasy.Message.Reasoning { text; _ } -> "<reasoning>" ^ text ^ "</reasoning>"
-  | Charm_fantasy.Message.File { mime; data; name } ->
+  | Charamel_fantasy.Message.Text text -> text
+  | Charamel_fantasy.Message.Reasoning { text; _ } ->
+      "<reasoning>" ^ text ^ "</reasoning>"
+  | Charamel_fantasy.Message.File { mime; data; name } ->
       Fmt.str "file <%s> <%s> (%d bytes)" mime
         (Option.value ~default:"" name)
         (String.length data)
-  | Charm_fantasy.Message.Tool_call { id; name; input } ->
+  | Charamel_fantasy.Message.Tool_call { id; name; input } ->
       Fmt.str "call %s (%s): %s" id name (Jsonx.display_string input)
-  | Charm_fantasy.Message.Tool_result { id; name; output } ->
+  | Charamel_fantasy.Message.Tool_result { id; name; output } ->
       Fmt.str "result %s (%s): %s" id name (output_string output)
 
-let message_text { Charm_fantasy.Message.role; parts } =
+let message_text { Charamel_fantasy.Message.role; parts } =
   let role =
     match role with
-    | Charm_fantasy.Message.System -> "system"
-    | Charm_fantasy.Message.User -> "user"
-    | Charm_fantasy.Message.Assistant -> "assistant"
-    | Charm_fantasy.Message.Tool -> "tool"
+    | Charamel_fantasy.Message.System -> "system"
+    | Charamel_fantasy.Message.User -> "user"
+    | Charamel_fantasy.Message.Assistant -> "assistant"
+    | Charamel_fantasy.Message.Tool -> "tool"
   in
   role ^ ": " ^ String.concat "" (List.map part_text parts)
 
@@ -86,7 +87,8 @@ let render_prefix events through =
           lines := Fmt.str "result %s: %s" name result :: !lines
       | Session.Usage { usage; cost_usd; _ } ->
           lines :=
-            Fmt.str "usage: %a cost=$%.6f" Charm_fantasy.Usage.pp usage cost_usd :: !lines
+            Fmt.str "usage: %a cost=$%.6f" Charamel_fantasy.Usage.pp usage cost_usd
+            :: !lines
       | Session.Permission { tool; action; path; decision; _ } ->
           let decision =
             match decision with
@@ -105,17 +107,19 @@ let run ~sw ~clock ~net ~(small : Models.resolved) ~auth session =
   if through < 0 then Ok ""
   else
     let rendered = render_prefix events through in
-    let messages = [ Charm_fantasy.Message.text Charm_fantasy.Message.User rendered ] in
+    let messages =
+      [ Charamel_fantasy.Message.text Charamel_fantasy.Message.User rendered ]
+    in
     let stream =
-      Charm_fantasy.Provider.stream small.Models.provider ~sw ~clock ~net
+      Charamel_fantasy.Provider.stream small.Models.provider ~sw ~clock ~net
         ~model:small.Models.model ~system:[ Prompt_summarize.text ] ~max_tokens:4096
         messages
     in
     let summary = Buffer.create 1024 in
-    let usage = ref Charm_fantasy.Usage.zero in
+    let usage = ref Charamel_fantasy.Usage.zero in
     let rec consume () =
       match Eio.Stream.take stream with
-      | Charm_fantasy.Stream_part.Text_delta text ->
+      | Charamel_fantasy.Stream_part.Text_delta text ->
           Buffer.add_string summary text;
           consume ()
       | Reasoning_delta _ -> consume ()
@@ -123,7 +127,7 @@ let run ~sw ~clock ~net ~(small : Models.resolved) ~auth session =
       | Tool_input_delta _ -> consume ()
       | Tool_call_end _ -> consume ()
       | Usage value ->
-          usage := Charm_fantasy.Usage.add !usage value;
+          usage := Charamel_fantasy.Usage.add !usage value;
           consume ()
       | Finish (`Error message) -> Error (`Provider message)
       | Finish (`Stop | `Length | `Content_filter | `Tool_calls) -> (
@@ -132,11 +136,11 @@ let run ~sw ~clock ~net ~(small : Models.resolved) ~auth session =
           let model =
             {
               Session.provider = small.Models.provider_id;
-              model = small.Models.model.Charm_fantasy.Model.id;
+              model = small.Models.model.Charamel_fantasy.Model.id;
             }
           in
           let persist_usage () =
-            if Charm_fantasy.Usage.total !usage = 0 then Ok ()
+            if Charamel_fantasy.Usage.total !usage = 0 then Ok ()
             else
               Session.append session ~clock
                 (Session.Usage

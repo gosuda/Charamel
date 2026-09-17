@@ -1,5 +1,5 @@
 let key name =
-  match Charm_tea.Key.of_string name with
+  match Charamel_tea.Key.of_string name with
   | Ok key -> key
   | Error (`Msg message) -> Alcotest.fail message
 
@@ -18,7 +18,7 @@ let scripted_selection () =
     }
   in
   let model, _frame =
-    Charm_tea.Test.run (Choose.app options)
+    Charamel_tea.Test.run (Choose.app options)
       ~events:[ `Key (key "down"); `Key (key "enter") ]
       ~size:(12, 80)
   in

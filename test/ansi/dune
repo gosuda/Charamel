@@ -1,7 +1,7 @@
 (test
  (name test_ansi)
- (package charm)
- (libraries charm.ansi alcotest fmt)
+ (package charamel)
+ (libraries charamel.ansi alcotest fmt)
  (modules
   test_ansi
   test_width

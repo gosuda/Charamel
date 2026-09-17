@@ -1,4 +1,4 @@
-module Key = Charm_ssh_keygen
+module Key = Charamel_ssh_keygen
 module Command = Keygen_core.Keygen
 
 let ( / ) = Eio.Path.( / )
@@ -13,7 +13,7 @@ let expect_error label = function
 
 let fresh_dir env name f =
   let absolute =
-    Filename.concat (Filename.get_temp_dir_name ()) ("charm-keygen-cli-" ^ name)
+    Filename.concat (Filename.get_temp_dir_name ()) ("charamel-keygen-cli-" ^ name)
   in
   let root = Eio.Path.(env#fs / absolute) in
   Eio.Path.rmtree ~missing_ok:true root;

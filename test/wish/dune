@@ -1,12 +1,12 @@
 (test
  (name test_wish)
- (package charm-ssh)
+ (package charamel-ssh)
  (modules test_wish)
  (libraries
   alcotest
-  charm-ssh.wish
-  charm-ssh.keygen
-  charm.tea
+  charamel-ssh.wish
+  charamel-ssh.keygen
+  charamel.tea
   awa
   eio
   eio.unix

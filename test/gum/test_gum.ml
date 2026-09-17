@@ -1,15 +1,15 @@
-let sides_equal (left : Charm_lipgloss.Sides.t) (right : Charm_lipgloss.Sides.t) =
-  left.Charm_lipgloss.Sides.top = right.Charm_lipgloss.Sides.top
-  && left.Charm_lipgloss.Sides.right = right.Charm_lipgloss.Sides.right
-  && left.Charm_lipgloss.Sides.bottom = right.Charm_lipgloss.Sides.bottom
-  && left.Charm_lipgloss.Sides.left = right.Charm_lipgloss.Sides.left
+let sides_equal (left : Charamel_lipgloss.Sides.t) (right : Charamel_lipgloss.Sides.t) =
+  left.Charamel_lipgloss.Sides.top = right.Charamel_lipgloss.Sides.top
+  && left.Charamel_lipgloss.Sides.right = right.Charamel_lipgloss.Sides.right
+  && left.Charamel_lipgloss.Sides.bottom = right.Charamel_lipgloss.Sides.bottom
+  && left.Charamel_lipgloss.Sides.left = right.Charamel_lipgloss.Sides.left
 
 let sides_testable =
   Alcotest.testable
-    (Fmt.of_to_string (fun (sides : Charm_lipgloss.Sides.t) ->
-         Fmt.str "(%d,%d,%d,%d)" sides.Charm_lipgloss.Sides.top
-           sides.Charm_lipgloss.Sides.right sides.Charm_lipgloss.Sides.bottom
-           sides.Charm_lipgloss.Sides.left))
+    (Fmt.of_to_string (fun (sides : Charamel_lipgloss.Sides.t) ->
+         Fmt.str "(%d,%d,%d,%d)" sides.Charamel_lipgloss.Sides.top
+           sides.Charamel_lipgloss.Sides.right sides.Charamel_lipgloss.Sides.bottom
+           sides.Charamel_lipgloss.Sides.left))
     sides_equal
 
 let test_env_names () =
@@ -28,10 +28,10 @@ let test_padding_shapes () =
     | Ok actual -> Alcotest.check sides_testable input expected actual
     | Error (`Msg message) -> Alcotest.fail message
   in
-  check "3" (Charm_lipgloss.Sides.all 3);
-  check "1 2" (Charm_lipgloss.Sides.v ~top:1 ~right:2 ~bottom:1 ~left:2 ());
-  check "1,2,3" (Charm_lipgloss.Sides.v ~top:1 ~right:2 ~bottom:3 ~left:2 ());
-  check "1,2,3,4" (Charm_lipgloss.Sides.v ~top:1 ~right:2 ~bottom:3 ~left:4 ())
+  check "3" (Charamel_lipgloss.Sides.all 3);
+  check "1 2" (Charamel_lipgloss.Sides.v ~top:1 ~right:2 ~bottom:1 ~left:2 ());
+  check "1,2,3" (Charamel_lipgloss.Sides.v ~top:1 ~right:2 ~bottom:3 ~left:2 ());
+  check "1,2,3,4" (Charamel_lipgloss.Sides.v ~top:1 ~right:2 ~bottom:3 ~left:4 ())
 
 let test_padding_rejects_malformed () =
   let malformed = [ ""; "1 2 3 4 5"; "one"; "1,broken" ] in
@@ -43,11 +43,13 @@ let test_padding_rejects_malformed () =
     malformed
 
 let test_color_align_border () =
-  let expected = Charm_ansi.Color.Rgb (170, 187, 204) in
+  let expected = Charamel_ansi.Color.Rgb (170, 187, 204) in
   match (Gum_flag.color "#abc", Gum_flag.align "middle", Gum_flag.border "rounded") with
   | Ok (Some color), Some position, Some border ->
-      Alcotest.(check bool) "hex color" true (Charm_ansi.Color.equal expected color);
-      Alcotest.(check (float 0.)) "middle" 0.5 (Charm_lipgloss.Position.to_float position);
+      Alcotest.(check bool) "hex color" true (Charamel_ansi.Color.equal expected color);
+      Alcotest.(check (float 0.))
+        "middle" 0.5
+        (Charamel_lipgloss.Position.to_float position);
       Alcotest.(check string) "rounded top-left" "╭" border.top_left
   | _ -> Alcotest.fail "valid color, alignment, or border rejected"
 
@@ -61,12 +63,13 @@ let test_style_defaults () =
   Alcotest.(check bool)
     "foreground" true
     (match Gum_style.foreground style with
-    | Some color -> Charm_ansi.Color.equal color (Charm_ansi.Color.Rgb (170, 187, 204))
+    | Some color ->
+        Charamel_ansi.Color.equal color (Charamel_ansi.Color.Rgb (170, 187, 204))
     | None -> false);
-  let rendered = Gum_style.to_style style |> Charm_lipgloss.Style.get_padding in
+  let rendered = Gum_style.to_style style |> Charamel_lipgloss.Style.get_padding in
   Alcotest.(check (option sides_testable))
     "padding"
-    (Some (Charm_lipgloss.Sides.v ~top:1 ~right:2 ~bottom:3 ~left:4 ()))
+    (Some (Charamel_lipgloss.Sides.v ~top:1 ~right:2 ~bottom:3 ~left:4 ()))
     rendered
 
 let cases =

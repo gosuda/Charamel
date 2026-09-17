@@ -28,7 +28,7 @@ val run :
   clock:_ Eio.Time.clock ->
   net:Eio_unix.Net.t ->
   small:Models.resolved ->
-  auth:Charm_fantasy.Provider.auth ->
+  auth:Charamel_fantasy.Provider.auth ->
   Session.t ->
   (string, [ `Provider of string | `Session of Session.error ]) result
 (** [run ~sw ~clock ~net ~small ~auth session] summarizes the replaced prefix of [session]

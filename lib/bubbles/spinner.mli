@@ -22,12 +22,16 @@ type msg = Tick
 type t
 
 val v :
-  ?kind:kind -> ?frames:string list * float -> ?style:Charm_lipgloss.Style.t -> unit -> t
+  ?kind:kind ->
+  ?frames:string list * float ->
+  ?style:Charamel_lipgloss.Style.t ->
+  unit ->
+  t
 
-val update : msg -> t -> t * msg Charm_tea.Cmd.t
+val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 val view : t -> string
-val key : t -> Charm_tea.Key.t -> msg option
-val subscriptions : t -> msg Charm_tea.Sub.t
+val key : t -> Charamel_tea.Key.t -> msg option
+val subscriptions : t -> msg Charamel_tea.Sub.t
 val set_kind : kind -> t -> t
-val set_style : Charm_lipgloss.Style.t -> t -> t
+val set_style : Charamel_lipgloss.Style.t -> t -> t
 val kind : t -> kind option

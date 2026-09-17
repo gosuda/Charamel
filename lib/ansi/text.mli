@@ -6,12 +6,12 @@
     Sequences are preserved byte for byte, line breaks never fall inside a sequence or a
     grapheme cluster, and cell measurements are grapheme based.
 
-    The recognized sequence families are the control sequences of {!Charm_ansi.Parser}: an
-    [ESC] or C1 introducer followed by the bytes its final byte, and the string sequences
-    [DCS], [SOS], [OSC], [PM] and [APC] whose payload ends at [BEL] (OSC only), [ST],
-    [CAN] or [SUB]. Bytes that begin no complete sequence are kept as written. [strip]
-    removes whole sequences and keeps control characters, the wrapping and truncation
-    functions keep every sequence in place.
+    The recognized sequence families are the control sequences of {!Charamel_ansi.Parser}:
+    an [ESC] or C1 introducer followed by the bytes its final byte, and the string
+    sequences [DCS], [SOS], [OSC], [PM] and [APC] whose payload ends at [BEL] (OSC only),
+    [ST], [CAN] or [SUB]. Bytes that begin no complete sequence are kept as written.
+    [strip] removes whole sequences and keeps control characters, the wrapping and
+    truncation functions keep every sequence in place.
 
     [width] is the escape-aware counterpart of {!Width.string_width}, which measures
     escape bytes as text. *)

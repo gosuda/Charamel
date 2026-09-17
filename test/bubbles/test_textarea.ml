@@ -1,5 +1,5 @@
-module Area = Charm_bubbles.Textarea
-module Key = Charm_tea.Key
+module Area = Charamel_bubbles.Textarea
+module Key = Charamel_tea.Key
 
 let focused area = fst (Area.focus area)
 let update message area = fst (Area.update message area)
@@ -60,7 +60,7 @@ let view_and_real_cursor () =
       ()
     |> focused
   in
-  let rendered = Charm_ansi.Text.strip (Area.view area) in
+  let rendered = Charamel_ansi.Text.strip (Area.view area) in
   Alcotest.(check bool) "placeholder rendered" true (String.length rendered > 0);
   let area = Area.set_value "abcdefghijk" area in
   let info = Area.line_info area in

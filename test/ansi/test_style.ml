@@ -1,11 +1,11 @@
-module Color = Charm_ansi.Color
+module Color = Charamel_ansi.Color
 
 let st ?(fg = Color.Default) ?(bg = Color.Default) ?(uc = Color.Default) ?(bold = false)
-    ?(faint = false) ?(italic = false) ?(underline = Charm_ansi.Style.No_underline)
+    ?(faint = false) ?(italic = false) ?(underline = Charamel_ansi.Style.No_underline)
     ?(blink = false) ?(reverse = false) ?(conceal = false) ?(strike = false) () :
-    Charm_ansi.Style.t =
+    Charamel_ansi.Style.t =
   {
-    Charm_ansi.Style.fg;
+    Charamel_ansi.Style.fg;
     bg;
     underline_color = uc;
     bold;
@@ -19,10 +19,10 @@ let st ?(fg = Color.Default) ?(bg = Color.Default) ?(uc = Color.Default) ?(bold 
   }
 
 let renders name expected style =
-  Alcotest.check Alcotest.string name expected (Charm_ansi.Style.to_sgr style)
+  Alcotest.check Alcotest.string name expected (Charamel_ansi.Style.to_sgr style)
 
 let transitions name expected ~from to_ =
-  Alcotest.check Alcotest.string name expected (Charm_ansi.Style.transition ~from to_)
+  Alcotest.check Alcotest.string name expected (Charamel_ansi.Style.transition ~from to_)
 
 let default_resets =
   Alcotest.test_case "default resets" `Quick (fun () ->
@@ -51,20 +51,20 @@ let attribute_params =
       renders "reverse" "\x1b[7m" (st ~reverse:true ());
       renders "conceal" "\x1b[8m" (st ~conceal:true ());
       renders "strike" "\x1b[9m" (st ~strike:true ());
-      renders "single underline" "\x1b[4m" (st ~underline:Charm_ansi.Style.Single ());
-      renders "double underline" "\x1b[4:2m" (st ~underline:Charm_ansi.Style.Double ());
-      renders "curly underline" "\x1b[4:3m" (st ~underline:Charm_ansi.Style.Curly ());
-      renders "dotted underline" "\x1b[4:4m" (st ~underline:Charm_ansi.Style.Dotted ());
-      renders "dashed underline" "\x1b[4:5m" (st ~underline:Charm_ansi.Style.Dashed ());
+      renders "single underline" "\x1b[4m" (st ~underline:Charamel_ansi.Style.Single ());
+      renders "double underline" "\x1b[4:2m" (st ~underline:Charamel_ansi.Style.Double ());
+      renders "curly underline" "\x1b[4:3m" (st ~underline:Charamel_ansi.Style.Curly ());
+      renders "dotted underline" "\x1b[4:4m" (st ~underline:Charamel_ansi.Style.Dotted ());
+      renders "dashed underline" "\x1b[4:5m" (st ~underline:Charamel_ansi.Style.Dashed ());
       renders "italic and strike" "\x1b[3;9m" (st ~italic:true ~strike:true ());
       renders "bold italic and underline" "\x1b[1;3;4m"
-        (st ~bold:true ~italic:true ~underline:Charm_ansi.Style.Single ());
+        (st ~bold:true ~italic:true ~underline:Charamel_ansi.Style.Single ());
       renders "full style" "\x1b[1;2;3;5;7;8;9;4:3;38;2;255;133;85;48;5;209;58;2;1;2;3m"
         (st
            ~fg:(Color.Rgb (255, 133, 85))
            ~bg:(Color.Indexed 209)
            ~uc:(Color.Rgb (1, 2, 3))
-           ~bold:true ~faint:true ~italic:true ~underline:Charm_ansi.Style.Curly
+           ~bold:true ~faint:true ~italic:true ~underline:Charamel_ansi.Style.Curly
            ~blink:true ~reverse:true ~conceal:true ~strike:true ()))
 
 let color_transitions =
@@ -92,14 +92,14 @@ let color_transitions =
       transitions "remove all colors" "\x1b[39;49;59m"
         ~from:
           (st ~fg:red ~bg:blue ~uc:green ~bold:true ~italic:true
-             ~underline:Charm_ansi.Style.Single ())
-        (st ~bold:true ~italic:true ~underline:Charm_ansi.Style.Single ());
+             ~underline:Charamel_ansi.Style.Single ())
+        (st ~bold:true ~italic:true ~underline:Charamel_ansi.Style.Single ());
       transitions "change all colors" "\x1b[38;2;0;255;0;48;2;255;255;0;58;2;0;255;255m"
         ~from:
           (st ~fg:red ~bg:blue ~uc:green ~bold:true ~italic:true
-             ~underline:Charm_ansi.Style.Single ())
+             ~underline:Charamel_ansi.Style.Single ())
         (st ~fg:green ~bg:yellow ~uc:cyan ~bold:true ~italic:true
-           ~underline:Charm_ansi.Style.Single ());
+           ~underline:Charamel_ansi.Style.Single ());
       transitions "only attributes change" "\x1b[3m"
         ~from:(st ~fg:red ~bg:blue ~uc:green ~bold:true ())
         (st ~fg:red ~bg:blue ~uc:green ~bold:true ~italic:true ()))
@@ -131,10 +131,10 @@ let intensity_transitions =
 
 let underline_transitions =
   Alcotest.test_case "underline transitions" `Quick (fun () ->
-      let s = Charm_ansi.Style.Single in
-      let d = Charm_ansi.Style.Double in
-      let c = Charm_ansi.Style.Curly in
-      let no = Charm_ansi.Style.No_underline in
+      let s = Charamel_ansi.Style.Single in
+      let d = Charamel_ansi.Style.Double in
+      let c = Charamel_ansi.Style.Curly in
+      let no = Charamel_ansi.Style.No_underline in
       transitions "add single underline" "\x1b[4m" ~from:(st ()) (st ~underline:s ());
       transitions "add double underline" "\x1b[4:2m" ~from:(st ()) (st ~underline:d ());
       transitions "add curly underline" "\x1b[4:3m" ~from:(st ()) (st ~underline:c ());
@@ -196,7 +196,7 @@ let attribute_transitions =
              ~fg:(Color.Rgb (255, 133, 85))
              ~bg:(Color.Indexed 209)
              ~uc:(Color.Rgb (1, 2, 3))
-             ~bold:true ~faint:true ~italic:true ~underline:Charm_ansi.Style.Curly
+             ~bold:true ~faint:true ~italic:true ~underline:Charamel_ansi.Style.Curly
              ~blink:true ~reverse:true ~conceal:true ~strike:true ())
         (st ());
       transitions "no changes with all properties" ""
@@ -205,13 +205,13 @@ let attribute_transitions =
              ~fg:(Color.Rgb (255, 133, 85))
              ~bg:(Color.Indexed 209)
              ~uc:(Color.Rgb (1, 2, 3))
-             ~bold:true ~faint:true ~italic:true ~underline:Charm_ansi.Style.Curly
+             ~bold:true ~faint:true ~italic:true ~underline:Charamel_ansi.Style.Curly
              ~blink:true ~reverse:true ~conceal:true ~strike:true ())
         (st
            ~fg:(Color.Rgb (255, 133, 85))
            ~bg:(Color.Indexed 209)
            ~uc:(Color.Rgb (1, 2, 3))
-           ~bold:true ~faint:true ~italic:true ~underline:Charm_ansi.Style.Curly
+           ~bold:true ~faint:true ~italic:true ~underline:Charamel_ansi.Style.Curly
            ~blink:true ~reverse:true ~conceal:true ~strike:true ()))
 
 let cases =

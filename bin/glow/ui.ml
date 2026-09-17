@@ -1,12 +1,12 @@
 open Result.Syntax
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module Key = Charm_tea.Key
-module View = Charm_tea.View
-module Viewport = Charm_bubbles.Viewport
-module List_view = Charm_bubbles.List
-module Style = Charm_lipgloss.Style
-module Color = Charm_ansi.Color
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module Key = Charamel_tea.Key
+module View = Charamel_tea.View
+module Viewport = Charamel_bubbles.Viewport
+module List_view = Charamel_bubbles.List
+module Style = Charamel_lipgloss.Style
+module Color = Charamel_ansi.Color
 
 let error_text = function
   | `Invalid message -> message
@@ -45,14 +45,14 @@ let split_words text =
 
 let theme ~is_dark style =
   match String.lowercase_ascii style with
-  | "dark" -> Charm_glamour.Theme.dark
-  | "light" -> Charm_glamour.Theme.light
-  | "dracula" -> Charm_glamour.Theme.dracula
-  | "tokyo-night" | "tokyo_night" -> Charm_glamour.Theme.tokyo_night
-  | "pink" -> Charm_glamour.Theme.pink
-  | "ascii" -> Charm_glamour.Theme.ascii
-  | "notty" -> Charm_glamour.Theme.notty
-  | "auto" -> Charm_glamour.Theme.auto ~is_dark
+  | "dark" -> Charamel_glamour.Theme.dark
+  | "light" -> Charamel_glamour.Theme.light
+  | "dracula" -> Charamel_glamour.Theme.dracula
+  | "tokyo-night" | "tokyo_night" -> Charamel_glamour.Theme.tokyo_night
+  | "pink" -> Charamel_glamour.Theme.pink
+  | "ascii" -> Charamel_glamour.Theme.ascii
+  | "notty" -> Charamel_glamour.Theme.notty
+  | "auto" -> Charamel_glamour.Theme.auto ~is_dark
   | value -> Fmt.failwith "glow: unknown style %S" value
 
 let line_prefix_style = Style.foreground (Color.Indexed 244) Style.empty
@@ -91,7 +91,7 @@ type model = Browser of browser | Pager of pager
 
 type msg =
   | Key of Key.t
-  | Mouse of Charm_tea.Mouse.t
+  | Mouse of Charamel_tea.Mouse.t
   | Resize of int * int
   | Browser_child of string List_view.msg
   | Pager_child of Viewport.msg
@@ -117,7 +117,7 @@ let code_fence document =
 
 let rendered_text ~is_dark ~width ~(config : Config.t) document =
   let theme = theme ~is_dark config.Config.style in
-  Charm_glamour.render ~width ~theme ?base_url:document.Source.base_url
+  Charamel_glamour.render ~width ~theme ?base_url:document.Source.base_url
     ~preserve_newlines:config.Config.preserve_new_lines (code_fence document)
 
 let add_line_numbers text =
@@ -149,7 +149,7 @@ let with_content (pager : pager) ?(keep_offset = true) () =
   { pager with viewport }
 
 let make_pager env (config : Config.t) ?origin_directory document ~width ~height =
-  let is_dark = Charm_cli.is_dark ~env:Sys.getenv_opt in
+  let is_dark = Charamel_cli.is_dark ~env:Sys.getenv_opt in
   let pager =
     {
       env = Some env;
@@ -180,7 +180,7 @@ let make_browser env (config : Config.t) root ~width ~height =
   let files = Source.discover_markdown ~root ~show_hidden:config.Config.all in
   let delegate =
     List_view.default_delegate
-      ~is_dark:(Charm_cli.is_dark ~env:Sys.getenv_opt)
+      ~is_dark:(Charamel_cli.is_dark ~env:Sys.getenv_opt)
       ~title:Filename.basename
       ~description:(fun path -> relative root path)
       ()
@@ -188,7 +188,7 @@ let make_browser env (config : Config.t) root ~width ~height =
   let listing =
     List_view.v ~title:"Markdown files" ~width
       ~height:(max 4 (height - 2))
-      ~is_dark:(Charm_cli.is_dark ~env:Sys.getenv_opt)
+      ~is_dark:(Charamel_cli.is_dark ~env:Sys.getenv_opt)
       ~delegate ~filter_value:(relative root) files
   in
   { env; config; root; listing; width; height }
@@ -466,7 +466,7 @@ let subscriptions = function
       Sub.batch [ resize; key; mouse ]
 
 let app initial =
-  { Charm_tea.init = (fun () -> (initial, Cmd.none)); update; view; subscriptions }
+  { Charamel_tea.init = (fun () -> (initial, Cmd.none)); update; view; subscriptions }
 
 type test_event =
   [ `Key of Key.t | `Text of string | `Resize of int * int | `Wait of float ]
@@ -484,7 +484,7 @@ let scripted ~(config : Config.t) ~content ~events ~size =
         viewport = Viewport.v ~width:columns ~height:2 ();
         width = columns;
         height = rows;
-        is_dark = Charm_cli.is_dark ~env:Sys.getenv_opt;
+        is_dark = Charamel_cli.is_dark ~env:Sys.getenv_opt;
         search_mode = false;
         query = "";
         matches = [];
@@ -504,7 +504,7 @@ let scripted ~(config : Config.t) ~content ~events ~size =
         | `Wait seconds -> `Wait seconds)
       events
   in
-  let _, frame = Charm_tea.Test.run (app (Pager pager)) ~events ~size in
+  let _, frame = Charamel_tea.Test.run (app (Pager pager)) ~events ~size in
   frame
 
 let run env ~(config : Config.t) ~location =
@@ -527,8 +527,8 @@ let run env ~(config : Config.t) ~location =
   in
   let* initial = initial in
   match
-    Charm_tea.run
-      ~terminal:(Charm_tea.Terminal.local env)
+    Charamel_tea.run
+      ~terminal:(Charamel_tea.Terminal.local env)
       ~clock:env#clock (app initial) env
   with
   | Ok _ -> Ok ()

@@ -7,7 +7,7 @@ let with_non_dumb_term f =
 let test_accessible_success () =
   Eio_main.run (fun env ->
       match
-        Charm_huh.Spinner.run ~accessible:true ~clock:env#clock (fun () -> Ok 42) env
+        Charamel_huh.Spinner.run ~accessible:true ~clock:env#clock (fun () -> Ok 42) env
       with
       | Ok value -> Alcotest.(check int) "action result" 42 value
       | Error `Interrupted -> Alcotest.fail "accessible spinner interrupted"
@@ -16,7 +16,7 @@ let test_accessible_success () =
 let test_accessible_error () =
   Eio_main.run (fun env ->
       match
-        Charm_huh.Spinner.run ~accessible:true ~clock:env#clock
+        Charamel_huh.Spinner.run ~accessible:true ~clock:env#clock
           (fun () -> Error "failed action")
           env
       with
@@ -53,7 +53,7 @@ let test_ctrl_c_cancels_action () =
               let promise, resolver = Eio.Promise.create () in
               Eio.Fiber.fork ~sw (fun () ->
                   let result =
-                    Charm_huh.Spinner.run ~clock:env#clock
+                    Charamel_huh.Spinner.run ~clock:env#clock
                       (fun () ->
                         try
                           Eio.Time.sleep env#clock 60.;

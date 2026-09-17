@@ -1,6 +1,6 @@
 let width s =
   Stdlib.List.fold_left
-    (fun m line -> max m (Charm_ansi.Text.width line))
+    (fun m line -> max m (Charamel_ansi.Text.width line))
     0 (String.split_on_char '\n' s)
 
 let height s = Stdlib.List.length (String.split_on_char '\n' s)
@@ -40,7 +40,7 @@ let join_horizontal ?(pos = Position.top) blocks =
           Stdlib.List.fold_left
             (fun acc (ls, w) ->
               let line = Stdlib.List.nth ls i in
-              acc ^ line ^ spaces (w - Charm_ansi.Text.width line))
+              acc ^ line ^ spaces (w - Charamel_ansi.Text.width line))
             "" padded)
       |> String.concat "\n"
 
@@ -56,7 +56,7 @@ let join_vertical ?(pos = Position.left) blocks =
           (fun (ls, _) ->
             Stdlib.List.map
               (fun line ->
-                let gap = widest - Charm_ansi.Text.width line in
+                let gap = widest - Charamel_ansi.Text.width line in
                 if gap <= 0 then line
                 else if pos = Position.left then line ^ spaces gap
                 else if pos = Position.right then spaces gap ^ line
@@ -75,12 +75,12 @@ let fill ?(whitespace = (" ", Style.empty)) n =
   let chars = if chars = "" then " " else chars in
   if n <= 0 then ""
   else
-    let glyphs = Charm_ansi.Width.graphemes chars in
+    let glyphs = Charamel_ansi.Width.graphemes chars in
     let rec loop out i remaining =
       if remaining <= 0 then ()
       else
         let g = Stdlib.List.nth glyphs (i mod Stdlib.List.length glyphs) in
-        let w = max 1 (Charm_ansi.Width.grapheme_width g) in
+        let w = max 1 (Charamel_ansi.Width.grapheme_width g) in
         if w <= remaining then begin
           Buffer.add_string out g;
           loop out (i + 1) (remaining - w)
@@ -90,7 +90,7 @@ let fill ?(whitespace = (" ", Style.empty)) n =
     let out = Buffer.create n in
     loop out 0 n;
     let contents = Buffer.contents out in
-    let short = n - Charm_ansi.Text.width contents in
+    let short = n - Charamel_ansi.Text.width contents in
     let contents = if short > 0 then contents ^ String.make short ' ' else contents in
     Style.render style contents
 
@@ -101,7 +101,7 @@ let place_horizontal ?(whitespace = (" ", Style.empty)) ~width:target ~pos text 
   else
     Stdlib.List.map
       (fun line ->
-        let gap = target - Charm_ansi.Text.width line in
+        let gap = target - Charamel_ansi.Text.width line in
         if pos = Position.left then line ^ fill ~whitespace gap
         else if pos = Position.right then fill ~whitespace gap ^ line
         else
@@ -137,36 +137,36 @@ let identity_style style = Style.render style "" = "" && Style.render style "x" 
 
 let style_piece style ~left ~right ~original ~plain =
   if right <= left then ""
-  else if identity_style style then Charm_ansi.Text.cut ~left ~right original
-  else Style.render style (Charm_ansi.Text.cut ~left ~right plain)
+  else if identity_style style then Charamel_ansi.Text.cut ~left ~right original
+  else Style.render style (Charamel_ansi.Text.cut ~left ~right plain)
 
 let style_ranges ranges text =
   match ranges with
   | [] -> text
   | _ when Stdlib.List.for_all (fun (_, _, style) -> identity_style style) ranges -> text
   | _ ->
-      let plain = Charm_ansi.Text.strip text in
+      let plain = Charamel_ansi.Text.strip text in
       let out = Buffer.create (String.length text) in
       let last = ref 0 in
       Stdlib.List.iter
         (fun (start, stop, style) ->
           if start > !last then
-            Buffer.add_string out (Charm_ansi.Text.cut ~left:!last ~right:start text);
+            Buffer.add_string out (Charamel_ansi.Text.cut ~left:!last ~right:start text);
           Buffer.add_string out
             (style_piece style ~left:start ~right:stop ~original:text ~plain);
           last := stop)
         ranges;
-      Buffer.add_string out (Charm_ansi.Text.truncate_left ~width:!last text);
+      Buffer.add_string out (Charamel_ansi.Text.truncate_left ~width:!last text);
       Buffer.contents out
 
 let style_runes matched unmatched text ~indices =
-  let plain = Charm_ansi.Text.strip text in
-  let glyphs = Charm_ansi.Width.graphemes plain in
+  let plain = Charamel_ansi.Text.strip text in
+  let glyphs = Charamel_ansi.Width.graphemes plain in
   let runs_rev, _, _ =
     Stdlib.List.fold_left
       (fun (runs, index, cell) glyph ->
         let selected = Stdlib.List.mem index indices in
-        let next_cell = cell + max 0 (Charm_ansi.Width.grapheme_width glyph) in
+        let next_cell = cell + max 0 (Charamel_ansi.Width.grapheme_width glyph) in
         let runs =
           if next_cell = cell then runs
           else

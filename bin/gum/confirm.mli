@@ -31,7 +31,7 @@ type model
 val make : options -> model
 (** [make options] creates a confirmation model with its default answer. *)
 
-val app : options -> (model, msg) Charm_tea.app
+val app : options -> (model, msg) Charamel_tea.app
 (** [app options] is the scripted or terminal confirmation application. *)
 
 val answer : model -> bool

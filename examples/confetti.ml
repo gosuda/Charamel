@@ -1,34 +1,34 @@
-module W = Charm_ssh_wish
-module K = Charm_ssh_keygen
+module W = Charamel_ssh_wish
+module K = Charamel_ssh_keygen
 
 type model = { frame : int }
-type msg = Tick of Mtime.t | Key of Charm_tea.Key.t
+type msg = Tick of Mtime.t | Key of Charamel_tea.Key.t
 
 let frames = [| "✦   ·    ✧    ·   ✦"; "  ·   ✦    ·   ✧   "; "✧    ·   ✦    ·    " |]
 
 let app _session =
   {
-    Charm_tea.init = (fun () -> ({ frame = 0 }, Charm_tea.Cmd.none));
+    Charamel_tea.init = (fun () -> ({ frame = 0 }, Charamel_tea.Cmd.none));
     update =
       (fun message model ->
         match message with
         | Tick _ ->
-            ({ frame = (model.frame + 1) mod Array.length frames }, Charm_tea.Cmd.none)
+            ({ frame = (model.frame + 1) mod Array.length frames }, Charamel_tea.Cmd.none)
         | Key key -> (
-            match key.Charm_tea.Key.code with
-            | Charm_tea.Key.Char c when Uchar.equal c (Uchar.of_char 'q') ->
-                (model, Charm_tea.Cmd.quit)
-            | _ -> (model, Charm_tea.Cmd.none)));
+            match key.Charamel_tea.Key.code with
+            | Charamel_tea.Key.Char c when Uchar.equal c (Uchar.of_char 'q') ->
+                (model, Charamel_tea.Cmd.quit)
+            | _ -> (model, Charamel_tea.Cmd.none)));
     view =
       (fun model ->
         let frame = frames.(model.frame) in
-        Charm_tea.View.v (Fmt.str "  %s\n\n  press q to quit\n" frame));
+        Charamel_tea.View.v (Fmt.str "  %s\n\n  press q to quit\n" frame));
     subscriptions =
       (fun _ ->
-        Charm_tea.Sub.batch
+        Charamel_tea.Sub.batch
           [
-            Charm_tea.Sub.key (fun key -> Key key);
-            Charm_tea.Sub.every 0.15 (fun tick -> Tick tick);
+            Charamel_tea.Sub.key (fun key -> Key key);
+            Charamel_tea.Sub.every 0.15 (fun tick -> Tick tick);
           ]);
   }
 

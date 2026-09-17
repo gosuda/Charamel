@@ -1,7 +1,7 @@
 (test
  (name test_lipgloss)
- (package charm)
- (libraries charm.lipgloss charm.ansi alcotest fmt)
+ (package charamel)
+ (libraries charamel.lipgloss charamel.ansi alcotest fmt)
  (flags
   (:standard
    -strict-sequence

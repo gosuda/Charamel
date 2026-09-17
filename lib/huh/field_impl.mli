@@ -18,28 +18,29 @@ type ctx = {
 type outcome = Stay | Next | Prev | Submit
 type t
 
-val init : t -> ctx -> t * Field_msg.t Charm_tea.Cmd.t
+val init : t -> ctx -> t * Field_msg.t Charamel_tea.Cmd.t
 (** [init field ctx] initializes effectful child components and returns their command. *)
 
 val reevaluate : t -> ctx -> t
 (** [reevaluate field ctx] recomputes dynamic properties when results changed. *)
 
-val step_key : t -> ctx -> Charm_tea.Key.t -> t * Field_msg.t Charm_tea.Cmd.t * outcome
+val step_key :
+  t -> ctx -> Charamel_tea.Key.t -> t * Field_msg.t Charamel_tea.Cmd.t * outcome
 (** [step_key field ctx key] handles one key and reports navigation separately. *)
 
-val step_msg : t -> ctx -> Field_msg.t -> t * Field_msg.t Charm_tea.Cmd.t
+val step_msg : t -> ctx -> Field_msg.t -> t * Field_msg.t Charamel_tea.Cmd.t
 (** [step_msg field ctx message] dispatches a message only when its typed id matches. *)
 
 val step_paste : t -> ctx -> string -> t
 (** [step_paste field ctx text] inserts paste text for editable fields. *)
 
-val subscriptions : t -> ctx -> Field_msg.t Charm_tea.Sub.t
+val subscriptions : t -> ctx -> Field_msg.t Charamel_tea.Sub.t
 (** [subscriptions field ctx] maps component subscriptions into existential messages. *)
 
 val view : t -> ctx -> focused:bool -> string
 (** [view field ctx ~focused] renders the field. *)
 
-val focus : t -> ctx -> t * Field_msg.t Charm_tea.Cmd.t
+val focus : t -> ctx -> t * Field_msg.t Charamel_tea.Cmd.t
 (** [focus field ctx] focuses the child editor, when the field has one. *)
 
 val blur : t -> ctx -> t
@@ -57,7 +58,7 @@ val zoom : t -> bool
 val key_name : t -> string option
 (** [key_name field] is its typed result key, or [None] for a note. *)
 
-val key_binds : t -> ctx -> Charm_bubbles.Key_binding.t list
+val key_binds : t -> ctx -> Charamel_bubbles.Key_binding.t list
 (** [key_binds field ctx] returns enabled bindings for the current position. *)
 
 val run_accessible : t -> ctx -> out:(string -> unit) -> Accessible.reader -> t

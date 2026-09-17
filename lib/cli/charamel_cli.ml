@@ -5,17 +5,17 @@ exception Controlled_exit of int * string option
 
 let check_code code =
   if code < 0 || code > 255 then
-    invalid_arg (Fmt.str "Charm_cli: exit code %d is outside 0..255" code);
+    invalid_arg (Fmt.str "Charamel_cli: exit code %d is outside 0..255" code);
   code
 
 let error ?(code = 1) message = raise (Controlled_exit (check_code code, Some message))
 let exit code = raise (Controlled_exit (check_code code, None))
 
 let ansi_index_is_dark index =
-  match Charm_ansi.Color.indexed index with
+  match Charamel_ansi.Color.indexed index with
   | None -> true
   | Some color -> (
-      match Charm_ansi.Color.to_rgb color with
+      match Charamel_ansi.Color.to_rgb color with
       | None -> true
       | Some (red, green, blue) ->
           (* The ITU-R BT.601 integer luma approximation agrees with the
@@ -126,9 +126,9 @@ let is_tty flow =
 let diagnostic ppf ~profile message =
   let styled =
     match profile with
-    | Charm_colorprofile.No_tty | Charm_colorprofile.Ascii -> false
-    | Charm_colorprofile.Ansi | Charm_colorprofile.Ansi256 | Charm_colorprofile.True_color
-      ->
+    | Charamel_colorprofile.No_tty | Charamel_colorprofile.Ascii -> false
+    | Charamel_colorprofile.Ansi | Charamel_colorprofile.Ansi256
+    | Charamel_colorprofile.True_color ->
         true
   in
   if styled then Fmt.pf ppf "\027[1;31mERROR\027[0m %s@.Try --help for usage.@." message
@@ -153,13 +153,14 @@ let run ~name ~version ~doc ?default commands =
                 let output_ppf = Eio.Buf_write.make_formatter stdout in
                 let error_ppf = Eio.Buf_write.make_formatter stderr in
                 let profile =
-                  Charm_colorprofile.detect ~is_tty:(is_tty env#stderr)
+                  Charamel_colorprofile.detect ~is_tty:(is_tty env#stderr)
                     ~env:Sys.getenv_opt
                 in
                 let old_reporter = Logs.reporter () in
                 let old_level = Logs.level () in
                 Logs.set_level (log_level ~verbose ~quiet);
-                Logs.set_reporter (Charm_log.reporter ~clock:env#clock ~profile error_ppf);
+                Logs.set_reporter
+                  (Charamel_log.reporter ~clock:env#clock ~profile error_ppf);
                 let restore () =
                   Format.pp_print_flush output_ppf ();
                   Format.pp_print_flush error_ppf ();
@@ -194,7 +195,7 @@ let run ~name ~version ~doc ?default commands =
                           if routes_to_default then Cmdliner.Cmd.v info (make env)
                           else Cmdliner.Cmd.group ~default:(make env) info children
                       | None, [] ->
-                          invalid_arg "charm_cli.run needs a default term or commands"
+                          invalid_arg "charamel_cli.run needs a default term or commands"
                       | None, children -> Cmdliner.Cmd.group info children
                     in
                     try

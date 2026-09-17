@@ -1,6 +1,6 @@
-module Input = Charm_tea__Input
-module Key = Charm_tea.Key
-module Event = Charm_tea.Event
+module Input = Charamel_tea__Input
+module Key = Charamel_tea.Key
+module Event = Charamel_tea.Event
 
 let decode input =
   let decoder = Input.create () in
@@ -107,7 +107,7 @@ let test_incremental_sequences () =
     "OSC prefix waits" 0
     (List.length (Input.feed decoder "\027]11;rgb:ff"));
   match Input.feed decoder "00/0000/ffff\007" with
-  | [ Event.Background_color (Charm_ansi.Color.Rgb (r, g, b)) ] ->
+  | [ Event.Background_color (Charamel_ansi.Color.Rgb (r, g, b)) ] ->
       Alcotest.(check (triple int int int)) "OSC color" (255, 0, 255) (r, g, b)
   | events -> Alcotest.failf "unexpected OSC events: %d" (List.length events)
 
@@ -125,15 +125,15 @@ let test_mouse_focus_and_reports () =
    Event.Kitty_flags flags;
    Event.Mode_report report;
   ] ->
-      Alcotest.(check int) "release x" 9 release.Charm_tea.Mouse.x;
-      Alcotest.(check int) "release y" 19 release.Charm_tea.Mouse.y;
+      Alcotest.(check int) "release x" 9 release.Charamel_tea.Mouse.x;
+      Alcotest.(check int) "release y" 19 release.Charamel_tea.Mouse.y;
       Alcotest.(check bool)
         "release action" true
-        (release.Charm_tea.Mouse.action = Charm_tea.Mouse.Release);
+        (release.Charamel_tea.Mouse.action = Charamel_tea.Mouse.Release);
       Alcotest.(check bool)
         "wheel action" true
-        (wheel.Charm_tea.Mouse.action = Charm_tea.Mouse.Press);
-      Alcotest.(check int) "wheel y" 2 wheel.Charm_tea.Mouse.y;
+        (wheel.Charamel_tea.Mouse.action = Charamel_tea.Mouse.Press);
+      Alcotest.(check int) "wheel y" 2 wheel.Charamel_tea.Mouse.y;
       Alcotest.(check (pair int int)) "CPR" (11, 33) (position.row, position.col);
       Alcotest.(check int) "Kitty flags" 7 flags;
       Alcotest.(check int) "DECRPM mode" 1049 report.mode;
@@ -208,16 +208,16 @@ let test_all_protocol_chunk_boundaries () =
   | events -> Alcotest.failf "8-bit CSI produced %d events" (List.length events));
   (match feed_one_byte "\027[M\032+," with
   | [ Event.Mouse mouse ] ->
-      Alcotest.(check int) "X10 x" 10 mouse.Charm_tea.Mouse.x;
-      Alcotest.(check int) "X10 y" 11 mouse.Charm_tea.Mouse.y
+      Alcotest.(check int) "X10 x" 10 mouse.Charamel_tea.Mouse.x;
+      Alcotest.(check int) "X10 y" 11 mouse.Charamel_tea.Mouse.y
   | events -> Alcotest.failf "X10 produced %d events" (List.length events));
   (match feed_one_byte "\027[<32;4;5M" with
   | [ Event.Mouse mouse ] ->
       Alcotest.(check bool)
         "motion" true
-        (mouse.Charm_tea.Mouse.action = Charm_tea.Mouse.Motion);
-      Alcotest.(check int) "motion x" 3 mouse.Charm_tea.Mouse.x;
-      Alcotest.(check int) "motion y" 4 mouse.Charm_tea.Mouse.y
+        (mouse.Charamel_tea.Mouse.action = Charamel_tea.Mouse.Motion);
+      Alcotest.(check int) "motion x" 3 mouse.Charamel_tea.Mouse.x;
+      Alcotest.(check int) "motion y" 4 mouse.Charamel_tea.Mouse.y
   | events -> Alcotest.failf "motion produced %d events" (List.length events));
   (match feed_one_byte "\027[I\027[O\027[12;34R" with
   | [ Event.Focus; Event.Blur; Event.Cursor_position position ] ->
@@ -228,7 +228,7 @@ let test_all_protocol_chunk_boundaries () =
       Alcotest.(check string) "8-bit DCS" "version" version
   | events -> Alcotest.failf "8-bit DCS produced %d events" (List.length events));
   match feed_one_byte "\15711;#010203\007" with
-  | [ Event.Background_color (Charm_ansi.Color.Rgb (1, 2, 3)) ] -> ()
+  | [ Event.Background_color (Charamel_ansi.Color.Rgb (1, 2, 3)) ] -> ()
   | events -> Alcotest.failf "8-bit OSC produced %d events" (List.length events)
 
 let test_eof_abort_and_unknown_boundaries () =

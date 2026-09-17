@@ -1,4 +1,4 @@
-module Key = Charm_ssh_keygen
+module Key = Charamel_ssh_keygen
 open Result.Syntax
 
 type error =
@@ -101,8 +101,8 @@ let force_write ~fs ~path ~comment key =
   let public_path = path_of fs public_name in
   let fingerprint = Key.fingerprint_sha256 key in
   let suffix = temporary_suffix fingerprint in
-  let private_tmp = path_of fs (private_name ^ ".charm-keygen-" ^ suffix) in
-  let public_tmp = path_of fs (public_name ^ ".charm-keygen-" ^ suffix) in
+  let private_tmp = path_of fs (private_name ^ ".charamel-keygen-" ^ suffix) in
+  let public_tmp = path_of fs (public_name ^ ".charamel-keygen-" ^ suffix) in
   let private_body = Key.to_openssh_private ~comment key in
   let public_body = Key.authorized_key ~comment key in
   let created = ref [] in

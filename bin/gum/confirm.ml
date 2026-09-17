@@ -1,9 +1,9 @@
-module Key = Charm_tea.Key
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module View = Charm_tea.View
-module Style = Charm_lipgloss.Style
-module Layout = Charm_lipgloss.Layout
+module Key = Charamel_tea.Key
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module View = Charamel_tea.View
+module Style = Charamel_lipgloss.Style
+module Layout = Charamel_lipgloss.Layout
 
 let key name =
   match Key.of_string name with
@@ -51,7 +51,7 @@ type model = {
   confirmation : bool;
   submitted : bool;
   quitting : bool;
-  padding : Charm_lipgloss.Sides.t;
+  padding : Charamel_lipgloss.Sides.t;
 }
 
 let default_options =
@@ -140,7 +140,7 @@ let render model =
 
 let update message model = match message with Key key -> handle_key model key
 
-let app options : (model, msg) Charm_tea.app =
+let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
@@ -166,7 +166,7 @@ let run env (options : options) =
   | Some value ->
       let confirmation = value = "yes" || value = "y" in
       print_answer env options confirmation;
-      if confirmation then () else Charm_cli.exit 1
+      if confirmation then () else Charamel_cli.exit 1
   | None ->
       let execute () =
         try
@@ -175,7 +175,7 @@ let run env (options : options) =
                 if submitted model then Gum_run.Submitted else Gum_run.Quit)
           in
           answer model
-        with Gum_io.No_tty -> Charm_cli.error "confirm: requires a terminal"
+        with Gum_io.No_tty -> Charamel_cli.error "confirm: requires a terminal"
       in
       let confirmation =
         match options.timeout with
@@ -185,7 +185,7 @@ let run env (options : options) =
         | _ -> execute ()
       in
       print_answer env options confirmation;
-      if confirmation then () else Charm_cli.exit 1
+      if confirmation then () else Charamel_cli.exit 1
 
 let validated_padding_term ~cmd =
   let open Cmdliner in

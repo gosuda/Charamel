@@ -6,4 +6,4 @@ val commands : (Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t) list
 
 val run : unit -> unit
 (** [run ()] starts the gum command-line runtime with global verbosity and Cmdliner
-    [--version] handling supplied by {!Charm_cli.run}. *)
+    [--version] handling supplied by {!Charamel_cli.run}. *)

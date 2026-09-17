@@ -20,7 +20,7 @@ val cut_lines : lines:int list -> string -> string
 (** [cut_lines ~lines text] selects the inclusive zero-based range. An empty range keeps
     [text]; a negative end selects through the last line. *)
 
-val language : override:string -> path:string option -> Charm_highlight.spec option
+val language : override:string -> path:string option -> Charamel_highlight.spec option
 (** [language ~override ~path] resolves an explicit language first, then a source path
     extension. *)
 

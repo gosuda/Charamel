@@ -1,15 +1,15 @@
 (lang dune 3.24)
-(name charm)
+(name charamel)
 (generate_opam_files true)
 (implicit_transitive_deps false)
 (formatting (enabled_for ocaml dune))
-(source (github metaphorics/charm))
+(source (github metaphorics/Charamel))
 (license Apache-2.0)
 (authors "metaphorics <152830360+metaphorics@users.noreply.github.com>")
 (maintainers "metaphorics <152830360+metaphorics@users.noreply.github.com>")
 
 (package
- (name charm)
+ (name charamel)
  (synopsis "Charm ecosystem in OCaml")
  (depends
   (ocaml (>= 5.4))
@@ -44,7 +44,7 @@
   (alcotest :with-test)))
 
 (package
- (name charm-ssh)
+ (name charamel-ssh)
  (synopsis "SSH libraries for the Charm ecosystem")
  (depends
   (ocaml (>= 5.4))
@@ -55,7 +55,7 @@
   fmt
   logs
   (jsont (>= 0.4))
-  charm
+  charamel
   (awa (>= 0.6.1))
   (mirage-crypto (>= 2.4.1))
   mirage-crypto-ec
@@ -73,7 +73,7 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  charm
+  charamel
   cmdliner
   eio
   fmt
@@ -90,7 +90,7 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  charm
+  charamel
   eio
   eio_main
   cmdliner
@@ -111,7 +111,7 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  charm
+  charamel
   eio
   eio_main
   cmdliner
@@ -127,7 +127,7 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  charm
+  charamel
   fmt
   eio
   eio_main
@@ -140,7 +140,7 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  charm
+  charamel
   cohttp-eio
   tls-eio
   ca-certs
@@ -167,7 +167,7 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  charm
+  charamel
   eio
   fmt
   jsont
@@ -182,8 +182,8 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  charm
-  charm-ssh
+  charamel
+  charamel-ssh
   digestif
   eio
   eio_main
@@ -198,8 +198,8 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  charm
-  charm-ssh
+  charamel
+  charamel-ssh
   eio
   fmt
   eio_main
@@ -213,7 +213,7 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  charm
+  charamel
   fmt
   cmdliner
   eio
@@ -227,7 +227,7 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  charm
+  charamel
   cohttp-eio
   tls-eio
   ca-certs

@@ -42,7 +42,7 @@ let with_data_dir (config : Config.t) (options : cli) =
     match options.data_dir with
     | None -> config.Config.options.Config.data_dir
     | Some value when String.trim value <> "" -> value
-    | Some _ -> Charm_cli.error "--data-dir must not be empty"
+    | Some _ -> Charamel_cli.error "--data-dir must not be empty"
   in
   let options =
     {
@@ -65,10 +65,10 @@ let ensure_directory fs directory =
 let prepare_directories env config cwd =
   let xdg =
     [
-      Charm_cli.Xdg.config_dir ~app:"crush";
-      Charm_cli.Xdg.data_dir ~app:"crush";
-      Charm_cli.Xdg.state_dir ~app:"crush";
-      Charm_cli.Xdg.cache_dir ~app:"crush";
+      Charamel_cli.Xdg.config_dir ~app:"crush";
+      Charamel_cli.Xdg.data_dir ~app:"crush";
+      Charamel_cli.Xdg.state_dir ~app:"crush";
+      Charamel_cli.Xdg.cache_dir ~app:"crush";
       Config.data_dir config ~cwd;
     ]
   in
@@ -76,11 +76,11 @@ let prepare_directories env config cwd =
 
 let load_config env ~cwd (options : cli) =
   match Config.load ~fs:env#fs ~env:Sys.getenv_opt ~cwd with
-  | Error error -> Charm_cli.error (Fmt.str "%a" Config.pp_error error)
+  | Error error -> Charamel_cli.error (Fmt.str "%a" Config.pp_error error)
   | Ok (config, _) -> with_data_dir config options
 
 let home_directory () = match Sys.getenv_opt "HOME" with Some home -> home | None -> ""
-let log_path () = Filename.concat (Charm_cli.Xdg.state_dir ~app:"crush") "crush.log"
+let log_path () = Filename.concat (Charamel_cli.Xdg.state_dir ~app:"crush") "crush.log"
 let permission_asker bridge request = Crush_ui.Bridge.ask_permission bridge request
 
 let create_common env sw (options : cli) ~interactive ~bridge =
@@ -90,7 +90,7 @@ let create_common env sw (options : cli) ~interactive ~bridge =
   let auth =
     match Auth.create ~path:(path env#fs (Auth.path ())) ~clock:env#clock () with
     | Ok value -> value
-    | Error error -> Charm_cli.error (Fmt.str "%a" Auth.pp_error error)
+    | Error error -> Charamel_cli.error (Fmt.str "%a" Auth.pp_error error)
   in
   let store = Session.store ~fs:env#fs ~cwd in
   let rules = Rules.load ~fs:env#fs ~cwd ~config in
@@ -130,7 +130,7 @@ let create_common env sw (options : cli) ~interactive ~bridge =
 let model_ref (model : Models.resolved) =
   {
     Session.provider = model.Models.provider_id;
-    model = model.Models.model.Charm_fantasy.Model.id;
+    model = model.Models.model.Charamel_fantasy.Model.id;
   }
 
 let selected_model config target ~fs ~auth ~env =
@@ -152,8 +152,8 @@ let selected_model config target ~fs ~auth ~env =
           (fun (provider, models, _) ->
             match
               List.find_opt
-                (fun (model : Charm_fantasy.Model.t) ->
-                  String.equal model.Charm_fantasy.Model.id target)
+                (fun (model : Charamel_fantasy.Model.t) ->
+                  String.equal model.Charamel_fantasy.Model.id target)
                 models
             with
             | Some _ -> Some (provider, target)
@@ -334,12 +334,12 @@ let prompt_from env prompts =
 
 let validate_agent_options options =
   if Option.is_some options.session && options.continue_ then
-    Charm_cli.error ~code:2 "--session and --continue cannot be used together"
+    Charamel_cli.error ~code:2 "--session and --continue cannot be used together"
 
 let run_agent env options prompts =
   validate_agent_options options;
   match prompt_from env prompts with
-  | Error message -> Charm_cli.error message
+  | Error message -> Charamel_cli.error message
   | Ok prompt -> (
       match
         with_agent env options ~interactive:false (fun runtime ->
@@ -352,12 +352,12 @@ let run_agent env options prompts =
             | Ok (`Halted reason) -> Error ("agent halted: " ^ reason))
       with
       | Ok () -> ()
-      | Error "interrupted" -> Charm_cli.exit 130
-      | Error message -> Charm_cli.error message)
+      | Error "interrupted" -> Charamel_cli.exit 130
+      | Error message -> Charamel_cli.error message)
 
 let form_environment env =
-  Charm_huh.Form.Env.v ~fs:env#fs ~temp_dir:env#cwd
-    ~editor:(Charm_huh.Form.Env.editor_of_string (Sys.getenv_opt "EDITOR"))
+  Charamel_huh.Form.Env.v ~fs:env#fs ~temp_dir:env#cwd
+    ~editor:(Charamel_huh.Form.Env.editor_of_string (Sys.getenv_opt "EDITOR"))
 
 let mime_type path =
   match String.lowercase_ascii (Filename.extension path) with
@@ -387,14 +387,14 @@ let model_rows runtime =
       List.concat_map
         (fun (provider, models, _) ->
           List.map
-            (fun (model : Charm_fantasy.Model.t) ->
+            (fun (model : Charamel_fantasy.Model.t) ->
               {
-                Crush_ui.id = model.Charm_fantasy.Model.id;
+                Crush_ui.id = model.Charamel_fantasy.Model.id;
                 provider;
-                context_window = model.Charm_fantasy.Model.context_window;
-                max_tokens = model.Charm_fantasy.Model.default_max_tokens;
-                can_reason = model.Charm_fantasy.Model.can_reason;
-                supports_attachments = model.Charm_fantasy.Model.supports_attachments;
+                context_window = model.Charamel_fantasy.Model.context_window;
+                max_tokens = model.Charamel_fantasy.Model.default_max_tokens;
+                can_reason = model.Charamel_fantasy.Model.can_reason;
+                supports_attachments = model.Charamel_fantasy.Model.supports_attachments;
               })
             models)
         rows
@@ -485,21 +485,21 @@ let resumed_agent runtime options ~agent_ref id =
   | Ok session -> replace_agent runtime options ~agent_ref session
 
 let message_role = function
-  | Charm_fantasy.Message.System -> "system"
-  | Charm_fantasy.Message.User -> "user"
-  | Charm_fantasy.Message.Assistant -> "assistant"
-  | Charm_fantasy.Message.Tool -> "tool"
+  | Charamel_fantasy.Message.System -> "system"
+  | Charamel_fantasy.Message.User -> "user"
+  | Charamel_fantasy.Message.Assistant -> "assistant"
+  | Charamel_fantasy.Message.Tool -> "tool"
 
 let message_part_text = function
-  | Charm_fantasy.Message.Text text -> text
-  | Charm_fantasy.Message.Reasoning { text; _ } -> text
-  | Charm_fantasy.Message.File { mime; data; name } ->
+  | Charamel_fantasy.Message.Text text -> text
+  | Charamel_fantasy.Message.Reasoning { text; _ } -> text
+  | Charamel_fantasy.Message.File { mime; data; name } ->
       Fmt.str "<file mime=%s name=%s bytes=%d>" mime
         (Option.value ~default:"" name)
         (String.length data)
-  | Charm_fantasy.Message.Tool_call { id; name; input } ->
+  | Charamel_fantasy.Message.Tool_call { id; name; input } ->
       Fmt.str "call %s (%s): %s" id name (Jsonx.string_of_json input)
-  | Charm_fantasy.Message.Tool_result { id; name; output } ->
+  | Charamel_fantasy.Message.Tool_result { id; name; output } ->
       let output =
         match output with
         | `Text text -> text
@@ -510,7 +510,7 @@ let message_part_text = function
 
 let history_rows agent =
   List.map
-    (fun ({ Charm_fantasy.Message.role; parts } : Charm_fantasy.Message.t) ->
+    (fun ({ Charamel_fantasy.Message.role; parts } : Charamel_fantasy.Message.t) ->
       {
         Crush_ui.role = message_role role;
         text = String.concat "" (List.map message_part_text parts);
@@ -519,13 +519,13 @@ let history_rows agent =
 
 let login_provider env provider ~force =
   if not (String.equal provider "anthropic") then
-    Charm_cli.error "only anthropic OAuth login is supported"
+    Charamel_cli.error "only anthropic OAuth login is supported"
   else
     Eio.Switch.run @@ fun sw ->
     let auth =
       match Auth.create ~path:(path env#fs (Auth.path ())) ~clock:env#clock () with
       | Ok value -> value
-      | Error error -> Charm_cli.error (Fmt.str "%a" Auth.pp_error error)
+      | Error error -> Charamel_cli.error (Fmt.str "%a" Auth.pp_error error)
     in
     match Auth.find auth ~provider with
     | Some (Auth.Oauth _) when not force ->
@@ -550,25 +550,26 @@ let login_provider env provider ~force =
         in
         match Auth.Login.anthropic ~sw ~net:env#net ~open_browser ~prompt_paste auth with
         | Ok () -> print_stdout env "Logged in to anthropic.\n"
-        | Error `Timeout -> Charm_cli.error ~code:124 "OAuth login timed out"
-        | Error `Aborted -> Charm_cli.exit 130
-        | Error (`Oauth message) -> Charm_cli.error message
-        | Error (`Io (path, message)) -> Charm_cli.error (Fmt.str "%s: %s" path message)
+        | Error `Timeout -> Charamel_cli.error ~code:124 "OAuth login timed out"
+        | Error `Aborted -> Charamel_cli.exit 130
+        | Error (`Oauth message) -> Charamel_cli.error message
+        | Error (`Io (path, message)) ->
+            Charamel_cli.error (Fmt.str "%s: %s" path message)
         | Error (`Parse (path, message)) ->
-            Charm_cli.error (Fmt.str "%s: %s" path message))
+            Charamel_cli.error (Fmt.str "%s: %s" path message))
 
 let logout_provider env provider ~force =
   Eio.Switch.run @@ fun _sw ->
   let auth =
     match Auth.create ~path:(path env#fs (Auth.path ())) ~clock:env#clock () with
     | Ok value -> value
-    | Error error -> Charm_cli.error (Fmt.str "%a" Auth.pp_error error)
+    | Error error -> Charamel_cli.error (Fmt.str "%a" Auth.pp_error error)
   in
   if (not force) && Option.is_none (Auth.find auth ~provider) then
-    Charm_cli.error (Fmt.str "no credentials for provider %s" provider);
+    Charamel_cli.error (Fmt.str "no credentials for provider %s" provider);
   match Auth.remove auth ~provider with
   | Ok () -> print_stdout env (Fmt.str "Logged out of %s.\n" provider)
-  | Error error -> Charm_cli.error (Fmt.str "%a" Auth.pp_error error)
+  | Error error -> Charamel_cli.error (Fmt.str "%a" Auth.pp_error error)
 
 let run_tui env options =
   match
@@ -681,7 +682,7 @@ let run_tui env options =
                       (List.map
                          (fun (name, state) -> name ^ ": " ^ state_text state)
                          (Mcp.states runtime.common.mcp)));
-                dark = (fun () -> Charm_cli.is_dark ~env:Sys.getenv_opt);
+                dark = (fun () -> Charamel_cli.is_dark ~env:Sys.getenv_opt);
                 quit = (fun () -> Agent.cancel !agent_ref);
               }
             in
@@ -692,8 +693,8 @@ let run_tui env options =
             | Error (`Exn (exn, _)) -> Error (Printexc.to_string exn)))
   with
   | Ok () -> ()
-  | Error "interrupted" -> Charm_cli.exit 130
-  | Error message -> Charm_cli.error message
+  | Error "interrupted" -> Charamel_cli.exit 130
+  | Error message -> Charamel_cli.error message
 
 let list_models env options =
   Eio.Switch.run @@ fun sw ->
@@ -709,11 +710,11 @@ let list_models env options =
       in
       print_stdout env (Fmt.str "%s\t%s\n" provider status);
       List.iter
-        (fun (model : Charm_fantasy.Model.t) ->
+        (fun (model : Charamel_fantasy.Model.t) ->
           print_stdout env
-            (Fmt.str "  %s\t%d\t%d\n" model.Charm_fantasy.Model.id
-               model.Charm_fantasy.Model.context_window
-               model.Charm_fantasy.Model.default_max_tokens))
+            (Fmt.str "  %s\t%d\t%d\n" model.Charamel_fantasy.Model.id
+               model.Charamel_fantasy.Model.context_window
+               model.Charamel_fantasy.Model.default_max_tokens))
         models)
     rows
 
@@ -721,7 +722,7 @@ let list_sessions env options =
   Eio.Switch.run @@ fun sw ->
   let common = create_common env sw options ~interactive:false ~bridge:None in
   match Session.list common.store with
-  | Error error -> Charm_cli.error (Fmt.str "%a" Session.pp_error error)
+  | Error error -> Charamel_cli.error (Fmt.str "%a" Session.pp_error error)
   | Ok rows ->
       List.iter
         (fun (row : Session.index_entry) ->
@@ -730,15 +731,17 @@ let list_sessions env options =
 
 let update_providers env source =
   if String.equal source "embedded" then
-    Charm_cli.error ~code:2 "--source expects a catalog URL"
+    Charamel_cli.error ~code:2 "--source expects a catalog URL"
   else
     Eio.Switch.run @@ fun _sw ->
     match Models.update_catalog ~source ~fs:env#fs ~net:env#net ~clock:env#clock () with
-    | Error (`Io (target, message)) -> Charm_cli.error (Fmt.str "%s: %s" target message)
-    | Error (`Parse message) -> Charm_cli.error (Fmt.str "provider catalog: %s" message)
+    | Error (`Io (target, message)) ->
+        Charamel_cli.error (Fmt.str "%s: %s" target message)
+    | Error (`Parse message) ->
+        Charamel_cli.error (Fmt.str "provider catalog: %s" message)
     | Error (`Fetch fetch_error) ->
-        Charm_cli.error
-          (Fmt.str "provider catalog: %a" Charm_fantasy.Error.pp fetch_error)
+        Charamel_cli.error
+          (Fmt.str "provider catalog: %a" Charamel_fantasy.Error.pp fetch_error)
     | Ok (Models.Updated etag) ->
         print_stdout env
           (if etag = "" then "Updated provider catalog.\n"
@@ -746,7 +749,7 @@ let update_providers env source =
     | Ok Models.Not_modified -> print_stdout env "Provider catalog is unchanged.\n"
 
 let read_log env ~tail ~follow =
-  if tail < 1 then Charm_cli.error ~code:2 "--tail must be at least 1";
+  if tail < 1 then Charamel_cli.error ~code:2 "--tail must be at least 1";
   let filename = log_path () in
   let read () =
     try Eio.Path.load (path env#fs filename)
@@ -781,10 +784,10 @@ let dirs env options =
   let config = load_config env ~cwd options in
   let lines =
     [
-      "config: " ^ Charm_cli.Xdg.config_dir ~app:"crush";
-      "data: " ^ Charm_cli.Xdg.data_dir ~app:"crush";
-      "state: " ^ Charm_cli.Xdg.state_dir ~app:"crush";
-      "cache: " ^ Charm_cli.Xdg.cache_dir ~app:"crush";
+      "config: " ^ Charamel_cli.Xdg.config_dir ~app:"crush";
+      "data: " ^ Charamel_cli.Xdg.data_dir ~app:"crush";
+      "state: " ^ Charamel_cli.Xdg.state_dir ~app:"crush";
+      "cache: " ^ Charamel_cli.Xdg.cache_dir ~app:"crush";
       "project: " ^ Config.data_dir config ~cwd;
       "project-key: " ^ Config.project_key ~cwd;
     ]
@@ -940,7 +943,7 @@ let commands =
 
 let run () =
   Mirage_crypto_rng_unix.use_default ();
-  Charm_cli.run ~name:"crush" ~version:Charm_cli.Version.current
+  Charamel_cli.run ~name:"crush" ~version:Charamel_cli.Version.current
     ~doc:"Agentic coding harness with a terminal UI and a scriptable run mode." ~default
     commands
 

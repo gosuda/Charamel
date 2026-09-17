@@ -1,7 +1,7 @@
 (** A styled {!Logs} reporter.
 
-    [reporter] renders reported log messages using {!Charm_lipgloss} styles and a
-    {!Charm_colorprofile} profile. A message's source ({!Logs.Src.name}) becomes its
+    [reporter] renders reported log messages using {!Charamel_lipgloss} styles and a
+    {!Charamel_colorprofile} profile. A message's source ({!Logs.Src.name}) becomes its
     prefix; a message's tags ({!Logs.Tag.set}) become its structured fields. [App]-level
     messages render without a level label (they use [Info]'s color when [Text] output asks
     for one, but the reporter never renders the label for [App]). *)
@@ -22,7 +22,7 @@ val reporter :
   ?report_timestamp:bool ->
   ?report_caller:bool ->
   clock:_ Eio.Time.clock ->
-  profile:Charm_colorprofile.t ->
+  profile:Charamel_colorprofile.t ->
   Format.formatter ->
   Logs.reporter
 (** [reporter ?format ?styles ?time_format ?report_timestamp ?report_caller ~clock
@@ -32,13 +32,13 @@ val reporter :
     [format] defaults to [Text]. [styles] defaults to {!Styles.default} and is used by
     [Text] only; it is adjusted for [profile] once, when [reporter] is called, so every
     subsequent line already respects what [profile] can show. Under [Ansi], [Ansi256], and
-    [True_color], only color slots are reduced, with {!Charm_colorprofile.convert}; every
-    other attribute (bold, faint, a style's width, ...) renders as [styles] configures it.
-    Under [Ascii] and [No_tty], every appearance attribute is cleared (no bold, no color,
-    no underline, ...), matching {!Charm_colorprofile.Writer}'s "removes all SGR
-    sequences" contract for those two profiles; a style's geometry (its width, for
-    instance a level label padded to a fixed width) is untouched, since geometry does not
-    itself emit SGR.
+    [True_color], only color slots are reduced, with {!Charamel_colorprofile.convert};
+    every other attribute (bold, faint, a style's width, ...) renders as [styles]
+    configures it. Under [Ascii] and [No_tty], every appearance attribute is cleared (no
+    bold, no color, no underline, ...), matching {!Charamel_colorprofile.Writer}'s
+    "removes all SGR sequences" contract for those two profiles; a style's geometry (its
+    width, for instance a level label padded to a fixed width) is untouched, since
+    geometry does not itself emit SGR.
 
     [time_format] renders a message's timestamp and defaults to a fixed
     ["%Y/%m/%d %H:%M:%S"]-shaped layout in UTC. [report_timestamp] and [report_caller]

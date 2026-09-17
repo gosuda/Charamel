@@ -1,8 +1,8 @@
 (library
- (name charm_huh)
- (public_name charm.huh)
+ (name charamel_huh)
+ (public_name charamel.huh)
  (modules
-  charm_huh
+  charamel_huh
   key
   results
   dyn
@@ -27,10 +27,10 @@
   run
   spinner)
  (libraries
-  charm.ansi
-  charm.lipgloss
-  charm.tea
-  charm.bubbles
+  charamel.ansi
+  charamel.lipgloss
+  charamel.tea
+  charamel.bubbles
   eio
   eio.unix
   fmt

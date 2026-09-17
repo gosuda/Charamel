@@ -1,6 +1,6 @@
 (library
- (name charm_ssh_keygen)
- (public_name charm-ssh.keygen)
+ (name charamel_ssh_keygen)
+ (public_name charamel-ssh.keygen)
  (flags
   (:standard
    -strict-sequence

@@ -230,14 +230,15 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
   let screen = Screen.create ~rows ~cols in
   let output_mutex = Eio.Mutex.create () in
   let profile =
-    Charm_colorprofile.detect ~is_tty:terminal.Terminal.is_tty ~env:terminal.Terminal.env
+    Charamel_colorprofile.detect ~is_tty:terminal.Terminal.is_tty
+      ~env:terminal.Terminal.env
   in
-  let writer = Charm_colorprofile.Writer.create ~profile terminal.Terminal.output in
+  let writer = Charamel_colorprofile.Writer.create ~profile terminal.Terminal.output in
   let entered = ref false in
   let old_handlers : (Sys.signal * Sys.signal_behavior) list ref = ref [] in
   let state_ref : ('model, 'msg) runtime_state option ref = ref None in
   let write_output_locked text =
-    if text <> "" then Charm_colorprofile.Writer.write writer text
+    if text <> "" then Charamel_colorprofile.Writer.write writer text
   in
   let with_output f =
     Eio.Mutex.lock output_mutex;
@@ -299,7 +300,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                 dirty = false;
                 paused = false;
                 anchor = Fresh_line;
-                last_frame = Charm_ansi.Text.strip initial_view.View.content;
+                last_frame = Charamel_ansi.Text.strip initial_view.View.content;
                 timers = [];
                 renderer_stop = false;
                 backlog = Queue.create ();
@@ -366,7 +367,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               write_output_locked bytes;
               last_rendered_alt := view.View.alt_screen;
               Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                  state.last_frame <- Charm_ansi.Text.strip view.View.content)
+                  state.last_frame <- Charamel_ansi.Text.strip view.View.content)
             in
             let render_with_rate ~immediate =
               if not immediate then
@@ -576,7 +577,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               let view = app.App.view model in
               Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
                   state.view <- view;
-                  state.last_frame <- Charm_ansi.Text.strip view.View.content;
+                  state.last_frame <- Charamel_ansi.Text.strip view.View.content;
                   if state.initial_events_left = 0 then state.dirty <- true;
                   Eio.Condition.broadcast state.condition)
             in
@@ -732,10 +733,10 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               List.iter apply_message messages
             in
             let query_bytes = function
-              | `Background -> Charm_ansi.Seq.bg_query
-              | `Foreground -> Charm_ansi.Seq.fg_query
-              | `Cursor_color -> Charm_ansi.Seq.cursor_color_query
-              | `Terminal_version -> Charm_ansi.Seq.xtversion
+              | `Background -> Charamel_ansi.Seq.bg_query
+              | `Foreground -> Charamel_ansi.Seq.fg_query
+              | `Cursor_color -> Charamel_ansi.Seq.cursor_color_query
+              | `Terminal_version -> Charamel_ansi.Seq.xtversion
               | `Kitty_flags -> "\x1b[?u"
               | `Cursor_position -> "\x1b[6n"
             in
@@ -810,7 +811,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   end
               | Effect_clipboard text ->
                   enqueue_output
-                    (Output_bytes (Charm_ansi.Seq.clipboard_osc52 text, resolver))
+                    (Output_bytes (Charamel_ansi.Seq.clipboard_osc52 text, resolver))
               | Effect_query query ->
                   enqueue_output (Output_bytes (query_bytes query, resolver))
               | Effect_window_size ->

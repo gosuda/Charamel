@@ -371,80 +371,81 @@ let route_output (env : Eio_unix.Stdenv.base) (options : options) (result : chil
   end
 
 type msg =
-  | Tick of Charm_bubbles.Spinner.msg
+  | Tick of Charamel_bubbles.Spinner.msg
   | Finished of (child_result, string) result
-  | Key of Charm_tea.Key.t
+  | Key of Charamel_tea.Key.t
 
 type model = {
-  spinner : Charm_bubbles.Spinner.t;
+  spinner : Charamel_bubbles.Spinner.t;
   result : (child_result, string) result option;
   title : string;
   align : string;
 }
 
-let key_name key = Charm_tea.Key.to_string key
+let key_name key = Charamel_tea.Key.to_string key
 
 let spinner_kind value =
   Option.value
-    (Charm_bubbles.Spinner.kind_of_string value)
-    ~default:Charm_bubbles.Spinner.Dot
+    (Charamel_bubbles.Spinner.kind_of_string value)
+    ~default:Charamel_bubbles.Spinner.Dot
 
 let make_app (env : Eio_unix.Stdenv.base) (options : options) padding ~capture =
   let spinner =
-    Charm_bubbles.Spinner.v
+    Charamel_bubbles.Spinner.v
       ~kind:(spinner_kind options.spinner)
       ~style:(Gum_style.to_style options.spinner_style)
       ()
   in
   let title =
     Gum_style.to_style options.title_style |> fun style ->
-    Charm_lipgloss.Style.render style options.title
+    Charamel_lipgloss.Style.render style options.title
   in
   let initial = { spinner; result = None; title; align = options.align } in
   let start =
-    Charm_tea.Cmd.perform (fun () ->
+    Charamel_tea.Cmd.perform (fun () ->
         Finished
           (run_child ~capture env ~command:options.command ~timeout:options.timeout))
   in
   let update message model =
     match message with
-    | Finished result -> ({ model with result = Some result }, Charm_tea.Cmd.quit)
+    | Finished result -> ({ model with result = Some result }, Charamel_tea.Cmd.quit)
     | Key key when String.equal (key_name key) "ctrl+c" ->
         !child_abort ();
-        (model, Charm_tea.Cmd.interrupt)
-    | Key _ -> (model, Charm_tea.Cmd.none)
+        (model, Charamel_tea.Cmd.interrupt)
+    | Key _ -> (model, Charamel_tea.Cmd.none)
     | Tick message ->
-        let spinner, command = Charm_bubbles.Spinner.update message model.spinner in
-        ({ model with spinner }, Charm_tea.Cmd.map (fun message -> Tick message) command)
+        let spinner, command = Charamel_bubbles.Spinner.update message model.spinner in
+        ( { model with spinner },
+          Charamel_tea.Cmd.map (fun message -> Tick message) command )
   in
   let view model =
-    let spinner = Charm_bubbles.Spinner.view model.spinner in
+    let spinner = Charamel_bubbles.Spinner.view model.spinner in
     let line =
       if String.equal model.align "right" then model.title ^ " " ^ spinner
       else spinner ^ " " ^ model.title
     in
-    Charm_tea.View.v ~alt_screen:false
-      (Charm_lipgloss.Style.render
-         (Charm_lipgloss.Style.padding padding Charm_lipgloss.Style.empty)
+    Charamel_tea.View.v ~alt_screen:false
+      (Charamel_lipgloss.Style.render
+         (Charamel_lipgloss.Style.padding padding Charamel_lipgloss.Style.empty)
          line)
   in
   let subscriptions model =
-    Charm_tea.Sub.batch
+    Charamel_tea.Sub.batch
       [
-        Charm_tea.Sub.key (fun key -> Key key);
-        Charm_tea.Sub.map
+        Charamel_tea.Sub.key (fun key -> Key key);
+        Charamel_tea.Sub.map
           (fun message -> Tick message)
-          (Charm_bubbles.Spinner.subscriptions model.spinner);
+          (Charamel_bubbles.Spinner.subscriptions model.spinner);
       ]
   in
-  { Charm_tea.init = (fun () -> (initial, start)); update; view; subscriptions }
+  { Charamel_tea.init = (fun () -> (initial, start)); update; view; subscriptions }
 
 let run env (options : options) =
-  if options.command = [] then Charm_cli.error "unable to run action: empty command";
+  if options.command = [] then Charamel_cli.error "unable to run action: empty command";
   let padding =
     match Gum_flag.parse_padding options.padding with
     | Ok value -> value
-    | Error (`Msg message) -> Charm_cli.error message
+    | Error (`Msg message) -> Charamel_cli.error message
   in
   let explicit =
     options.show_output || options.show_error || options.show_stdout
@@ -471,10 +472,10 @@ let run env (options : options) =
     end
   in
   match result with
-  | Error message -> Charm_cli.error message
+  | Error message -> Charamel_cli.error message
   | Ok result ->
       route_output env options result;
-      if result.timed_out then Charm_cli.exit 124 else Charm_cli.exit result.status
+      if result.timed_out then Charamel_cli.exit 124 else Charamel_cli.exit result.status
 
 let options command show_output show_error show_stdout show_stderr spinner title align
     timeout padding spinner_style title_style =

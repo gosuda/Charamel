@@ -3,10 +3,11 @@
     [t] buffers raw bytes read from a terminal and turns them into {!Event.t} values:
     keys, mouse reports, paste content, focus changes, and query replies. It is a private
     byte-level port of ultraviolet's [decoder.go] and [terminal_reader.go] (bubbletea v2's
-    input layer), not built on {!Charm_ansi.Parser}: every branch here needs the exact raw
-    bytes of a sequence to preserve them in {!Event.Unknown}, to re-decode an ESC-prefixed
-    tail for the alt-key merge, and to reparse a URxvt ["$"]-terminated sequence as a
-    ["~"]-terminated one, none of which a general streaming ANSI parser exposes.
+    input layer), not built on {!Charamel_ansi.Parser}: every branch here needs the exact
+    raw bytes of a sequence to preserve them in {!Event.Unknown}, to re-decode an
+    ESC-prefixed tail for the alt-key merge, and to reparse a URxvt ["$"]-terminated
+    sequence as a ["~"]-terminated one, none of which a general streaming ANSI parser
+    exposes.
 
     Terminfo-sourced key tables and legacy encoding flags are not implemented: every
     sequence the upstream default (non-terminfo) legacy key table recognizes is also

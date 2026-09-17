@@ -1,10 +1,10 @@
-module Key = Charm_tea.Key
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module View = Charm_tea.View
-module Style = Charm_lipgloss.Style
-module Textinput = Charm_bubbles.Textinput
-module Viewport = Charm_bubbles.Viewport
+module Key = Charamel_tea.Key
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module View = Charamel_tea.View
+module Style = Charamel_lipgloss.Style
+module Textinput = Charamel_bubbles.Textinput
+module Viewport = Charamel_bubbles.Viewport
 
 let key name =
   match Key.of_string name with
@@ -338,7 +338,7 @@ let update message model =
       let search = Textinput.set_width width model.search in
       ({ model with viewport; search }, Cmd.none)
 
-let app options : (model, msg) Charm_tea.app =
+let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
@@ -366,17 +366,17 @@ let run env (options : options) =
     else
       match Gum_io.read_stdin env with
       | Ok value -> value
-      | Error `Empty -> Charm_cli.error "provide some content to display"
+      | Error `Empty -> Charamel_cli.error "provide some content to display"
       | Error (`Read value) -> value
   in
   let content = sanitize content in
-  if content = "" then Charm_cli.error "provide some content to display";
+  if content = "" then Charamel_cli.error "provide some content to display";
   let options = { options with content } in
   try
     ignore
       (Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun _ ->
            Gum_run.Submitted))
-  with Gum_io.No_tty -> Charm_cli.error "pager: requires a terminal"
+  with Gum_io.No_tty -> Charamel_cli.error "pager: requires a terminal"
 
 let cmd env =
   let open Cmdliner in

@@ -1,5 +1,5 @@
-module Input = Charm_bubbles.Textinput
-module Key = Charm_tea.Key
+module Input = Charamel_bubbles.Textinput
+module Key = Charamel_tea.Key
 
 let focused input = fst (Input.focus input)
 let update message input = fst (Input.update message input)
@@ -45,10 +45,10 @@ let suggestions () =
 
 let scrolling_and_paste () =
   let input = Input.v ~width:4 () |> focused |> Input.set_value "abcdef" in
-  let view = Charm_ansi.Text.strip (Input.view input) in
+  let view = Charamel_ansi.Text.strip (Input.view input) in
   Alcotest.(check bool) "right edge remains visible" true (String.contains view 'f');
   let input = Input.cursor_start input in
-  let view = Charm_ansi.Text.strip (Input.view input) in
+  let view = Charamel_ansi.Text.strip (Input.view input) in
   Alcotest.(check bool) "left edge remains visible" true (String.contains view 'a');
   let input = Input.paste "x\ny" input in
   Alcotest.(check string)

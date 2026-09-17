@@ -22,13 +22,13 @@ val review :
   net:Eio_unix.Net.t ->
   Models.resolved ->
   context:string ->
-  last_turn:Charm_fantasy.Message.t list ->
+  last_turn:Charamel_fantasy.Message.t list ->
   (verdict option, [ `Provider of string ]) result
 (** [review t ~sw ~clock ~net model ~context ~last_turn] asks [model] to review
     [last_turn] with [context]. An unparsable answer is ignored. Two consecutive identical
     verdict fingerprints quarantine the advisor. *)
 
-val steering_message : verdict -> Charm_fantasy.Message.t
+val steering_message : verdict -> Charamel_fantasy.Message.t
 (** [steering_message verdict] is a user message carrying a blocker steering instruction
     for [verdict]. *)
 

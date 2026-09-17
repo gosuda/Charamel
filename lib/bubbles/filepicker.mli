@@ -19,17 +19,17 @@ val default_keymap : keymap
 (** [default_keymap] is the standard file-picker navigation map. *)
 
 type styles = {
-  disabled_cursor : Charm_lipgloss.Style.t;
-  cursor : Charm_lipgloss.Style.t;
-  symlink : Charm_lipgloss.Style.t;
-  directory : Charm_lipgloss.Style.t;
-  file : Charm_lipgloss.Style.t;
-  disabled_file : Charm_lipgloss.Style.t;
-  permission : Charm_lipgloss.Style.t;
-  selected : Charm_lipgloss.Style.t;
-  disabled_selected : Charm_lipgloss.Style.t;
-  file_size : Charm_lipgloss.Style.t;
-  empty_directory : Charm_lipgloss.Style.t;
+  disabled_cursor : Charamel_lipgloss.Style.t;
+  cursor : Charamel_lipgloss.Style.t;
+  symlink : Charamel_lipgloss.Style.t;
+  directory : Charamel_lipgloss.Style.t;
+  file : Charamel_lipgloss.Style.t;
+  disabled_file : Charamel_lipgloss.Style.t;
+  permission : Charamel_lipgloss.Style.t;
+  selected : Charamel_lipgloss.Style.t;
+  disabled_selected : Charamel_lipgloss.Style.t;
+  file_size : Charamel_lipgloss.Style.t;
+  empty_directory : Charamel_lipgloss.Style.t;
 }
 
 val default_styles : styles
@@ -82,10 +82,10 @@ val v :
     hidden entries omitted, files allowed, directories disallowed, automatic height
     enabled, height [0], and cursor [">"]. *)
 
-val init : t -> t * msg Charm_tea.Cmd.t
+val init : t -> t * msg Charamel_tea.Cmd.t
 (** [init t] schedules a real read of [current_directory]. *)
 
-val update : msg -> t -> t * msg Charm_tea.Cmd.t
+val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 (** [update msg t] applies navigation, selection, resize, or a directory-read result. A
     read result for a stale path is ignored. Directory failures are retained in the model
     and rendered visibly. *)
@@ -93,11 +93,11 @@ val update : msg -> t -> t * msg Charm_tea.Cmd.t
 val view : t -> string
 (** [view t] renders the visible rows and pads to the configured height. *)
 
-val key : t -> Charm_tea.Key.t -> msg option
+val key : t -> Charamel_tea.Key.t -> msg option
 (** [key t key] returns the enabled action bound to [key], if any. *)
 
-val subscriptions : t -> msg Charm_tea.Sub.t
-(** [subscriptions t] is {!Charm_tea.Sub.none}; reads are commands. *)
+val subscriptions : t -> msg Charamel_tea.Sub.t
+(** [subscriptions t] is {!Charamel_tea.Sub.none}; reads are commands. *)
 
 val did_select_file : msg -> t -> string option
 (** [did_select_file msg t] reports a selectable highlighted path before [msg] is passed

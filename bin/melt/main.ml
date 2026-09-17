@@ -1,4 +1,4 @@
-module Key = Charm_ssh_keygen
+module Key = Charamel_ssh_keygen
 module Mnemonic = Melt_core.Mnemonic
 open Result.Syntax
 
@@ -95,12 +95,12 @@ let restore ~fs ~words ~output =
 
 let run_backup env path =
   match backup ~fs:(fst env#fs) ~path with
-  | Error error -> Charm_cli.error (Fmt.str "%a" pp_error error)
+  | Error error -> Charamel_cli.error (Fmt.str "%a" pp_error error)
   | Ok words -> Eio.Flow.copy_string (String.concat " " words ^ "\n") env#stdout
 
 let run_restore env words output =
   match restore ~fs:(fst env#fs) ~words ~output with
-  | Error error -> Charm_cli.error (Fmt.str "%a" pp_error error)
+  | Error error -> Charamel_cli.error (Fmt.str "%a" pp_error error)
   | Ok () -> ()
 
 let backup_path_arg () =
@@ -147,7 +147,7 @@ let restore_command env =
 
 let () =
   Mirage_crypto_rng_unix.use_default ();
-  Charm_cli.run ~name:"melt" ~version:Charm_cli.Version.current
+  Charamel_cli.run ~name:"melt" ~version:Charamel_cli.Version.current
     ~doc:"Back up and restore OpenSSH Ed25519 keys with a 24-word seed phrase."
     ~default:backup_term
     [ backup_command; restore_command ]

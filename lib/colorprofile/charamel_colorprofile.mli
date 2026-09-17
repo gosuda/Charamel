@@ -23,7 +23,7 @@ val detect : is_tty:bool -> env:(string -> string option) -> t
     colours on a terminal. [CLICOLOR_FORCE] forces at least sixteen colours, and
     [CLICOLOR] enables at least sixteen colours on a terminal. *)
 
-val convert : t -> Charm_ansi.Color.t -> Charm_ansi.Color.t
+val convert : t -> Charamel_ansi.Color.t -> Charamel_ansi.Color.t
 (** [convert profile color] is [color] reduced to what [profile] can display. [No_tty] and
     [Ascii] return [Default]. [Ansi] and [Ansi256] return a palette colour. [True_color]
     returns [color] unchanged. *)

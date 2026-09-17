@@ -1,4 +1,4 @@
-module Filepicker = Charm_bubbles.Filepicker
+module Filepicker = Charamel_bubbles.Filepicker
 
 let check_string name expected actual =
   Alcotest.check Alcotest.string name expected actual
@@ -54,7 +54,7 @@ let read_real_entries fs path =
 let with_directory f =
   Eio_main.run @@ fun env ->
   let fs = Eio.Stdenv.fs env in
-  let name = "/tmp/charm-filepicker-test" in
+  let name = "/tmp/charamel-filepicker-test" in
   let root = path_append fs name in
   (try Eio.Path.rmtree ~missing_ok:true root with Eio.Io (Eio.Fs.E _, _) -> ());
   Eio.Path.mkdirs ~perm:0o700 root;
@@ -120,7 +120,7 @@ let directory_error_is_visible () =
   let missing = name ^ "/missing" in
   let picker = Filepicker.set_current_directory missing picker in
   let picker, _ = read_model fs missing picker in
-  let view = Charm_ansi.Text.strip (Filepicker.view picker) in
+  let view = Charamel_ansi.Text.strip (Filepicker.view picker) in
   check_bool "directory failure visible" true
     (String.length view > 0 && String.contains view 'E');
   check_int "failed read clears entries" 0

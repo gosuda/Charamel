@@ -3,9 +3,9 @@
  (wrapped true)
  (modules mime smtp pop_lib send preview forms)
  (libraries
-  charm.cli
-  charm.huh
-  charm.glamour
+  charamel.cli
+  charamel.huh
+  charamel.glamour
   cmarkit
   cohttp-eio
   cohttp
@@ -40,8 +40,8 @@
  (modules main)
  (libraries
   pop_core
-  charm.cli
-  charm.huh
+  charamel.cli
+  charamel.huh
   cmdliner
   eio
   eio.unix

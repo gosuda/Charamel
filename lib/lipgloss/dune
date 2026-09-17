@@ -1,7 +1,7 @@
 (library
- (name charm_lipgloss)
- (public_name charm.lipgloss)
- (libraries charm.ansi fmt uucp)
+ (name charamel_lipgloss)
+ (public_name charamel.lipgloss)
+ (libraries charamel.ansi fmt uucp)
  (flags
   (:standard
    -strict-sequence

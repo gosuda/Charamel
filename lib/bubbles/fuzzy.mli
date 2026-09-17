@@ -2,7 +2,7 @@
 
     Scores use scalar positions and the matching constants from [sahilm/fuzzy]. The
     returned [matched] positions are converted once to unique extended-grapheme indices,
-    which callers can pass directly to [Charm_lipgloss.Layout.style_runes]. *)
+    which callers can pass directly to [Charamel_lipgloss.Layout.style_runes]. *)
 
 type match_ = { index : int; matched : int list; score : int }
 (** A candidate's source index, grapheme positions selected in it, and score. *)

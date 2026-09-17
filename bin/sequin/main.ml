@@ -17,23 +17,23 @@ let read_input env = function
          [Permission_denied] before the filesystem is even consulted. *)
       try Eio.Path.load (env#fs / path) with
       | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) ->
-          Charm_cli.error (Fmt.str "sequin: %s: no such file or directory" path)
+          Charamel_cli.error (Fmt.str "sequin: %s: no such file or directory" path)
       | Eio.Io (Eio.Fs.E (Eio.Fs.Permission_denied _), _) ->
-          Charm_cli.error (Fmt.str "sequin: %s: permission denied" path)
+          Charamel_cli.error (Fmt.str "sequin: %s: permission denied" path)
       | Eio.Io _ as exn ->
-          Charm_cli.error
+          Charamel_cli.error
             (Fmt.str "sequin: cannot read %s: %s" path (Printexc.to_string exn)))
 
 let render mode input =
   match mode with
   | Explain -> Sequin_core.Explain.explain input
   | Raw -> String.escaped input
-  | Width -> Fmt.str "%d\n" (Charm_ansi.Text.width input)
+  | Width -> Fmt.str "%d\n" (Charamel_ansi.Text.width input)
 
 let run env file raw width =
   let mode =
     if raw && width then
-      Charm_cli.error ~code:2 "sequin: --raw and --width are mutually exclusive"
+      Charamel_cli.error ~code:2 "sequin: --raw and --width are mutually exclusive"
     else if raw then Raw
     else if width then Width
     else Explain
@@ -60,5 +60,5 @@ let default env =
   Cmdliner.Term.(const action $ file_arg $ raw_arg $ width_arg)
 
 let () =
-  Charm_cli.run ~name:"sequin" ~version:Charm_cli.Version.current
+  Charamel_cli.run ~name:"sequin" ~version:Charamel_cli.Version.current
     ~doc:"Inspect ANSI terminal escape sequences." ~default []

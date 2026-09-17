@@ -1,9 +1,9 @@
-module Key = Charm_tea.Key
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module View = Charm_tea.View
-module Style = Charm_lipgloss.Style
-module Text = Charm_ansi.Text
+module Key = Charamel_tea.Key
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module View = Charamel_tea.View
+module Style = Charamel_lipgloss.Style
+module Text = Charamel_ansi.Text
 
 let key name =
   match Key.of_string name with
@@ -99,10 +99,10 @@ type model = {
   options : options;
   items : item list;
   index : int;
-  paginator : Charm_bubbles.Paginator.t;
+  paginator : Charamel_bubbles.Paginator.t;
   submitted : bool;
   quitting : bool;
-  padding : Charm_lipgloss.Sides.t;
+  padding : Charamel_lipgloss.Sides.t;
 }
 
 let default_options =
@@ -200,10 +200,10 @@ let make (options : options) =
   let height = max 1 options.height in
   let total_pages = max 1 ((List.length items + height - 1) / height) in
   let paginator =
-    Charm_bubbles.Paginator.v ~kind:Charm_bubbles.Paginator.Dots ~per_page:height
+    Charamel_bubbles.Paginator.v ~kind:Charamel_bubbles.Paginator.Dots ~per_page:height
       ~total_pages ()
   in
-  let paginator = Charm_bubbles.Paginator.set_page (index / height) paginator in
+  let paginator = Charamel_bubbles.Paginator.set_page (index / height) paginator in
   {
     options;
     items;
@@ -226,7 +226,7 @@ let submitted model = model.submitted
 
 let page_sync model index =
   let page = index / max 1 model.options.height in
-  Charm_bubbles.Paginator.set_page page model.paginator
+  Charamel_bubbles.Paginator.set_page page model.paginator
 
 let update_item index f items =
   List.mapi (fun current item -> if current = index then f item else item) items
@@ -327,7 +327,7 @@ let render model =
   if model.quitting then ""
   else
     let start =
-      Charm_bubbles.Paginator.page model.paginator * max 1 model.options.height
+      Charamel_bubbles.Paginator.page model.paginator * max 1 model.options.height
     in
     let visible =
       model.items
@@ -359,8 +359,8 @@ let render model =
     in
     let lines = String.concat "\n" lines in
     let lines =
-      if model.paginator |> Charm_bubbles.Paginator.total_pages > 1 then
-        lines ^ "\n  " ^ Charm_bubbles.Paginator.view model.paginator
+      if model.paginator |> Charamel_bubbles.Paginator.total_pages > 1 then
+        lines ^ "\n  " ^ Charamel_bubbles.Paginator.view model.paginator
       else lines
     in
     let lines =
@@ -385,14 +385,17 @@ let update message model =
         if model.options.height = 0 then { model.options with height } else model.options
       in
       let paginator =
-        Charm_bubbles.Paginator.v ~kind:Charm_bubbles.Paginator.Dots ~per_page:height
+        Charamel_bubbles.Paginator.v ~kind:Charamel_bubbles.Paginator.Dots
+          ~per_page:height
           ~total_pages:(max 1 ((List.length model.items + height - 1) / height))
           ()
       in
-      let paginator = Charm_bubbles.Paginator.set_page (model.index / height) paginator in
+      let paginator =
+        Charamel_bubbles.Paginator.set_page (model.index / height) paginator
+      in
       ({ model with options; paginator }, Cmd.none)
 
-let app options : (model, msg) Charm_tea.app =
+let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
@@ -430,20 +433,20 @@ let normalized_options env (options : options) =
 let run env (options : options) =
   let options = normalized_options env options in
   if options.options = [] then
-    Charm_cli.error "no options provided, see `gum choose --help`";
+    Charamel_cli.error "no options provided, see `gum choose --help`";
   match single_option options with
-  | Error message -> Charm_cli.error message
+  | Error message -> Charamel_cli.error message
   | Ok (Some value) -> Gum_io.print_raw env value
   | Ok None ->
       let model =
         try
           Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun model ->
               if submitted model then Gum_run.Submitted else Gum_run.Quit)
-        with Gum_io.No_tty -> Charm_cli.error "choose: requires a terminal"
+        with Gum_io.No_tty -> Charamel_cli.error "choose: requires a terminal"
       in
-      if not (submitted model) then Charm_cli.error "nothing selected";
+      if not (submitted model) then Charamel_cli.error "nothing selected";
       let values = selected model in
-      if values = [] then Charm_cli.error "nothing selected"
+      if values = [] then Charamel_cli.error "nothing selected"
       else Gum_io.println env (String.concat options.output_delimiter values)
 
 let validated_padding_term ~cmd =

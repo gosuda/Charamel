@@ -16,7 +16,7 @@ val format_message : string -> string list -> string
 
 val time_formatter : string -> Ptime.t -> string
 (** [time_formatter layout] converts Go-style layouts and named presets into a formatter
-    suitable for {!Charm_log.reporter}. *)
+    suitable for {!Charamel_log.reporter}. *)
 
 val emit :
   ?file:string ->
@@ -27,12 +27,12 @@ val emit :
   ?time:string ->
   ?format:bool ->
   ?structured:bool ->
-  ?styles:Charm_log.Styles.t ->
+  ?styles:Charamel_log.Styles.t ->
   Eio_unix.Stdenv.base ->
   string list ->
   unit
 (** [emit ... env text] emits one log record. This is the command's execution function;
-    invalid levels and output failures report through [Charm_cli]. *)
+    invalid levels and output failures report through [Charamel_cli]. *)
 
 val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
 (** [cmd env] is the [log] subcommand evaluated with [env]. *)

@@ -2,7 +2,7 @@
 
     The server terminates the SSH protocol with [awa], then exposes one typed session to a
     middleware chain. A session can run an interactive shell or a single exec request, and
-    its byte streams are suitable for {!Charm_tea.Terminal.custom}. *)
+    its byte streams are suitable for {!Charamel_tea.Terminal.custom}. *)
 
 type pty = { term : string; rows : int; cols : int }
 (** The terminal requested by the client. *)
@@ -60,7 +60,7 @@ type middleware = handler -> handler
 (** A middleware wraps an endpoint and may reject or decorate a session. *)
 
 val tea :
-  env:Eio_unix.Stdenv.base -> (Session.t -> ('model, 'msg) Charm_tea.app) -> middleware
+  env:Eio_unix.Stdenv.base -> (Session.t -> ('model, 'msg) Charamel_tea.app) -> middleware
 (** [tea ~env make] runs the application returned by [make] over the session's SSH streams
     and current PTY size. Window-change requests are delivered through the custom
     terminal's resize stream. [env] supplies the process capabilities required by the
@@ -90,7 +90,7 @@ val serve :
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:float Eio.Time.clock_ty Eio.Resource.t ->
-  host_key:Charm_ssh_keygen.t ->
+  host_key:Charamel_ssh_keygen.t ->
   addr:Eio.Net.Sockaddr.stream ->
   ?idle_timeout:float ->
   ?max_timeout:float ->

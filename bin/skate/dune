@@ -16,7 +16,7 @@
  (public_name skate)
  (package skate)
  (modules main skate_cli)
- (libraries skate_core charm.cli cmdliner eio eio.unix fmt)
+ (libraries skate_core charamel.cli cmdliner eio eio.unix fmt)
  (flags
   (:standard
    -strict-sequence

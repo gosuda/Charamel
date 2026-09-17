@@ -1,4 +1,4 @@
-module Timer = Charm_bubbles.Timer
+module Timer = Charamel_bubbles.Timer
 
 let transitions () =
   let timer = Timer.v ~interval:1.0 ~timeout:3.0 () in

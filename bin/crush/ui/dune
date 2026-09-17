@@ -4,12 +4,12 @@
  (modules crush_ui)
  (libraries
   crush.core
-  charm.ansi
-  charm.bubbles
-  charm.fantasy
-  charm.huh
-  charm.lipgloss
-  charm.tea
+  charamel.ansi
+  charamel.bubbles
+  charamel.fantasy
+  charamel.huh
+  charamel.lipgloss
+  charamel.tea
   base64
   eio
   eio.unix

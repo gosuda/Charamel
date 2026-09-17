@@ -1,10 +1,10 @@
 (library
- (name charm_cli)
- (public_name charm.cli)
+ (name charamel_cli)
+ (public_name charamel.cli)
  (libraries
-  charm.ansi
-  charm.log
-  charm.colorprofile
+  charamel.ansi
+  charamel.log
+  charamel.colorprofile
   cmdliner
   dune-build-info
   eio

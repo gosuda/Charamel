@@ -23,14 +23,14 @@ val resolve_path : string -> (string, error) result
 (** [resolve_path path] is [path] with a leading [~] expanded and a relative path resolved
     against the current directory. An empty path is rejected. *)
 
-val default_path : Charm_ssh_keygen.algorithm -> (string, error) result
+val default_path : Charamel_ssh_keygen.algorithm -> (string, error) result
 (** [default_path algorithm] is the default private-key path for [algorithm] under
     [$HOME/.ssh]. *)
 
 val generate :
   fs:_ Eio.Fs.dir ->
   path:string ->
-  algorithm:Charm_ssh_keygen.algorithm ->
+  algorithm:Charamel_ssh_keygen.algorithm ->
   ?comment:string ->
   force:bool ->
   unit ->

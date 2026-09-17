@@ -2,7 +2,7 @@
    pink,dracula,tokyo-night}.json and the corresponding styles/*.go values.
    The full GitHub shortcode table is in emoji.ml; it is generated from
    yuin/goldmark-emoji v1.0.5, pinned by glamour's go.sum. *)
-module Color = Charm_ansi.Color
+module Color = Charamel_ansi.Color
 
 module Theme = struct
   type block = {
@@ -38,7 +38,7 @@ module Theme = struct
     emph : block;
     strike : block;
     code : block;
-    code_block : block * Charm_highlight.Theme.t;
+    code_block : block * Charamel_highlight.Theme.t;
     hr : block;
     link : block;
     link_text : block;
@@ -77,27 +77,27 @@ module Theme = struct
   let empty = block ()
   let indexed n = Some (Color.Indexed n)
   let rgb r g b = Some (Color.Rgb (r, g, b))
-  let code_no_highlight _ = Charm_lipgloss.Style.empty
-  let code_charm_dark = Charm_highlight.Theme.charm ~is_dark:true
-  let code_charm_light = Charm_highlight.Theme.charm ~is_dark:false
-  let code_dracula = Charm_highlight.Theme.dracula
+  let code_no_highlight _ = Charamel_lipgloss.Style.empty
+  let code_charm_dark = Charamel_highlight.Theme.charm ~is_dark:true
+  let code_charm_light = Charamel_highlight.Theme.charm ~is_dark:false
+  let code_dracula = Charamel_highlight.Theme.dracula
 
   let tokyo_color r g b =
-    Charm_lipgloss.Style.foreground (Color.Rgb (r, g, b)) Charm_lipgloss.Style.empty
+    Charamel_lipgloss.Style.foreground (Color.Rgb (r, g, b)) Charamel_lipgloss.Style.empty
 
   let code_tokyo = function
-    | Charm_highlight.Keyword -> tokyo_color 0x2a 0xc3 0xde
-    | Charm_highlight.Type -> tokyo_color 0x7a 0xa2 0xf7
-    | Charm_highlight.Builtin -> tokyo_color 0x7a 0xa2 0xf7
-    | Charm_highlight.Constant -> tokyo_color 0xbb 0x9a 0xf7
-    | Charm_highlight.String -> tokyo_color 0xe0 0xaf 0x68
-    | Charm_highlight.Number -> tokyo_color 0xbb 0x9a 0xf7
-    | Charm_highlight.Comment -> tokyo_color 0x56 0x5f 0x89
-    | Charm_highlight.Operator -> tokyo_color 0x2a 0xc3 0xde
-    | Charm_highlight.Punct -> tokyo_color 0xa9 0xb1 0xd6
-    | Charm_highlight.Ident -> tokyo_color 0xa9 0xb1 0xd6
-    | Charm_highlight.Attribute -> tokyo_color 0x9e 0xce 0x6a
-    | Charm_highlight.Text -> tokyo_color 0xa9 0xb1 0xd6
+    | Charamel_highlight.Keyword -> tokyo_color 0x2a 0xc3 0xde
+    | Charamel_highlight.Type -> tokyo_color 0x7a 0xa2 0xf7
+    | Charamel_highlight.Builtin -> tokyo_color 0x7a 0xa2 0xf7
+    | Charamel_highlight.Constant -> tokyo_color 0xbb 0x9a 0xf7
+    | Charamel_highlight.String -> tokyo_color 0xe0 0xaf 0x68
+    | Charamel_highlight.Number -> tokyo_color 0xbb 0x9a 0xf7
+    | Charamel_highlight.Comment -> tokyo_color 0x56 0x5f 0x89
+    | Charamel_highlight.Operator -> tokyo_color 0x2a 0xc3 0xde
+    | Charamel_highlight.Punct -> tokyo_color 0xa9 0xb1 0xd6
+    | Charamel_highlight.Ident -> tokyo_color 0xa9 0xb1 0xd6
+    | Charamel_highlight.Attribute -> tokyo_color 0x9e 0xce 0x6a
+    | Charamel_highlight.Text -> tokyo_color 0xa9 0xb1 0xd6
 
   let dark =
     let document =
@@ -484,7 +484,7 @@ type context = {
 }
 
 let style_of_block (b : Theme.block) =
-  let open Charm_lipgloss.Style in
+  let open Charamel_lipgloss.Style in
   let s = empty in
   let s = match b.Theme.color with None -> s | Some c -> foreground c s in
   let s = match b.Theme.background with None -> s | Some c -> background c s in
@@ -495,10 +495,10 @@ let style_of_block (b : Theme.block) =
   strikethrough b.Theme.strike s
 
 let style_text (b : Theme.block) text =
-  if text = "" then "" else Charm_lipgloss.Style.render (style_of_block b) text
+  if text = "" then "" else Charamel_lipgloss.Style.render (style_of_block b) text
 
 let wrap_text width s =
-  if width < 1 then s else Charm_ansi.Text.wrap ~breakpoints:" ,.;-+|" ~width s
+  if width < 1 then s else Charamel_ansi.Text.wrap ~breakpoints:" ,.;-+|" ~width s
 
 let split_lines s = String.split_on_char '\n' s
 let spaces n = if n <= 0 then "" else String.make n ' '
@@ -532,7 +532,7 @@ let url_is_valid url =
 let hyperlink url text =
   if not (url_is_valid url) then text
   else
-    let open Charm_ansi in
+    let open Charamel_ansi in
     let token = Link.osc8 (Some ({ url; params = [] } : Link.t)) in
     let close = Link.osc8 None in
     token ^ text ^ close
@@ -568,7 +568,7 @@ let replace_emoji s =
   in
   loop 0 (Buffer.create (String.length s))
 
-let plain s = Charm_ansi.Text.strip s
+let plain s = Charamel_ansi.Text.strip s
 
 let inline_text ctx text =
   let text = if ctx.emoji then replace_emoji text else text in
@@ -698,7 +698,7 @@ let rec render_inline ctx (inline : Cmarkit.Inline.t) =
         if url_is_valid resolved then
           text ^ " " ^ hyperlink resolved (style_text ctx.theme.Theme.image resolved)
         else text
-  | _ -> invalid_arg "charm.glamour: unsupported inline extension"
+  | _ -> invalid_arg "charamel.glamour: unsupported inline extension"
 
 let merge_block ?(inherit_affixes = false) (parent : Theme.block) (child : Theme.block) :
     Theme.block =
@@ -792,8 +792,8 @@ let render_code_block ctx ~indent code_block =
   let highlighted =
     match language with
     | Some lang -> (
-        match Charm_highlight.find lang with
-        | Some spec -> Charm_highlight.render ~theme:code_theme spec code
+        match Charamel_highlight.find lang with
+        | Some spec -> Charamel_highlight.render ~theme:code_theme spec code
         | None -> style_text block code)
     | None -> style_text block code
   in
@@ -859,7 +859,7 @@ and render_list ctx ~indent list =
                 (Theme.block ~block_prefix:ctx.theme.Theme.item ())
                 ctx.theme.Theme.item
       in
-      let marker_width = max 1 (Charm_ansi.Text.width marker) in
+      let marker_width = max 1 (Charamel_ansi.Text.width marker) in
       let body = render_list_item ctx ~indent ~marker_width ~level_indent item in
       let lines = split_lines body in
       let first_line = match lines with [] -> "" | x :: _ -> x in
@@ -881,7 +881,7 @@ and render_block ctx ~indent block =
       let marker = ctx.theme.Theme.block_quote.Theme.block_prefix in
       let marker_width =
         if marker = "" then max 1 ctx.theme.Theme.block_quote.Theme.indent
-        else Charm_ansi.Text.width marker
+        else Charamel_ansi.Text.width marker
       in
       let rendered =
         render_block ctx ~indent:(indent + marker_width)
@@ -907,7 +907,7 @@ and render_block ctx ~indent block =
         (code_text (Cmarkit.Block.Code_block.code code))
   | Cmarkit.Block.Ext_table (table, _) -> render_table ctx ~indent table
   | Cmarkit.Block.Ext_footnote_definition _ -> ""
-  | _ -> invalid_arg "charm.glamour: unsupported block extension"
+  | _ -> invalid_arg "charamel.glamour: unsupported block extension"
 
 and render_table ctx ~indent table =
   let old_in_table = ctx.in_table in
@@ -925,11 +925,11 @@ and render_table ctx ~indent table =
     (Cmarkit.Block.Table.rows table);
   let table_block, separator = ctx.theme.Theme.table in
   let border =
-    if separator = "|" then Charm_lipgloss.Border.ascii
-    else if separator = "│" || separator = "" then Charm_lipgloss.Border.normal
+    if separator = "|" then Charamel_lipgloss.Border.ascii
+    else if separator = "│" || separator = "" then Charamel_lipgloss.Border.normal
     else
       {
-        Charm_lipgloss.Border.top = separator;
+        Charamel_lipgloss.Border.top = separator;
         bottom = separator;
         left = separator;
         right = separator;
@@ -947,16 +947,16 @@ and render_table ctx ~indent table =
   let style ~row:_ ~col =
     let style =
       style_of_block table_block
-      |> Charm_lipgloss.Style.inline false
-      |> Charm_lipgloss.Style.margin (Charm_lipgloss.Sides.xy ~x:1 ~y:0)
+      |> Charamel_lipgloss.Style.inline false
+      |> Charamel_lipgloss.Style.margin (Charamel_lipgloss.Sides.xy ~x:1 ~y:0)
     in
     match List.nth_opt !alignments col with
     | Some (Some `Left) ->
-        Charm_lipgloss.Style.align_horizontal Charm_lipgloss.Position.left style
+        Charamel_lipgloss.Style.align_horizontal Charamel_lipgloss.Position.left style
     | Some (Some `Center) ->
-        Charm_lipgloss.Style.align_horizontal Charm_lipgloss.Position.center style
+        Charamel_lipgloss.Style.align_horizontal Charamel_lipgloss.Position.center style
     | Some (Some `Right) ->
-        Charm_lipgloss.Style.align_horizontal Charm_lipgloss.Position.right style
+        Charamel_lipgloss.Style.align_horizontal Charamel_lipgloss.Position.right style
     | _ -> style
   in
   let width =
@@ -972,8 +972,8 @@ and render_table ctx ~indent table =
         in
         let budget = max 1 ((width / max 1 columns) - 3) in
         let truncate cell =
-          if Charm_ansi.Text.width cell > budget then
-            Charm_ansi.Text.truncate ~width:budget ~tail:"…" cell
+          if Charamel_ansi.Text.width cell > budget then
+            Charamel_ansi.Text.truncate ~width:budget ~tail:"…" cell
           else cell
         in
         (List.map truncate !headers, List.map (List.map truncate) !rows)
@@ -981,12 +981,13 @@ and render_table ctx ~indent table =
   in
   let tbl =
     match width with
-    | None -> Charm_lipgloss.Table.v ~headers ~rows ~border ~style ~wrap:ctx.table_wrap ()
+    | None ->
+        Charamel_lipgloss.Table.v ~headers ~rows ~border ~style ~wrap:ctx.table_wrap ()
     | Some width ->
-        Charm_lipgloss.Table.v ~headers ~rows ~border ~style ~width ~wrap:ctx.table_wrap
-          ()
+        Charamel_lipgloss.Table.v ~headers ~rows ~border ~style ~width
+          ~wrap:ctx.table_wrap ()
   in
-  let rendered = Charm_lipgloss.Table.render tbl in
+  let rendered = Charamel_lipgloss.Table.render tbl in
   let rendered =
     table_block.Theme.block_prefix
     ^ style_text table_block

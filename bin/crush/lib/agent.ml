@@ -15,7 +15,7 @@ type event =
   | Permission_asked of Permission.request
   | Permission_resolved of Permission.request * Permission.outcome
   | Usage of {
-      usage : Charm_fantasy.Usage.t;
+      usage : Charamel_fantasy.Usage.t;
       cost_usd : float;
       total_cost_usd : float;
       context_tokens : int;
@@ -86,10 +86,10 @@ type stream_item =
 type stream_result = {
   finish : [ `Stop | `Length | `Content_filter | `Tool_calls | `Error of string ];
   calls : call list;
-  parts : Charm_fantasy.Message.part list;
+  parts : Charamel_fantasy.Message.part list;
   prompt_tokens : int;
   completion_tokens : int;
-  typed_error : Charm_fantasy.Error.t option;
+  typed_error : Charamel_fantasy.Error.t option;
   emitted : bool;
 }
 
@@ -112,8 +112,8 @@ type scheduled = {
 
 type turn_state = {
   mutable assistant_appended : bool;
-  mutable parts : Charm_fantasy.Message.part list;
-  mutable last_turn : Charm_fantasy.Message.t list;
+  mutable parts : Charamel_fantasy.Message.part list;
+  mutable last_turn : Charamel_fantasy.Message.t list;
 }
 
 type t = {
@@ -131,7 +131,7 @@ type t = {
   run_child : prompt:string -> (string, string) result;
   busy_state : bool ref;
   turn_cancel : Eio.Cancel.t option ref;
-  usage : Charm_fantasy.Usage.t ref;
+  usage : Charamel_fantasy.Usage.t ref;
   cost_usd : float ref;
   context_tokens : int ref;
   loop_window : string list ref;
@@ -278,18 +278,19 @@ let parts_of_items items =
   let part = function
     | Text_item buffer ->
         let text = Buffer.contents buffer in
-        if text = "" then None else Some (Charm_fantasy.Message.Text text)
+        if text = "" then None else Some (Charamel_fantasy.Message.Text text)
     | Reasoning_item buffer ->
         let text = Buffer.contents buffer in
         if text = "" then None
-        else Some (Charm_fantasy.Message.Reasoning { text; signature = None })
+        else Some (Charamel_fantasy.Message.Reasoning { text; signature = None })
     | Call_item call ->
         let input =
           match call.decoded with
           | Some (Ok json) -> json
           | Some (Error _) | None -> Jsont.Json.object' []
         in
-        Some (Charm_fantasy.Message.Tool_call { id = call.id; name = call.name; input })
+        Some
+          (Charamel_fantasy.Message.Tool_call { id = call.id; name = call.name; input })
   in
   List.filter_map part (List.rev items)
 
@@ -303,7 +304,7 @@ let decode_call call =
 
 let record_usage t (model : Models.resolved) usage =
   let cost = Models.cost model.Models.model usage in
-  t.usage := Charm_fantasy.Usage.add !(t.usage) usage;
+  t.usage := Charamel_fantasy.Usage.add !(t.usage) usage;
   t.cost_usd := !(t.cost_usd) +. cost;
   emit t
     (Usage
@@ -322,14 +323,14 @@ let record_usage t (model : Models.resolved) usage =
          model =
            {
              Session.provider = model.Models.provider_id;
-             model = model.Models.model.Charm_fantasy.Model.id;
+             model = model.Models.model.Charamel_fantasy.Model.id;
            };
        })
 
 let refresh_model ?(force = false) ?rejected t turn_sw role :
-    (Models.resolved * Charm_fantasy.Provider.auth, error) result =
+    (Models.resolved * Charamel_fantasy.Provider.auth, error) result =
   let model = match role with `Large -> !(t.large_model) | `Small -> !(t.small_model) in
-  let refresh : (Charm_fantasy.Provider.auth, [ `Auth of string ]) result =
+  let refresh : (Charamel_fantasy.Provider.auth, [ `Auth of string ]) result =
     if force then
       match rejected with
       | None -> Error (`Auth "missing rejected credential for forced refresh")
@@ -342,7 +343,7 @@ let refresh_model ?(force = false) ?rejected t turn_sw role :
           | Error `No_credential ->
               Error (`Auth ("no credential for " ^ model.Models.provider_id))
           | Error (`Refresh provider_error) ->
-              Error (`Auth (Charm_fantasy.Error.message provider_error))
+              Error (`Auth (Charamel_fantasy.Error.message provider_error))
           | Error error -> Error (`Auth (Fmt.str "%a" Auth.pp_refresh_error error))
           | Ok provider_auth -> Ok provider_auth)
     else
@@ -354,7 +355,7 @@ let refresh_model ?(force = false) ?rejected t turn_sw role :
       | Error `No_credential ->
           Error (`Auth ("no credential for " ^ model.Models.provider_id))
       | Error (`Refresh provider_error) ->
-          Error (`Auth (Charm_fantasy.Error.message provider_error))
+          Error (`Auth (Charamel_fantasy.Error.message provider_error))
       | Error error -> Error (`Auth (Fmt.str "%a" Auth.pp_refresh_error error))
       | Ok provider_auth -> Ok provider_auth
   in
@@ -421,8 +422,8 @@ let consume_stream t turn_sw (model : Models.resolved) provider_auth messages st
     let typed_error = ref None in
     let emitted = ref false in
     let stream =
-      Charm_fantasy.Provider.stream model.Models.provider ~sw:turn_sw ~clock:t.deps.clock
-        ~net:t.deps.net ~model:model.Models.model
+      Charamel_fantasy.Provider.stream model.Models.provider ~sw:turn_sw
+        ~clock:t.deps.clock ~net:t.deps.net ~model:model.Models.model
         ~system:[ system_prompt t turn_sw ]
         ~tools:(Toolset.fantasy t.tools) ~max_tokens:model.Models.max_tokens
         ~reasoning:model.Models.reasoning
@@ -431,10 +432,10 @@ let consume_stream t turn_sw (model : Models.resolved) provider_auth messages st
     in
     let items = ref [] in
     let calls = ref [] in
-    let latest_usage = ref Charm_fantasy.Usage.zero in
+    let latest_usage = ref Charamel_fantasy.Usage.zero in
     let rec consume () =
       match Eio.Stream.take stream with
-      | Charm_fantasy.Stream_part.Text_delta text ->
+      | Charamel_fantasy.Stream_part.Text_delta text ->
           emitted := true;
           add_delta items `Text text;
           state.parts <- parts_of_items !items;
@@ -465,7 +466,7 @@ let consume_stream t turn_sw (model : Models.resolved) provider_auth messages st
           consume ()
       | Usage usage -> (
           emitted := true;
-          latest_usage := Charm_fantasy.Usage.add !latest_usage usage;
+          latest_usage := Charamel_fantasy.Usage.add !latest_usage usage;
           match record_usage t model usage with
           | Ok () -> consume ()
           | Error error -> Result.Error error)
@@ -474,16 +475,17 @@ let consume_stream t turn_sw (model : Models.resolved) provider_auth messages st
           List.iter (fun call -> ignore (decode_call call)) calls;
           state.parts <- parts_of_items !items;
           let latest = !latest_usage in
-          t.context_tokens := Charm_fantasy.Usage.total latest;
+          t.context_tokens := Charamel_fantasy.Usage.total latest;
           Ok
             {
               finish;
               calls;
               parts = state.parts;
               prompt_tokens =
-                latest.Charm_fantasy.Usage.input + latest.Charm_fantasy.Usage.cache_read
-                + latest.Charm_fantasy.Usage.cache_write;
-              completion_tokens = latest.Charm_fantasy.Usage.output;
+                latest.Charamel_fantasy.Usage.input
+                + latest.Charamel_fantasy.Usage.cache_read
+                + latest.Charamel_fantasy.Usage.cache_write;
+              completion_tokens = latest.Charamel_fantasy.Usage.output;
               typed_error = !typed_error;
               emitted = !emitted;
             }
@@ -655,7 +657,7 @@ let persist_executions t executions =
   loop executions
 
 let assistant_message parts =
-  { Charm_fantasy.Message.role = Charm_fantasy.Message.Assistant; parts }
+  { Charamel_fantasy.Message.role = Charamel_fantasy.Message.Assistant; parts }
 
 let finish_result = function
   | `Stop -> Ok `Stop
@@ -668,13 +670,13 @@ let add_attachments text attachments =
   let files =
     List.map
       (fun (mime, data, name) ->
-        Charm_fantasy.Message.File
+        Charamel_fantasy.Message.File
           { mime; data; name = (if name = "" then None else Some name) })
       attachments
   in
   {
-    Charm_fantasy.Message.role = Charm_fantasy.Message.User;
-    parts = Charm_fantasy.Message.Text text :: files;
+    Charamel_fantasy.Message.role = Charamel_fantasy.Message.User;
+    parts = Charamel_fantasy.Message.Text text :: files;
   }
 
 let post_metadata t turn_sw first_prompt state =
@@ -741,10 +743,10 @@ let post_metadata t turn_sw first_prompt state =
 
 let provider_error_message = function
   | None -> "provider returned HTTP 401"
-  | Some error -> Charm_fantasy.Error.message error
+  | Some error -> Charamel_fantasy.Error.message error
 
 let is_http_401 = function
-  | Some (`Http ({ status = 401; _ } : Charm_fantasy.Error.http_error)) -> true
+  | Some (`Http ({ status = 401; _ } : Charamel_fantasy.Error.http_error)) -> true
   | _ -> false
 
 let disable_oauth t provider_id rejected reason =
@@ -764,7 +766,7 @@ let run_turn t turn_sw first_prompt user_message attachments state =
       let* stream_result = consume_stream t turn_sw model provider_auth messages state in
       let retryable =
         match (stream_result.finish, provider_auth) with
-        | `Error _, Charm_fantasy.Provider.Oauth _ ->
+        | `Error _, Charamel_fantasy.Provider.Oauth _ ->
             (not stream_result.emitted) && is_http_401 stream_result.typed_error
         | _ -> false
       in
@@ -811,7 +813,7 @@ let run_turn t turn_sw first_prompt user_message attachments state =
             in
             if results = [] then Ok `Stop
             else
-              let tool_message = Charm_fantasy.Message.tool_results results in
+              let tool_message = Charamel_fantasy.Message.tool_results results in
               let* () =
                 append t (Session.Message { ms = now_ms t; message = tool_message })
               in
@@ -821,7 +823,7 @@ let run_turn t turn_sw first_prompt user_message attachments state =
               else if stop_turn then Ok `Stop
               else if
                 Compaction.needed
-                  ~context_window:model.Models.model.Charm_fantasy.Model.context_window
+                  ~context_window:model.Models.model.Charamel_fantasy.Model.context_window
                   ~prompt_tokens:stream_result.prompt_tokens
                   ~completion_tokens:stream_result.completion_tokens
                   ~disabled:t.deps.config.Config.options.Config.disable_auto_compaction
@@ -908,7 +910,7 @@ let rec run_child_agent parent ~prompt:instruction =
       ~model:
         {
           Session.provider = model.Models.provider_id;
-          model = model.Models.model.Charm_fantasy.Model.id;
+          model = model.Models.model.Charamel_fantasy.Model.id;
         }
       ()
   with
@@ -932,12 +934,15 @@ let rec run_child_agent parent ~prompt:instruction =
           | Ok _ ->
               let rec last = function
                 | [] -> ""
-                | { Charm_fantasy.Message.role = Charm_fantasy.Message.Assistant; parts }
+                | {
+                    Charamel_fantasy.Message.role = Charamel_fantasy.Message.Assistant;
+                    parts;
+                  }
                   :: rest ->
                     let text =
                       List.filter_map
                         (function
-                          | Charm_fantasy.Message.Text text -> Some text | _ -> None)
+                          | Charamel_fantasy.Message.Text text -> Some text | _ -> None)
                         parts
                       |> String.concat ""
                     in

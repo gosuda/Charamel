@@ -1,4 +1,4 @@
-type binding = Charm_bubbles.Key_binding.t
+type binding = Charamel_bubbles.Key_binding.t
 
 type input = {
   accept_suggestion : binding;
@@ -88,7 +88,7 @@ type t = {
   file : file;
 }
 
-let b ?(enabled = true) ?help keys = Charm_bubbles.Key_binding.v ~enabled ?help keys
+let b ?(enabled = true) ?help keys = Charamel_bubbles.Key_binding.v ~enabled ?help keys
 let disabled ?help keys = b ~enabled:false ?help keys
 
 let default =

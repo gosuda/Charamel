@@ -1,4 +1,4 @@
-open Charm_fantasy
+open Charamel_fantasy
 open Stream_test_support
 
 let sse ?event data =

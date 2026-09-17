@@ -1,4 +1,4 @@
-open Charm_tea
+open Charamel_tea
 
 let view count = View.v (string_of_int count)
 

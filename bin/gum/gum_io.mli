@@ -43,7 +43,7 @@ val list_files : Eio_unix.Stdenv.base -> string list
 (** [list_files env] recursively lists relative files below the current directory,
     skipping entries rooted at [.git], [node_modules], or a hidden path component. *)
 
-val ui_terminal : ?sw:Eio.Switch.t -> Eio_unix.Stdenv.base -> Charm_tea.Terminal.t
+val ui_terminal : ?sw:Eio.Switch.t -> Eio_unix.Stdenv.base -> Charamel_tea.Terminal.t
 (** [ui_terminal ?sw env] routes interactive rendering to stderr. With piped stdin, it
     opens [/dev/tty] for keyboard input when stderr is a terminal. [sw] owns that
     descriptor and must outlive the returned terminal; callers that omit it receive

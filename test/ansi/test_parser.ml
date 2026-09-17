@@ -1,4 +1,4 @@
-open Charm_ansi
+open Charamel_ansi
 
 let sub_to_string = function Some v -> string_of_int v | None -> "_"
 let param_to_string ps = String.concat ":" (List.map sub_to_string ps)

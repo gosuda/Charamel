@@ -24,15 +24,15 @@
   csv
   spin)
  (libraries
-  charm.cli
-  charm.ansi
-  charm.colorprofile
-  charm.lipgloss
-  charm.tea
-  charm.bubbles
-  charm.log
-  charm.highlight
-  charm.glamour
+  charamel.cli
+  charamel.ansi
+  charamel.colorprofile
+  charamel.lipgloss
+  charamel.tea
+  charamel.bubbles
+  charamel.log
+  charamel.highlight
+  charamel.glamour
   cmdliner
   eio
   eio.unix
@@ -56,7 +56,7 @@
  (public_name gum)
  (package gum)
  (modules main)
- (libraries gum_core charm.cli cmdliner eio.unix)
+ (libraries gum_core charamel.cli cmdliner eio.unix)
  (flags
   (:standard
    -strict-sequence

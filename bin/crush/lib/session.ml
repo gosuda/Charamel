@@ -15,7 +15,7 @@ type tool_output = [ `Text of string | `Error of string | `Media of string * str
 type decision = Allow_once | Allow_session | Deny
 
 type event =
-  | Message of { ms : int; message : Charm_fantasy.Message.t }
+  | Message of { ms : int; message : Charamel_fantasy.Message.t }
   | Tool_call of { ms : int; id : string; name : string; input : Jsont.json }
   | Tool_result of {
       ms : int;
@@ -27,7 +27,7 @@ type event =
     }
   | Usage of {
       ms : int;
-      usage : Charm_fantasy.Usage.t;
+      usage : Charamel_fantasy.Usage.t;
       cost_usd : float;
       model : model_ref;
     }
@@ -48,7 +48,7 @@ type index_entry = {
   created_ms : int;
   updated_ms : int;
   message_count : int;
-  usage : Charm_fantasy.Usage.t;
+  usage : Charamel_fantasy.Usage.t;
   cost_usd : float;
 }
 
@@ -59,10 +59,10 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
 let role_jsont =
   Jsont.enum
     [
-      ("system", Charm_fantasy.Message.System);
-      ("user", Charm_fantasy.Message.User);
-      ("assistant", Charm_fantasy.Message.Assistant);
-      ("tool", Charm_fantasy.Message.Tool);
+      ("system", Charamel_fantasy.Message.System);
+      ("user", Charamel_fantasy.Message.User);
+      ("assistant", Charamel_fantasy.Message.Assistant);
+      ("tool", Charamel_fantasy.Message.Tool);
     ]
 
 let text_part_jsont =
@@ -139,24 +139,24 @@ let tool_result_part_jsont =
 
 let text_part_case =
   Jsont.Object.Case.map "text" text_part_jsont ~dec:(fun text ->
-      Charm_fantasy.Message.Text text)
+      Charamel_fantasy.Message.Text text)
 
 let reasoning_part_case =
   Jsont.Object.Case.map "reasoning" reasoning_part_jsont ~dec:(fun (text, signature) ->
-      Charm_fantasy.Message.Reasoning { text; signature })
+      Charamel_fantasy.Message.Reasoning { text; signature })
 
 let file_part_case =
   Jsont.Object.Case.map "file" file_part_jsont ~dec:(fun (mime, data, name) ->
-      Charm_fantasy.Message.File { mime; data; name })
+      Charamel_fantasy.Message.File { mime; data; name })
 
 let tool_call_part_case =
   Jsont.Object.Case.map "tool_call" tool_call_part_jsont ~dec:(fun (id, name, input) ->
-      Charm_fantasy.Message.Tool_call { id; name; input })
+      Charamel_fantasy.Message.Tool_call { id; name; input })
 
 let tool_result_part_case =
   Jsont.Object.Case.map "tool_result" tool_result_part_jsont
     ~dec:(fun (id, name, output) ->
-      Charm_fantasy.Message.Tool_result { id; name; output })
+      Charamel_fantasy.Message.Tool_result { id; name; output })
 
 let part_jsont =
   let cases =
@@ -170,14 +170,14 @@ let part_jsont =
       ]
   in
   let enc_case = function
-    | Charm_fantasy.Message.Text text -> Jsont.Object.Case.value text_part_case text
-    | Charm_fantasy.Message.Reasoning { text; signature } ->
+    | Charamel_fantasy.Message.Text text -> Jsont.Object.Case.value text_part_case text
+    | Charamel_fantasy.Message.Reasoning { text; signature } ->
         Jsont.Object.Case.value reasoning_part_case (text, signature)
-    | Charm_fantasy.Message.File { mime; data; name } ->
+    | Charamel_fantasy.Message.File { mime; data; name } ->
         Jsont.Object.Case.value file_part_case (mime, data, name)
-    | Charm_fantasy.Message.Tool_call { id; name; input } ->
+    | Charamel_fantasy.Message.Tool_call { id; name; input } ->
         Jsont.Object.Case.value tool_call_part_case (id, name, input)
-    | Charm_fantasy.Message.Tool_result { id; name; output } ->
+    | Charamel_fantasy.Message.Tool_result { id; name; output } ->
         Jsont.Object.Case.value tool_result_part_case (id, name, output)
   in
   Jsont.Object.map Fun.id
@@ -186,10 +186,11 @@ let part_jsont =
 
 let message_jsont =
   let open Jsont in
-  Object.map (fun role parts -> { Charm_fantasy.Message.role; parts })
-  |> Object.mem "role" role_jsont ~enc:(fun value -> value.Charm_fantasy.Message.role)
-  |> Object.mem "parts" (list part_jsont) ~enc:(fun (value : Charm_fantasy.Message.t) ->
-      value.Charm_fantasy.Message.parts)
+  Object.map (fun role parts -> { Charamel_fantasy.Message.role; parts })
+  |> Object.mem "role" role_jsont ~enc:(fun value -> value.Charamel_fantasy.Message.role)
+  |> Object.mem "parts" (list part_jsont)
+       ~enc:(fun (value : Charamel_fantasy.Message.t) ->
+         value.Charamel_fantasy.Message.parts)
   |> Object.finish
 
 let model_ref_jsont =
@@ -202,13 +203,14 @@ let model_ref_jsont =
 let usage_jsont =
   let open Jsont in
   Object.map (fun input output cache_read cache_write reasoning ->
-      { Charm_fantasy.Usage.input; output; cache_read; cache_write; reasoning })
-  |> Object.mem "input" int ~enc:(fun value -> value.Charm_fantasy.Usage.input)
-  |> Object.mem "output" int ~enc:(fun value -> value.Charm_fantasy.Usage.output)
-  |> Object.mem "cache_read" int ~enc:(fun value -> value.Charm_fantasy.Usage.cache_read)
+      { Charamel_fantasy.Usage.input; output; cache_read; cache_write; reasoning })
+  |> Object.mem "input" int ~enc:(fun value -> value.Charamel_fantasy.Usage.input)
+  |> Object.mem "output" int ~enc:(fun value -> value.Charamel_fantasy.Usage.output)
+  |> Object.mem "cache_read" int ~enc:(fun value ->
+      value.Charamel_fantasy.Usage.cache_read)
   |> Object.mem "cache_write" int ~enc:(fun value ->
-      value.Charm_fantasy.Usage.cache_write)
-  |> Object.mem "reasoning" int ~enc:(fun value -> value.Charm_fantasy.Usage.reasoning)
+      value.Charamel_fantasy.Usage.cache_write)
+  |> Object.mem "reasoning" int ~enc:(fun value -> value.Charamel_fantasy.Usage.reasoning)
   |> Object.finish
 
 let header_jsont =
@@ -224,7 +226,7 @@ let header_jsont =
   |> Object.mem "model" model_ref_jsont ~enc:(fun (value : header) -> value.model)
   |> Object.finish
 
-type message_event = { ms : int; message : Charm_fantasy.Message.t }
+type message_event = { ms : int; message : Charamel_fantasy.Message.t }
 type tool_call_event = { ms : int; id : string; name : string; input : Jsont.json }
 
 type tool_result_event = {
@@ -238,7 +240,7 @@ type tool_result_event = {
 
 type usage_event = {
   ms : int;
-  usage : Charm_fantasy.Usage.t;
+  usage : Charamel_fantasy.Usage.t;
   cost_usd : float;
   model : model_ref;
 }
@@ -291,20 +293,20 @@ let usage_event_jsont =
   let open Jsont in
   Object.map (fun ms input output cache_read cache_write reasoning cost_usd model ->
       let usage =
-        { Charm_fantasy.Usage.input; output; cache_read; cache_write; reasoning }
+        { Charamel_fantasy.Usage.input; output; cache_read; cache_write; reasoning }
       in
       ({ ms; usage; cost_usd; model } : usage_event))
   |> Object.mem "ms" int ~enc:(fun (value : usage_event) -> value.ms)
   |> Object.mem "input" int ~enc:(fun (value : usage_event) ->
-      value.usage.Charm_fantasy.Usage.input)
+      value.usage.Charamel_fantasy.Usage.input)
   |> Object.mem "output" int ~enc:(fun (value : usage_event) ->
-      value.usage.Charm_fantasy.Usage.output)
+      value.usage.Charamel_fantasy.Usage.output)
   |> Object.mem "cache_read" int ~enc:(fun (value : usage_event) ->
-      value.usage.Charm_fantasy.Usage.cache_read)
+      value.usage.Charamel_fantasy.Usage.cache_read)
   |> Object.mem "cache_write" int ~enc:(fun (value : usage_event) ->
-      value.usage.Charm_fantasy.Usage.cache_write)
+      value.usage.Charamel_fantasy.Usage.cache_write)
   |> Object.mem "reasoning" int ~enc:(fun (value : usage_event) ->
-      value.usage.Charm_fantasy.Usage.reasoning)
+      value.usage.Charamel_fantasy.Usage.reasoning)
   |> Object.mem "cost_usd" number ~enc:(fun (value : usage_event) -> value.cost_usd)
   |> Object.mem "model" model_ref_jsont ~enc:(fun (value : usage_event) -> value.model)
   |> Object.finish
@@ -531,7 +533,7 @@ let replace_entry (id : string) (entry : index_entry) (entries : index_entry lis
   in
   if !found then entries else entries @ [ entry ]
 
-let usage_zero = Charm_fantasy.Usage.zero
+let usage_zero = Charamel_fantasy.Usage.zero
 
 let entry_of_header (header : header) : index_entry =
   {
@@ -552,7 +554,7 @@ let update_entry (entry : index_entry) event ~updated_ms =
       {
         entry with
         updated_ms;
-        usage = Charm_fantasy.Usage.add entry.usage usage;
+        usage = Charamel_fantasy.Usage.add entry.usage usage;
         cost_usd = entry.cost_usd +. cost_usd;
       }
   | Tool_call _ | Tool_result _ | Summary _ | Permission _ | Note _ ->
@@ -561,7 +563,7 @@ let update_entry (entry : index_entry) event ~updated_ms =
 let valid_session_id id = Ulid.is_valid id
 
 let store ~fs ~cwd =
-  let data_root = Charm_cli.Xdg.data_dir ~app:"crush" in
+  let data_root = Charamel_cli.Xdg.data_dir ~app:"crush" in
   let root =
     Filename.concat (Filename.concat data_root "projects") (Config.project_key ~cwd)
   in
@@ -800,9 +802,9 @@ let messages session =
       done;
       let prefix =
         [
-          Charm_fantasy.Message.text Charm_fantasy.Message.User
+          Charamel_fantasy.Message.text Charamel_fantasy.Message.User
             ("Summary of the earlier conversation:\n" ^ summary_text);
-          Charm_fantasy.Message.text Charm_fantasy.Message.Assistant "Understood.";
+          Charamel_fantasy.Message.text Charamel_fantasy.Message.Assistant "Understood.";
         ]
       in
       prefix @ List.rev !tail
@@ -812,7 +814,7 @@ let usage_total session =
     (fun (usage, cost) event ->
       match event with
       | Usage { usage = event_usage; cost_usd; _ } ->
-          (Charm_fantasy.Usage.add usage event_usage, cost +. cost_usd)
+          (Charamel_fantasy.Usage.add usage event_usage, cost +. cost_usd)
       | _ -> (usage, cost))
     (usage_zero, 0.) session.events
 

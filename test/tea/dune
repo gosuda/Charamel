@@ -1,6 +1,6 @@
 (test
  (name test_tea)
- (package charm)
+ (package charamel)
  (modules
   test_tea
   test_key
@@ -10,8 +10,8 @@
   test_terminal
   test_program)
  (libraries
-  charm.tea
-  charm.ansi
+  charamel.tea
+  charamel.ansi
   alcotest
   eio
   eio.unix

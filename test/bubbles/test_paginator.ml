@@ -1,4 +1,4 @@
-module Paginator = Charm_bubbles.Paginator
+module Paginator = Charamel_bubbles.Paginator
 
 let total_pages_and_bounds () =
   let paginator = Paginator.v ~per_page:5 ~total_pages:1 () in
@@ -30,7 +30,7 @@ let views_and_keys () =
   Alcotest.(check string) "dot view" "•○○" (Paginator.view paginator);
   let paginator, _ = Paginator.update Paginator.Next_page paginator in
   Alcotest.(check string) "next dot view" "○•○" (Paginator.view paginator);
-  let key = Charm_tea.Key.v Charm_tea.Key.Left in
+  let key = Charamel_tea.Key.v Charamel_tea.Key.Left in
   match Paginator.key paginator key with
   | Some Paginator.Prev_page -> ()
   | _ -> Alcotest.fail "left key not bound"

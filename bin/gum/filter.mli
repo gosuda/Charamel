@@ -63,7 +63,7 @@ val exact_matches : pattern:string -> string list -> match_ list
 val make : options -> model
 (** [make options] creates a filter model with its initial query and matches. *)
 
-val app : options -> (model, msg) Charm_tea.app
+val app : options -> (model, msg) Charamel_tea.app
 (** [app options] is the scripted or terminal filter application. *)
 
 val single_option : options -> (string option, string) result

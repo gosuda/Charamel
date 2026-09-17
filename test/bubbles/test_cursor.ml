@@ -1,9 +1,9 @@
-module Cursor = Charm_bubbles.Cursor
+module Cursor = Charamel_bubbles.Cursor
 
 let check_view expected cursor =
   Alcotest.(check string)
     "cursor text" expected
-    (Charm_ansi.Text.strip (Cursor.view cursor))
+    (Charamel_ansi.Text.strip (Cursor.view cursor))
 
 let blink_and_focus () =
   let cursor = Cursor.v () |> Cursor.set_char "x" in

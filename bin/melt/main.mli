@@ -8,10 +8,10 @@
 type error =
   [ `No_home
   | `Read_key of string * string
-  | `Parse_key of Charm_ssh_keygen.error
+  | `Parse_key of Charamel_ssh_keygen.error
   | `Unsupported_key
   | `Mnemonic of Melt_core.Mnemonic.error
-  | `Write_key of Charm_ssh_keygen.error ]
+  | `Write_key of Charamel_ssh_keygen.error ]
 (** [error] is a typed failure raised by a backup or restore operation. *)
 
 val pp_error : error Fmt.t

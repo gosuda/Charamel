@@ -73,7 +73,7 @@ type backend = {
   events : Bridge.t;
   clock : float Eio.Time.clock_ty Eio.Resource.t;
   env : Eio_unix.Stdenv.base;
-  form_env : Charm_huh.Form.Env.t;
+  form_env : Charamel_huh.Form.Env.t;
   project : string;
   session_id : unit -> string;
   new_session : unit -> (Crush_core.Agent.t, string) result;
@@ -107,17 +107,17 @@ type ui_model
 type ui_msg
 (** Internal and external Tea messages. *)
 
-val app : backend -> (ui_model, ui_msg) Charm_tea.app
+val app : backend -> (ui_model, ui_msg) Charamel_tea.app
 (** [app backend] is the Tea application used by both production and scripted tests. *)
 
-val run : backend -> (ui_model, Charm_tea.error) result
+val run : backend -> (ui_model, Charamel_tea.error) result
 (** [run backend] starts the chat application on [backend.env], restoring the terminal and
     closing the bridge on every exit path. *)
 
 val run_with :
   backend ->
   events:
-    [ `Key of Charm_tea.Key.t
+    [ `Key of Charamel_tea.Key.t
     | `Text of string
     | `Resize of int * int
     | `Msg of ui_msg
@@ -125,6 +125,6 @@ val run_with :
     list ->
   size:int * int ->
   ui_model * string
-(** [run_with] drives the same application against [Charm_tea.Test] and is the
+(** [run_with] drives the same application against [Charamel_tea.Test] and is the
     deterministic backend bridge surface used by UI tests. The bridge remains open for the
     scripted run and is closed when it returns. *)

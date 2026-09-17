@@ -16,34 +16,34 @@ let expected_vectors () =
     (fun (seconds, expected) ->
       Alcotest.(check string)
         (string_of_float seconds) expected
-        (Charm_bubbles.Duration.to_string seconds))
+        (Charamel_bubbles.Duration.to_string seconds))
     vectors
 
 let trimmed_fraction_and_sign () =
   Alcotest.(check string)
     "trims zero fractional digits" "2s"
-    (Charm_bubbles.Duration.to_string 2.0);
+    (Charamel_bubbles.Duration.to_string 2.0);
   Alcotest.(check string)
     "nanoseconds are rounded before formatting" "1ns"
-    (Charm_bubbles.Duration.to_string 0.0000000006);
+    (Charamel_bubbles.Duration.to_string 0.0000000006);
   Alcotest.(check string)
     "negative subsecond" "-1.5µs"
-    (Charm_bubbles.Duration.to_string (-0.0000015));
+    (Charamel_bubbles.Duration.to_string (-0.0000015));
   Alcotest.(check string)
     "negative minutes" "-1m0.25s"
-    (Charm_bubbles.Duration.to_string (-60.25))
+    (Charamel_bubbles.Duration.to_string (-60.25))
 
 let rejects_nonfinite () =
   let raised =
     try
-      ignore (Charm_bubbles.Duration.to_string Float.nan);
+      ignore (Charamel_bubbles.Duration.to_string Float.nan);
       false
     with Invalid_argument _ -> true
   in
   Alcotest.(check bool) "NaN is rejected" true raised;
   let raised =
     try
-      ignore (Charm_bubbles.Duration.to_string Float.infinity);
+      ignore (Charamel_bubbles.Duration.to_string Float.infinity);
       false
     with Invalid_argument _ -> true
   in

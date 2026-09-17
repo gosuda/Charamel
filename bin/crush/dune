@@ -6,10 +6,10 @@
  (libraries
   crush_core
   crush.ui
-  charm.cli
-  charm.fantasy
-  charm.huh
-  charm.tea
+  charamel.cli
+  charamel.fantasy
+  charamel.huh
+  charamel.tea
   cmdliner
   eio
   eio.unix

@@ -1,7 +1,7 @@
-(** The Elm-architecture program description [Charm_tea]'s runtime drives.
+(** The Elm-architecture program description [Charamel_tea]'s runtime drives.
 
     An application is a plain record. A caller builds one directly with the fields below.
-    [Charm_tea] re-exports [t] under the name [app]. *)
+    [Charamel_tea] re-exports [t] under the name [app]. *)
 
 type ('model, 'msg) t = {
   init : unit -> 'model * 'msg Cmd.t;

@@ -1,4 +1,4 @@
-module H = Charm_highlight
+module H = Charamel_highlight
 
 let source lines =
   if List.length lines <> 10 then invalid_arg "highlight samples must have ten lines";
@@ -593,7 +593,7 @@ let render_case =
       | None -> Alcotest.fail "OCaml specification missing"
       | Some spec ->
           let source = "let x = 1" in
-          let empty_theme _ = Charm_lipgloss.Style.empty in
+          let empty_theme _ = Charamel_lipgloss.Style.empty in
           let rendered = H.render ~theme:empty_theme spec source in
           Alcotest.check Alcotest.string "empty theme is byte identity" source rendered)
 

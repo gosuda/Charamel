@@ -1,9 +1,9 @@
 (include_subdirs unqualified)
 
 (library
- (name charm_highlight)
- (public_name charm.highlight)
- (libraries charm.ansi charm.lipgloss re)
+ (name charamel_highlight)
+ (public_name charamel.highlight)
+ (libraries charamel.ansi charamel.lipgloss re)
  (flags
   (:standard
    -strict-sequence

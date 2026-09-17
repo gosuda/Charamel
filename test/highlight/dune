@@ -1,7 +1,7 @@
 (test
  (name test_highlight)
- (package charm)
- (libraries charm.highlight charm.lipgloss alcotest)
+ (package charamel)
+ (libraries charamel.highlight charamel.lipgloss alcotest)
  (modules test_highlight)
  (flags
   (:standard

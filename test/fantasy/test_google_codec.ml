@@ -1,4 +1,4 @@
-open Charm_fantasy
+open Charamel_fantasy
 open Stream_test_support
 
 let sse_data data = Fmt.str "data: %s\n\n" data

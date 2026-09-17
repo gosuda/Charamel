@@ -61,7 +61,7 @@ let default_output = "freeze.png"
 
 let run_render (env : Eio_unix.Stdenv.base) ~sw (config : Freeze_core.Config.t) ~path ~raw
     =
-  if raw = "" then Charm_cli.error "No input"
+  if raw = "" then Charamel_cli.error "No input"
   else
     let render_config : Freeze_core.Config.t =
       if config.Freeze_core.Config.output = "" then
@@ -76,7 +76,7 @@ let run_render (env : Eio_unix.Stdenv.base) ~sw (config : Freeze_core.Config.t) 
       Freeze_core.Input.language ~override:render_config.Freeze_core.Config.language ~path
     in
     if (not ansi) && Option.is_none language then
-      Charm_cli.error "Language Unknown: specify a language with the --language flag"
+      Charamel_cli.error "Language Unknown: specify a language with the --language flag"
     else
       let svg_fs =
         if render_config.Freeze_core.Config.font.Freeze_core.Config.file = "" then env#cwd
@@ -87,7 +87,7 @@ let run_render (env : Eio_unix.Stdenv.base) ~sw (config : Freeze_core.Config.t) 
         Freeze_core.Svg.render ~fs:svg_fs ~config:render_config ~language ~text:raw
           ~is_ansi:ansi
       with
-      | Error message -> Charm_cli.error message
+      | Error message -> Charamel_cli.error message
       | Ok ({ svg; _ } : Freeze_core.Svg.rendered) -> (
           let output =
             if render_config.Freeze_core.Config.output <> "" then
@@ -101,12 +101,12 @@ let run_render (env : Eio_unix.Stdenv.base) ~sw (config : Freeze_core.Config.t) 
                 Freeze_core.Png.convert ~sw ~process_mgr:env#process_mgr ~svg ~output:path
               with
               | Ok () -> with_status env path
-              | Error message -> Charm_cli.error message)
+              | Error message -> Charamel_cli.error message)
           | Some path when Filename.check_suffix path ".svg" -> (
               match save_svg env path svg with
               | Ok () -> with_status env path
-              | Error message -> Charm_cli.error message)
-          | Some _ -> Charm_cli.error "unsupported output format")
+              | Error message -> Charamel_cli.error message)
+          | Some _ -> Charamel_cli.error "unsupported output format")
 
 let run (env : Eio_unix.Stdenv.base) (cli : Freeze_core.Config.cli) =
   let config_fs =
@@ -114,7 +114,7 @@ let run (env : Eio_unix.Stdenv.base) (cli : Freeze_core.Config.cli) =
     else root_for_path env cli.Freeze_core.Config.config
   in
   match Freeze_core.Config.load ~fs:config_fs ~name:cli.Freeze_core.Config.config with
-  | Error message -> Charm_cli.error message
+  | Error message -> Charamel_cli.error message
   | Ok (base : Freeze_core.Config.t) ->
       let config : Freeze_core.Config.t = Freeze_core.Config.apply_cli base cli in
       let config : Freeze_core.Config.t =
@@ -127,7 +127,7 @@ let run (env : Eio_unix.Stdenv.base) (cli : Freeze_core.Config.cli) =
        then
          match Freeze_core.Config.save_user ~fs:env#fs config with
          | Ok () -> ()
-         | Error message -> Charm_cli.error message);
+         | Error message -> Charamel_cli.error message);
       Eio.Switch.run (fun sw ->
           let execute = String.trim config.Freeze_core.Config.execute in
           if execute <> "" then
@@ -145,10 +145,10 @@ let run (env : Eio_unix.Stdenv.base) (cli : Freeze_core.Config.cli) =
                 ~timeout:config.Freeze_core.Config.execute_timeout execute
             with
             | Error (`Timeout output) ->
-                Charm_cli.error ~code:124 (output_error (`Timeout output))
-            | Error error -> Charm_cli.error (output_error error)
+                Charamel_cli.error ~code:124 (output_error (`Timeout output))
+            | Error error -> Charamel_cli.error (output_error error)
             | Ok output ->
-                if output = "" then Charm_cli.error "no command output"
+                if output = "" then Charamel_cli.error "no command output"
                 else
                   let config = { config with language = "ansi" } in
                   run_render env ~sw config ~path:None ~raw:output
@@ -166,7 +166,7 @@ let run (env : Eio_unix.Stdenv.base) (cli : Freeze_core.Config.cli) =
               | Freeze_core.Input.Stdin | Freeze_core.Input.Execute _ -> env#cwd
             in
             match Freeze_core.Input.read ~fs:input_fs ~stdin:env#stdin source with
-            | Error message -> Charm_cli.error message
+            | Error message -> Charamel_cli.error message
             | Ok ({ text; path } : Freeze_core.Input.loaded) ->
                 run_render env ~sw config ~path ~raw:text)
 
@@ -175,5 +175,5 @@ let default (env : Eio_unix.Stdenv.base) =
   Cmdliner.Term.(const action $ Freeze_core.Config.cli_term)
 
 let () =
-  Charm_cli.run ~name:"freeze" ~version:Charm_cli.Version.current
+  Charamel_cli.run ~name:"freeze" ~version:Charamel_cli.Version.current
     ~doc:"Generate an SVG or PNG image of source code and terminal output." ~default []

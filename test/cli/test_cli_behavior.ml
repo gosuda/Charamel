@@ -1,13 +1,13 @@
 let runtime_probe mode =
   let action () =
     match mode with
-    | "error" -> Charm_cli.error "probe failure"
-    | "silent" -> Charm_cli.exit 1
+    | "error" -> Charamel_cli.error "probe failure"
+    | "silent" -> Charamel_cli.exit 1
     | "timeout" -> raise Eio.Time.Timeout
     | "interrupt" -> raise Sys.Break
     | _ -> ()
   in
-  Charm_cli.run ~name:"cli-probe" ~version:"dev" ~doc:"CLI runtime probe"
+  Charamel_cli.run ~name:"cli-probe" ~version:"dev" ~doc:"CLI runtime probe"
     ~default:(fun _env -> Cmdliner.Term.(const action $ const ()))
     []
 
@@ -21,7 +21,7 @@ let child_status mode =
           match
             Eio.Process.await
               (Eio.Process.spawn ~sw env#process_mgr
-                 ~env:[| "CHARM_CLI_RUNTIME_PROBE=" ^ mode |]
+                 ~env:[| "CHARAMEL_CLI_RUNTIME_PROBE=" ^ mode |]
                  argv)
           with
           | `Exited code -> code
@@ -41,7 +41,7 @@ let cases =
   ]
 
 let () =
-  match Sys.getenv_opt "CHARM_CLI_RUNTIME_PROBE" with
+  match Sys.getenv_opt "CHARAMEL_CLI_RUNTIME_PROBE" with
   | Some mode -> runtime_probe mode
   | None ->
       Alcotest.run "cli-behavior"

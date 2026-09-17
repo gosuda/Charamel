@@ -2,40 +2,42 @@ module Styles = Styles
 
 type format = Text | Logfmt | Json
 
-(* [Charm_colorprofile.convert] only reduces color slots. Under [No_tty]/[Ascii],
-   {!Charm_colorprofile.Writer} documents removing every SGR sequence, not just color
+(* [Charamel_colorprofile.convert] only reduces color slots. Under [No_tty]/[Ascii],
+   {!Charamel_colorprofile.Writer} documents removing every SGR sequence, not just color
    parameters, so every appearance attribute is cleared for those two profiles; geometry
    ([width], [padding], [border], ...) is untouched either way, since it never produces
    SGR bytes by itself. *)
 let clear_appearance style =
-  style |> Charm_lipgloss.Style.unset_bold |> Charm_lipgloss.Style.unset_italic
-  |> Charm_lipgloss.Style.unset_underline |> Charm_lipgloss.Style.unset_underline_style
-  |> Charm_lipgloss.Style.unset_underline_color
-  |> Charm_lipgloss.Style.unset_strikethrough |> Charm_lipgloss.Style.unset_reverse
-  |> Charm_lipgloss.Style.unset_blink |> Charm_lipgloss.Style.unset_faint
-  |> Charm_lipgloss.Style.unset_underline_spaces
-  |> Charm_lipgloss.Style.unset_strikethrough_spaces
-  |> Charm_lipgloss.Style.unset_color_whitespace |> Charm_lipgloss.Style.unset_foreground
-  |> Charm_lipgloss.Style.unset_background |> Charm_lipgloss.Style.unset_margin_background
-  |> Charm_lipgloss.Style.unset_border_foreground
-  |> Charm_lipgloss.Style.unset_border_background
+  style |> Charamel_lipgloss.Style.unset_bold |> Charamel_lipgloss.Style.unset_italic
+  |> Charamel_lipgloss.Style.unset_underline
+  |> Charamel_lipgloss.Style.unset_underline_style
+  |> Charamel_lipgloss.Style.unset_underline_color
+  |> Charamel_lipgloss.Style.unset_strikethrough |> Charamel_lipgloss.Style.unset_reverse
+  |> Charamel_lipgloss.Style.unset_blink |> Charamel_lipgloss.Style.unset_faint
+  |> Charamel_lipgloss.Style.unset_underline_spaces
+  |> Charamel_lipgloss.Style.unset_strikethrough_spaces
+  |> Charamel_lipgloss.Style.unset_color_whitespace
+  |> Charamel_lipgloss.Style.unset_foreground |> Charamel_lipgloss.Style.unset_background
+  |> Charamel_lipgloss.Style.unset_margin_background
+  |> Charamel_lipgloss.Style.unset_border_foreground
+  |> Charamel_lipgloss.Style.unset_border_background
 
-let adjust_color profile c = Charm_colorprofile.convert profile c
+let adjust_color profile c = Charamel_colorprofile.convert profile c
 
 let apply_adjusted profile ~get ~set style =
   match get style with Some c -> set (adjust_color profile c) style | None -> style
 
 let adjust_style profile style =
-  match (profile : Charm_colorprofile.t) with
+  match (profile : Charamel_colorprofile.t) with
   | No_tty | Ascii -> clear_appearance style
   | Ansi | Ansi256 | True_color ->
       style
-      |> apply_adjusted profile ~get:Charm_lipgloss.Style.get_foreground
-           ~set:Charm_lipgloss.Style.foreground
-      |> apply_adjusted profile ~get:Charm_lipgloss.Style.get_background
-           ~set:Charm_lipgloss.Style.background
-      |> apply_adjusted profile ~get:Charm_lipgloss.Style.get_underline_color
-           ~set:Charm_lipgloss.Style.underline_color
+      |> apply_adjusted profile ~get:Charamel_lipgloss.Style.get_foreground
+           ~set:Charamel_lipgloss.Style.foreground
+      |> apply_adjusted profile ~get:Charamel_lipgloss.Style.get_background
+           ~set:Charamel_lipgloss.Style.background
+      |> apply_adjusted profile ~get:Charamel_lipgloss.Style.get_underline_color
+           ~set:Charamel_lipgloss.Style.underline_color
 
 let adjust_styles profile (s : Styles.t) : Styles.t =
   {
@@ -113,22 +115,26 @@ let render_text (styles : Styles.t) ~ts ~level ~caller ~prefix ~message ~tags =
     first := false;
     Buffer.add_string buf rendered
   in
-  Option.iter (fun s -> emit (Charm_lipgloss.Style.render styles.Styles.timestamp s)) ts;
+  Option.iter
+    (fun s -> emit (Charamel_lipgloss.Style.render styles.Styles.timestamp s))
+    ts;
   (match level with
   | Logs.App -> ()
   | level ->
-      emit (Charm_lipgloss.Style.render (styles.Styles.levels level) (level_label level)));
+      emit
+        (Charamel_lipgloss.Style.render (styles.Styles.levels level) (level_label level)));
   Option.iter
-    (fun c -> emit (Charm_lipgloss.Style.render styles.Styles.caller (Fmt.str "<%s>" c)))
+    (fun c ->
+      emit (Charamel_lipgloss.Style.render styles.Styles.caller (Fmt.str "<%s>" c)))
     caller;
-  emit (Charm_lipgloss.Style.render styles.Styles.prefix (prefix ^ ":"));
-  emit (Charm_lipgloss.Style.render styles.Styles.message message);
+  emit (Charamel_lipgloss.Style.render styles.Styles.prefix (prefix ^ ":"));
+  emit (Charamel_lipgloss.Style.render styles.Styles.message message);
   List.iter
     (fun (k, v) ->
       if k <> "" then begin
-        let key = Charm_lipgloss.Style.render styles.Styles.key k in
-        let sep = Charm_lipgloss.Style.render styles.Styles.separator "=" in
-        let value = Charm_lipgloss.Style.render styles.Styles.value (quote_value v) in
+        let key = Charamel_lipgloss.Style.render styles.Styles.key k in
+        let sep = Charamel_lipgloss.Style.render styles.Styles.separator "=" in
+        let value = Charamel_lipgloss.Style.render styles.Styles.value (quote_value v) in
         emit (key ^ sep ^ value)
       end)
     tags;
@@ -175,7 +181,7 @@ let render_json ~ts ~level ~caller ~prefix ~message ~tags =
   let obj = Jsont.Object (members, Jsont.Meta.none) in
   match Jsont_bytesrw.encode_string ~format:Jsont.Minify Jsont.json obj with
   | Ok s -> s ^ "\n"
-  | Error msg -> Fmt.failwith "charm.log: json encoding failed: %s" msg
+  | Error msg -> Fmt.failwith "charamel.log: json encoding failed: %s" msg
 
 let emit_line ~format ~styles ~time_format ~report_timestamp ~report_caller ~clock ppf
     ~level ~src ~header ~tags message =

@@ -163,7 +163,7 @@ let render_body ~unsafe_html body =
     try
       let document = Cmarkit.Doc.of_string ~strict:false body in
       let html = Cmarkit_html.of_doc ~safe:(not unsafe_html) document in
-      let plain = Charm_glamour.render ~theme:Charm_glamour.Theme.ascii body in
+      let plain = Charamel_glamour.render ~theme:Charamel_glamour.Theme.ascii body in
       Ok (plain, html)
     with
     | Invalid_argument message -> Error (`Markdown message)

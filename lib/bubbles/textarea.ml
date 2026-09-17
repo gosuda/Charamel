@@ -1,10 +1,10 @@
-module Key = Charm_tea.Key
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module Style = Charm_lipgloss.Style
-module Color = Charm_ansi.Color
-module Text = Charm_ansi.Text
-module Width = Charm_ansi.Width
+module Key = Charamel_tea.Key
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module Style = Charamel_lipgloss.Style
+module Color = Charamel_ansi.Color
+module Text = Charamel_ansi.Text
+module Width = Charamel_ansi.Width
 
 let clamp n lo hi = max lo (min hi n)
 let max_lines = 10_000
@@ -48,7 +48,7 @@ let clusters_width xs = Stdlib.List.fold_left (fun n x -> n + cluster_width x) 0
 let style_inline s = Style.inline true s
 let render_style style text = Style.render (style_inline style) text
 let color n = match Color.indexed n with Some c -> c | None -> Color.Default
-let light_dark ~is_dark light dark = Charm_lipgloss.light_dark ~is_dark ~light ~dark
+let light_dark ~is_dark light dark = Charamel_lipgloss.light_dark ~is_dark ~light ~dark
 
 type style_state = {
   base : Style.t;
@@ -99,7 +99,7 @@ let default_styles ~is_dark =
     cursor =
       {
         color = color 7;
-        shape = Charm_tea.Cursor.Block;
+        shape = Charamel_tea.Cursor.Block;
         blink = true;
         blink_speed = None;
       };
@@ -1381,7 +1381,7 @@ let cursor m =
     let st = m.styles.cursor in
     Some
       {
-        Charm_tea.Cursor.row = max 0 (visual_row - Viewport.y_offset m.viewport);
+        Charamel_tea.Cursor.row = max 0 (visual_row - Viewport.y_offset m.viewport);
         col = gutter_width m + info.char_offset;
         shape = st.shape;
         blink = st.blink;

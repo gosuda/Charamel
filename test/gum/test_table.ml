@@ -41,7 +41,7 @@ let test_static_render () =
   in
   let output =
     match Table.render_static base ~headers ~rows with
-    | Ok value -> Charm_ansi.Text.strip value
+    | Ok value -> Charamel_ansi.Text.strip value
     | Error error -> Alcotest.fail (Table.error_message error)
   in
   Alcotest.(check bool)

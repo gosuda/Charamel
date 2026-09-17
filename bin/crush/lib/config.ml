@@ -8,7 +8,7 @@ type provider = {
   base_url : string option;
   api_key : string option;
   headers : (string * string) list;
-  models : Charm_fantasy.Model.t list;
+  models : Charamel_fantasy.Model.t list;
 }
 
 type reasoning = [ `Off | `Low | `Medium | `High ]
@@ -109,7 +109,7 @@ let string_map_codec =
       List.fold_left (fun map (key, value) -> M.add key value map) M.empty values)
     map_codec
 
-let model_codec : Charm_fantasy.Model.t Jsont.t =
+let model_codec : Charamel_fantasy.Model.t Jsont.t =
   let open Jsont in
   Object.map
     (fun
@@ -125,7 +125,7 @@ let model_codec : Charm_fantasy.Model.t Jsont.t =
       supports_attachments
     ->
       ({
-         Charm_fantasy.Model.id;
+         Charamel_fantasy.Model.id;
          name;
          provider = "";
          context_window;
@@ -137,25 +137,25 @@ let model_codec : Charm_fantasy.Model.t Jsont.t =
          cost_cache_read;
          cost_cache_write;
        }
-        : Charm_fantasy.Model.t))
-  |> Object.mem "id" string ~enc:(fun model -> model.Charm_fantasy.Model.id)
-  |> Object.mem "name" string ~enc:(fun model -> model.Charm_fantasy.Model.name)
+        : Charamel_fantasy.Model.t))
+  |> Object.mem "id" string ~enc:(fun model -> model.Charamel_fantasy.Model.id)
+  |> Object.mem "name" string ~enc:(fun model -> model.Charamel_fantasy.Model.name)
   |> Object.mem "cost_per_1m_in" number ~enc:(fun model ->
-      model.Charm_fantasy.Model.cost_in)
+      model.Charamel_fantasy.Model.cost_in)
   |> Object.mem "cost_per_1m_out" number ~enc:(fun model ->
-      model.Charm_fantasy.Model.cost_out)
+      model.Charamel_fantasy.Model.cost_out)
   |> Object.mem "cost_per_1m_in_cached" number ~dec_absent:0. ~enc:(fun model ->
-      model.Charm_fantasy.Model.cost_cache_write)
+      model.Charamel_fantasy.Model.cost_cache_write)
   |> Object.mem "cost_per_1m_out_cached" number ~dec_absent:0. ~enc:(fun model ->
-      model.Charm_fantasy.Model.cost_cache_read)
+      model.Charamel_fantasy.Model.cost_cache_read)
   |> Object.mem "context_window" int ~enc:(fun model ->
-      model.Charm_fantasy.Model.context_window)
+      model.Charamel_fantasy.Model.context_window)
   |> Object.mem "default_max_tokens" int ~enc:(fun model ->
-      model.Charm_fantasy.Model.default_max_tokens)
+      model.Charamel_fantasy.Model.default_max_tokens)
   |> Object.mem "can_reason" bool ~dec_absent:false ~enc:(fun model ->
-      model.Charm_fantasy.Model.can_reason)
+      model.Charamel_fantasy.Model.can_reason)
   |> Object.mem "supports_attachments" bool ~dec_absent:false ~enc:(fun model ->
-      model.Charm_fantasy.Model.supports_attachments)
+      model.Charamel_fantasy.Model.supports_attachments)
   |> Object.error_unknown |> Object.finish
 
 let provider_kind_codec =
@@ -341,7 +341,7 @@ let options_codec =
 let stamp_provider id (provider : provider) =
   let models =
     List.map
-      (fun model -> { model with Charm_fantasy.Model.provider = id })
+      (fun model -> { model with Charamel_fantasy.Model.provider = id })
       provider.models
   in
   { provider with models }
@@ -415,25 +415,25 @@ let valid_permission_entry value =
   | [ tool; action ] -> tool <> "" && action <> ""
   | _ -> false
 
-let validate_model (model : Charm_fantasy.Model.t) =
-  let* () = nonempty "model id" model.Charm_fantasy.Model.id in
-  let* () = nonempty "model name" model.Charm_fantasy.Model.name in
-  if model.Charm_fantasy.Model.context_window <= 0 then
+let validate_model (model : Charamel_fantasy.Model.t) =
+  let* () = nonempty "model id" model.Charamel_fantasy.Model.id in
+  let* () = nonempty "model name" model.Charamel_fantasy.Model.name in
+  if model.Charamel_fantasy.Model.context_window <= 0 then
     Error "model context_window must be positive"
-  else if model.Charm_fantasy.Model.default_max_tokens <= 0 then
+  else if model.Charamel_fantasy.Model.default_max_tokens <= 0 then
     Error "model default_max_tokens must be positive"
   else if
     not
-      (Float.is_finite model.Charm_fantasy.Model.cost_in
-      && Float.is_finite model.Charm_fantasy.Model.cost_out
-      && Float.is_finite model.Charm_fantasy.Model.cost_cache_read
-      && Float.is_finite model.Charm_fantasy.Model.cost_cache_write)
+      (Float.is_finite model.Charamel_fantasy.Model.cost_in
+      && Float.is_finite model.Charamel_fantasy.Model.cost_out
+      && Float.is_finite model.Charamel_fantasy.Model.cost_cache_read
+      && Float.is_finite model.Charamel_fantasy.Model.cost_cache_write)
   then Error "model costs must be finite"
   else if
-    model.Charm_fantasy.Model.cost_in < 0.
-    || model.Charm_fantasy.Model.cost_out < 0.
-    || model.Charm_fantasy.Model.cost_cache_read < 0.
-    || model.Charm_fantasy.Model.cost_cache_write < 0.
+    model.Charamel_fantasy.Model.cost_in < 0.
+    || model.Charamel_fantasy.Model.cost_out < 0.
+    || model.Charamel_fantasy.Model.cost_cache_read < 0.
+    || model.Charamel_fantasy.Model.cost_cache_write < 0.
   then Error "model costs must be non-negative"
   else Ok ()
 
@@ -841,7 +841,7 @@ let config_home ~env =
       match environment env "HOME" with
       | Some home when home <> "" && not (Filename.is_relative home) ->
           Filename.concat home ".config/crush"
-      | _ -> Charm_cli.Xdg.config_dir ~app:"crush")
+      | _ -> Charamel_cli.Xdg.config_dir ~app:"crush")
 
 let load ~(fs : Eio.Fs.dir_ty Eio.Path.t) ~env ~cwd =
   let cwd = absolute_path cwd in

@@ -52,7 +52,7 @@ val make : options -> model
 (** [make options] creates an initial choose model after applying its limits and
     preselection. *)
 
-val app : options -> (model, msg) Charm_tea.app
+val app : options -> (model, msg) Charamel_tea.app
 (** [app options] is the scripted or terminal choose application. *)
 
 val selected : model -> string list

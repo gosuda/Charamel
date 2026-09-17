@@ -114,7 +114,7 @@ let tool_response model_id name input =
 
 let model ~base_url:_ =
   {
-    Charm_fantasy.Model.id = "fixture-model";
+    Charamel_fantasy.Model.id = "fixture-model";
     name = "Fixture";
     provider = "anthropic";
     context_window = 200_000;
@@ -127,7 +127,7 @@ let model ~base_url:_ =
     cost_cache_write = 0.;
   }
 
-let config ~base_url (model : Charm_fantasy.Model.t) =
+let config ~base_url (model : Charamel_fantasy.Model.t) =
   let provider : Config.provider =
     {
       kind = Config.Anthropic;
@@ -140,7 +140,7 @@ let config ~base_url (model : Charm_fantasy.Model.t) =
   let selected : Config.selected_model =
     {
       provider = "anthropic";
-      model = model.Charm_fantasy.Model.id;
+      model = model.Charamel_fantasy.Model.id;
       reasoning = None;
       max_tokens = None;
     }
@@ -186,7 +186,7 @@ let with_agent ~queue ~fallback f =
             ~model:
               {
                 Session.provider = "anthropic";
-                model = selected_model.Charm_fantasy.Model.id;
+                model = selected_model.Charamel_fantasy.Model.id;
               }
             ()
         with
@@ -262,7 +262,8 @@ let assistant_count events =
       match event with
       | Session.Message
           {
-            message = { Charm_fantasy.Message.role = Charm_fantasy.Message.Assistant; _ };
+            message =
+              { Charamel_fantasy.Message.role = Charamel_fantasy.Message.Assistant; _ };
             _;
           } ->
           count + 1

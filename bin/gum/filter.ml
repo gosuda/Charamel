@@ -1,13 +1,13 @@
-module Key = Charm_tea.Key
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module View = Charm_tea.View
-module Style = Charm_lipgloss.Style
-module Text = Charm_ansi.Text
-module Layout = Charm_lipgloss.Layout
-module Fuzzy = Charm_bubbles.Fuzzy
-module Textinput = Charm_bubbles.Textinput
-module Viewport = Charm_bubbles.Viewport
+module Key = Charamel_tea.Key
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module View = Charamel_tea.View
+module Style = Charamel_lipgloss.Style
+module Text = Charamel_ansi.Text
+module Layout = Charamel_lipgloss.Layout
+module Fuzzy = Charamel_bubbles.Fuzzy
+module Textinput = Charamel_bubbles.Textinput
+module Viewport = Charamel_bubbles.Viewport
 
 let key name =
   match Key.of_string name with
@@ -94,7 +94,7 @@ type model = {
   selected : string list;
   submitted : bool;
   quitting : bool;
-  padding : Charm_lipgloss.Sides.t;
+  padding : Charamel_lipgloss.Sides.t;
 }
 
 let default_options =
@@ -143,7 +143,7 @@ let matched_ranges indices =
   match indices with [] -> [] | first :: rest -> loop first first [] rest
 
 let grapheme_indices_for_bytes text start stop =
-  let clusters = Charm_ansi.Width.graphemes text in
+  let clusters = Charamel_ansi.Width.graphemes text in
   let rec loop byte_pos grapheme_pos acc = function
     | [] -> List.rev acc
     | cluster :: rest ->
@@ -256,7 +256,7 @@ let set_viewport_content model =
   Viewport.set_content content model.viewport
 
 let source_candidates (options : options) =
-  List.map (fun value -> { text = Charm_ansi.Text.strip value; value }) options.options
+  List.map (fun value -> { text = Charamel_ansi.Text.strip value; value }) options.options
 
 let single_option (options : options) =
   if (not options.select_if_one) || options.value = "" then Ok None
@@ -501,7 +501,7 @@ let update message model =
       in
       ({ model with input; viewport }, Cmd.none)
 
-let app options : (model, msg) Charm_tea.app =
+let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
@@ -532,20 +532,20 @@ let normalized_options env (options : options) =
 let run env (options : options) =
   let options = normalized_options env options in
   if options.options = [] then
-    Charm_cli.error "no options provided, see `gum filter --help`";
+    Charamel_cli.error "no options provided, see `gum filter --help`";
   match single_option options with
-  | Error message -> Charm_cli.error message
+  | Error message -> Charamel_cli.error message
   | Ok (Some value) -> Gum_io.println env value
   | Ok None ->
       let model =
         try
           Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun model ->
               if submitted model then Gum_run.Submitted else Gum_run.Quit)
-        with Gum_io.No_tty -> Charm_cli.error "filter: requires a terminal"
+        with Gum_io.No_tty -> Charamel_cli.error "filter: requires a terminal"
       in
-      if not (submitted model) then Charm_cli.error "nothing selected";
+      if not (submitted model) then Charamel_cli.error "nothing selected";
       let values = output_values model in
-      if values = [] then Charm_cli.error "nothing selected"
+      if values = [] then Charamel_cli.error "nothing selected"
       else Gum_io.println env (String.concat options.output_delimiter values)
 
 let validated_padding_term ~cmd =

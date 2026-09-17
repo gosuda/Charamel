@@ -1,8 +1,8 @@
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module Style = Charm_lipgloss.Style
-module Text = Charm_ansi.Text
-module Layout = Charm_lipgloss.Layout
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module Style = Charamel_lipgloss.Style
+module Text = Charamel_ansi.Text
+module Layout = Charamel_lipgloss.Layout
 
 let clamp n lo hi =
   let lo, hi = if lo <= hi then (lo, hi) else (hi, lo) in
@@ -26,27 +26,29 @@ let normalize_crlf s =
 
 let frame_sides style =
   let padding =
-    match Style.get_padding style with Some s -> s | None -> Charm_lipgloss.Sides.v ()
+    match Style.get_padding style with
+    | Some s -> s
+    | None -> Charamel_lipgloss.Sides.v ()
   in
   let border = Style.get_border style in
   let side_size getter enabled =
     match (border, enabled) with Some b, Some true -> getter b | _ -> 0
   in
   let left =
-    padding.Charm_lipgloss.Sides.left
-    + side_size Charm_lipgloss.Border.left_size (Style.get_border_left style)
+    padding.Charamel_lipgloss.Sides.left
+    + side_size Charamel_lipgloss.Border.left_size (Style.get_border_left style)
   in
   let right =
-    padding.Charm_lipgloss.Sides.right
-    + side_size Charm_lipgloss.Border.right_size (Style.get_border_right style)
+    padding.Charamel_lipgloss.Sides.right
+    + side_size Charamel_lipgloss.Border.right_size (Style.get_border_right style)
   in
   let top =
-    padding.Charm_lipgloss.Sides.top
-    + side_size Charm_lipgloss.Border.top_size (Style.get_border_top style)
+    padding.Charamel_lipgloss.Sides.top
+    + side_size Charamel_lipgloss.Border.top_size (Style.get_border_top style)
   in
   let bottom =
-    padding.Charm_lipgloss.Sides.bottom
-    + side_size Charm_lipgloss.Border.bottom_size (Style.get_border_bottom style)
+    padding.Charamel_lipgloss.Sides.bottom
+    + side_size Charamel_lipgloss.Border.bottom_size (Style.get_border_bottom style)
   in
   (left, right, top, bottom)
 
@@ -92,7 +94,7 @@ type msg =
   | Down
   | Left
   | Right
-  | Wheel of Charm_tea.Mouse.t
+  | Wheel of Charamel_tea.Mouse.t
 
 type highlight = { line_start : int; ranges : (int * int * int) list }
 
@@ -514,12 +516,12 @@ let key m key =
   else if Key_binding.matches key m.keymap.right then Some Right
   else None
 
-let mouse m (mouse : Charm_tea.Mouse.t) =
+let mouse m (mouse : Charamel_tea.Mouse.t) =
   if not m.mouse_wheel_enabled then None
   else
-    match mouse.Charm_tea.Mouse.button with
-    | Charm_tea.Mouse.Wheel_up | Charm_tea.Mouse.Wheel_down | Charm_tea.Mouse.Wheel_left
-    | Charm_tea.Mouse.Wheel_right ->
+    match mouse.Charamel_tea.Mouse.button with
+    | Charamel_tea.Mouse.Wheel_up | Charamel_tea.Mouse.Wheel_down
+    | Charamel_tea.Mouse.Wheel_left | Charamel_tea.Mouse.Wheel_right ->
         Some (Wheel mouse)
     | _ -> None
 
@@ -535,9 +537,9 @@ let update message m =
     | Left -> scroll_left m.horizontal_step m
     | Right -> scroll_right m.horizontal_step m
     | Wheel mouse -> (
-        let shift = mouse.Charm_tea.Mouse.mods.Charm_tea.Key.shift in
-        match mouse.Charm_tea.Mouse.button with
-        | Charm_tea.Mouse.Wheel_down ->
+        let shift = mouse.Charamel_tea.Mouse.mods.Charamel_tea.Key.shift in
+        match mouse.Charamel_tea.Mouse.button with
+        | Charamel_tea.Mouse.Wheel_down ->
             if shift then scroll_right m.horizontal_step m
             else scroll_down m.mouse_wheel_delta m
         | Wheel_up ->

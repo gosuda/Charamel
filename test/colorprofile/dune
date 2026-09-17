@@ -1,7 +1,7 @@
 (test
  (name test_colorprofile)
- (package charm)
- (libraries charm.colorprofile charm.ansi eio alcotest)
+ (package charamel)
+ (libraries charamel.colorprofile charamel.ansi eio alcotest)
  (flags
   (:standard
    -strict-sequence

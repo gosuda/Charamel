@@ -1,8 +1,8 @@
 (test
  (name test_harmonica)
- (package charm)
+ (package charamel)
  (modules test_harmonica)
- (libraries alcotest charm.harmonica)
+ (libraries alcotest charamel.harmonica)
  (flags
   (:standard
    -strict-sequence

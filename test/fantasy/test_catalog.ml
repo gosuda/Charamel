@@ -8,7 +8,7 @@
 
 let fixture_body path = In_channel.with_open_bin path In_channel.input_all
 let fixture = fixture_body "data/catalog.json"
-let catalog_codec = Jsont.list Charm_fantasy.Provider_info.jsont
+let catalog_codec = Jsont.list Charamel_fantasy.Provider_info.jsont
 
 let decode body =
   match Jsont_bytesrw.decode_string catalog_codec body with
@@ -23,26 +23,26 @@ let encode providers =
 let get_provider id providers =
   match
     List.find_opt
-      (fun (p : Charm_fantasy.Provider_info.t) ->
-        String.equal p.Charm_fantasy.Provider_info.id id)
+      (fun (p : Charamel_fantasy.Provider_info.t) ->
+        String.equal p.Charamel_fantasy.Provider_info.id id)
       providers
   with
   | Some p -> p
   | None -> Alcotest.failf "provider %s is missing" id
 
-let model_id (m : Charm_fantasy.Model.t) = m.Charm_fantasy.Model.id
+let model_id (m : Charamel_fantasy.Model.t) = m.Charamel_fantasy.Model.id
 
 let get_model id models =
   match List.find_opt (fun m -> String.equal (model_id m) id) models with
   | Some m -> m
   | None -> Alcotest.failf "model %s is missing" id
 
-let count models = List.length (models : Charm_fantasy.Model.t list)
+let count models = List.length (models : Charamel_fantasy.Model.t list)
 
 (* The embedded snapshot *)
 
 let test_embedded_shape () =
-  let embedded = Charm_fantasy.Catalog.embedded in
+  let embedded = Charamel_fantasy.Catalog.embedded in
   Alcotest.(check int) "37 retained providers" 37 (List.length embedded);
   let cut = [ "azure"; "bedrock"; "bedrock-europe"; "vertexai" ] in
   List.iter
@@ -50,44 +50,47 @@ let test_embedded_shape () =
       Alcotest.(check bool)
         (id ^ " is cut") false
         (List.exists
-           (fun (p : Charm_fantasy.Provider_info.t) ->
-             String.equal p.Charm_fantasy.Provider_info.id id)
+           (fun (p : Charamel_fantasy.Provider_info.t) ->
+             String.equal p.Charamel_fantasy.Provider_info.id id)
            embedded))
     cut;
   List.iter
     (fun p ->
-      let name = p.Charm_fantasy.Provider_info.name in
+      let name = p.Charamel_fantasy.Provider_info.name in
       Alcotest.(check bool)
         (name ^ " carries models") true
-        (count p.Charm_fantasy.Provider_info.models > 0))
+        (count p.Charamel_fantasy.Provider_info.models > 0))
     embedded
 
 let test_embedded_costs () =
-  let embedded = Charm_fantasy.Catalog.embedded in
+  let embedded = Charamel_fantasy.Catalog.embedded in
   let anthropic = get_provider "anthropic" embedded in
-  let fable = get_model "claude-fable-5-1" anthropic.Charm_fantasy.Provider_info.models in
-  Alcotest.(check (float 0.)) "input cost" 10.0 fable.Charm_fantasy.Model.cost_in;
-  Alcotest.(check (float 0.)) "output cost" 50.0 fable.Charm_fantasy.Model.cost_out;
+  let fable =
+    get_model "claude-fable-5-1" anthropic.Charamel_fantasy.Provider_info.models
+  in
+  Alcotest.(check (float 0.)) "input cost" 10.0 fable.Charamel_fantasy.Model.cost_in;
+  Alcotest.(check (float 0.)) "output cost" 50.0 fable.Charamel_fantasy.Model.cost_out;
   Alcotest.(check (float 0.))
     "cached-in prices cache creation (write)" 12.5
-    fable.Charm_fantasy.Model.cost_cache_write;
+    fable.Charamel_fantasy.Model.cost_cache_write;
   Alcotest.(check (float 0.))
-    "cached-out prices cache reads (read)" 0.25 fable.Charm_fantasy.Model.cost_cache_read;
+    "cached-out prices cache reads (read)" 0.25
+    fable.Charamel_fantasy.Model.cost_cache_read;
   Alcotest.(check string)
     "the provider id is stamped on every model" "anthropic"
-    fable.Charm_fantasy.Model.provider
+    fable.Charamel_fantasy.Model.provider
 
 let test_embedded_provider_stamping () =
-  let embedded = Charm_fantasy.Catalog.embedded in
+  let embedded = Charamel_fantasy.Catalog.embedded in
   List.iter
     (fun p ->
-      let id = p.Charm_fantasy.Provider_info.id in
+      let id = p.Charamel_fantasy.Provider_info.id in
       List.iter
         (fun m ->
           Alcotest.(check string)
             (id ^ " owns " ^ model_id m)
-            id m.Charm_fantasy.Model.provider)
-        p.Charm_fantasy.Provider_info.models)
+            id m.Charamel_fantasy.Model.provider)
+        p.Charamel_fantasy.Provider_info.models)
     embedded
 
 (* The codec *)
@@ -98,29 +101,29 @@ let test_roundtrip () =
   let again = encode providers in
   Alcotest.(check string) "re-encoding is stable" (encode (decode again)) again;
   let groq = get_provider "groq" providers in
-  let qwen = get_model "qwen/qwen3-32b" groq.Charm_fantasy.Provider_info.models in
+  let qwen = get_model "qwen/qwen3-32b" groq.Charamel_fantasy.Provider_info.models in
   Alcotest.(check (float 0.))
-    "absent cache costs decode to zero" 0.0 qwen.Charm_fantasy.Model.cost_cache_write;
+    "absent cache costs decode to zero" 0.0 qwen.Charamel_fantasy.Model.cost_cache_write;
   Alcotest.(check bool)
-    "absent can_reason decodes to false" false qwen.Charm_fantasy.Model.can_reason;
+    "absent can_reason decodes to false" false qwen.Charamel_fantasy.Model.can_reason;
   let anthropic = get_provider "anthropic" providers in
   Alcotest.(check string)
     "the environment endpoint is kept verbatim" "$ANTHROPIC_API_ENDPOINT"
-    anthropic.Charm_fantasy.Provider_info.base_url;
+    anthropic.Charamel_fantasy.Provider_info.base_url;
   let copilot = get_provider "copilot" providers in
   Alcotest.(check int)
     "a provider without an api key still decodes" 1
-    (count copilot.Charm_fantasy.Provider_info.models);
+    (count copilot.Charamel_fantasy.Provider_info.models);
   let openrouter = get_provider "openrouter" providers in
   Alcotest.(check string)
     "skipped members leave the base url intact" "https://openrouter.ai/api/v1"
-    openrouter.Charm_fantasy.Provider_info.base_url
+    openrouter.Charamel_fantasy.Provider_info.base_url
 
 (* The refresh *)
 
 let fetch_over ~net ~clock server ?etag ?base_url () =
   let providers, etag =
-    Charm_fantasy.Catalog.fetch
+    Charamel_fantasy.Catalog.fetch
       ?base_url:
         (match base_url with
         | Some url -> Some url
@@ -156,14 +159,14 @@ let test_fetch_not_modified () =
     ~headers:[ ("etag", "\"6f1a2b3c4d5e6f70\"") ]
     "";
   let result =
-    Charm_fantasy.Catalog.fetch
+    Charamel_fantasy.Catalog.fetch
       ~base_url:(Fixture_server.base_url server)
       ~etag:"6f1a2b3c4d5e6f70" ~net:env#net ~clock:env#clock ()
   in
   (match result with
   | Error `Not_modified -> ()
   | Error e ->
-      Alcotest.failf "expected Not_modified, got %a" Charm_fantasy.Catalog.pp_error e
+      Alcotest.failf "expected Not_modified, got %a" Charamel_fantasy.Catalog.pp_error e
   | Ok (_, etag) ->
       Alcotest.failf "expected Not_modified, got a catalog with etag %s" etag);
   let headers = Fixture_server.last_headers server in
@@ -180,7 +183,7 @@ let test_fetch_http_error () =
   let server = Fixture_server.start ~sw ~net:env#net () in
   Fixture_server.respond_with server ~status:500 ~headers:[] "boom";
   match
-    Charm_fantasy.Catalog.fetch
+    Charamel_fantasy.Catalog.fetch
       ~base_url:(Fixture_server.base_url server)
       ~net:env#net ~clock:env#clock ()
   with
@@ -192,7 +195,8 @@ let test_fetch_http_error () =
         message;
       Alcotest.(check bool) "a 5xx is retryable" true retryable
   | Error e ->
-      Alcotest.failf "expected an HTTP failure, got %a" Charm_fantasy.Catalog.pp_error e
+      Alcotest.failf "expected an HTTP failure, got %a" Charamel_fantasy.Catalog.pp_error
+        e
   | Ok _ -> Alcotest.fail "expected an HTTP failure"
 
 let test_fetch_unreadable_body () =
@@ -203,7 +207,7 @@ let test_fetch_unreadable_body () =
     ~headers:[ ("etag", "\"6f1a2b3c4d5e6f70\"") ]
     "{\"not\": a catalog";
   match
-    Charm_fantasy.Catalog.fetch
+    Charamel_fantasy.Catalog.fetch
       ~base_url:(Fixture_server.base_url server)
       ~net:env#net ~clock:env#clock ()
   with
@@ -214,7 +218,8 @@ let test_fetch_unreadable_body () =
         "the message carries the decoder report" true
         (String.starts_with ~prefix:"catalog body did not decode: " message)
   | Error e ->
-      Alcotest.failf "expected an HTTP failure, got %a" Charm_fantasy.Catalog.pp_error e
+      Alcotest.failf "expected an HTTP failure, got %a" Charamel_fantasy.Catalog.pp_error
+        e
   | Ok _ -> Alcotest.fail "expected an HTTP failure"
 
 let cases =

@@ -1,9 +1,9 @@
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module Style = Charm_lipgloss.Style
-module Color = Charm_ansi.Color
-module Text = Charm_ansi.Text
-module Spring = Charm_harmonica.Spring
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module Style = Charamel_lipgloss.Style
+module Color = Charamel_ansi.Color
+module Text = Charamel_ansi.Text
+module Spring = Charamel_harmonica.Spring
 
 type msg = Frame
 

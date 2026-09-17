@@ -53,7 +53,7 @@ val render : t -> View.t -> string
 
     [view.content] is parsed for printable text, SGR (`m`) and OSC 8 hyperlinks only;
     every other escape sequence it contains is dropped. A [Basic] or [Indexed]
-    {!Charm_ansi.Color.t} in [view.background] or [view.foreground] has no portable OSC
+    {!Charamel_ansi.Color.t} in [view.background] or [view.foreground] has no portable OSC
     10/11 spelling and is silently not applied; only [Rgb] is sent. *)
 
 val clear : t -> string

@@ -1,4 +1,4 @@
-module Spinner = Charm_bubbles.Spinner
+module Spinner = Charamel_bubbles.Spinner
 
 let check_frames () =
   Alcotest.(check (list string))
@@ -38,7 +38,7 @@ let tick_wraps () =
   in
   Alcotest.(check string)
     "four ticks return to first frame" "|"
-    (Charm_ansi.Text.strip (Spinner.view spinner))
+    (Charamel_ansi.Text.strip (Spinner.view spinner))
 
 let custom_frames () =
   let spinner = Spinner.v ~frames:([ "a"; "b"; "c"; "d" ], 0.0625) () in

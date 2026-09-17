@@ -1,9 +1,9 @@
 (** Charm's LLM provider SDK.
 
-    [Charm_fantasy] speaks to Anthropic, OpenAI-compatible, OpenAI Responses, and Google
-    endpoints. A provider is constructed from a base URL and an authentication mode;
-    [Provider.stream] drives one request and yields the seven approved event kinds into a
-    bounded Eio stream ending with exactly one terminal [Finish]. *)
+    [Charamel_fantasy] speaks to Anthropic, OpenAI-compatible, OpenAI Responses, and
+    Google endpoints. A provider is constructed from a base URL and an authentication
+    mode; [Provider.stream] drives one request and yields the seven approved event kinds
+    into a bounded Eio stream ending with exactly one terminal [Finish]. *)
 
 module Error = Error
 (** Shared provider errors. *)

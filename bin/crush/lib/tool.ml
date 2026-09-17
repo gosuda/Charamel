@@ -98,7 +98,7 @@ type t = {
 }
 
 let to_fantasy { name; description; schema; _ } =
-  Charm_fantasy.Tool.v ~name ~description ~schema
+  Charamel_fantasy.Tool.v ~name ~description ~schema
 
 let decode codec value =
   match Jsont.Json.decode codec value with

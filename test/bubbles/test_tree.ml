@@ -1,7 +1,7 @@
-module Key_binding = Charm_bubbles.Key_binding
-module Tree = Charm_bubbles.Tree
+module Key_binding = Charamel_bubbles.Key_binding
+module Tree = Charamel_bubbles.Tree
 
-let plain model = Charm_ansi.Text.strip (Tree.view model)
+let plain model = Charamel_ansi.Text.strip (Tree.view model)
 
 let node_shape_and_size () =
   let closed = Tree.node ~open_:false [ Tree.leaf "hidden" ] in
@@ -48,7 +48,7 @@ let keymap_and_help () =
   let model =
     Tree.v ~width:60 ~height:10 (Tree.node ~value:"root" [ Tree.leaf "child" ])
   in
-  let key = Charm_tea.Key.v Charm_tea.Key.Down in
+  let key = Charamel_tea.Key.v Charamel_tea.Key.Down in
   (match Tree.key model key with
   | Some Tree.Down -> ()
   | _ -> Alcotest.fail "down key not bound");

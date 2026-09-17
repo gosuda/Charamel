@@ -13,7 +13,7 @@ val split_words : string -> string list
 (** [split_words command] splits a pager or editor command without invoking a shell. *)
 
 type test_event =
-  [ `Key of Charm_tea.Key.t | `Text of string | `Resize of int * int | `Wait of float ]
+  [ `Key of Charamel_tea.Key.t | `Text of string | `Resize of int * int | `Wait of float ]
 (** Script events accepted by {!scripted}. *)
 
 val scripted :

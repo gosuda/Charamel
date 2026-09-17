@@ -36,7 +36,7 @@ let grapheme_map ~text ~scalar_count =
             incr scalar_index
           end)
         cluster_scalars)
-    (Charm_ansi.Width.graphemes text);
+    (Charamel_ansi.Width.graphemes text);
   mapping
 
 let unique_graphemes ~text ~scalar_count scalar_indices =

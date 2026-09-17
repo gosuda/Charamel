@@ -25,7 +25,7 @@ OVERRIDE = {
     ("bin/crush/lib/tools_lsp.ml", "col", "Tool.diagnostic"): "Lsp",
     ("bin/crush/lib/tools_lsp.ml", "severity", "Tool.diagnostic"): "Lsp",
     ("bin/crush/lib/tools_lsp.ml", "message", "Tool.diagnostic"): "Lsp",
-    ("lib/huh/field_impl.ml", "keys", "Keymap.binding"): "Charm_bubbles.Key_binding",
+    ("lib/huh/field_impl.ml", "keys", "Keymap.binding"): "Charamel_bubbles.Key_binding",
 }
 
 BLOCK_RE = re.compile(r'^File "([^"]+)", line (\d+), characters (\d+)-(\d+):')

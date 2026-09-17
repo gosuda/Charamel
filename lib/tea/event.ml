@@ -6,11 +6,11 @@ type t =
   | Blur
   | Resize of { rows : int; cols : int }
   | Cursor_position of { row : int; col : int }
-  | Background_color of Charm_ansi.Color.t
-  | Foreground_color of Charm_ansi.Color.t
-  | Cursor_color of Charm_ansi.Color.t
+  | Background_color of Charamel_ansi.Color.t
+  | Foreground_color of Charamel_ansi.Color.t
+  | Cursor_color of Charamel_ansi.Color.t
   | Terminal_version of string
   | Kitty_flags of int
   | Mode_report of { mode : int; value : int }
-  | Profile of Charm_colorprofile.t
+  | Profile of Charamel_colorprofile.t
   | Unknown of string

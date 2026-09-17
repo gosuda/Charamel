@@ -1,10 +1,10 @@
-module Key = Charm_tea.Key
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module View = Charm_tea.View
-module Style = Charm_lipgloss.Style
-module Textarea = Charm_bubbles.Textarea
-module Key_binding = Charm_bubbles.Key_binding
+module Key = Charamel_tea.Key
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module View = Charamel_tea.View
+module Style = Charamel_lipgloss.Style
+module Textarea = Charamel_bubbles.Textarea
+module Key_binding = Charamel_bubbles.Key_binding
 
 let key name =
   match Key.of_string name with
@@ -57,7 +57,7 @@ type model = {
   textarea : Textarea.t;
   submitted : bool;
   quitting : bool;
-  padding : Charm_lipgloss.Sides.t;
+  padding : Charamel_lipgloss.Sides.t;
 }
 
 let default_options =
@@ -257,7 +257,7 @@ let update message model =
           Cmd.none )
       else ({ model with quitting = true }, Cmd.interrupt)
 
-let app options : (model, msg) Charm_tea.app =
+let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
@@ -282,9 +282,9 @@ let run env (options : options) =
     try
       Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun model ->
           if submitted model then Gum_run.Submitted else Gum_run.Quit)
-    with Gum_io.No_tty -> Charm_cli.error "write: requires a terminal"
+    with Gum_io.No_tty -> Charamel_cli.error "write: requires a terminal"
   in
-  if not (submitted model) then Charm_cli.error "not submitted";
+  if not (submitted model) then Charamel_cli.error "not submitted";
   Gum_io.print_raw env (value model)
 
 let validated_padding_term ~cmd =

@@ -6,21 +6,21 @@ variable, or file format is kept for Go compatibility.
 
 ## Packages
 
-`charm.ansi` parses and measures terminal sequences. `charm.colorprofile`
-detects color support from the environment. `charm.tea` runs Elm-style
-terminal apps on a cell grid with per-frame diff. `charm.lipgloss` styles
+`charamel.ansi` parses and measures terminal sequences. `charamel.colorprofile`
+detects color support from the environment. `charamel.tea` runs Elm-style
+terminal apps on a cell grid with per-frame diff. `charamel.lipgloss` styles
 text with borders, layout, tables, trees, and lists.
-`charm.harmonica` integrates spring and projectile motion.
-`charm.log` reports through `Logs` in text, logfmt, or JSON.
-`charm.highlight` tokenizes source with data-driven lexers.
-`charm.glamour` renders Markdown through `cmarkit` and `lipgloss`.
-`charm.bubbles` ships reusable TUI components over `charm.tea`.
-`charm.huh` builds typed forms with accessible fallbacks.
-`charm.cli` runs apps with XDG paths and styled errors.
-`charm.fantasy` streams chat completions from Anthropic, OpenAI-compatible,
+`charamel.harmonica` integrates spring and projectile motion.
+`charamel.log` reports through `Logs` in text, logfmt, or JSON.
+`charamel.highlight` tokenizes source with data-driven lexers.
+`charamel.glamour` renders Markdown through `cmarkit` and `lipgloss`.
+`charamel.bubbles` ships reusable TUI components over `charamel.tea`.
+`charamel.huh` builds typed forms with accessible fallbacks.
+`charamel.cli` runs apps with XDG paths and styled errors.
+`charamel.fantasy` streams chat completions from Anthropic, OpenAI-compatible,
 OpenAI Responses, and Google providers plus a vendored model catalog.
-`charm-ssh.keygen` generates and reads OpenSSH keys in pure OCaml.
-`charm-ssh.wish` serves TUI apps over SSH through the pure `awa` state
+`charamel-ssh.keygen` generates and reads OpenSSH keys in pure OCaml.
+`charamel-ssh.wish` serves TUI apps over SSH through the pure `awa` state
 machine.
 
 `gum` prompts for input, choices, and values. `glow` reads and browses

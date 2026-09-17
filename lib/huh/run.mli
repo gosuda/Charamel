@@ -1,7 +1,7 @@
 (** Running a form against a local terminal.
 
     [app] exposes the same model used by [run], so deterministic callers can drive a form
-    with [Charm_tea.Test] without opening a terminal. [run] chooses accessible prompts
+    with [Charamel_tea.Test] without opening a terminal. [run] chooses accessible prompts
     when the input is not a tty or TERM is dumb; the caller may force that mode. *)
 
 type model = { form : Form.t; timed_out : bool }
@@ -9,7 +9,7 @@ type model = { form : Form.t; timed_out : bool }
 
 type msg = Form_msg of Form.msg | Timed_out  (** Messages accepted by {!app}. *)
 
-val app : Form.Env.t -> ?timeout:float -> Form.t -> (model, msg) Charm_tea.app
+val app : Form.Env.t -> ?timeout:float -> Form.t -> (model, msg) Charamel_tea.app
 (** [app env ?timeout form] builds the terminal application. A positive [timeout] adds a
     deadline message; a non-positive timeout has no effect. *)
 

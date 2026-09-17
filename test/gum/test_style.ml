@@ -1,12 +1,13 @@
-let side_equal (expected : Charm_lipgloss.Sides.t) (actual : Charm_lipgloss.Sides.t) =
+let side_equal (expected : Charamel_lipgloss.Sides.t) (actual : Charamel_lipgloss.Sides.t)
+    =
   Alcotest.(check int)
-    "top" expected.Charm_lipgloss.Sides.top actual.Charm_lipgloss.Sides.top;
+    "top" expected.Charamel_lipgloss.Sides.top actual.Charamel_lipgloss.Sides.top;
   Alcotest.(check int)
-    "right" expected.Charm_lipgloss.Sides.right actual.Charm_lipgloss.Sides.right;
+    "right" expected.Charamel_lipgloss.Sides.right actual.Charamel_lipgloss.Sides.right;
   Alcotest.(check int)
-    "bottom" expected.Charm_lipgloss.Sides.bottom actual.Charm_lipgloss.Sides.bottom;
+    "bottom" expected.Charamel_lipgloss.Sides.bottom actual.Charamel_lipgloss.Sides.bottom;
   Alcotest.(check int)
-    "left" expected.Charm_lipgloss.Sides.left actual.Charm_lipgloss.Sides.left
+    "left" expected.Charamel_lipgloss.Sides.left actual.Charamel_lipgloss.Sides.left
 
 let trims_each_line () =
   Alcotest.(check string)
@@ -25,28 +26,30 @@ let renders_complete_style () =
   in
   let rendered = Style_cmd.render style ~trim:false "x" in
   let lipgloss = Gum_style.to_style style in
-  (match Charm_lipgloss.Style.get_padding lipgloss with
-  | Some sides -> side_equal (Charm_lipgloss.Sides.xy ~x:1 ~y:0) sides
+  (match Charamel_lipgloss.Style.get_padding lipgloss with
+  | Some sides -> side_equal (Charamel_lipgloss.Sides.xy ~x:1 ~y:0) sides
   | None -> Alcotest.fail "padding was dropped");
-  (match Charm_lipgloss.Style.get_margin lipgloss with
-  | Some sides -> side_equal (Charm_lipgloss.Sides.xy ~x:2 ~y:1) sides
+  (match Charamel_lipgloss.Style.get_margin lipgloss with
+  | Some sides -> side_equal (Charamel_lipgloss.Sides.xy ~x:2 ~y:1) sides
   | None -> Alcotest.fail "margin was dropped");
-  (match Charm_lipgloss.Style.get_border lipgloss with
+  (match Charamel_lipgloss.Style.get_border lipgloss with
   | Some border ->
-      Alcotest.(check bool) "rounded border" true (border = Charm_lipgloss.Border.rounded)
+      Alcotest.(check bool)
+        "rounded border" true
+        (border = Charamel_lipgloss.Border.rounded)
   | None -> Alcotest.fail "border was dropped");
-  (match Charm_lipgloss.Style.get_align_horizontal lipgloss with
+  (match Charamel_lipgloss.Style.get_align_horizontal lipgloss with
   | Some position ->
       Alcotest.(check bool)
         "center alignment" true
-        (position = Charm_lipgloss.Position.center)
+        (position = Charamel_lipgloss.Position.center)
   | None -> Alcotest.fail "alignment was dropped");
   Alcotest.(check int)
     "rendered width including margin" 9
-    (Charm_lipgloss.Layout.width rendered);
+    (Charamel_lipgloss.Layout.width rendered);
   Alcotest.(check int)
     "rendered height including margin" 5
-    (Charm_lipgloss.Layout.height rendered)
+    (Charamel_lipgloss.Layout.height rendered)
 
 let neutral_style_is_identity () =
   Alcotest.(check string)

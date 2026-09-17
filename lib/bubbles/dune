@@ -1,8 +1,8 @@
 (library
- (name charm_bubbles)
- (public_name charm.bubbles)
+ (name charamel_bubbles)
+ (public_name charamel.bubbles)
  (modules
-  charm_bubbles
+  charamel_bubbles
   key_binding
   fuzzy
   duration
@@ -21,10 +21,10 @@
   filepicker
   tree)
  (libraries
-  charm.ansi
-  charm.tea
-  charm.lipgloss
-  charm.harmonica
+  charamel.ansi
+  charamel.tea
+  charamel.lipgloss
+  charamel.harmonica
   eio
   fmt
   mtime

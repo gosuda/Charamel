@@ -1,1 +1,1 @@
-(** Interactive burger-ordering example using [Charm_huh]. *)
+(** Interactive burger-ordering example using [Charamel_huh]. *)

@@ -6,15 +6,15 @@
 *)
 
 type style_state = {
-  base : Charm_lipgloss.Style.t;
-  text : Charm_lipgloss.Style.t;
-  line_number : Charm_lipgloss.Style.t;
-  cursor_line_number : Charm_lipgloss.Style.t;
-  cursor_line : Charm_lipgloss.Style.t;
-  end_of_buffer : Charm_lipgloss.Style.t;
-  placeholder : Charm_lipgloss.Style.t;
-  prompt : Charm_lipgloss.Style.t;
-  selection : Charm_lipgloss.Style.t;
+  base : Charamel_lipgloss.Style.t;
+  text : Charamel_lipgloss.Style.t;
+  line_number : Charamel_lipgloss.Style.t;
+  cursor_line_number : Charamel_lipgloss.Style.t;
+  cursor_line : Charamel_lipgloss.Style.t;
+  end_of_buffer : Charamel_lipgloss.Style.t;
+  placeholder : Charamel_lipgloss.Style.t;
+  prompt : Charamel_lipgloss.Style.t;
+  selection : Charamel_lipgloss.Style.t;
 }
 (** Styles for logical and rendered lines. *)
 
@@ -152,7 +152,7 @@ val v :
     limit, maximum height [99], maximum width [500], width [40], height [6], fixed height,
     minimum height [1], no visual content limit, dark styles, and a virtual cursor. *)
 
-val update : msg -> t -> t * msg Charm_tea.Cmd.t
+val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 (** [update message t] applies a complete editing or cursor transition. A blurred textarea
     ignores the message. Clipboard requests are represented as messages; the parent
     supplies the clipboard operation. *)
@@ -161,13 +161,13 @@ val view : t -> string
 (** [view t] renders wrapped logical lines, prompts, line numbers, selection, placeholder,
     cursor, and end-of-buffer rows. *)
 
-val key : t -> Charm_tea.Key.t -> msg option
+val key : t -> Charamel_tea.Key.t -> msg option
 (** [key t key] maps an enabled binding or printable key to a message. *)
 
-val subscriptions : t -> msg Charm_tea.Sub.t
+val subscriptions : t -> msg Charamel_tea.Sub.t
 (** [subscriptions t] subscribes to virtual cursor ticks while focused. *)
 
-val focus : t -> t * msg Charm_tea.Cmd.t
+val focus : t -> t * msg Charamel_tea.Cmd.t
 (** [focus t] focuses the textarea. *)
 
 val blur : t -> t
@@ -299,7 +299,7 @@ val set_styles : styles -> t -> t
 val set_virtual_cursor : bool -> t -> t
 (** [set_virtual_cursor enabled t] selects embedded or real cursor output. *)
 
-val cursor : t -> Charm_tea.Cursor.t option
+val cursor : t -> Charamel_tea.Cursor.t option
 (** [cursor t] returns a real cursor request when focused and virtual output is disabled.
 *)
 

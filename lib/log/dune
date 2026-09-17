@@ -1,9 +1,9 @@
 (library
- (name charm_log)
- (public_name charm.log)
+ (name charamel_log)
+ (public_name charamel.log)
  (libraries
-  charm.lipgloss
-  charm.colorprofile
+  charamel.lipgloss
+  charamel.colorprofile
   eio
   logs
   fmt

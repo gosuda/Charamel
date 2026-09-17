@@ -59,4 +59,4 @@
 - /tmp/fix_warn40.py parser: W40_RE tightened to require dotted type paths;
   unqualified names silently skipped (go manual/index).
 - OVERRIDE map in fixer: (file, ident, tpath) → module, only for aliased
-  record types (Tool.diagnostic→Lsp, Keymap.binding→Charm_bubbles.Key_binding).
+  record types (Tool.diagnostic→Lsp, Keymap.binding→Charamel_bubbles.Key_binding).

@@ -6,7 +6,7 @@
 
 type credential =
   | Api_key of string
-  | Oauth of Charm_fantasy.Oauth.Credential.t
+  | Oauth of Charamel_fantasy.Oauth.Credential.t
   | Disabled of { reason : string; at_ms : int }
       (** The type for a stored provider credential. *)
 
@@ -14,7 +14,7 @@ type error = [ `Io of string * string | `Parse of string * string ]
 (** The type for persistent authentication failures. *)
 
 type refresh_error =
-  [ error | `Disabled of string | `No_credential | `Refresh of Charm_fantasy.Error.t ]
+  [ error | `Disabled of string | `No_credential | `Refresh of Charamel_fantasy.Error.t ]
 (** The type for authentication and OAuth-refresh failures. *)
 
 type login_error = [ error | `Oauth of string | `Timeout | `Aborted ]
@@ -59,7 +59,7 @@ val remove : t -> provider:string -> (unit, error) result
 (** [remove resource ~provider] persistently removes one provider and publishes the result
     into [resource]. *)
 
-val to_fantasy : credential -> Charm_fantasy.Provider.auth option
+val to_fantasy : credential -> Charamel_fantasy.Provider.auth option
 (** [to_fantasy credential] converts usable credentials and returns [None] for disabled
     credentials. *)
 
@@ -80,7 +80,7 @@ val ensure_fresh :
   env:(string -> string option) ->
   t ->
   provider:string ->
-  (Charm_fantasy.Provider.auth, refresh_error) result
+  (Charamel_fantasy.Provider.auth, refresh_error) result
 (** [ensure_fresh ~sw ~net ~config ~env resource ~provider] reloads the resource, returns
     a configured or environment API key without persisting it, and refreshes an expiring
     OAuth credential under the resource transaction. *)
@@ -92,8 +92,8 @@ val refresh :
   env:(string -> string option) ->
   t ->
   provider:string ->
-  rejected:Charm_fantasy.Provider.auth ->
-  (Charm_fantasy.Provider.auth, refresh_error) result
+  rejected:Charamel_fantasy.Provider.auth ->
+  (Charamel_fantasy.Provider.auth, refresh_error) result
 (** [refresh ~sw ~net ~config ~env resource ~provider ~rejected] performs a conditional
     OAuth recovery. It rotates only when [rejected] is still the current stored
     credential; a replacement is returned through normal freshness handling. *)
@@ -101,7 +101,7 @@ val refresh :
 val disable :
   t ->
   provider:string ->
-  rejected:Charm_fantasy.Provider.auth ->
+  rejected:Charamel_fantasy.Provider.auth ->
   reason:string ->
   now_ms:int ->
   (unit, error) result

@@ -84,7 +84,7 @@ let style_get_height style = Option.value (Style.get_height style) ~default:1
 let pad_to n xs = xs @ Stdlib.List.init (max 0 (n - Stdlib.List.length xs)) (fun _ -> "")
 
 let repeat_glyph glyph width =
-  let glyph_width = Charm_ansi.Text.width glyph in
+  let glyph_width = Charamel_ansi.Text.width glyph in
   if width <= 0 then ""
   else if glyph = "" || glyph_width <= 0 then String.make width ' '
   else
@@ -95,7 +95,7 @@ let repeat_glyph glyph width =
 let border_budget (border : Border.t) columns =
   if columns = 0 then 0
   else
-    let width s = Charm_ansi.Text.width s in
+    let width s = Charamel_ansi.Text.width s in
     let left =
       max (width border.Border.left)
         (max
@@ -161,7 +161,7 @@ let wrapped_height ~width content =
          (fun n line ->
            n
            + Stdlib.List.length
-               (String.split_on_char '\n' (Charm_ansi.Text.wrap ~width line)))
+               (String.split_on_char '\n' (Charamel_ansi.Text.wrap ~width line)))
          0
 
 let shrink_widths columns border target =
@@ -271,7 +271,7 @@ let style_render ~column_width ~row_height style content =
 
 let truncate_lines ~width content =
   normalize_newlines content |> String.split_on_char '\n'
-  |> Stdlib.List.map (Charm_ansi.Text.truncate ~width ~tail:"…")
+  |> Stdlib.List.map (Charamel_ansi.Text.truncate ~width ~tail:"…")
   |> String.concat "\n"
 
 let fit_cell ~wrap ~is_header ~column_width ~frame_width content =
@@ -282,9 +282,9 @@ let fit_cell ~wrap ~is_header ~column_width ~frame_width content =
       | [] -> ""
       | first :: _ -> first
     in
-    Charm_ansi.Text.truncate ~width:available ~tail:"…" first_line
+    Charamel_ansi.Text.truncate ~width:available ~tail:"…" first_line
   else if not wrap then truncate_lines ~width:available content
-  else Charm_ansi.Text.wrap ~width:available content
+  else Charamel_ansi.Text.wrap ~width:available content
 
 let render t =
   let has_headers = t.headers <> [] in
@@ -449,7 +449,8 @@ let render t =
           Array.iteri
             (fun col cell_lines ->
               let line = nth_default ~default:"" cell_lines line_index in
-              Buffer.add_string b (Charm_ansi.Text.pad_right ~width:(width_at col) line);
+              Buffer.add_string b
+                (Charamel_ansi.Text.pad_right ~width:(width_at col) line);
               if col < columns - 1 && t.border.Border.left <> "" then
                 Buffer.add_string b t.border.Border.left)
             lines;

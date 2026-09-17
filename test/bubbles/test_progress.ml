@@ -1,6 +1,6 @@
-module Progress = Charm_bubbles.Progress
-module Color = Charm_ansi.Color
-module Text = Charm_ansi.Text
+module Progress = Charamel_bubbles.Progress
+module Color = Charamel_ansi.Color
+module Text = Charamel_ansi.Text
 
 let settles_to_target () =
   let progress =

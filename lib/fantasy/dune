@@ -1,6 +1,6 @@
 (library
- (name charm_fantasy)
- (public_name charm.fantasy)
+ (name charamel_fantasy)
+ (public_name charamel.fantasy)
  (flags
   (:standard
    -strict-sequence

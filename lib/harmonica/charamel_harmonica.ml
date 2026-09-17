@@ -104,5 +104,5 @@ module Projectile = struct
 end
 
 let fps n =
-  if n = 0 then invalid_arg "Charm_harmonica.fps: frame count must not be zero";
+  if n = 0 then invalid_arg "Charamel_harmonica.fps: frame count must not be zero";
   1.0 /. float_of_int n

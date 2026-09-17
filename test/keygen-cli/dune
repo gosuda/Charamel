@@ -4,7 +4,7 @@
  (modules test_keygen_cli)
  (libraries
   keygen_core
-  charm-ssh.keygen
+  charamel-ssh.keygen
   alcotest
   eio
   eio.unix

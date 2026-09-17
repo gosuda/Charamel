@@ -4,10 +4,10 @@ type msg = Tick | Start | Stop | Reset
 type t
 
 val v : ?interval:float -> unit -> t
-val update : msg -> t -> t * msg Charm_tea.Cmd.t
+val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 val view : t -> string
-val key : t -> Charm_tea.Key.t -> msg option
-val subscriptions : t -> msg Charm_tea.Sub.t
+val key : t -> Charamel_tea.Key.t -> msg option
+val subscriptions : t -> msg Charamel_tea.Sub.t
 val elapsed : t -> float
 val running : t -> bool
 val start : t -> t

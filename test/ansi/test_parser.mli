@@ -1,4 +1,4 @@
-(** Parser test cases for the charm.ansi suite.
+(** Parser test cases for the charamel.ansi suite.
 
     The cases port the upstream parser decode, DCS, CSI and OSC vectors, then pin the
     incremental, cancel, limit, UTF-8 and flush behaviour of {!Parser}. *)

@@ -1,4 +1,4 @@
-open Charm_fantasy
+open Charamel_fantasy
 
 (** Shared stream-part assertions for the provider codec suites.
 

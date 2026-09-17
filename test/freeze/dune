@@ -4,8 +4,8 @@
  (modules test_freeze)
  (libraries
   freeze_core
-  charm.ansi
-  charm.highlight
+  charamel.ansi
+  charamel.highlight
   eio
   eio.unix
   eio_main

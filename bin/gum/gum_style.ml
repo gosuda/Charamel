@@ -1,14 +1,14 @@
 type t = {
-  foreground : Charm_ansi.Color.t option;
-  background : Charm_ansi.Color.t option;
-  border : Charm_lipgloss.Border.t;
-  border_foreground : Charm_ansi.Color.t option;
-  border_background : Charm_ansi.Color.t option;
-  align : Charm_lipgloss.Position.t;
+  foreground : Charamel_ansi.Color.t option;
+  background : Charamel_ansi.Color.t option;
+  border : Charamel_lipgloss.Border.t;
+  border_foreground : Charamel_ansi.Color.t option;
+  border_background : Charamel_ansi.Color.t option;
+  align : Charamel_lipgloss.Position.t;
   height : int;
   width : int;
-  margin : Charm_lipgloss.Sides.t;
-  padding : Charm_lipgloss.Sides.t;
+  margin : Charamel_lipgloss.Sides.t;
+  padding : Charamel_lipgloss.Sides.t;
   bold : bool;
   faint : bool;
   italic : bool;
@@ -42,14 +42,14 @@ let neutral =
   {
     foreground = None;
     background = None;
-    border = Charm_lipgloss.Border.none;
+    border = Charamel_lipgloss.Border.none;
     border_foreground = None;
     border_background = None;
-    align = Charm_lipgloss.Position.left;
+    align = Charamel_lipgloss.Position.left;
     height = 0;
     width = 0;
-    margin = Charm_lipgloss.Sides.all 0;
-    padding = Charm_lipgloss.Sides.all 0;
+    margin = Charamel_lipgloss.Sides.all 0;
+    padding = Charamel_lipgloss.Sides.all 0;
     bold = false;
     faint = false;
     italic = false;
@@ -115,12 +115,12 @@ let color_conv =
 let border_conv =
   let choices =
     [
-      ("none", Charm_lipgloss.Border.none);
-      ("hidden", Charm_lipgloss.Border.hidden);
-      ("normal", Charm_lipgloss.Border.normal);
-      ("rounded", Charm_lipgloss.Border.rounded);
-      ("thick", Charm_lipgloss.Border.thick);
-      ("double", Charm_lipgloss.Border.double);
+      ("none", Charamel_lipgloss.Border.none);
+      ("hidden", Charamel_lipgloss.Border.hidden);
+      ("normal", Charamel_lipgloss.Border.normal);
+      ("rounded", Charamel_lipgloss.Border.rounded);
+      ("thick", Charamel_lipgloss.Border.thick);
+      ("double", Charamel_lipgloss.Border.double);
     ]
   in
   Gum_flag.enum ~docv:"BORDER" choices
@@ -218,46 +218,48 @@ let term ~cmd ?(hidden = true) ?(prefix = "") ?env_prefix:custom_env_prefix ~def
   }
 
 let to_style t =
-  let style = Charm_lipgloss.Style.empty in
+  let style = Charamel_lipgloss.Style.empty in
   let style =
     match t.background with
-    | Some color -> Charm_lipgloss.Style.background color style
+    | Some color -> Charamel_lipgloss.Style.background color style
     | None -> style
   in
   let style =
     match t.foreground with
-    | Some color -> Charm_lipgloss.Style.foreground color style
+    | Some color -> Charamel_lipgloss.Style.foreground color style
     | None -> style
   in
   let style =
     match t.border_background with
     | Some color ->
-        Charm_lipgloss.Style.border_background
-          (Charm_lipgloss.Sides_color.all color)
+        Charamel_lipgloss.Style.border_background
+          (Charamel_lipgloss.Sides_color.all color)
           style
     | None -> style
   in
   let style =
     match t.border_foreground with
     | Some color ->
-        Charm_lipgloss.Style.border_foreground
-          (Charm_lipgloss.Sides_color.all color)
+        Charamel_lipgloss.Style.border_foreground
+          (Charamel_lipgloss.Sides_color.all color)
           style
     | None -> style
   in
-  let style = Charm_lipgloss.Style.align t.align style in
-  let style = Charm_lipgloss.Style.border t.border style in
+  let style = Charamel_lipgloss.Style.align t.align style in
+  let style = Charamel_lipgloss.Style.border t.border style in
   let style =
-    if t.height > 0 then Charm_lipgloss.Style.height t.height style else style
+    if t.height > 0 then Charamel_lipgloss.Style.height t.height style else style
   in
-  let style = if t.width > 0 then Charm_lipgloss.Style.width t.width style else style in
-  let style = Charm_lipgloss.Style.margin t.margin style in
-  let style = Charm_lipgloss.Style.padding t.padding style in
-  let style = Charm_lipgloss.Style.bold t.bold style in
-  let style = Charm_lipgloss.Style.faint t.faint style in
-  let style = Charm_lipgloss.Style.italic t.italic style in
-  let style = Charm_lipgloss.Style.strikethrough t.strikethrough style in
-  Charm_lipgloss.Style.underline t.underline style
+  let style =
+    if t.width > 0 then Charamel_lipgloss.Style.width t.width style else style
+  in
+  let style = Charamel_lipgloss.Style.margin t.margin style in
+  let style = Charamel_lipgloss.Style.padding t.padding style in
+  let style = Charamel_lipgloss.Style.bold t.bold style in
+  let style = Charamel_lipgloss.Style.faint t.faint style in
+  let style = Charamel_lipgloss.Style.italic t.italic style in
+  let style = Charamel_lipgloss.Style.strikethrough t.strikethrough style in
+  Charamel_lipgloss.Style.underline t.underline style
 
-let inline t = Charm_lipgloss.Style.inline true (to_style t)
+let inline t = Charamel_lipgloss.Style.inline true (to_style t)
 let foreground t = t.foreground

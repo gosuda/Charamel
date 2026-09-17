@@ -2,7 +2,7 @@
    URL parameters, extract_code forms, and refresh skew arithmetic.
    The suite is pure logic with no transport. *)
 
-open Charm_fantasy
+open Charamel_fantasy
 
 let test_pkce_s256 () =
   let seed = String.make 96 '\000' in
@@ -68,7 +68,7 @@ let test_extract_code_forms () =
   Alcotest.(check bool) "state mismatch rejected" true mismatch
 
 let test_expiry_skew () =
-  let module A = Charm_fantasy__Oauth.Anthropic in
+  let module A = Charamel_fantasy__Oauth.Anthropic in
   (* now + expires_in*1000 - 300_000 *)
   Alcotest.(check int)
     "five minute shave" 1_000_000

@@ -1,12 +1,12 @@
 let key name =
-  match Charm_tea.Key.of_string name with
+  match Charamel_tea.Key.of_string name with
   | Ok key -> key
   | Error (`Msg message) -> Alcotest.fail message
 
 let multiline_input () =
   let options = { Write.default_options with show_help = false; padding = "0" } in
   let model, _ =
-    Charm_tea.Test.run (Write.app options)
+    Charamel_tea.Test.run (Write.app options)
       ~events:[ `Text "hello"; `Key (key "ctrl+j"); `Text "world"; `Key (key "enter") ]
       ~size:(12, 80)
   in

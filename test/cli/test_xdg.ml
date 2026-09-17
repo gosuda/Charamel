@@ -1,4 +1,4 @@
-module Xdg = Charm_cli.Xdg
+module Xdg = Charamel_cli.Xdg
 
 (* Each vector runs the probe in a child process whose environment holds
    exactly the vector's bindings, so the suite never mutates its own

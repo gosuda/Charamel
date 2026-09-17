@@ -16,7 +16,7 @@ type provider = {
   base_url : string option;
   api_key : string option;
   headers : (string * string) list;
-  models : Charm_fantasy.Model.t list;
+  models : Charamel_fantasy.Model.t list;
 }
 (** A configured provider. Model entries are stamped with their provider id. *)
 

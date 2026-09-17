@@ -1,4 +1,4 @@
-module K = Charm_ssh_keygen
+module K = Charamel_ssh_keygen
 
 let err_show = function
   | `Malformed -> "`Malformed"
@@ -185,7 +185,7 @@ let roundtrip_case algo () =
   Alcotest.check Alcotest.int "fingerprint is unpadded base64" 50 (String.length fp);
   Alcotest.check Alcotest.bool "authorized_key starts with the SSH key type" true
     (String.starts_with ~prefix:(keytype_of algo) (K.authorized_key k));
-  let pem = K.to_openssh_private ~comment:"charm-test" k in
+  let pem = K.to_openssh_private ~comment:"charamel-test" k in
 
   let k2 = expect_ok (name ^ " reloads its own container") (K.of_openssh_private pem) in
   Alcotest.check Alcotest.string "fingerprint survives the container round trip" fp
@@ -539,4 +539,4 @@ let () =
   Eio.Path.mkdirs ~perm:0o700 root;
   Fun.protect
     ~finally:(fun () -> Eio.Path.rmtree ~missing_ok:true root)
-    (fun () -> Alcotest.run ~and_exit:false "charm-ssh.keygen" (suites env))
+    (fun () -> Alcotest.run ~and_exit:false "charamel-ssh.keygen" (suites env))

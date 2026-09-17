@@ -1,4 +1,4 @@
-module Viewport = Charm_bubbles.Viewport
+module Viewport = Charamel_bubbles.Viewport
 
 let check_equal expected actual = Alcotest.(check (list string)) "lines" expected actual
 
@@ -42,8 +42,8 @@ let soft_wrap_and_gutter () =
 
 let highlights () =
   let style =
-    Charm_lipgloss.Style.background (Charm_ansi.Color.Indexed 1)
-      Charm_lipgloss.Style.empty
+    Charamel_lipgloss.Style.background (Charamel_ansi.Color.Indexed 1)
+      Charamel_lipgloss.Style.empty
   in
   let viewport =
     Viewport.v ~width:20 ~height:2 ~highlight_style:style ~selected_highlight_style:style
@@ -62,7 +62,7 @@ let highlights () =
 
 let key_navigation () =
   let viewport = Viewport.v ~width:10 ~height:2 () in
-  let key = Charm_tea.Key.v Charm_tea.Key.Down in
+  let key = Charamel_tea.Key.v Charamel_tea.Key.Down in
   match Viewport.key viewport key with
   | Some Viewport.Down -> ()
   | _ -> Alcotest.fail "down key not bound"

@@ -1,7 +1,7 @@
 (** Language lexer specifications.
 
     A specification describes the words, delimiters, regular expressions, and aliases
-    consumed by {!Charm_highlight.Scanner}. *)
+    consumed by {!Charamel_highlight.Scanner}. *)
 
 type kind =
   | Keyword

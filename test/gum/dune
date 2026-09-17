@@ -21,11 +21,11 @@
  (libraries
   gum_core
   alcotest
-  charm.ansi
-  charm.cli
-  charm.bubbles
-  charm.lipgloss
-  charm.tea
+  charamel.ansi
+  charamel.cli
+  charamel.bubbles
+  charamel.lipgloss
+  charamel.tea
   cmdliner
   eio
   eio.unix

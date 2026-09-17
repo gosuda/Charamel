@@ -1,4 +1,4 @@
-module BTable = Charm_bubbles.Table
+module BTable = Charamel_bubbles.Table
 
 let values () =
   let rows = BTable.of_values "foo1,bar1\nfoo2,bar2\nfoo3,bar3" in
@@ -23,19 +23,19 @@ let navigation () =
   Alcotest.(check bool) "blurred" false (BTable.focused model);
   Alcotest.(check bool)
     "blurred key ignored" true
-    (BTable.key model (Charm_tea.Key.v Charm_tea.Key.Down) = None)
+    (BTable.key model (Charamel_tea.Key.v Charamel_tea.Key.Down) = None)
 
 let rendering () =
   let columns = [ { BTable.title = "Column"; width = 10 } ] in
   let rows = [ [ "ABCDEFGH" ]; [ "longer-than-ten" ] ] in
   let model = BTable.v ~columns ~rows ~width:20 ~height:5 ~focused:true () in
-  let plain = Charm_ansi.Text.strip (BTable.view model) in
+  let plain = Charamel_ansi.Text.strip (BTable.view model) in
   let lines = String.split_on_char '\n' plain in
   Alcotest.(check bool) "header and rows" true (List.length lines >= 3);
   Alcotest.(check bool) "first value" true (String.contains plain 'A');
   Alcotest.(check bool) "truncation marker" true (String.contains plain '\226');
   let model = BTable.move_down 1 model in
-  let plain = Charm_ansi.Text.strip (BTable.view model) in
+  let plain = Charamel_ansi.Text.strip (BTable.view model) in
   Alcotest.(check bool) "second value" true (String.contains plain 'l')
 
 let cases =

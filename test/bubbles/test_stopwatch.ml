@@ -1,4 +1,4 @@
-module Stopwatch = Charm_bubbles.Stopwatch
+module Stopwatch = Charamel_bubbles.Stopwatch
 
 let start_stop_reset () =
   let stopwatch = Stopwatch.v ~interval:0.5 () in

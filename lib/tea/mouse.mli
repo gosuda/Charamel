@@ -2,7 +2,7 @@
 
     [t] is a single mouse report decoded from SGR (["CSI < Cb ; Cx ; Cy M/m"]) or X10
     (["CSI M Cb Cx Cy"]) mouse tracking sequences. Coordinates are 0-based, upper-left
-    origin, matching {!Charm_tea.Screen} and every other 0-based coordinate in this
+    origin, matching {!Charamel_tea.Screen} and every other 0-based coordinate in this
     library; the wire protocols are 1-based and the decoder subtracts 1. *)
 
 (** The button a click, release, or wheel report names. [None_] is X10's own release

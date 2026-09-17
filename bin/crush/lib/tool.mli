@@ -90,7 +90,7 @@ type t = {
 (** The type for one model-callable tool. [read_only] is conservative scheduling metadata
     and is true only when every invocation is read-only. *)
 
-val to_fantasy : t -> Charm_fantasy.Tool.t
+val to_fantasy : t -> Charamel_fantasy.Tool.t
 (** [to_fantasy tool] is the provider-neutral definition of [tool]. *)
 
 val decode : 'a Jsont.t -> Jsont.json -> ('a, error) result

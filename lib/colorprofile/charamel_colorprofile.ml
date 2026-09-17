@@ -59,9 +59,9 @@ let detect ~is_tty ~env =
 
 let convert profile color =
   match profile with
-  | No_tty | Ascii -> Charm_ansi.Color.Default
-  | Ansi -> Charm_ansi.Color.to_ansi16 color
-  | Ansi256 -> Charm_ansi.Color.to_ansi256 color
+  | No_tty | Ascii -> Charamel_ansi.Color.Default
+  | Ansi -> Charamel_ansi.Color.to_ansi16 color
+  | Ansi256 -> Charamel_ansi.Color.to_ansi256 color
   | True_color -> color
 
 module Writer = struct
@@ -127,7 +127,7 @@ module Writer = struct
 
   type parameter = { raw : string; fields : string list }
   type slot = Foreground | Background | Underline
-  type colour = { slot : slot; colour : Charm_ansi.Color.t; consumed : int }
+  type colour = { slot : slot; colour : Charamel_ansi.Color.t; consumed : int }
 
   let parse_parameters body =
     let raw = String.split_on_char ';' body in
@@ -146,7 +146,7 @@ module Writer = struct
     | 58 -> Some Underline
     | _ -> None
 
-  let rgb r g b = Charm_ansi.Color.Rgb (r, g, b)
+  let rgb r g b = Charamel_ansi.Color.Rgb (r, g, b)
 
   let colour_at parameters index =
     let open Option.Syntax in
@@ -157,7 +157,7 @@ module Writer = struct
       else None
     in
     let indexed slot value consumed =
-      { slot; colour = Charm_ansi.Color.Indexed value; consumed }
+      { slot; colour = Charamel_ansi.Color.Indexed value; consumed }
     in
     match parameter.fields with
     | first :: mode :: rest -> (
@@ -191,36 +191,39 @@ module Writer = struct
   let emit_colour slot colour =
     let basic n = clamp_palette n in
     match (slot, colour) with
-    | Foreground, Charm_ansi.Color.Basic n ->
+    | Foreground, Charamel_ansi.Color.Basic n ->
         if n < 8 then string_of_int (30 + n) else string_of_int (82 + n)
-    | Background, Charm_ansi.Color.Basic n ->
+    | Background, Charamel_ansi.Color.Basic n ->
         if n < 8 then string_of_int (40 + n) else string_of_int (92 + n)
-    | Underline, Charm_ansi.Color.Basic n -> "58;5;" ^ string_of_int (clamp_palette n)
-    | Foreground, Charm_ansi.Color.Indexed n -> "38;5;" ^ string_of_int (clamp_palette n)
-    | Background, Charm_ansi.Color.Indexed n -> "48;5;" ^ string_of_int (clamp_palette n)
-    | Underline, Charm_ansi.Color.Indexed n -> "58;5;" ^ string_of_int (clamp_palette n)
-    | Foreground, Charm_ansi.Color.Rgb (r, g, b) ->
+    | Underline, Charamel_ansi.Color.Basic n -> "58;5;" ^ string_of_int (clamp_palette n)
+    | Foreground, Charamel_ansi.Color.Indexed n ->
+        "38;5;" ^ string_of_int (clamp_palette n)
+    | Background, Charamel_ansi.Color.Indexed n ->
+        "48;5;" ^ string_of_int (clamp_palette n)
+    | Underline, Charamel_ansi.Color.Indexed n ->
+        "58;5;" ^ string_of_int (clamp_palette n)
+    | Foreground, Charamel_ansi.Color.Rgb (r, g, b) ->
         "38;2;"
         ^ string_of_int (basic r)
         ^ ";"
         ^ string_of_int (basic g)
         ^ ";"
         ^ string_of_int (basic b)
-    | Background, Charm_ansi.Color.Rgb (r, g, b) ->
+    | Background, Charamel_ansi.Color.Rgb (r, g, b) ->
         "48;2;"
         ^ string_of_int (basic r)
         ^ ";"
         ^ string_of_int (basic g)
         ^ ";"
         ^ string_of_int (basic b)
-    | Underline, Charm_ansi.Color.Rgb (r, g, b) ->
+    | Underline, Charamel_ansi.Color.Rgb (r, g, b) ->
         "58;2;"
         ^ string_of_int (basic r)
         ^ ";"
         ^ string_of_int (basic g)
         ^ ";"
         ^ string_of_int (basic b)
-    | _, Charm_ansi.Color.Default -> ""
+    | _, Charamel_ansi.Color.Default -> ""
 
   let transform_sgr profile raw =
     let length = String.length raw in

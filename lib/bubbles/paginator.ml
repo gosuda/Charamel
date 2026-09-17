@@ -1,5 +1,5 @@
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
 
 let clamp value low high = max low (min high value)
 

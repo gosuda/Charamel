@@ -3,31 +3,31 @@ type error = [ `Msg of string ]
 
 let theme_value ~env name =
   match String.lowercase_ascii name with
-  | "dark" -> Ok Charm_glamour.Theme.dark
-  | "light" -> Ok Charm_glamour.Theme.light
-  | "dracula" -> Ok Charm_glamour.Theme.dracula
-  | "tokyo-night" -> Ok Charm_glamour.Theme.tokyo_night
-  | "pink" -> Ok Charm_glamour.Theme.pink
-  | "ascii" -> Ok Charm_glamour.Theme.ascii
-  | "notty" -> Ok Charm_glamour.Theme.notty
-  | "auto" -> Ok (Charm_glamour.Theme.auto ~is_dark:(Charm_cli.is_dark ~env))
+  | "dark" -> Ok Charamel_glamour.Theme.dark
+  | "light" -> Ok Charamel_glamour.Theme.light
+  | "dracula" -> Ok Charamel_glamour.Theme.dracula
+  | "tokyo-night" -> Ok Charamel_glamour.Theme.tokyo_night
+  | "pink" -> Ok Charamel_glamour.Theme.pink
+  | "ascii" -> Ok Charamel_glamour.Theme.ascii
+  | "notty" -> Ok Charamel_glamour.Theme.notty
+  | "auto" -> Ok (Charamel_glamour.Theme.auto ~is_dark:(Charamel_cli.is_dark ~env))
   | value -> Error (`Msg (Fmt.str "unknown theme: %s" value))
 
 let render ?(theme = "pink") ?(language = "") ?(strip_ansi = false) kind input =
-  let input = if strip_ansi then Charm_ansi.Text.strip input else input in
+  let input = if strip_ansi then Charamel_ansi.Text.strip input else input in
   match kind with
   | Template -> Template.render input
   | Markdown -> (
       match theme_value ~env:Sys.getenv_opt theme with
       | Error _ as error -> error
-      | Ok theme -> Ok (Charm_glamour.render ~width:0 ~theme input))
+      | Ok theme -> Ok (Charamel_glamour.render ~width:0 ~theme input))
   | Code -> (
       match theme_value ~env:Sys.getenv_opt theme with
       | Error _ as error -> error
       | Ok theme ->
           let fenced = "```" ^ language ^ "\n" ^ input ^ "\n```" in
-          Ok (Charm_glamour.render ~width:0 ~theme fenced))
-  | Emoji -> Ok (Charm_glamour.render ~width:0 ~emoji:true input)
+          Ok (Charamel_glamour.render ~width:0 ~theme fenced))
+  | Emoji -> Ok (Charamel_glamour.render ~width:0 ~emoji:true input)
 
 let read_input env ~strip_ansi texts =
   match texts with
@@ -36,7 +36,7 @@ let read_input env ~strip_ansi texts =
       match Gum_io.read_stdin ~strip_ansi env with
       | Ok text -> text
       | Error `Empty -> ""
-      | Error (`Read message) -> Charm_cli.error message)
+      | Error (`Read message) -> Charamel_cli.error message)
 
 let kind_conv =
   Gum_flag.enum ~docv:"TYPE"
@@ -100,7 +100,7 @@ let cmd env =
           | Template -> Fmt.str "unable to parse template: %s" message
           | _ -> Fmt.str "unable to render: %s" message
         in
-        Charm_cli.error message
+        Charamel_cli.error message
   in
   Cmd.v
     (command_info "format" "Format text as markdown, code, emoji, or a template.")

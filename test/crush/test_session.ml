@@ -20,7 +20,7 @@ let with_environment name value f =
 let with_store f =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun _sw ->
-  let directory = temporary_directory "charm-session-" in
+  let directory = temporary_directory "charamel-session-" in
   with_environment "XDG_DATA_HOME" directory (fun () ->
       let result =
         Fun.protect
@@ -45,7 +45,7 @@ let contains_substring text needle =
   in
   loop 0
 
-let text_message text = Charm_fantasy.Message.text Charm_fantasy.Message.User text
+let text_message text = Charamel_fantasy.Message.text Charamel_fantasy.Message.User text
 
 let json_input =
   Jsont.Json.object'
@@ -53,18 +53,19 @@ let json_input =
 
 let event_cases () =
   let message =
-    Charm_fantasy.Message.
+    Charamel_fantasy.Message.
       {
-        role = Charm_fantasy.Message.Assistant;
+        role = Charamel_fantasy.Message.Assistant;
         parts =
           [
-            Charm_fantasy.Message.Text "answer";
-            Charm_fantasy.Message.Reasoning { text = "thinking"; signature = Some "sig" };
-            Charm_fantasy.Message.File
+            Charamel_fantasy.Message.Text "answer";
+            Charamel_fantasy.Message.Reasoning
+              { text = "thinking"; signature = Some "sig" };
+            Charamel_fantasy.Message.File
               { mime = "text/plain"; data = "ZGF0YQ=="; name = Some "note.txt" };
-            Charm_fantasy.Message.Tool_call
+            Charamel_fantasy.Message.Tool_call
               { id = "call-1"; name = "read"; input = json_input };
-            Charm_fantasy.Message.Tool_result
+            Charamel_fantasy.Message.Tool_result
               { id = "call-1"; name = "read"; output = `Media ("image/png", "aGVsbG8=") };
           ];
       }
@@ -86,7 +87,7 @@ let event_cases () =
         ms = 5;
         usage =
           {
-            Charm_fantasy.Usage.input = 10;
+            Charamel_fantasy.Usage.input = 10;
             output = 20;
             cache_read = 2;
             cache_write = 3;
@@ -149,13 +150,16 @@ let event_round_trip () =
                 "title restored from index" "roundtrip" (Session.title reopened);
               Alcotest.(check (list string)) "all event variants" expected actual;
               let usage, cost = Session.usage_total reopened in
-              Alcotest.(check int) "usage input" 10 usage.Charm_fantasy.Usage.input;
-              Alcotest.(check int) "usage output" 20 usage.Charm_fantasy.Usage.output;
+              Alcotest.(check int) "usage input" 10 usage.Charamel_fantasy.Usage.input;
+              Alcotest.(check int) "usage output" 20 usage.Charamel_fantasy.Usage.output;
               Alcotest.(check (float 1e-12)) "usage cost" 0.125 cost;
               let messages = Session.messages reopened in
               Alcotest.(check int) "summary replay and suffix" 3 (List.length messages);
               begin match List.rev messages with
-              | { Charm_fantasy.Message.parts = [ Charm_fantasy.Message.Text text ]; _ }
+              | {
+                  Charamel_fantasy.Message.parts = [ Charamel_fantasy.Message.Text text ];
+                  _;
+                }
                 :: _ ->
                   Alcotest.(check string) "post-summary message" "after-summary" text
               | _ -> Alcotest.fail "post-summary message was not replayed"

@@ -2,9 +2,9 @@
  (name crush_core)
  (public_name crush.core)
  (libraries
-  charm.cli
-  charm.fantasy
-  charm.log
+  charamel.cli
+  charamel.fantasy
+  charamel.log
   eio
   eio.unix
   jsont
@@ -44,25 +44,25 @@
  (action
   (write-file
    %{target}
-   "let text = {charm_prompt|%{read:prompts/coder.md}|charm_prompt}\n")))
+   "let text = {charamel_prompt|%{read:prompts/coder.md}|charamel_prompt}\n")))
 
 (rule
  (target prompt_summarize.ml)
  (action
   (write-file
    %{target}
-   "let text = {charm_prompt|%{read:prompts/summarize.md}|charm_prompt}\n")))
+   "let text = {charamel_prompt|%{read:prompts/summarize.md}|charamel_prompt}\n")))
 
 (rule
  (target prompt_title.ml)
  (action
   (write-file
    %{target}
-   "let text = {charm_prompt|%{read:prompts/title.md}|charm_prompt}\n")))
+   "let text = {charamel_prompt|%{read:prompts/title.md}|charamel_prompt}\n")))
 
 (rule
  (target prompt_advisor.ml)
  (action
   (write-file
    %{target}
-   "let text = {charm_prompt|%{read:prompts/advisor.md}|charm_prompt}\n")))
+   "let text = {charamel_prompt|%{read:prompts/advisor.md}|charamel_prompt}\n")))

@@ -4,9 +4,9 @@
  (modules test_pop test_mime test_smtp test_cli fixture_smtp)
  (libraries
   pop_core
-  charm.cli
-  charm.huh
-  charm.glamour
+  charamel.cli
+  charamel.huh
+  charamel.glamour
   cmarkit
   eio
   eio.unix

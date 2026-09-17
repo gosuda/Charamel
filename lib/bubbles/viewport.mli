@@ -24,7 +24,7 @@ type msg =
   | Down
   | Left
   | Right
-  | Wheel of Charm_tea.Mouse.t
+  | Wheel of Charamel_tea.Mouse.t
 
 type t
 
@@ -32,24 +32,24 @@ val v :
   ?width:int ->
   ?height:int ->
   ?keymap:keymap ->
-  ?style:Charm_lipgloss.Style.t ->
+  ?style:Charamel_lipgloss.Style.t ->
   ?soft_wrap:bool ->
   ?fill_height:bool ->
   ?mouse_wheel_enabled:bool ->
   ?mouse_wheel_delta:int ->
   ?horizontal_step:int ->
   ?left_gutter:(gutter_context -> string) ->
-  ?style_line:(int -> Charm_lipgloss.Style.t) ->
-  ?highlight_style:Charm_lipgloss.Style.t ->
-  ?selected_highlight_style:Charm_lipgloss.Style.t ->
+  ?style_line:(int -> Charamel_lipgloss.Style.t) ->
+  ?highlight_style:Charamel_lipgloss.Style.t ->
+  ?selected_highlight_style:Charamel_lipgloss.Style.t ->
   unit ->
   t
 
-val update : msg -> t -> t * msg Charm_tea.Cmd.t
+val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 val view : t -> string
-val key : t -> Charm_tea.Key.t -> msg option
-val mouse : t -> Charm_tea.Mouse.t -> msg option
-val subscriptions : t -> msg Charm_tea.Sub.t
+val key : t -> Charamel_tea.Key.t -> msg option
+val mouse : t -> Charamel_tea.Mouse.t -> msg option
+val subscriptions : t -> msg Charamel_tea.Sub.t
 val set_content : string -> t -> t
 val set_content_lines : string list -> t -> t
 val content : t -> string
@@ -61,13 +61,13 @@ val y_offset : t -> int
 val set_y_offset : int -> t -> t
 val x_offset : t -> int
 val set_x_offset : int -> t -> t
-val style : t -> Charm_lipgloss.Style.t
-val set_style : Charm_lipgloss.Style.t -> t -> t
+val style : t -> Charamel_lipgloss.Style.t
+val set_style : Charamel_lipgloss.Style.t -> t -> t
 val soft_wrap : t -> bool
 val set_soft_wrap : bool -> t -> t
 val set_fill_height : bool -> t -> t
 val set_left_gutter : (gutter_context -> string) option -> t -> t
-val set_style_line : (int -> Charm_lipgloss.Style.t) option -> t -> t
+val set_style_line : (int -> Charamel_lipgloss.Style.t) option -> t -> t
 val set_horizontal_step : int -> t -> t
 val set_mouse_wheel_enabled : bool -> t -> t
 val set_mouse_wheel_delta : int -> t -> t
@@ -94,5 +94,5 @@ val set_highlights : (int * int) list -> t -> t
 val clear_highlights : t -> t
 val highlight_next : t -> t
 val highlight_previous : t -> t
-val set_highlight_style : Charm_lipgloss.Style.t -> t -> t
-val set_selected_highlight_style : Charm_lipgloss.Style.t -> t -> t
+val set_highlight_style : Charamel_lipgloss.Style.t -> t -> t
+val set_selected_highlight_style : Charamel_lipgloss.Style.t -> t -> t

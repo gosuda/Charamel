@@ -1,10 +1,10 @@
-module Key = Charm_tea.Key
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module Style = Charm_lipgloss.Style
-module Color = Charm_ansi.Color
-module Text = Charm_ansi.Text
-module Width = Charm_ansi.Width
+module Key = Charamel_tea.Key
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module Style = Charamel_lipgloss.Style
+module Color = Charamel_ansi.Color
+module Text = Charamel_ansi.Text
+module Width = Charamel_ansi.Width
 
 let clamp n lo hi = max lo (min hi n)
 
@@ -102,7 +102,7 @@ type style_state = {
 
 type cursor_style = {
   color : Color.t;
-  shape : Charm_tea.Cursor.shape;
+  shape : Charamel_tea.Cursor.shape;
   blink : bool;
   blink_speed : float option;
 }
@@ -111,7 +111,7 @@ type styles = { focused : style_state; blurred : style_state; cursor : cursor_st
 
 let default_styles ~is_dark =
   let color n = match Color.indexed n with Some c -> c | None -> Color.Default in
-  let light_dark light dark = Charm_lipgloss.light_dark ~is_dark ~light ~dark in
+  let light_dark light dark = Charamel_lipgloss.light_dark ~is_dark ~light ~dark in
   {
     focused =
       {
@@ -130,7 +130,7 @@ let default_styles ~is_dark =
     cursor =
       {
         color = color 7;
-        shape = Charm_tea.Cursor.Block;
+        shape = Charamel_tea.Cursor.Block;
         blink = true;
         blink_speed = None;
       };
@@ -709,7 +709,7 @@ let cursor (m : t) =
   else
     let col = Text.width m.prompt + segment_width m m.offset (m.position - m.offset) in
     let cs = m.styles.cursor in
-    Some { Charm_tea.Cursor.row = 0; col; shape = cs.shape; blink = cs.blink }
+    Some { Charamel_tea.Cursor.row = 0; col; shape = cs.shape; blink = cs.blink }
 
 let set_validate validator m =
   let m = { m with validate = validator } in

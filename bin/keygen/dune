@@ -1,7 +1,7 @@
 (library
  (name keygen_core)
  (modules keygen)
- (libraries charm-ssh.keygen eio fmt)
+ (libraries charamel-ssh.keygen eio fmt)
  (flags
   (:standard
    -strict-sequence
@@ -18,8 +18,8 @@
  (modules main)
  (libraries
   keygen_core
-  charm.cli
-  charm-ssh.keygen
+  charamel.cli
+  charamel-ssh.keygen
   eio
   eio.unix
   eio_main

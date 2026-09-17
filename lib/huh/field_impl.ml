@@ -16,21 +16,21 @@ type ('value, 'state, 'message) impl = {
   name : string;
   key : 'value Key.t option;
   msg_id : 'message Type.Id.t;
-  init : ctx -> 'state -> 'state * 'message Charm_tea.Cmd.t;
+  init : ctx -> 'state -> 'state * 'message Charamel_tea.Cmd.t;
   reevaluate : ctx -> 'state -> 'state;
   on_key :
-    ctx -> Charm_tea.Key.t -> 'state -> 'state * 'message Charm_tea.Cmd.t * outcome;
+    ctx -> Charamel_tea.Key.t -> 'state -> 'state * 'message Charamel_tea.Cmd.t * outcome;
   on_paste : ctx -> string -> 'state -> 'state;
-  update : ctx -> 'message -> 'state -> 'state * 'message Charm_tea.Cmd.t;
-  subscriptions : ctx -> 'state -> 'message Charm_tea.Sub.t;
+  update : ctx -> 'message -> 'state -> 'state * 'message Charamel_tea.Cmd.t;
+  subscriptions : ctx -> 'state -> 'message Charamel_tea.Sub.t;
   view : ctx -> focused:bool -> 'state -> string;
-  focus : ctx -> 'state -> 'state * 'message Charm_tea.Cmd.t;
+  focus : ctx -> 'state -> 'state * 'message Charamel_tea.Cmd.t;
   blur : ctx -> 'state -> 'state;
   value : 'state -> 'value;
   error : 'state -> string option;
   skip : ctx -> 'state -> bool;
   zoom : 'state -> bool;
-  key_binds : ctx -> 'state -> Charm_bubbles.Key_binding.t list;
+  key_binds : ctx -> 'state -> Charamel_bubbles.Key_binding.t list;
   run_accessible :
     name:string -> ctx -> out:(string -> unit) -> Accessible.reader -> 'state -> 'state;
 }
@@ -38,10 +38,10 @@ type ('value, 'state, 'message) impl = {
 type t = Field : ('value, 'state, 'message) impl * 'state -> t
 
 let map_cmd id command =
-  Charm_tea.Cmd.map (fun message -> Field_msg.inject id message) command
+  Charamel_tea.Cmd.map (fun message -> Field_msg.inject id message) command
 
 let map_sub id subscription =
-  Charm_tea.Sub.map (fun message -> Field_msg.inject id message) subscription
+  Charamel_tea.Sub.map (fun message -> Field_msg.inject id message) subscription
 
 let concat_nonempty parts =
   parts |> Stdlib.List.filter (fun s -> s <> "") |> String.concat "\n"
@@ -51,9 +51,9 @@ let field_label name = String.capitalize_ascii name ^ ":"
 let field_style ctx focused =
   if focused then ctx.styles.Styles.focused else ctx.styles.Styles.blurred
 
-let textinput_styles (styles : Styles.t) : Charm_bubbles.Textinput.styles =
-  let defaults = Charm_bubbles.Textinput.default_styles ~is_dark:true in
-  let state (custom : Styles.text_input) : Charm_bubbles.Textinput.style_state =
+let textinput_styles (styles : Styles.t) : Charamel_bubbles.Textinput.styles =
+  let defaults = Charamel_bubbles.Textinput.default_styles ~is_dark:true in
+  let state (custom : Styles.text_input) : Charamel_bubbles.Textinput.style_state =
     {
       text = custom.Styles.text;
       placeholder = custom.Styles.placeholder;
@@ -64,33 +64,33 @@ let textinput_styles (styles : Styles.t) : Charm_bubbles.Textinput.styles =
   {
     focused = state styles.Styles.focused.Styles.text_input;
     blurred = state styles.Styles.blurred.Styles.text_input;
-    cursor = defaults.Charm_bubbles.Textinput.cursor;
+    cursor = defaults.Charamel_bubbles.Textinput.cursor;
   }
 
-let textarea_styles (styles : Styles.t) : Charm_bubbles.Textarea.styles =
-  let defaults = Charm_bubbles.Textarea.default_styles ~is_dark:true in
-  let state (base : Charm_bubbles.Textarea.style_state) (custom : Styles.text_input) :
-      Charm_bubbles.Textarea.style_state =
+let textarea_styles (styles : Styles.t) : Charamel_bubbles.Textarea.styles =
+  let defaults = Charamel_bubbles.Textarea.default_styles ~is_dark:true in
+  let state (base : Charamel_bubbles.Textarea.style_state) (custom : Styles.text_input) :
+      Charamel_bubbles.Textarea.style_state =
     {
-      base = base.Charm_bubbles.Textarea.base;
+      base = base.Charamel_bubbles.Textarea.base;
       text = custom.Styles.text;
-      line_number = base.Charm_bubbles.Textarea.line_number;
-      cursor_line_number = base.Charm_bubbles.Textarea.cursor_line_number;
-      cursor_line = base.Charm_bubbles.Textarea.cursor_line;
-      end_of_buffer = base.Charm_bubbles.Textarea.end_of_buffer;
+      line_number = base.Charamel_bubbles.Textarea.line_number;
+      cursor_line_number = base.Charamel_bubbles.Textarea.cursor_line_number;
+      cursor_line = base.Charamel_bubbles.Textarea.cursor_line;
+      end_of_buffer = base.Charamel_bubbles.Textarea.end_of_buffer;
       placeholder = custom.Styles.placeholder;
       prompt = custom.Styles.prompt;
-      selection = base.Charm_bubbles.Textarea.selection;
+      selection = base.Charamel_bubbles.Textarea.selection;
     }
   in
   {
     focused =
-      state defaults.Charm_bubbles.Textarea.focused
+      state defaults.Charamel_bubbles.Textarea.focused
         styles.Styles.focused.Styles.text_input;
     blurred =
-      state defaults.Charm_bubbles.Textarea.blurred
+      state defaults.Charamel_bubbles.Textarea.blurred
         styles.Styles.blurred.Styles.text_input;
-    cursor = defaults.Charm_bubbles.Textarea.cursor;
+    cursor = defaults.Charamel_bubbles.Textarea.cursor;
   }
 
 let render_title_description ctx ~focused ~title ~description ~error =
@@ -98,29 +98,29 @@ let render_title_description ctx ~focused ~title ~description ~error =
   let title =
     if title = "" then ""
     else
-      let rendered = Charm_lipgloss.Style.render style.Styles.title title in
+      let rendered = Charamel_lipgloss.Style.render style.Styles.title title in
       match error with
       | None -> rendered
       | Some _ ->
           rendered
-          ^ Charm_lipgloss.Style.render style.Styles.error_indicator
+          ^ Charamel_lipgloss.Style.render style.Styles.error_indicator
               style.Styles.indicators.Styles.error_indicator
   in
   let description =
     if description = "" then ""
     else
-      Charm_lipgloss.Style.render style.Styles.description
-        (Charm_ansi.Text.wrap ~width:(max 1 ctx.width) description)
+      Charamel_lipgloss.Style.render style.Styles.description
+        (Charamel_ansi.Text.wrap ~width:(max 1 ctx.width) description)
   in
   concat_nonempty [ title; description ]
 
-let raw_matches key (binding : Charm_bubbles.Key_binding.t) =
+let raw_matches key (binding : Charamel_bubbles.Key_binding.t) =
   Stdlib.List.exists
-    (fun candidate -> Charm_tea.Key.matches key candidate)
-    binding.Charm_bubbles.Key_binding.keys
+    (fun candidate -> Charamel_tea.Key.matches key candidate)
+    binding.Charamel_bubbles.Key_binding.keys
 
 let binding_enabled binding enabled =
-  Charm_bubbles.Key_binding.set_enabled enabled binding
+  Charamel_bubbles.Key_binding.set_enabled enabled binding
 
 let navigation_binds ctx ~prev ~next ~submit =
   [
@@ -151,17 +151,17 @@ let noop_string _ = Ok ()
 let noop_bool _ = Ok ()
 let noop_list _ = Ok ()
 
-type input_message = Input_edit of Charm_bubbles.Textinput.msg
+type input_message = Input_edit of Charamel_bubbles.Textinput.msg
 
 type input_state = {
-  textinput : Charm_bubbles.Textinput.t;
+  textinput : Charamel_bubbles.Textinput.t;
   title : string Dyn.t;
   description : string Dyn.t;
   placeholder : string;
   prompt : string;
   suggestions : string list Dyn.t;
   char_limit : int;
-  echo : Charm_bubbles.Textinput.echo;
+  echo : Charamel_bubbles.Textinput.echo;
   validate : string -> (unit, string) result;
   inline : bool;
   err : string option;
@@ -173,7 +173,7 @@ let input_msg_id : input_message Type.Id.t = Type.Id.make ()
 
 let make_input_textinput ~prompt ~placeholder ~suggestions ~char_limit ~echo ~value ~width
     =
-  Charm_bubbles.Textinput.v ~prompt ~placeholder ~echo ~echo_character:"•" ~char_limit
+  Charamel_bubbles.Textinput.v ~prompt ~placeholder ~echo ~echo_character:"•" ~char_limit
     ~width ~show_suggestions:(suggestions <> []) ~suggestions ~value ()
 
 let input_evaluate state results ~width ~styles =
@@ -182,13 +182,13 @@ let input_evaluate state results ~width ~styles =
     let suggestions = Dyn.eval state.suggestions results in
     let textinput =
       state.textinput
-      |> Charm_bubbles.Textinput.set_suggestions suggestions
-      |> Charm_bubbles.Textinput.set_show_suggestions (suggestions <> [])
-      |> Charm_bubbles.Textinput.set_char_limit state.char_limit
-      |> Charm_bubbles.Textinput.set_prompt state.prompt
-      |> Charm_bubbles.Textinput.set_placeholder state.placeholder
-      |> Charm_bubbles.Textinput.set_width (max 1 width)
-      |> Charm_bubbles.Textinput.set_styles (textinput_styles styles)
+      |> Charamel_bubbles.Textinput.set_suggestions suggestions
+      |> Charamel_bubbles.Textinput.set_show_suggestions (suggestions <> [])
+      |> Charamel_bubbles.Textinput.set_char_limit state.char_limit
+      |> Charamel_bubbles.Textinput.set_prompt state.prompt
+      |> Charamel_bubbles.Textinput.set_placeholder state.placeholder
+      |> Charamel_bubbles.Textinput.set_width (max 1 width)
+      |> Charamel_bubbles.Textinput.set_styles (textinput_styles styles)
     in
     { state with textinput; last_version = Results.version results; width }
 
@@ -197,39 +197,39 @@ let input_validate state =
 
 let input_init (ctx : ctx) state =
   let state = input_evaluate state ctx.results ~width:ctx.width ~styles:ctx.styles in
-  (state, Charm_tea.Cmd.none)
+  (state, Charamel_tea.Cmd.none)
 
 let input_reevaluate (ctx : ctx) state =
   input_evaluate state ctx.results ~width:ctx.width ~styles:ctx.styles
 
 let input_edit _ctx message state =
-  let textinput, command = Charm_bubbles.Textinput.update message state.textinput in
-  let command = Charm_tea.Cmd.map (fun child -> Input_edit child) command in
+  let textinput, command = Charamel_bubbles.Textinput.update message state.textinput in
+  let command = Charamel_tea.Cmd.map (fun child -> Input_edit child) command in
   ({ state with textinput; err = None }, command)
 
 let input_on_key ctx key state =
   let state = { state with err = None } in
   let km = ctx.keymap.Keymap.input in
   if raw_matches key km.Keymap.prev && not ctx.position.is_first then
-    (state, Charm_tea.Cmd.none, Prev)
+    (state, Charamel_tea.Cmd.none, Prev)
   else if raw_matches key km.Keymap.next && not ctx.position.is_last then
-    match input_validate state (Charm_bubbles.Textinput.value state.textinput) with
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-    | Ok () -> (state, Charm_tea.Cmd.none, Next)
+    match input_validate state (Charamel_bubbles.Textinput.value state.textinput) with
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Next)
   else if raw_matches key km.Keymap.submit && ctx.position.is_last then
-    match input_validate state (Charm_bubbles.Textinput.value state.textinput) with
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-    | Ok () -> (state, Charm_tea.Cmd.none, Submit)
+    match input_validate state (Charamel_bubbles.Textinput.value state.textinput) with
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Submit)
   else if raw_matches key km.Keymap.accept_suggestion then
     let textinput, command =
-      Charm_bubbles.Textinput.update Charm_bubbles.Textinput.Accept_suggestion
+      Charamel_bubbles.Textinput.update Charamel_bubbles.Textinput.Accept_suggestion
         state.textinput
     in
-    let command = Charm_tea.Cmd.map (fun child -> Input_edit child) command in
+    let command = Charamel_tea.Cmd.map (fun child -> Input_edit child) command in
     ({ state with textinput }, command, Stay)
   else
-    match Charm_bubbles.Textinput.key state.textinput key with
-    | None -> (state, Charm_tea.Cmd.none, Stay)
+    match Charamel_bubbles.Textinput.key state.textinput key with
+    | None -> (state, Charamel_tea.Cmd.none, Stay)
     | Some message ->
         let state, command = input_edit ctx message state in
         (state, command, Stay)
@@ -241,18 +241,18 @@ let input_update _ctx message state =
       (state, command)
 
 let input_paste _ text state =
-  let textinput = Charm_bubbles.Textinput.paste text state.textinput in
+  let textinput = Charamel_bubbles.Textinput.paste text state.textinput in
   { state with textinput; err = None }
 
 let input_focus _ctx state =
-  let textinput, command = Charm_bubbles.Textinput.focus state.textinput in
-  let command = Charm_tea.Cmd.map (fun child -> Input_edit child) command in
+  let textinput, command = Charamel_bubbles.Textinput.focus state.textinput in
+  let command = Charamel_tea.Cmd.map (fun child -> Input_edit child) command in
   ({ state with textinput }, command)
 
 let input_blur _ state =
-  let textinput = Charm_bubbles.Textinput.blur state.textinput in
+  let textinput = Charamel_bubbles.Textinput.blur state.textinput in
   let err =
-    match input_validate state (Charm_bubbles.Textinput.value state.textinput) with
+    match input_validate state (Charamel_bubbles.Textinput.value state.textinput) with
     | Ok () -> None
     | Error error -> Some error
   in
@@ -262,12 +262,12 @@ let input_view ctx ~focused state =
   let title = Dyn.eval state.title ctx.results in
   let description = Dyn.eval state.description ctx.results in
   let text = render_title_description ctx ~focused ~title ~description ~error:state.err in
-  let input = Charm_bubbles.Textinput.view state.textinput in
+  let input = Charamel_bubbles.Textinput.view state.textinput in
   let content =
     if state.inline && title <> "" then String.concat " " [ text; input ]
     else concat_nonempty [ text; input ]
   in
-  Charm_lipgloss.Style.render (field_style ctx focused).Styles.base content
+  Charamel_lipgloss.Style.render (field_style ctx focused).Styles.base content
 
 let input_key_binds ctx _state =
   let km = ctx.keymap.Keymap.input in
@@ -280,14 +280,14 @@ let input_accessible ~name ctx ~out reader state =
   let validate value = input_validate state value in
   let value =
     match state.echo with
-    | Charm_bubbles.Textinput.Password ->
+    | Charamel_bubbles.Textinput.Password ->
         Accessible.prompt_password out reader ~prompt ~validate
-    | Charm_bubbles.Textinput.No_echo | Charm_bubbles.Textinput.Normal ->
+    | Charamel_bubbles.Textinput.No_echo | Charamel_bubbles.Textinput.Normal ->
         Accessible.prompt_string ~out reader ~prompt
-          ~default:(Charm_bubbles.Textinput.value state.textinput)
+          ~default:(Charamel_bubbles.Textinput.value state.textinput)
           ~validate
   in
-  let textinput = Charm_bubbles.Textinput.set_value value state.textinput in
+  let textinput = Charamel_bubbles.Textinput.set_value value state.textinput in
   { state with textinput; err = None }
 
 let input_impl key title description placeholder prompt char_limit suggestions echo inline
@@ -325,13 +325,13 @@ let input_impl key title description placeholder prompt char_limit suggestions e
       update = input_update;
       subscriptions =
         (fun _ state ->
-          Charm_tea.Sub.map
+          Charamel_tea.Sub.map
             (fun message -> Input_edit message)
-            (Charm_bubbles.Textinput.subscriptions state.textinput));
+            (Charamel_bubbles.Textinput.subscriptions state.textinput));
       view = input_view;
       focus = input_focus;
       blur = input_blur;
-      value = (fun state -> Charm_bubbles.Textinput.value state.textinput);
+      value = (fun state -> Charamel_bubbles.Textinput.value state.textinput);
       error = (fun state -> state.err);
       skip = (fun _ _ -> false);
       zoom = (fun _ -> false);
@@ -342,11 +342,11 @@ let input_impl key title description placeholder prompt char_limit suggestions e
   Field (impl, state)
 
 type text_message =
-  | Text_edit of Charm_bubbles.Textarea.msg
+  | Text_edit of Charamel_bubbles.Textarea.msg
   | Editor_done of string * int
 
 type text_state = {
-  textarea : Charm_bubbles.Textarea.t;
+  textarea : Charamel_bubbles.Textarea.t;
   title : string Dyn.t;
   description : string Dyn.t;
   placeholder : string;
@@ -366,7 +366,7 @@ type text_state = {
 let text_msg_id : text_message Type.Id.t = Type.Id.make ()
 
 let make_textarea ~placeholder ~lines ~char_limit ~show_line_numbers ~value ~width =
-  Charm_bubbles.Textarea.v ~prompt:"┃ " ~placeholder ~show_line_numbers ~char_limit
+  Charamel_bubbles.Textarea.v ~prompt:"┃ " ~placeholder ~show_line_numbers ~char_limit
     ~height:(max 1 lines) ~width ~value ()
 
 let text_validate state =
@@ -380,27 +380,27 @@ let text_reevaluate (ctx : ctx) state =
       state with
       textarea =
         state.textarea
-        |> Charm_bubbles.Textarea.set_placeholder state.placeholder
-        |> Charm_bubbles.Textarea.set_char_limit state.char_limit
-        |> Charm_bubbles.Textarea.set_show_line_numbers state.show_line_numbers
-        |> Charm_bubbles.Textarea.set_width (max 1 ctx.width)
-        |> Charm_bubbles.Textarea.set_height (max 1 state.lines)
-        |> Charm_bubbles.Textarea.set_styles (textarea_styles ctx.styles);
+        |> Charamel_bubbles.Textarea.set_placeholder state.placeholder
+        |> Charamel_bubbles.Textarea.set_char_limit state.char_limit
+        |> Charamel_bubbles.Textarea.set_show_line_numbers state.show_line_numbers
+        |> Charamel_bubbles.Textarea.set_width (max 1 ctx.width)
+        |> Charamel_bubbles.Textarea.set_height (max 1 state.lines)
+        |> Charamel_bubbles.Textarea.set_styles (textarea_styles ctx.styles);
       last_version = Results.version ctx.results;
       width = ctx.width;
     }
 
 let text_init ctx state =
   let state = text_reevaluate ctx state in
-  (state, Charm_tea.Cmd.none)
+  (state, Charamel_tea.Cmd.none)
 
 let text_update ctx message state =
   match message with
   | Text_edit child_message ->
       let textarea, command =
-        Charm_bubbles.Textarea.update child_message state.textarea
+        Charamel_bubbles.Textarea.update child_message state.textarea
       in
-      let command = Charm_tea.Cmd.map (fun child -> Text_edit child) command in
+      let command = Charamel_tea.Cmd.map (fun child -> Text_edit child) command in
       ({ state with textarea; err = None }, command)
   | Editor_done (path, code) ->
       let state = { state with editor_path = None } in
@@ -415,14 +415,14 @@ let text_update ctx message state =
         | Some value ->
             {
               state with
-              textarea = Charm_bubbles.Textarea.set_value value state.textarea;
+              textarea = Charamel_bubbles.Textarea.set_value value state.textarea;
             }
         | None when code = 0 -> { state with err = Some "cannot read editor file" }
         | None -> state
       in
       Eio.Cancel.protect (fun () ->
           Eio.Path.unlink ~missing_ok:true Eio.Path.(ctx.env.Env.temp_dir / path));
-      (state, Charm_tea.Cmd.none)
+      (state, Charamel_tea.Cmd.none)
 
 let text_make_editor_file ctx state =
   let rec attempt counter =
@@ -434,7 +434,7 @@ let text_make_editor_file ctx state =
       let path = Eio.Path.(ctx.env.Env.temp_dir / filename) in
       try
         Eio.Path.save ~create:(`Exclusive 0o600) path
-          (Charm_bubbles.Textarea.value state.textarea);
+          (Charamel_bubbles.Textarea.value state.textarea);
         Ok (filename, counter + 1)
       with
       | Eio.Io (Eio.Fs.E (Eio.Fs.Already_exists _), _) -> attempt (counter + 1)
@@ -446,27 +446,27 @@ let text_on_key ctx key state =
   let state = { state with err = None } in
   let km = ctx.keymap.Keymap.text in
   if raw_matches key km.Keymap.prev && not ctx.position.is_first then
-    (state, Charm_tea.Cmd.none, Prev)
+    (state, Charamel_tea.Cmd.none, Prev)
   else if raw_matches key km.Keymap.next && not ctx.position.is_last then
-    match text_validate state (Charm_bubbles.Textarea.value state.textarea) with
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-    | Ok () -> (state, Charm_tea.Cmd.none, Next)
+    match text_validate state (Charamel_bubbles.Textarea.value state.textarea) with
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Next)
   else if raw_matches key km.Keymap.submit && ctx.position.is_last then
-    match text_validate state (Charm_bubbles.Textarea.value state.textarea) with
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-    | Ok () -> (state, Charm_tea.Cmd.none, Submit)
+    match text_validate state (Charamel_bubbles.Textarea.value state.textarea) with
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Submit)
   else if raw_matches key km.Keymap.new_line then
-    let textarea = Charm_bubbles.Textarea.insert_string "\n" state.textarea in
-    ({ state with textarea }, Charm_tea.Cmd.none, Stay)
+    let textarea = Charamel_bubbles.Textarea.insert_string "\n" state.textarea in
+    ({ state with textarea }, Charamel_tea.Cmd.none, Stay)
   else if
     raw_matches key km.Keymap.editor
     && state.editor && state.editor_path = None && ctx.env.Env.editor <> []
   then
     match text_make_editor_file ctx state with
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
     | Ok (path, counter) ->
         let command =
-          Charm_tea.Cmd.exec
+          Charamel_tea.Cmd.exec
             ~argv:
               (ctx.env.Env.editor
               @ [ Eio.Path.native_exn Eio.Path.(ctx.env.Env.temp_dir / path) ])
@@ -474,27 +474,31 @@ let text_on_key ctx key state =
         in
         ({ state with counter; editor_path = Some path }, command, Stay)
   else
-    match Charm_bubbles.Textarea.key state.textarea key with
-    | None -> (state, Charm_tea.Cmd.none, Stay)
+    match Charamel_bubbles.Textarea.key state.textarea key with
+    | None -> (state, Charamel_tea.Cmd.none, Stay)
     | Some child_message ->
         let textarea, command =
-          Charm_bubbles.Textarea.update child_message state.textarea
+          Charamel_bubbles.Textarea.update child_message state.textarea
         in
-        let command = Charm_tea.Cmd.map (fun child -> Text_edit child) command in
+        let command = Charamel_tea.Cmd.map (fun child -> Text_edit child) command in
         ({ state with textarea }, command, Stay)
 
 let text_paste _ text state =
-  { state with textarea = Charm_bubbles.Textarea.paste text state.textarea; err = None }
+  {
+    state with
+    textarea = Charamel_bubbles.Textarea.paste text state.textarea;
+    err = None;
+  }
 
 let text_focus _ctx state =
-  let textarea, command = Charm_bubbles.Textarea.focus state.textarea in
-  let command = Charm_tea.Cmd.map (fun child -> Text_edit child) command in
+  let textarea, command = Charamel_bubbles.Textarea.focus state.textarea in
+  let command = Charamel_tea.Cmd.map (fun child -> Text_edit child) command in
   ({ state with textarea }, command)
 
 let text_blur _ state =
-  let textarea = Charm_bubbles.Textarea.blur state.textarea in
+  let textarea = Charamel_bubbles.Textarea.blur state.textarea in
   let err =
-    match text_validate state (Charm_bubbles.Textarea.value state.textarea) with
+    match text_validate state (Charamel_bubbles.Textarea.value state.textarea) with
     | Ok () -> None
     | Error error -> Some error
   in
@@ -509,16 +513,16 @@ let text_view ctx ~focused state =
   let style = field_style ctx focused in
   let body =
     match state.editor_path with
-    | None -> concat_nonempty [ heading; Charm_bubbles.Textarea.view state.textarea ]
+    | None -> concat_nonempty [ heading; Charamel_bubbles.Textarea.view state.textarea ]
     | Some path ->
         concat_nonempty
           [
             heading;
-            Charm_bubbles.Textarea.view state.textarea;
-            Charm_lipgloss.Style.render style.Styles.next (Fmt.str "editing: %s" path);
+            Charamel_bubbles.Textarea.view state.textarea;
+            Charamel_lipgloss.Style.render style.Styles.next (Fmt.str "editing: %s" path);
           ]
   in
-  Charm_lipgloss.Style.render style.Styles.base body
+  Charamel_lipgloss.Style.render style.Styles.base body
 
 let text_key_binds ctx _state =
   let km = ctx.keymap.Keymap.text in
@@ -530,12 +534,12 @@ let text_accessible ~name ctx ~out reader state =
   let prompt = (if title = "" then field_label name else title) ^ " " in
   let value =
     Accessible.prompt_string ~out reader ~prompt
-      ~default:(Charm_bubbles.Textarea.value state.textarea)
+      ~default:(Charamel_bubbles.Textarea.value state.textarea)
       ~validate:(text_validate state)
   in
   {
     state with
-    textarea = Charm_bubbles.Textarea.set_value value state.textarea;
+    textarea = Charamel_bubbles.Textarea.set_value value state.textarea;
     err = None;
   }
 
@@ -576,13 +580,13 @@ let text_impl key title description placeholder lines char_limit show_line_numbe
       update = text_update;
       subscriptions =
         (fun _ state ->
-          Charm_tea.Sub.map
+          Charamel_tea.Sub.map
             (fun message -> Text_edit message)
-            (Charm_bubbles.Textarea.subscriptions state.textarea));
+            (Charamel_bubbles.Textarea.subscriptions state.textarea));
       view = text_view;
       focus = text_focus;
       blur = text_blur;
-      value = (fun state -> Charm_bubbles.Textarea.value state.textarea);
+      value = (fun state -> Charamel_bubbles.Textarea.value state.textarea);
       error = (fun state -> state.err);
       skip = (fun _ _ -> false);
       zoom = (fun _ -> false);
@@ -593,10 +597,10 @@ let text_impl key title description placeholder lines char_limit show_line_numbe
   Field (impl, state)
 
 type 'a option_ = { key : string; value : 'a }
-type select_message = Select_filter of Charm_bubbles.Textinput.msg
+type select_message = Select_filter of Charamel_bubbles.Textinput.msg
 
 type 'a select_state = {
-  filter_input : Charm_bubbles.Textinput.t;
+  filter_input : Charamel_bubbles.Textinput.t;
   title : string Dyn.t;
   description : string Dyn.t;
   options : 'a option_ list Dyn.t;
@@ -621,7 +625,7 @@ let check_unique_options options =
     | [] -> ()
     | option_ :: rest ->
         if Stdlib.List.mem option_.key seen then
-          invalid_arg (Fmt.str "Charm_huh.Field: duplicate option key %S" option_.key)
+          invalid_arg (Fmt.str "Charamel_huh.Field: duplicate option key %S" option_.key)
         else loop (option_.key :: seen) rest
   in
   loop [] options
@@ -658,7 +662,9 @@ let clamp_cursor cursor options =
 
 let select_recompute ?(apply_default = true) state all old_key =
   check_unique_options all;
-  let filtered = filter_options (Charm_bubbles.Textinput.value state.filter_input) all in
+  let filtered =
+    filter_options (Charamel_bubbles.Textinput.value state.filter_input) all
+  in
   let cursor =
     match old_key with
     | Some key -> (
@@ -682,7 +688,7 @@ let select_reevaluate (ctx : ctx) state =
     {
       state with
       filter_input =
-        Charm_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input;
+        Charamel_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input;
       width = ctx.width;
       last_version = Results.version ctx.results;
     }
@@ -692,7 +698,7 @@ let select_init (ctx : ctx) state =
   check_unique_options all;
   let state = select_recompute state all None in
   let filter_input =
-    Charm_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input
+    Charamel_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input
   in
   ( {
       state with
@@ -700,7 +706,7 @@ let select_init (ctx : ctx) state =
       width = ctx.width;
       last_version = Results.version ctx.results;
     },
-    Charm_tea.Cmd.none )
+    Charamel_tea.Cmd.none )
 
 let select_move_by delta state =
   let length = Stdlib.List.length state.filtered in
@@ -709,17 +715,19 @@ let select_move_by delta state =
 
 let select_set_filtering state filtering =
   let filter_input =
-    if filtering then Charm_bubbles.Textinput.focus state.filter_input |> fst
-    else Charm_bubbles.Textinput.blur state.filter_input
+    if filtering then Charamel_bubbles.Textinput.focus state.filter_input |> fst
+    else Charamel_bubbles.Textinput.blur state.filter_input
   in
   { state with filtering; filter_input }
 
 let select_child_update ctx child state =
-  let filter_input, command = Charm_bubbles.Textinput.update child state.filter_input in
+  let filter_input, command =
+    Charamel_bubbles.Textinput.update child state.filter_input
+  in
   let all = Dyn.eval state.options ctx.results in
   let state = { state with filter_input; err = None } in
   let state = select_recompute ~apply_default:false state all None in
-  (state, Charm_tea.Cmd.map (fun child -> Select_filter child) command)
+  (state, Charamel_tea.Cmd.map (fun child -> Select_filter child) command)
 
 let select_validate_current state =
   match List.nth_opt state.filtered state.cursor with
@@ -735,82 +743,82 @@ let select_on_key ctx key state =
   if state.filtering then
     if
       raw_matches key km.Keymap.set_filter
-      || Charm_tea.Key.matches key (Charm_tea.Key.v Charm_tea.Key.Escape)
+      || Charamel_tea.Key.matches key (Charamel_tea.Key.v Charamel_tea.Key.Escape)
     then
       let state =
         if state.filtered = [] then
-          let filter_input = Charm_bubbles.Textinput.set_value "" state.filter_input in
+          let filter_input = Charamel_bubbles.Textinput.set_value "" state.filter_input in
           let all = Dyn.eval state.options ctx.results in
           select_recompute ~apply_default:false { state with filter_input } all None
         else state
       in
-      ({ state with filtering = false }, Charm_tea.Cmd.none, Stay)
+      ({ state with filtering = false }, Charamel_tea.Cmd.none, Stay)
     else if raw_matches key km.Keymap.up then
-      (select_move_by (-1) state, Charm_tea.Cmd.none, Stay)
+      (select_move_by (-1) state, Charamel_tea.Cmd.none, Stay)
     else if raw_matches key km.Keymap.down then
-      (select_move_by 1 state, Charm_tea.Cmd.none, Stay)
+      (select_move_by 1 state, Charamel_tea.Cmd.none, Stay)
     else if raw_matches key km.Keymap.goto_top then
-      ({ state with cursor = 0 }, Charm_tea.Cmd.none, Stay)
+      ({ state with cursor = 0 }, Charamel_tea.Cmd.none, Stay)
     else if raw_matches key km.Keymap.goto_bottom then
       ( { state with cursor = max 0 (Stdlib.List.length state.filtered - 1) },
-        Charm_tea.Cmd.none,
+        Charamel_tea.Cmd.none,
         Stay )
     else
-      match Charm_bubbles.Textinput.key state.filter_input key with
-      | None -> (state, Charm_tea.Cmd.none, Stay)
+      match Charamel_bubbles.Textinput.key state.filter_input key with
+      | None -> (state, Charamel_tea.Cmd.none, Stay)
       | Some child ->
           let state, command = select_child_update ctx child state in
           (state, command, Stay)
   else if state.filterable && raw_matches key km.Keymap.filter then
     let state = select_set_filtering state true in
-    (state, Charm_tea.Cmd.none, Stay)
+    (state, Charamel_tea.Cmd.none, Stay)
   else if
     raw_matches key km.Keymap.clear_filter
-    && Charm_bubbles.Textinput.value state.filter_input <> ""
+    && Charamel_bubbles.Textinput.value state.filter_input <> ""
   then
-    let filter_input = Charm_bubbles.Textinput.set_value "" state.filter_input in
+    let filter_input = Charamel_bubbles.Textinput.set_value "" state.filter_input in
     let all = Dyn.eval state.options ctx.results in
     let state =
       select_recompute ~apply_default:false { state with filter_input } all None
     in
-    (state, Charm_tea.Cmd.none, Stay)
+    (state, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.prev && not ctx.position.is_first then
-    (state, Charm_tea.Cmd.none, Prev)
+    (state, Charamel_tea.Cmd.none, Prev)
   else if raw_matches key km.Keymap.next && not ctx.position.is_last then
     match select_validate_current state with
-    | Ok () -> (state, Charm_tea.Cmd.none, Next)
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Next)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.submit && ctx.position.is_last then
     match select_validate_current state with
-    | Ok () -> (state, Charm_tea.Cmd.none, Submit)
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Submit)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
   else if state.inline && (raw_matches key km.Keymap.up || raw_matches key km.Keymap.down)
-  then (state, Charm_tea.Cmd.none, Stay)
+  then (state, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.up then
-    (select_move_by (-1) state, Charm_tea.Cmd.none, Stay)
+    (select_move_by (-1) state, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.down then
-    (select_move_by 1 state, Charm_tea.Cmd.none, Stay)
+    (select_move_by 1 state, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.left || raw_matches key km.Keymap.right then
     ( select_move_by (if raw_matches key km.Keymap.left then -1 else 1) state,
-      Charm_tea.Cmd.none,
+      Charamel_tea.Cmd.none,
       Stay )
   else if raw_matches key km.Keymap.half_page_up then
-    (select_move_by (-max 1 (state.height / 2)) state, Charm_tea.Cmd.none, Stay)
+    (select_move_by (-max 1 (state.height / 2)) state, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.half_page_down then
-    (select_move_by (max 1 (state.height / 2)) state, Charm_tea.Cmd.none, Stay)
+    (select_move_by (max 1 (state.height / 2)) state, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.goto_top then
-    ({ state with cursor = 0 }, Charm_tea.Cmd.none, Stay)
+    ({ state with cursor = 0 }, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.goto_bottom then
     ( { state with cursor = max 0 (Stdlib.List.length state.filtered - 1) },
-      Charm_tea.Cmd.none,
+      Charamel_tea.Cmd.none,
       Stay )
-  else (state, Charm_tea.Cmd.none, Stay)
+  else (state, Charamel_tea.Cmd.none, Stay)
 
 let select_update ctx message state =
   match message with Select_filter child -> select_child_update ctx child state
 
 let select_paste _ _ state = state
-let select_focus _ state = (state, Charm_tea.Cmd.none)
+let select_focus _ state = (state, Charamel_tea.Cmd.none)
 
 let select_blur _ state =
   match select_validate_current state with
@@ -852,11 +860,12 @@ let select_view ctx ~focused state =
         let row_style =
           if selected then style.Styles.selected_option else style.Styles.option_
         in
-        Charm_lipgloss.Style.render style.Styles.select_selector selector
-        ^ Charm_lipgloss.Style.render row_style option_.key)
+        Charamel_lipgloss.Style.render style.Styles.select_selector selector
+        ^ Charamel_lipgloss.Style.render row_style option_.key)
   in
   let rows =
-    if state.filtering then Charm_bubbles.Textinput.view state.filter_input :: option_rows
+    if state.filtering then
+      Charamel_bubbles.Textinput.view state.filter_input :: option_rows
     else option_rows
   in
   let rows =
@@ -867,14 +876,14 @@ let select_view ctx ~focused state =
   let content = String.concat "\n" rows in
   let content =
     if state.inline then
-      Charm_lipgloss.Style.render style.Styles.prev_indicator
+      Charamel_lipgloss.Style.render style.Styles.prev_indicator
         style.Styles.indicators.Styles.prev_indicator
       ^ content
-      ^ Charm_lipgloss.Style.render style.Styles.next_indicator
+      ^ Charamel_lipgloss.Style.render style.Styles.next_indicator
           style.Styles.indicators.Styles.next_indicator
     else content
   in
-  Charm_lipgloss.Style.render style.Styles.base (concat_nonempty [ heading; content ])
+  Charamel_lipgloss.Style.render style.Styles.base (concat_nonempty [ heading; content ])
 
 let select_key_binds ctx state =
   let km = ctx.keymap.Keymap.select in
@@ -900,7 +909,7 @@ let select_key_binds ctx state =
         km.Keymap.right;
         km.Keymap.filter;
         binding_enabled km.Keymap.clear_filter
-          (Charm_bubbles.Textinput.value state.filter_input <> "");
+          (Charamel_bubbles.Textinput.value state.filter_input <> "");
         km.Keymap.half_page_up;
         km.Keymap.half_page_down;
         km.Keymap.goto_top;
@@ -940,12 +949,12 @@ let select_accessible ~name ctx ~out reader state =
       loop state
 
 let select_subscriptions _ state =
-  Charm_tea.Sub.map
+  Charamel_tea.Sub.map
     (fun message -> Select_filter message)
-    (Charm_bubbles.Textinput.subscriptions state.filter_input)
+    (Charamel_bubbles.Textinput.subscriptions state.filter_input)
 
 let select_impl key title description height inline filterable default validate options =
-  let filter_input = Charm_bubbles.Textinput.v ~prompt:"/ " ~width:80 () in
+  let filter_input = Charamel_bubbles.Textinput.v ~prompt:"/ " ~width:80 () in
   let state =
     {
       filter_input;
@@ -990,10 +999,10 @@ let select_impl key title description height inline filterable default validate 
   in
   Field (impl, state)
 
-type multi_message = Multi_filter of Charm_bubbles.Textinput.msg
+type multi_message = Multi_filter of Charamel_bubbles.Textinput.msg
 
 type 'a multi_state = {
-  filter_input : Charm_bubbles.Textinput.t;
+  filter_input : Charamel_bubbles.Textinput.t;
   title : string Dyn.t;
   description : string Dyn.t;
   options : 'a option_ list Dyn.t;
@@ -1046,7 +1055,9 @@ let multi_recompute state all old_key =
         | None -> Stdlib.List.mem option_.key state.default)
       all
   in
-  let filtered = filter_options (Charm_bubbles.Textinput.value state.filter_input) all in
+  let filtered =
+    filter_options (Charamel_bubbles.Textinput.value state.filter_input) all
+  in
   let cursor =
     match old_key with
     | Some key -> (
@@ -1065,7 +1076,7 @@ let multi_reevaluate (ctx : ctx) state =
     {
       state with
       filter_input =
-        Charm_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input;
+        Charamel_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input;
       width = ctx.width;
       last_version = Results.version ctx.results;
     }
@@ -1074,7 +1085,7 @@ let multi_init (ctx : ctx) state =
   let all = Dyn.eval state.options ctx.results in
   let state = multi_recompute state all None in
   let filter_input =
-    Charm_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input
+    Charamel_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input
   in
   ( {
       state with
@@ -1082,7 +1093,7 @@ let multi_init (ctx : ctx) state =
       width = ctx.width;
       last_version = Results.version ctx.results;
     },
-    Charm_tea.Cmd.none )
+    Charamel_tea.Cmd.none )
 
 let multi_selected_at index state =
   match List.nth_opt state.filtered index with
@@ -1134,11 +1145,13 @@ let multi_validate state =
   state.validate values
 
 let multi_filter_update ctx child state =
-  let filter_input, command = Charm_bubbles.Textinput.update child state.filter_input in
+  let filter_input, command =
+    Charamel_bubbles.Textinput.update child state.filter_input
+  in
   let all = Dyn.eval state.options ctx.results in
   let state = { state with filter_input; err = None } in
   ( multi_recompute state all None,
-    Charm_tea.Cmd.map (fun child -> Multi_filter child) command )
+    Charamel_tea.Cmd.map (fun child -> Multi_filter child) command )
 
 let multi_on_key ctx key state =
   let state = { state with err = None } in
@@ -1147,37 +1160,37 @@ let multi_on_key ctx key state =
     if raw_matches key km.Keymap.set_filter then
       let state =
         if state.filtered = [] then
-          let filter_input = Charm_bubbles.Textinput.set_value "" state.filter_input in
+          let filter_input = Charamel_bubbles.Textinput.set_value "" state.filter_input in
           let all = Dyn.eval state.options ctx.results in
           multi_recompute { state with filter_input } all None
         else state
       in
-      ({ state with filtering = false }, Charm_tea.Cmd.none, Stay)
+      ({ state with filtering = false }, Charamel_tea.Cmd.none, Stay)
     else if raw_matches key km.Keymap.up then
-      (multi_move_by (-1) state, Charm_tea.Cmd.none, Stay)
+      (multi_move_by (-1) state, Charamel_tea.Cmd.none, Stay)
     else if raw_matches key km.Keymap.down then
-      (multi_move_by 1 state, Charm_tea.Cmd.none, Stay)
+      (multi_move_by 1 state, Charamel_tea.Cmd.none, Stay)
     else
-      match Charm_bubbles.Textinput.key state.filter_input key with
-      | None -> (state, Charm_tea.Cmd.none, Stay)
+      match Charamel_bubbles.Textinput.key state.filter_input key with
+      | None -> (state, Charamel_tea.Cmd.none, Stay)
       | Some child ->
           let state, command = multi_filter_update ctx child state in
           (state, command, Stay)
   else if state.filterable && raw_matches key km.Keymap.filter then
-    let filter_input = Charm_bubbles.Textinput.focus state.filter_input |> fst in
-    ({ state with filtering = true; filter_input }, Charm_tea.Cmd.none, Stay)
+    let filter_input = Charamel_bubbles.Textinput.focus state.filter_input |> fst in
+    ({ state with filtering = true; filter_input }, Charamel_tea.Cmd.none, Stay)
   else if
     raw_matches key km.Keymap.clear_filter
-    && Charm_bubbles.Textinput.value state.filter_input <> ""
+    && Charamel_bubbles.Textinput.value state.filter_input <> ""
   then
-    let filter_input = Charm_bubbles.Textinput.set_value "" state.filter_input in
+    let filter_input = Charamel_bubbles.Textinput.set_value "" state.filter_input in
     let all = Dyn.eval state.options ctx.results in
-    (multi_recompute { state with filter_input } all None, Charm_tea.Cmd.none, Stay)
+    (multi_recompute { state with filter_input } all None, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.toggle then
     let state = multi_toggle_current state in
     match multi_validate state with
-    | Ok () -> (state, Charm_tea.Cmd.none, Stay)
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Stay)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.select_all && state.limit = 0 then
     let all_selected = multi_all_filtered_selected state in
     let selected =
@@ -1193,8 +1206,8 @@ let multi_on_key ctx key state =
     in
     let state = { state with selected } in
     match multi_validate state with
-    | Ok () -> (state, Charm_tea.Cmd.none, Stay)
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Stay)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.select_none && state.limit = 0 then
     let selected =
       Stdlib.List.map
@@ -1209,39 +1222,39 @@ let multi_on_key ctx key state =
     in
     let state = { state with selected } in
     match multi_validate state with
-    | Ok () -> (state, Charm_tea.Cmd.none, Stay)
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Stay)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.prev && not ctx.position.is_first then
-    (state, Charm_tea.Cmd.none, Prev)
+    (state, Charamel_tea.Cmd.none, Prev)
   else if raw_matches key km.Keymap.next && not ctx.position.is_last then
     match multi_validate state with
-    | Ok () -> (state, Charm_tea.Cmd.none, Next)
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Next)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.submit && ctx.position.is_last then
     match multi_validate state with
-    | Ok () -> (state, Charm_tea.Cmd.none, Submit)
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Submit)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.up then
-    (multi_move_by (-1) state, Charm_tea.Cmd.none, Stay)
+    (multi_move_by (-1) state, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.down then
-    (multi_move_by 1 state, Charm_tea.Cmd.none, Stay)
+    (multi_move_by 1 state, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.half_page_up then
-    (multi_move_by (-max 1 (state.height / 2)) state, Charm_tea.Cmd.none, Stay)
+    (multi_move_by (-max 1 (state.height / 2)) state, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.half_page_down then
-    (multi_move_by (max 1 (state.height / 2)) state, Charm_tea.Cmd.none, Stay)
+    (multi_move_by (max 1 (state.height / 2)) state, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.goto_top then
-    ({ state with cursor = 0 }, Charm_tea.Cmd.none, Stay)
+    ({ state with cursor = 0 }, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.goto_bottom then
     ( { state with cursor = max 0 (List.length state.filtered - 1) },
-      Charm_tea.Cmd.none,
+      Charamel_tea.Cmd.none,
       Stay )
-  else (state, Charm_tea.Cmd.none, Stay)
+  else (state, Charamel_tea.Cmd.none, Stay)
 
 let multi_update ctx message state =
   match message with Multi_filter child -> multi_filter_update ctx child state
 
 let multi_paste _ _ state = state
-let multi_focus _ state = (state, Charm_tea.Cmd.none)
+let multi_focus _ state = (state, Charamel_tea.Cmd.none)
 
 let multi_blur _ state =
   match multi_validate state with
@@ -1283,12 +1296,13 @@ let multi_view ctx ~focused state =
           if selected then style.Styles.selected_option
           else style.Styles.unselected_option
         in
-        Charm_lipgloss.Style.render style.Styles.multi_select_selector selector
-        ^ Charm_lipgloss.Style.render prefix_style prefix
-        ^ Charm_lipgloss.Style.render option_style option_.key)
+        Charamel_lipgloss.Style.render style.Styles.multi_select_selector selector
+        ^ Charamel_lipgloss.Style.render prefix_style prefix
+        ^ Charamel_lipgloss.Style.render option_style option_.key)
   in
   let rows =
-    if state.filtering then Charm_bubbles.Textinput.view state.filter_input :: option_rows
+    if state.filtering then
+      Charamel_bubbles.Textinput.view state.filter_input :: option_rows
     else option_rows
   in
   let rows =
@@ -1296,7 +1310,7 @@ let multi_view ctx ~focused state =
     else rows @ List.init (max 0 (state.height - List.length rows)) (fun _ -> "")
   in
   let rows = if rows = [] && not state.filtering then [ "" ] else rows in
-  Charm_lipgloss.Style.render style.Styles.base
+  Charamel_lipgloss.Style.render style.Styles.base
     (concat_nonempty [ heading; String.concat "\n" rows ])
 
 let multi_key_binds ctx state =
@@ -1311,7 +1325,7 @@ let multi_key_binds ctx state =
       km.Keymap.filter;
       binding_enabled km.Keymap.set_filter state.filtering;
       binding_enabled km.Keymap.clear_filter
-        (Charm_bubbles.Textinput.value state.filter_input <> "");
+        (Charamel_bubbles.Textinput.value state.filter_input <> "");
       km.Keymap.half_page_up;
       km.Keymap.half_page_down;
       km.Keymap.goto_top;
@@ -1388,12 +1402,12 @@ let multi_accessible ~name ctx ~out reader state =
     loop state
 
 let multi_subscriptions _ state =
-  Charm_tea.Sub.map
+  Charamel_tea.Sub.map
     (fun message -> Multi_filter message)
-    (Charm_bubbles.Textinput.subscriptions state.filter_input)
+    (Charamel_bubbles.Textinput.subscriptions state.filter_input)
 
 let multi_impl key title description height limit filterable default validate options =
-  let filter_input = Charm_bubbles.Textinput.v ~prompt:"/ " ~width:80 () in
+  let filter_input = Charamel_bubbles.Textinput.v ~prompt:"/ " ~width:80 () in
   let state =
     {
       filter_input;
@@ -1463,34 +1477,34 @@ let confirm_on_key ctx key state =
   let finish value =
     let outcome = if ctx.position.is_last then Submit else Next in
     match confirm_validate state value with
-    | Ok () -> ({ state with value }, Charm_tea.Cmd.none, outcome)
-    | Error error -> ({ state with value; err = Some error }, Charm_tea.Cmd.none, Stay)
+    | Ok () -> ({ state with value }, Charamel_tea.Cmd.none, outcome)
+    | Error error -> ({ state with value; err = Some error }, Charamel_tea.Cmd.none, Stay)
   in
   if raw_matches key km.Keymap.prev && not ctx.position.is_first then
-    (state, Charm_tea.Cmd.none, Prev)
+    (state, Charamel_tea.Cmd.none, Prev)
   else if raw_matches key km.Keymap.accept then finish true
   else if raw_matches key km.Keymap.reject && state.negative <> None then finish false
   else if raw_matches key km.Keymap.toggle && state.negative <> None then
-    ({ state with value = not state.value }, Charm_tea.Cmd.none, Stay)
+    ({ state with value = not state.value }, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.next && not ctx.position.is_last then
     match confirm_validate state state.value with
-    | Ok () -> (state, Charm_tea.Cmd.none, Next)
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Next)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.submit && ctx.position.is_last then
     match confirm_validate state state.value with
-    | Ok () -> (state, Charm_tea.Cmd.none, Submit)
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-  else (state, Charm_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Submit)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
+  else (state, Charamel_tea.Cmd.none, Stay)
 
-let confirm_update _ (_ : confirm_message) state = (state, Charm_tea.Cmd.none)
+let confirm_update _ (_ : confirm_message) state = (state, Charamel_tea.Cmd.none)
 
 let confirm_reevaluate ctx state =
   if state.last_version = Results.version ctx.results then state
   else { state with last_version = Results.version ctx.results }
 
-let confirm_init ctx state = (confirm_reevaluate ctx state, Charm_tea.Cmd.none)
+let confirm_init ctx state = (confirm_reevaluate ctx state, Charamel_tea.Cmd.none)
 let confirm_paste _ _ state = state
-let confirm_focus _ state = (state, Charm_tea.Cmd.none)
+let confirm_focus _ state = (state, Charamel_tea.Cmd.none)
 
 let confirm_blur _ state =
   match confirm_validate state state.value with
@@ -1505,7 +1519,7 @@ let confirm_view ctx ~focused state =
     render_title_description ctx ~focused ~title ~description ~error:state.err
   in
   let button label active =
-    Charm_lipgloss.Style.render
+    Charamel_lipgloss.Style.render
       (if active then style.Styles.focused_button else style.Styles.blurred_button)
       label
   in
@@ -1513,19 +1527,19 @@ let confirm_view ctx ~focused state =
     match state.negative with
     | None -> button state.affirmative state.value
     | Some negative ->
-        Charm_lipgloss.Layout.join_horizontal ~pos:Charm_lipgloss.Position.center
+        Charamel_lipgloss.Layout.join_horizontal ~pos:Charamel_lipgloss.Position.center
           [ button state.affirmative state.value; button negative (not state.value) ]
   in
   let buttons =
-    Charm_lipgloss.Layout.place_horizontal ~pos:Charm_lipgloss.Position.center
-      ~width:(max (Charm_ansi.Text.width heading) (Charm_ansi.Text.width buttons))
+    Charamel_lipgloss.Layout.place_horizontal ~pos:Charamel_lipgloss.Position.center
+      ~width:(max (Charamel_ansi.Text.width heading) (Charamel_ansi.Text.width buttons))
       buttons
   in
   let content =
     if state.inline then concat_nonempty [ heading ^ " " ^ buttons ]
     else concat_nonempty [ heading; buttons ]
   in
-  Charm_lipgloss.Style.render style.Styles.base content
+  Charamel_lipgloss.Style.render style.Styles.base content
 
 let confirm_key_binds ctx state =
   let km = ctx.keymap.Keymap.confirm in
@@ -1577,7 +1591,7 @@ let confirm_impl key title description affirmative negative inline default valid
       on_key = confirm_on_key;
       on_paste = confirm_paste;
       update = confirm_update;
-      subscriptions = (fun _ _ -> Charm_tea.Sub.none);
+      subscriptions = (fun _ _ -> Charamel_tea.Sub.none);
       view = confirm_view;
       focus = confirm_focus;
       blur = confirm_blur;
@@ -1623,16 +1637,16 @@ let mini_markdown text =
             let rendered =
               match delimiter with
               | '_' ->
-                  Charm_lipgloss.Style.render
-                    (Charm_lipgloss.Style.italic true Charm_lipgloss.Style.empty)
+                  Charamel_lipgloss.Style.render
+                    (Charamel_lipgloss.Style.italic true Charamel_lipgloss.Style.empty)
                     inner
               | '*' ->
-                  Charm_lipgloss.Style.render
-                    (Charm_lipgloss.Style.bold true Charm_lipgloss.Style.empty)
+                  Charamel_lipgloss.Style.render
+                    (Charamel_lipgloss.Style.bold true Charamel_lipgloss.Style.empty)
                     inner
               | '`' ->
-                  Charm_lipgloss.Style.render
-                    (Charm_lipgloss.Style.reverse true Charm_lipgloss.Style.empty)
+                  Charamel_lipgloss.Style.render
+                    (Charamel_lipgloss.Style.reverse true Charamel_lipgloss.Style.empty)
                     inner
               | _ -> inner
             in
@@ -1645,19 +1659,19 @@ let mini_markdown text =
   parse 0;
   Buffer.contents buffer
 
-let note_init _ state = (state, Charm_tea.Cmd.none)
+let note_init _ state = (state, Charamel_tea.Cmd.none)
 let note_reevaluate _ state = state
 
 let note_on_key ctx key state =
   let km = ctx.keymap.Keymap.note in
   if raw_matches key km.Keymap.prev && not ctx.position.is_first then
-    (state, Charm_tea.Cmd.none, Prev)
-  else if ctx.position.is_last then (state, Charm_tea.Cmd.none, Submit)
-  else (state, Charm_tea.Cmd.none, Next)
+    (state, Charamel_tea.Cmd.none, Prev)
+  else if ctx.position.is_last then (state, Charamel_tea.Cmd.none, Submit)
+  else (state, Charamel_tea.Cmd.none, Next)
 
-let note_update _ (_ : note_message) state = (state, Charm_tea.Cmd.none)
+let note_update _ (_ : note_message) state = (state, Charamel_tea.Cmd.none)
 let note_paste _ _ state = state
-let note_focus _ state = (state, Charm_tea.Cmd.none)
+let note_focus _ state = (state, Charamel_tea.Cmd.none)
 let note_blur _ state = state
 
 let note_view ctx ~focused state =
@@ -1666,18 +1680,18 @@ let note_view ctx ~focused state =
   let description = Dyn.eval state.description ctx.results |> mini_markdown in
   let card =
     concat_nonempty
-      [ Charm_lipgloss.Style.render style.Styles.note_title title; description ]
+      [ Charamel_lipgloss.Style.render style.Styles.note_title title; description ]
   in
   let card =
     match state.next with
     | None -> card
-    | Some label -> card ^ "\n" ^ Charm_lipgloss.Style.render style.Styles.next label
+    | Some label -> card ^ "\n" ^ Charamel_lipgloss.Style.render style.Styles.next label
   in
   let card_lines = String.split_on_char '\n' card in
   let padded =
     card_lines @ List.init (max 0 (state.height - List.length card_lines)) (fun _ -> "")
   in
-  Charm_lipgloss.Style.render style.Styles.card (String.concat "\n" padded)
+  Charamel_lipgloss.Style.render style.Styles.card (String.concat "\n" padded)
 
 let note_key_binds ctx _state =
   let km = ctx.keymap.Keymap.note in
@@ -1702,7 +1716,7 @@ let note_impl title description height next =
       on_key = note_on_key;
       on_paste = note_paste;
       update = note_update;
-      subscriptions = (fun _ _ -> Charm_tea.Sub.none);
+      subscriptions = (fun _ _ -> Charamel_tea.Sub.none);
       view = note_view;
       focus = note_focus;
       blur = note_blur;
@@ -1716,7 +1730,7 @@ let note_impl title description height next =
   in
   Field (impl, state)
 
-type file_message = File_picker of Charm_bubbles.Filepicker.msg
+type file_message = File_picker of Charamel_bubbles.Filepicker.msg
 
 type file_state = {
   title : string Dyn.t;
@@ -1730,7 +1744,7 @@ type file_state = {
   dirs : bool;
   height : int;
   validate : string -> (unit, string) result;
-  picker : Charm_bubbles.Filepicker.t option;
+  picker : Charamel_bubbles.Filepicker.t option;
   picking : bool;
   selected : string;
   err : string option;
@@ -1739,21 +1753,21 @@ type file_state = {
 let file_msg_id : file_message Type.Id.t = Type.Id.make ()
 
 let make_picker ctx state =
-  Charm_bubbles.Filepicker.v ~fs:ctx.env.Env.fs ~current_directory:state.dir
+  Charamel_bubbles.Filepicker.v ~fs:ctx.env.Env.fs ~current_directory:state.dir
     ~allowed_types:state.allowed ~show_permissions:state.show_permissions
     ~show_size:state.show_size ~show_hidden:state.show_hidden ~dir_allowed:state.dirs
     ~file_allowed:state.files ~height:(max 1 state.height) ()
 
 let file_init ctx state =
   let picker = make_picker ctx state in
-  let picker, command = Charm_bubbles.Filepicker.init picker in
+  let picker, command = Charamel_bubbles.Filepicker.init picker in
   ( { state with picker = Some picker },
-    Charm_tea.Cmd.map (fun message -> File_picker message) command )
+    Charamel_tea.Cmd.map (fun message -> File_picker message) command )
 
 let file_reevaluate (ctx : ctx) state =
   let picker =
     Option.map
-      (Charm_bubbles.Filepicker.set_height
+      (Charamel_bubbles.Filepicker.set_height
          (max 1 (if state.picking then ctx.height else state.height)))
       state.picker
   in
@@ -1788,31 +1802,31 @@ let file_on_key ctx key state =
   if (not state.picking) && raw_matches key km.Keymap.open_ then
     let picker, command =
       match state.picker with
-      | Some picker -> Charm_bubbles.Filepicker.init picker
+      | Some picker -> Charamel_bubbles.Filepicker.init picker
       | None ->
           let picker = make_picker ctx state in
-          Charm_bubbles.Filepicker.init picker
+          Charamel_bubbles.Filepicker.init picker
     in
     ( { state with picker = Some picker; picking = true },
-      Charm_tea.Cmd.map (fun message -> File_picker message) command,
+      Charamel_tea.Cmd.map (fun message -> File_picker message) command,
       Stay )
   else if state.picking then
     if raw_matches key km.Keymap.close then
-      ({ state with picking = false }, Charm_tea.Cmd.none, Stay)
+      ({ state with picking = false }, Charamel_tea.Cmd.none, Stay)
     else
       match state.picker with
-      | None -> (state, Charm_tea.Cmd.none, Stay)
+      | None -> (state, Charamel_tea.Cmd.none, Stay)
       | Some picker -> (
-          match Charm_bubbles.Filepicker.key picker key with
-          | None -> (state, Charm_tea.Cmd.none, Stay)
+          match Charamel_bubbles.Filepicker.key picker key with
+          | None -> (state, Charamel_tea.Cmd.none, Stay)
           | Some child -> (
-              let selected = Charm_bubbles.Filepicker.did_select_file child picker in
+              let selected = Charamel_bubbles.Filepicker.did_select_file child picker in
               let disabled =
-                Charm_bubbles.Filepicker.did_select_disabled_file child picker
+                Charamel_bubbles.Filepicker.did_select_disabled_file child picker
               in
-              let picker, command = Charm_bubbles.Filepicker.update child picker in
+              let picker, command = Charamel_bubbles.Filepicker.update child picker in
               let command =
-                Charm_tea.Cmd.map (fun message -> File_picker message) command
+                Charamel_tea.Cmd.map (fun message -> File_picker message) command
               in
               match (selected, disabled) with
               | Some path, _ ->
@@ -1836,23 +1850,23 @@ let file_on_key ctx key state =
                   ({ state with picker = Some picker; err = Some error }, command, Stay)
               | None, None -> ({ state with picker = Some picker }, command, Stay)))
   else if raw_matches key km.Keymap.prev && not ctx.position.is_first then
-    (state, Charm_tea.Cmd.none, Prev)
+    (state, Charamel_tea.Cmd.none, Prev)
   else if raw_matches key km.Keymap.next && not ctx.position.is_last then
     match file_validate ctx state state.selected with
-    | Ok () -> (state, Charm_tea.Cmd.none, Next)
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Next)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
   else if raw_matches key km.Keymap.submit && ctx.position.is_last then
     match file_validate ctx state state.selected with
-    | Ok () -> (state, Charm_tea.Cmd.none, Submit)
-    | Error error -> ({ state with err = Some error }, Charm_tea.Cmd.none, Stay)
-  else (state, Charm_tea.Cmd.none, Stay)
+    | Ok () -> (state, Charamel_tea.Cmd.none, Submit)
+    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
+  else (state, Charamel_tea.Cmd.none, Stay)
 
 let file_update _ctx message state =
   match (message, state.picker) with
   | File_picker child, Some picker ->
-      let selected = Charm_bubbles.Filepicker.did_select_file child picker in
-      let disabled = Charm_bubbles.Filepicker.did_select_disabled_file child picker in
-      let picker, command = Charm_bubbles.Filepicker.update child picker in
+      let selected = Charamel_bubbles.Filepicker.did_select_file child picker in
+      let disabled = Charamel_bubbles.Filepicker.did_select_disabled_file child picker in
+      let picker, command = Charamel_bubbles.Filepicker.update child picker in
       let state =
         match (selected, disabled) with
         | Some path, _ ->
@@ -1880,8 +1894,8 @@ let file_update _ctx message state =
             { state with picker = Some picker; err = Some error }
         | None, None -> { state with picker = Some picker }
       in
-      (state, Charm_tea.Cmd.map (fun message -> File_picker message) command)
-  | _ -> (state, Charm_tea.Cmd.none)
+      (state, Charamel_tea.Cmd.map (fun message -> File_picker message) command)
+  | _ -> (state, Charamel_tea.Cmd.none)
 
 let file_view ctx ~focused state =
   let style = field_style ctx focused in
@@ -1893,15 +1907,15 @@ let file_view ctx ~focused state =
   let body =
     if state.picking then
       match state.picker with
-      | Some picker -> Charm_bubbles.Filepicker.view picker
+      | Some picker -> Charamel_bubbles.Filepicker.view picker
       | None -> ""
     else if state.selected <> "" then
-      Charm_lipgloss.Style.render style.Styles.selected_option state.selected
+      Charamel_lipgloss.Style.render style.Styles.selected_option state.selected
     else
-      Charm_lipgloss.Style.render style.Styles.text_input.Styles.placeholder
+      Charamel_lipgloss.Style.render style.Styles.text_input.Styles.placeholder
         "No file selected."
   in
-  Charm_lipgloss.Style.render style.Styles.base (concat_nonempty [ heading; body ])
+  Charamel_lipgloss.Style.render style.Styles.base (concat_nonempty [ heading; body ])
 
 let file_key_binds ctx state =
   let km = ctx.keymap.Keymap.file in
@@ -1968,9 +1982,9 @@ let file_impl key title description dir show_hidden show_size show_permissions a
       on_key = file_on_key;
       on_paste = (fun _ _ state -> state);
       update = file_update;
-      subscriptions = (fun _ _ -> Charm_tea.Sub.none);
+      subscriptions = (fun _ _ -> Charamel_tea.Sub.none);
       view = file_view;
-      focus = (fun _ state -> (state, Charm_tea.Cmd.none));
+      focus = (fun _ state -> (state, Charamel_tea.Cmd.none));
       blur = file_blur;
       value = (fun state -> state.selected);
       error = (fun state -> state.err);
@@ -1996,7 +2010,7 @@ let step_key (Field (impl, state)) ctx key =
 
 let step_msg (Field (impl, state)) ctx message =
   match Field_msg.project impl.msg_id message with
-  | None -> (Field (impl, state), Charm_tea.Cmd.none)
+  | None -> (Field (impl, state), Charamel_tea.Cmd.none)
   | Some message ->
       let state, command = impl.update ctx message state in
       (Field (impl, state), map_cmd impl.msg_id command)
@@ -2039,9 +2053,9 @@ module Field = struct
       ?(inline = false) ?(default = "") ?(validate = noop_string) key =
     let echo =
       match echo with
-      | `Normal -> Charm_bubbles.Textinput.Normal
-      | `Password -> Charm_bubbles.Textinput.Password
-      | `None -> Charm_bubbles.Textinput.No_echo
+      | `Normal -> Charamel_bubbles.Textinput.Normal
+      | `Password -> Charamel_bubbles.Textinput.Password
+      | `None -> Charamel_bubbles.Textinput.No_echo
     in
     input_impl key title description placeholder prompt char_limit suggestions echo inline
       default validate

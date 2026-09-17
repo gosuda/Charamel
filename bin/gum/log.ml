@@ -239,18 +239,18 @@ let make_tags fields =
 
 let make_styles ~level_style ~time_style ~prefix_style ~message_style ~key_style
     ~value_style ~separator_style ~emitted =
-  let defaults = Charm_log.Styles.default in
+  let defaults = Charamel_log.Styles.default in
   let level_style = Gum_style.inline level_style in
   let levels level =
     if level = emitted then
-      Charm_lipgloss.Style.inherit_
-        ~parent:(defaults.Charm_log.Styles.levels level)
+      Charamel_lipgloss.Style.inherit_
+        ~parent:(defaults.Charamel_log.Styles.levels level)
         level_style
-    else defaults.Charm_log.Styles.levels level
+    else defaults.Charamel_log.Styles.levels level
   in
   {
-    Charm_log.Styles.timestamp = Gum_style.inline time_style;
-    caller = defaults.Charm_log.Styles.caller;
+    Charamel_log.Styles.timestamp = Gum_style.inline time_style;
+    caller = defaults.Charamel_log.Styles.caller;
     prefix = Gum_style.inline prefix_style;
     message = Gum_style.inline message_style;
     key = Gum_style.inline key_style;
@@ -262,11 +262,11 @@ let make_styles ~level_style ~time_style ~prefix_style ~message_style ~key_style
 let emit ?file ?(formatter = Text) ?(level = None_) ?(min_level = "") ?(prefix = "")
     ?(time = "") ?(format = false) ?(structured = false) ?styles env texts =
   if format && structured then
-    Charm_cli.error ~code:2 "--format and --structured are mutually exclusive";
+    Charamel_cli.error ~code:2 "--format and --structured are mutually exclusive";
   let minimum =
     match parse_minimum min_level with
     | Ok rank -> rank
-    | Error (`Msg message) -> Charm_cli.error message
+    | Error (`Msg message) -> Charamel_cli.error message
   in
   if level_rank level < minimum then ()
   else
@@ -280,20 +280,21 @@ let emit ?file ?(formatter = Text) ?(level = None_) ?(min_level = "") ?(prefix =
     in
     let profile =
       match file with
-      | Some path when path <> "" -> Charm_colorprofile.No_tty
+      | Some path when path <> "" -> Charamel_colorprofile.No_tty
       | _ ->
-          Charm_colorprofile.detect ~is_tty:(Gum_io.stderr_is_tty env) ~env:Sys.getenv_opt
+          Charamel_colorprofile.detect ~is_tty:(Gum_io.stderr_is_tty env)
+            ~env:Sys.getenv_opt
     in
-    let styles = Option.value ~default:Charm_log.Styles.default styles in
+    let styles = Option.value ~default:Charamel_log.Styles.default styles in
     let report ppf =
       let output_format =
         match formatter with
-        | Text -> Charm_log.Text
-        | Logfmt -> Charm_log.Logfmt
-        | Json -> Charm_log.Json
+        | Text -> Charamel_log.Text
+        | Logfmt -> Charamel_log.Logfmt
+        | Json -> Charamel_log.Json
       in
       let reporter =
-        Charm_log.reporter ~format:output_format ~styles ~report_timestamp:(time <> "")
+        Charamel_log.reporter ~format:output_format ~styles ~report_timestamp:(time <> "")
           ?time_format:(if time = "" then None else Some (time_formatter time))
           ~clock:env#clock ~profile ppf
       in
@@ -334,8 +335,8 @@ let emit ?file ?(formatter = Text) ?(level = None_) ?(min_level = "") ?(prefix =
           report Stdlib.Format.err_formatter;
           Ok ()
     in
-    (match result with Error (`Msg message) -> Charm_cli.error message | Ok () -> ());
-    if level = Fatal then Charm_cli.exit 1
+    (match result with Error (`Msg message) -> Charamel_cli.error message | Ok () -> ());
+    if level = Fatal then Charamel_cli.exit 1
 
 let string_opt ?short ~cmd name ~default ~doc =
   let names =

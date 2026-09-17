@@ -1,9 +1,9 @@
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module Style = Charm_lipgloss.Style
-module Color = Charm_ansi.Color
-module Position = Charm_lipgloss.Position
-module Sides = Charm_lipgloss.Sides
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module Style = Charamel_lipgloss.Style
+module Color = Charamel_ansi.Color
+module Position = Charamel_lipgloss.Position
+module Sides = Charamel_lipgloss.Sides
 
 let clamp n lo hi = max lo (min hi n)
 let key_binding ?help names = Key_binding.v ?help names

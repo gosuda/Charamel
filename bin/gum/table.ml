@@ -108,7 +108,7 @@ let parse_input options input =
 
 let resolve_widths options headers rows =
   let header_widths =
-    List.mapi (fun index value -> (index, Charm_ansi.Text.width value)) headers
+    List.mapi (fun index value -> (index, Charamel_ansi.Text.width value)) headers
   in
   let data_widths =
     List.fold_left
@@ -116,7 +116,7 @@ let resolve_widths options headers rows =
         List.mapi
           (fun index value ->
             let current = List.nth widths index in
-            max current (Charm_ansi.Text.width value))
+            max current (Charamel_ansi.Text.width value))
           row
         |> List.map2 max widths)
       (List.map snd header_widths) rows
@@ -137,7 +137,8 @@ let constrain_row widths row =
   List.mapi
     (fun index value ->
       let width = List.nth widths index in
-      Charm_ansi.Text.pad_right ~width (Charm_ansi.Text.truncate ~tail:"…" ~width value))
+      Charamel_ansi.Text.pad_right ~width
+        (Charamel_ansi.Text.truncate ~tail:"…" ~width value))
     row
 
 let render_static_with_padding options ~headers ~rows ~padding =
@@ -145,22 +146,22 @@ let render_static_with_padding options ~headers ~rows ~padding =
   let headers = if options.widths = [] then headers else constrain_row widths headers in
   let rows = if options.widths = [] then rows else List.map (constrain_row widths) rows in
   let border =
-    Option.value (Gum_flag.border options.border) ~default:Charm_lipgloss.Border.none
+    Option.value (Gum_flag.border options.border) ~default:Charamel_lipgloss.Border.none
   in
   let header_style = Gum_style.to_style options.header_style in
   let cell_style = Gum_style.to_style options.cell_style in
   let style ~row ~col:_ = if row = -1 then header_style else cell_style in
   let rendered =
-    Charm_lipgloss.Table.render
-      (Charm_lipgloss.Table.v ~headers ~rows ~border ~style
+    Charamel_lipgloss.Table.render
+      (Charamel_lipgloss.Table.v ~headers ~rows ~border ~style
          ?height:(if options.height > 0 then Some options.height else None)
          ())
   in
   let frame =
-    Charm_lipgloss.Style.render (Gum_style.to_style options.border_style) rendered
+    Charamel_lipgloss.Style.render (Gum_style.to_style options.border_style) rendered
   in
-  Charm_lipgloss.Style.render
-    (Charm_lipgloss.Style.padding padding Charm_lipgloss.Style.empty)
+  Charamel_lipgloss.Style.render
+    (Charamel_lipgloss.Style.padding padding Charamel_lipgloss.Style.empty)
     frame
 
 let render_static options ~headers ~rows =
@@ -171,17 +172,17 @@ let render_static options ~headers ~rows =
 type status = Running | Selected of string list | Quit | Aborted
 
 type model = {
-  table : Charm_bubbles.Table.t;
+  table : Charamel_bubbles.Table.t;
   status : status;
   show_help : bool;
   hide_count : bool;
-  padding : Charm_lipgloss.Sides.t;
-  border_style : Charm_lipgloss.Style.t;
+  padding : Charamel_lipgloss.Sides.t;
+  border_style : Charamel_lipgloss.Style.t;
 }
 
-type msg = Table of Charm_bubbles.Table.msg | Key of Charm_tea.Key.t
+type msg = Table of Charamel_bubbles.Table.msg | Key of Charamel_tea.Key.t
 
-let key_name key = Charm_tea.Key.to_string key
+let key_name key = Charamel_tea.Key.to_string key
 let is_abort key = String.equal (key_name key) "ctrl+c"
 let is_submit key = match key_name key with "enter" | "ctrl+q" -> true | _ -> false
 let is_quit key = match key_name key with "q" | "esc" -> true | _ -> false
@@ -190,25 +191,25 @@ let make_model (options : options) ~headers ~rows ~padding =
   let widths = resolve_widths options headers rows in
   let columns =
     List.mapi
-      (fun index title -> { Charm_bubbles.Table.title; width = List.nth widths index })
+      (fun index title -> { Charamel_bubbles.Table.title; width = List.nth widths index })
       headers
   in
   let styles =
     {
-      Charm_bubbles.Table.header = Gum_style.to_style options.header_style;
+      Charamel_bubbles.Table.header = Gum_style.to_style options.header_style;
       cell = Gum_style.to_style options.cell_style;
       selected = Gum_style.to_style options.selected_style;
     }
   in
   let height =
     if options.height > 0 then
-      Charm_lipgloss.Sides.(max 1 (options.height - padding.top - padding.bottom))
+      Charamel_lipgloss.Sides.(max 1 (options.height - padding.top - padding.bottom))
     else 0
   in
   let table =
     if options.height > 0 then
-      Charm_bubbles.Table.v ~columns ~rows ~height ~focused:true ~styles ()
-    else Charm_bubbles.Table.v ~columns ~rows ~focused:true ~styles ()
+      Charamel_bubbles.Table.v ~columns ~rows ~height ~focused:true ~styles ()
+    else Charamel_bubbles.Table.v ~columns ~rows ~focused:true ~styles ()
   in
   {
     table;
@@ -220,47 +221,47 @@ let make_model (options : options) ~headers ~rows ~padding =
   }
 
 let table_view model =
-  let base = Charm_bubbles.Table.view model.table in
+  let base = Charamel_bubbles.Table.view model.table in
   let help =
-    if model.show_help then "\n" ^ Charm_bubbles.Table.help_view model.table else ""
+    if model.show_help then "\n" ^ Charamel_bubbles.Table.help_view model.table else ""
   in
   let count =
     if model.hide_count then ""
     else
-      let total = List.length (Charm_bubbles.Table.rows model.table) in
+      let total = List.length (Charamel_bubbles.Table.rows model.table) in
       if total = 0 then ""
-      else Fmt.str "\n%d/%d" (Charm_bubbles.Table.cursor model.table + 1) total
+      else Fmt.str "\n%d/%d" (Charamel_bubbles.Table.cursor model.table + 1) total
   in
   let content = base ^ count ^ help in
-  let content = Charm_lipgloss.Style.render model.border_style content in
-  Charm_lipgloss.Style.render
-    (Charm_lipgloss.Style.padding model.padding Charm_lipgloss.Style.empty)
+  let content = Charamel_lipgloss.Style.render model.border_style content in
+  Charamel_lipgloss.Style.render
+    (Charamel_lipgloss.Style.padding model.padding Charamel_lipgloss.Style.empty)
     content
 
 let make_app model =
   let update message model =
     match message with
     | Key key when is_abort key ->
-        ({ model with status = Aborted }, Charm_tea.Cmd.interrupt)
+        ({ model with status = Aborted }, Charamel_tea.Cmd.interrupt)
     | Key key when is_submit key -> (
-        match Charm_bubbles.Table.selected_row model.table with
-        | Some row -> ({ model with status = Selected row }, Charm_tea.Cmd.quit)
-        | None -> ({ model with status = Quit }, Charm_tea.Cmd.quit))
-    | Key key when is_quit key -> ({ model with status = Quit }, Charm_tea.Cmd.quit)
+        match Charamel_bubbles.Table.selected_row model.table with
+        | Some row -> ({ model with status = Selected row }, Charamel_tea.Cmd.quit)
+        | None -> ({ model with status = Quit }, Charamel_tea.Cmd.quit))
+    | Key key when is_quit key -> ({ model with status = Quit }, Charamel_tea.Cmd.quit)
     | Key key -> (
-        match Charm_bubbles.Table.key model.table key with
-        | None -> (model, Charm_tea.Cmd.none)
+        match Charamel_bubbles.Table.key model.table key with
+        | None -> (model, Charamel_tea.Cmd.none)
         | Some message ->
-            let table, command = Charm_bubbles.Table.update message model.table in
-            ({ model with table }, Charm_tea.Cmd.map (fun msg -> Table msg) command))
+            let table, command = Charamel_bubbles.Table.update message model.table in
+            ({ model with table }, Charamel_tea.Cmd.map (fun msg -> Table msg) command))
     | Table message ->
-        let table, command = Charm_bubbles.Table.update message model.table in
-        ({ model with table }, Charm_tea.Cmd.map (fun msg -> Table msg) command)
+        let table, command = Charamel_bubbles.Table.update message model.table in
+        ({ model with table }, Charamel_tea.Cmd.map (fun msg -> Table msg) command)
   in
-  let view model = Charm_tea.View.v ~alt_screen:false (table_view model) in
-  let subscriptions _ = Charm_tea.Sub.key (fun key -> Key key) in
+  let view model = Charamel_tea.View.v ~alt_screen:false (table_view model) in
+  let subscriptions _ = Charamel_tea.Sub.key (fun key -> Key key) in
   {
-    Charm_tea.init = (fun () -> (model, Charm_tea.Cmd.none));
+    Charamel_tea.init = (fun () -> (model, Charamel_tea.Cmd.none));
     update;
     view;
     subscriptions;
@@ -284,22 +285,22 @@ let run env (options : options) =
   let input =
     match read_input env options with
     | Ok input -> input
-    | Error message -> Charm_cli.error message
+    | Error message -> Charamel_cli.error message
   in
   let headers, rows =
     match parse_input options input with
     | Ok value -> value
-    | Error error -> Charm_cli.error (error_message error)
+    | Error error -> Charamel_cli.error (error_message error)
   in
   if options.print then
     match render_static options ~headers ~rows with
     | Ok rendered -> Gum_io.println env rendered
-    | Error error -> Charm_cli.error (error_message error)
+    | Error error -> Charamel_cli.error (error_message error)
   else
     let padding =
       match Gum_flag.parse_padding options.padding with
       | Ok value -> value
-      | Error (`Msg message) -> Charm_cli.error message
+      | Error (`Msg message) -> Charamel_cli.error message
     in
     let model = make_model options ~headers ~rows ~padding in
     let model =
@@ -310,7 +311,7 @@ let run env (options : options) =
             | Quit -> Gum_run.Quit
             | Aborted -> Gum_run.Aborted
             | Running -> Gum_run.Quit)
-      with Gum_io.No_tty -> Charm_cli.error "table: requires a terminal"
+      with Gum_io.No_tty -> Charamel_cli.error "table: requires a terminal"
     in
     match model.status with
     | Selected row ->
@@ -320,11 +321,12 @@ let run env (options : options) =
           else if options.return_column > 0 && options.return_column <= List.length row
           then [ List.nth row (options.return_column - 1) ]
           else
-            Charm_cli.error (error_message (`Invalid_return_column options.return_column))
+            Charamel_cli.error
+              (error_message (`Invalid_return_column options.return_column))
         in
         write_result env ~separator row
-    | Quit | Running -> Charm_cli.error "nothing selected"
-    | Aborted -> Charm_cli.exit 130
+    | Quit | Running -> Charamel_cli.error "nothing selected"
+    | Aborted -> Charamel_cli.exit 130
 
 let options separator columns widths height print file border show_help hide_count
     lazy_quotes fields_per_record return_column timeout padding border_style cell_style

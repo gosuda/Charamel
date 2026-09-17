@@ -1,7 +1,7 @@
 (* Cmd and Sub builder tests: building a command or subscription runs no
    thunk and applies no mapping function; only the runtime does that. *)
 
-open Charm_tea
+open Charamel_tea
 
 let test_perform_defers_thunk () =
   let runs = ref 0 in

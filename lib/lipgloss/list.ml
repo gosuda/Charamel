@@ -63,7 +63,7 @@ let render t =
     (fun index item ->
       if index > 0 then Buffer.add_char out '\n';
       let prefix = marker t.enumerator index ~roman_width in
-      let prefix_width = Charm_ansi.Text.width prefix in
+      let prefix_width = Charamel_ansi.Text.width prefix in
       match String.split_on_char '\n' item with
       | [] -> Buffer.add_string out prefix
       | first :: rest ->

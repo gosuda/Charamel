@@ -6,8 +6,8 @@
 type resolved = {
   role : [ `Large | `Small ];
   provider_id : string;
-  provider : Charm_fantasy.Provider.t;
-  model : Charm_fantasy.Model.t;
+  provider : Charamel_fantasy.Provider.t;
+  model : Charamel_fantasy.Model.t;
   reasoning : Config.reasoning;
   max_tokens : int;
 }
@@ -29,7 +29,7 @@ val catalog_cache_path : unit -> string
 (** [catalog_cache_path ()] is the provider catalog cache path. *)
 
 val catalog :
-  fs:Eio.Fs.dir_ty Eio.Path.t -> Config.t -> Charm_fantasy.Provider_info.t list
+  fs:Eio.Fs.dir_ty Eio.Path.t -> Config.t -> Charamel_fantasy.Provider_info.t list
 (** [catalog ~fs config] loads a parseable cached catalog, otherwise the embedded
     snapshot, and overlays configured providers and models. *)
 
@@ -48,13 +48,13 @@ val with_auth :
   Config.t ->
   env:(string -> string option) ->
   resolved ->
-  Charm_fantasy.Provider.auth ->
+  Charamel_fantasy.Provider.auth ->
   (resolved, error) result
 (** [with_auth ~fs config ~env resolved provider_auth] rebuilds only the provider handle
     for [resolved] with [provider_auth]. The selected provider, model, role, reasoning,
     and token limit are preserved. *)
 
-val cost : Charm_fantasy.Model.t -> Charm_fantasy.Usage.t -> float
+val cost : Charamel_fantasy.Model.t -> Charamel_fantasy.Usage.t -> float
 (** [cost model usage] is the usage charge in US dollars. *)
 
 val list :
@@ -62,7 +62,7 @@ val list :
   Config.t ->
   auth:Auth.t ->
   env:(string -> string option) ->
-  (string * Charm_fantasy.Model.t list * [ `Ready | `No_credential | `Disabled ]) list
+  (string * Charamel_fantasy.Model.t list * [ `Ready | `No_credential | `Disabled ]) list
 (** [list ~fs config ~auth ~env] lists catalog models and credential state for every
     provider in catalog order. *)
 
@@ -73,7 +73,7 @@ type update_result =
           returned by the endpoint, which may be empty. *)
 
 type update_error =
-  [ `Io of string * string | `Parse of string | `Fetch of Charm_fantasy.Error.t ]
+  [ `Io of string * string | `Parse of string | `Fetch of Charamel_fantasy.Error.t ]
 (** The type for catalog cache refresh failures. [Parse] carries a path followed by a
     diagnostic message. *)
 
@@ -83,7 +83,7 @@ val pp_update_error : update_error Fmt.t
 val save_catalog :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   etag:string ->
-  Charm_fantasy.Provider_info.t list ->
+  Charamel_fantasy.Provider_info.t list ->
   (unit, update_error) result
 (** [save_catalog ~fs ~etag providers] atomically writes the provider cache in its JSON
     object shape. *)

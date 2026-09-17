@@ -861,7 +861,7 @@ let initialize (server : server) =
           json_object
             [
               ("name", json_string "crush");
-              ("version", json_string Charm_cli.Version.current);
+              ("version", json_string Charamel_cli.Version.current);
             ] );
       ]
   in

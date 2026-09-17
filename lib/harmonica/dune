@@ -1,6 +1,6 @@
 (library
- (name charm_harmonica)
- (public_name charm.harmonica)
+ (name charamel_harmonica)
+ (public_name charamel.harmonica)
  (flags
   (:standard
    -strict-sequence

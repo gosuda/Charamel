@@ -1,10 +1,10 @@
-(* Observable contract cases for Charm_lipgloss.Layout.  The geometry cases are
+(* Observable contract cases for Charamel_lipgloss.Layout.  The geometry cases are
    derived from .references/lipgloss/join_test.go, position.go, and size.go;
    styling cases cover the range and rune contracts in ranges.go and runes.go.
    These tests assert rendered geometry and escape-aware text, not implementation
    details. *)
 
-open Charm_lipgloss
+open Charamel_lipgloss
 
 let check_string name expected actual = Alcotest.(check string) name expected actual
 let check_int name expected actual = Alcotest.(check int) name expected actual

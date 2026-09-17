@@ -1,11 +1,11 @@
 ; One independent native target per example. The Tea examples depend on
-; nothing but charm.tea and the Eio stack, so building them never pulls in
+; nothing but charamel.tea and the Eio stack, so building them never pulls in
 ; Huh or the SSH tier.
 
 (executable
  (name tea_counter)
  (modules tea_counter)
- (libraries charm.tea eio eio.unix eio_main fmt)
+ (libraries charamel.tea eio eio.unix eio_main fmt)
  (flags
   (:standard
    -strict-sequence
@@ -18,7 +18,7 @@
 (executable
  (name tea_inline)
  (modules tea_inline)
- (libraries charm.tea eio eio.unix eio_main fmt mtime)
+ (libraries charamel.tea eio eio.unix eio_main fmt mtime)
  (flags
   (:standard
    -strict-sequence
@@ -31,7 +31,7 @@
 (executable
  (name huh_burger)
  (modules huh_burger)
- (libraries charm.huh charm.tea eio eio.unix eio_main fmt)
+ (libraries charamel.huh charamel.tea eio eio.unix eio_main fmt)
  (flags
   (:standard
    -strict-sequence
@@ -45,9 +45,9 @@
  (name wish_counter)
  (modules wish_counter)
  (libraries
-  charm-ssh.wish
-  charm-ssh.keygen
-  charm.tea
+  charamel-ssh.wish
+  charamel-ssh.keygen
+  charamel.tea
   eio
   eio.unix
   eio_main
@@ -66,9 +66,9 @@
  (name confetti)
  (modules confetti)
  (libraries
-  charm-ssh.wish
-  charm-ssh.keygen
-  charm.tea
+  charamel-ssh.wish
+  charamel-ssh.keygen
+  charamel.tea
   eio
   eio.unix
   eio_main

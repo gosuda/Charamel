@@ -24,4 +24,4 @@ let mem key t = Int_map.mem (Key.uid key) t.bindings
 let get_exn key t =
   match get key t with
   | Some value -> value
-  | None -> invalid_arg (Fmt.str "Charm_huh.Results.get_exn: %s unset" (Key.name key))
+  | None -> invalid_arg (Fmt.str "Charamel_huh.Results.get_exn: %s unset" (Key.name key))

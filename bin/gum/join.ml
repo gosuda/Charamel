@@ -8,10 +8,10 @@ let join ?(align = "left") ?(horizontal = false) ?(vertical = false) texts =
       | None -> Error (`Msg (errorf "invalid alignment: %s" align))
       | Some position ->
           let rendered =
-            if vertical then Charm_lipgloss.Layout.join_vertical ~pos:position texts
+            if vertical then Charamel_lipgloss.Layout.join_vertical ~pos:position texts
             else if horizontal then
-              Charm_lipgloss.Layout.join_horizontal ~pos:position texts
-            else Charm_lipgloss.Layout.join_horizontal ~pos:position texts
+              Charamel_lipgloss.Layout.join_horizontal ~pos:position texts
+            else Charamel_lipgloss.Layout.join_horizontal ~pos:position texts
           in
           Ok rendered)
 
@@ -52,6 +52,6 @@ let cmd env =
     and+ texts = texts in
     match join ~align ~horizontal ~vertical texts with
     | Ok output -> Gum_io.println env output
-    | Error (`Msg message) -> Charm_cli.error message
+    | Error (`Msg message) -> Charamel_cli.error message
   in
   Cmd.v (command_info "join" "Join multi-line text blocks.") term

@@ -17,7 +17,7 @@ let commands =
   ]
 
 let run () =
-  Charm_cli.run ~name:"gum" ~version:Charm_cli.Version.current
+  Charamel_cli.run ~name:"gum" ~version:Charamel_cli.Version.current
     ~doc:"A tool for glamorous shell scripts." commands
 
 let () = run ()

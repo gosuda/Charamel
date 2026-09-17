@@ -3,7 +3,7 @@ module Config = Crush_core.Config
 
 let model =
   {
-    Charm_fantasy.Model.id = "test";
+    Charamel_fantasy.Model.id = "test";
     name = "Test";
     provider = "test";
     context_window = 100_000;
@@ -25,7 +25,7 @@ let model =
 let test_cost () =
   let usage =
     {
-      Charm_fantasy.Usage.input = 1_000_000;
+      Charamel_fantasy.Usage.input = 1_000_000;
       output = 100_000;
       cache_read = 200_000;
       cache_write = 10_000;
@@ -42,10 +42,10 @@ let test_cost () =
 
 (* Decoder-to-cost integration.
 
-   [Charm_fantasy.Anthropic_codec] and [Charm_fantasy.Responses_codec] are
-   not re-exported by charm_fantasy.mli (lib/fantasy/provider.ml:31-35 uses
+   [Charamel_fantasy.Anthropic_codec] and [Charamel_fantasy.Responses_codec] are
+   not re-exported by charamel_fantasy.mli (lib/fantasy/provider.ml:31-35 uses
    them only internally), so there is no public codec entry point to call
-   directly. [Charm_fantasy.Provider.stream] is the real public boundary:
+   directly. [Charamel_fantasy.Provider.stream] is the real public boundary:
    it selects the same codec, drives one HTTP request, and yields the
    decoded [Stream_part.t] sequence. A loopback fixture server -- the same
    idiom test_agent.ml, test_advisor.ml and test_cli.ml already use for
@@ -54,7 +54,7 @@ let test_cost () =
 
 let priced_model =
   {
-    Charm_fantasy.Model.id = "priced";
+    Charamel_fantasy.Model.id = "priced";
     name = "Priced";
     provider = "test";
     context_window = 200_000;
@@ -99,7 +99,7 @@ let start_fixture ~sw ~net body =
 
 let rec drain acc stream =
   match Eio.Stream.take stream with
-  | Charm_fantasy.Stream_part.Finish _ as part -> List.rev (part :: acc)
+  | Charamel_fantasy.Stream_part.Finish _ as part -> List.rev (part :: acc)
   | part -> drain (part :: acc) stream
 
 let usage_from ~make_provider body =
@@ -108,13 +108,13 @@ let usage_from ~make_provider body =
   let fixture = start_fixture ~sw ~net:env#net body in
   let provider = make_provider (Fmt.str "http://127.0.0.1:%d" fixture.port) in
   let stream =
-    Charm_fantasy.Provider.stream provider ~sw ~clock:env#clock ~net:env#net
+    Charamel_fantasy.Provider.stream provider ~sw ~clock:env#clock ~net:env#net
       ~model:priced_model
-      [ Charm_fantasy.Message.text Charm_fantasy.Message.User "hi" ]
+      [ Charamel_fantasy.Message.text Charamel_fantasy.Message.User "hi" ]
   in
   match
     List.find_map
-      (function Charm_fantasy.Stream_part.Usage u -> Some u | _ -> None)
+      (function Charamel_fantasy.Stream_part.Usage u -> Some u | _ -> None)
       (drain [] stream)
   with
   | Some usage -> usage
@@ -134,8 +134,8 @@ let responses_completed_body =
 let test_cost_from_responses_decoder () =
   let usage =
     usage_from responses_completed_body ~make_provider:(fun base_url ->
-        Charm_fantasy.Provider.openai_responses ~base_url
-          ~auth:(Charm_fantasy.Provider.Api_key "test-key") ())
+        Charamel_fantasy.Provider.openai_responses ~base_url
+          ~auth:(Charamel_fantasy.Provider.Api_key "test-key") ())
   in
   Alcotest.(check (float 1e-9))
     "responses decoder already excludes cache reads from input; Models.cost must not \
@@ -144,7 +144,7 @@ let test_cost_from_responses_decoder () =
     (Models.cost priced_model usage);
   Alcotest.(check int)
     "the four billing buckets sum to the decoded total" 1100
-    (Charm_fantasy.Usage.total usage)
+    (Charamel_fantasy.Usage.total usage)
 
 (* Anthropic reports input_tokens, cache_creation_input_tokens and
    cache_read_input_tokens as disjoint counters (never overlapping;
@@ -166,8 +166,8 @@ let anthropic_disjoint_body =
 let test_cost_from_anthropic_decoder () =
   let usage =
     usage_from anthropic_disjoint_body ~make_provider:(fun base_url ->
-        Charm_fantasy.Provider.anthropic ~base_url
-          ~auth:(Charm_fantasy.Provider.Api_key "test-key") ())
+        Charamel_fantasy.Provider.anthropic ~base_url
+          ~auth:(Charamel_fantasy.Provider.Api_key "test-key") ())
   in
   Alcotest.(check (float 1e-9))
     "anthropic's disjoint input/read/write buckets must each be billed once, not netted \
@@ -176,7 +176,7 @@ let test_cost_from_anthropic_decoder () =
     (Models.cost priced_model usage);
   Alcotest.(check int)
     "the four billing buckets sum to the decoded total" 1100
-    (Charm_fantasy.Usage.total usage)
+    (Charamel_fantasy.Usage.total usage)
 
 let test_error_printer () =
   let rendered = Fmt.str "%a" Models.pp_error (`Unknown_model ("anthropic", "missing")) in
@@ -237,7 +237,7 @@ let test_with_auth_preserves_selection () =
                   match
                     Models.with_auth ~fs:env#fs config
                       ~env:(fun _ -> None)
-                      resolved (Charm_fantasy.Provider.Api_key "new")
+                      resolved (Charamel_fantasy.Provider.Api_key "new")
                   with
                   | Error error ->
                       Alcotest.failf "provider rebind failed: %a" Models.pp_error error
@@ -246,8 +246,8 @@ let test_with_auth_preserves_selection () =
                         "provider identity" resolved.Models.provider_id
                         rebound.Models.provider_id;
                       Alcotest.(check string)
-                        "model identity" resolved.Models.model.Charm_fantasy.Model.id
-                        rebound.Models.model.Charm_fantasy.Model.id;
+                        "model identity" resolved.Models.model.Charamel_fantasy.Model.id
+                        rebound.Models.model.Charamel_fantasy.Model.id;
                       Alcotest.(check int)
                         "max tokens" resolved.Models.max_tokens rebound.Models.max_tokens;
                       Alcotest.(check bool)

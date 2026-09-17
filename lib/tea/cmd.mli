@@ -1,7 +1,7 @@
 (** Commands: one-off work the runtime performs outside [update].
 
     Building a command runs nothing. [t] is a pure description that the program's runtime
-    interprets; [Charm_tea] re-exports it abstract. Constructors are [private]. Every
+    interprets; [Charamel_tea] re-exports it abstract. Constructors are [private]. Every
     value of [t] is built through the functions below, and any module may still
     pattern-match one. *)
 

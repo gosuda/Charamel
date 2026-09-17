@@ -13,7 +13,7 @@
    already hold the provider wire form ([lib/fantasy/message.mli]), so both
    are copied into the request verbatim; re-encoding would corrupt them. *)
 
-let log_src = Logs.Src.create "charm.fantasy.google_codec"
+let log_src = Logs.Src.create "charamel.fantasy.google_codec"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
 open Json

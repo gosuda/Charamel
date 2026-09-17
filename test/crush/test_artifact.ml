@@ -9,7 +9,7 @@ let temporary_directory prefix =
 let with_artifact f =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun _sw ->
-  let base = temporary_directory "charm-artifact-" in
+  let base = temporary_directory "charamel-artifact-" in
   let directory = Filename.concat base "artifacts" in
   let store = Artifact.create ~fs:env#fs ~dir:directory in
   Fun.protect

@@ -1,4 +1,4 @@
-open Charm_harmonica
+open Charamel_harmonica
 
 let dt = fps 60
 let f = Alcotest.float 1e-6
@@ -134,8 +134,8 @@ let fps_suite =
           Alcotest.check (Alcotest.float 1e-15) "fps 60" (1.0 /. 60.0) (fps 60));
       Alcotest.test_case "zero is a programming error" `Quick (fun () ->
           Alcotest.check_raises "fps 0"
-            (Invalid_argument "Charm_harmonica.fps: frame count must not be zero")
+            (Invalid_argument "Charamel_harmonica.fps: frame count must not be zero")
             (fun () -> ignore (fps 0)));
     ] )
 
-let () = Alcotest.run "charm_harmonica" [ spring; projectile; fps_suite ]
+let () = Alcotest.run "charamel_harmonica" [ spring; projectile; fps_suite ]

@@ -2,12 +2,12 @@ type rendered = { svg : string; width : float; height : float }
 
 type run = {
   text : string;
-  fg : Charm_ansi.Color.t;
-  bg : Charm_ansi.Color.t;
+  fg : Charamel_ansi.Color.t;
+  bg : Charamel_ansi.Color.t;
   bold : bool;
   faint : bool;
   italic : bool;
-  underline : Charm_ansi.Style.underline;
+  underline : Charamel_ansi.Style.underline;
   strike : bool;
   conceal : bool;
   blink : bool;
@@ -16,12 +16,12 @@ type run = {
 }
 
 type style = {
-  fg : Charm_ansi.Color.t;
-  bg : Charm_ansi.Color.t;
+  fg : Charamel_ansi.Color.t;
+  bg : Charamel_ansi.Color.t;
   bold : bool;
   faint : bool;
   italic : bool;
-  underline : Charm_ansi.Style.underline;
+  underline : Charamel_ansi.Style.underline;
   strike : bool;
   conceal : bool;
   blink : bool;
@@ -31,12 +31,12 @@ type style = {
 
 let default_style =
   {
-    fg = Charm_ansi.Color.Default;
-    bg = Charm_ansi.Color.Default;
+    fg = Charamel_ansi.Color.Default;
+    bg = Charamel_ansi.Color.Default;
     bold = false;
     faint = false;
     italic = false;
-    underline = Charm_ansi.Style.No_underline;
+    underline = Charamel_ansi.Style.No_underline;
     strike = false;
     conceal = false;
     blink = false;
@@ -45,8 +45,8 @@ let default_style =
   }
 
 let style_equal a b =
-  Charm_ansi.Color.equal a.fg b.fg
-  && Charm_ansi.Color.equal a.bg b.bg
+  Charamel_ansi.Color.equal a.fg b.fg
+  && Charamel_ansi.Color.equal a.bg b.bg
   && Bool.equal a.bold b.bold && Bool.equal a.faint b.faint
   && Bool.equal a.italic b.italic && a.underline = b.underline
   && Bool.equal a.strike b.strike
@@ -72,8 +72,10 @@ let run_of_style style text =
   }
 
 let parse_runs text =
-  let parser = Charm_ansi.Parser.create () in
-  let actions = Charm_ansi.Parser.feed parser text @ Charm_ansi.Parser.flush parser in
+  let parser = Charamel_ansi.Parser.create () in
+  let actions =
+    Charamel_ansi.Parser.feed parser text @ Charamel_ansi.Parser.flush parser
+  in
   let lines = ref [] in
   let current = ref [] in
   let style = ref default_style in
@@ -104,9 +106,9 @@ let parse_runs text =
   in
   let clamp value = max 0 (min 255 value) in
   let rgb r g b =
-    match Charm_ansi.Color.rgb (clamp r) (clamp g) (clamp b) with
+    match Charamel_ansi.Color.rgb (clamp r) (clamp g) (clamp b) with
     | Some value -> value
-    | None -> Charm_ansi.Color.Default
+    | None -> Charamel_ansi.Color.Default
   in
   let param values index =
     match List.nth_opt values index with
@@ -138,11 +140,11 @@ let parse_runs text =
             | 4 ->
                 let underline =
                   match colon values index 1 with
-                  | Some 2 -> Charm_ansi.Style.Double
-                  | Some 3 -> Charm_ansi.Style.Curly
-                  | Some 4 -> Charm_ansi.Style.Dotted
-                  | Some 5 -> Charm_ansi.Style.Dashed
-                  | _ -> Charm_ansi.Style.Single
+                  | Some 2 -> Charamel_ansi.Style.Double
+                  | Some 3 -> Charamel_ansi.Style.Curly
+                  | Some 4 -> Charamel_ansi.Style.Dotted
+                  | Some 5 -> Charamel_ansi.Style.Dashed
+                  | _ -> Charamel_ansi.Style.Single
                 in
                 set_underline underline
             | 5 | 6 -> next := { !next with blink = true }
@@ -151,21 +153,21 @@ let parse_runs text =
             | 9 -> next := { !next with strike = true }
             | 22 -> next := { !next with bold = false; faint = false }
             | 23 -> next := { !next with italic = false }
-            | 24 -> set_underline Charm_ansi.Style.No_underline
+            | 24 -> set_underline Charamel_ansi.Style.No_underline
             | 25 -> next := { !next with blink = false }
             | 27 -> next := { !next with reverse = false }
             | 28 -> next := { !next with conceal = false }
             | 29 -> next := { !next with strike = false }
             | value when value >= 30 && value <= 37 ->
-                set_fg (Charm_ansi.Color.Basic (value - 30))
-            | 39 -> set_fg Charm_ansi.Color.Default
+                set_fg (Charamel_ansi.Color.Basic (value - 30))
+            | 39 -> set_fg Charamel_ansi.Color.Default
             | value when value >= 40 && value <= 47 ->
-                set_bg (Charm_ansi.Color.Basic (value - 40))
-            | 49 -> set_bg Charm_ansi.Color.Default
+                set_bg (Charamel_ansi.Color.Basic (value - 40))
+            | 49 -> set_bg Charamel_ansi.Color.Default
             | value when value >= 90 && value <= 97 ->
-                set_fg (Charm_ansi.Color.Basic (value - 90 + 8))
+                set_fg (Charamel_ansi.Color.Basic (value - 90 + 8))
             | value when value >= 100 && value <= 107 ->
-                set_bg (Charm_ansi.Color.Basic (value - 100 + 8))
+                set_bg (Charamel_ansi.Color.Basic (value - 100 + 8))
             | 38 | 48 | 58 -> (
                 let target =
                   match value with
@@ -179,7 +181,7 @@ let parse_runs text =
                     next_index := index + 3;
                     match param values (index + 2) with
                     | Some palette -> (
-                        let color = Charm_ansi.Color.Indexed (clamp palette) in
+                        let color = Charamel_ansi.Color.Indexed (clamp palette) in
                         match target with
                         | `Foreground -> set_fg color
                         | `Background -> set_bg color
@@ -203,19 +205,19 @@ let parse_runs text =
     loop 0
   in
   let handle = function
-    | Charm_ansi.Parser.Print text -> push_run text
-    | Charm_ansi.Parser.Execute '\n' -> finish_line ()
-    | Charm_ansi.Parser.Execute '\r' -> ()
-    | Charm_ansi.Parser.Execute '\t' -> push_run "\t"
-    | Charm_ansi.Parser.Csi { params; final = 'm'; _ } -> update_sgr params
-    | Charm_ansi.Parser.Osc fields -> (
+    | Charamel_ansi.Parser.Print text -> push_run text
+    | Charamel_ansi.Parser.Execute '\n' -> finish_line ()
+    | Charamel_ansi.Parser.Execute '\r' -> ()
+    | Charamel_ansi.Parser.Execute '\t' -> push_run "\t"
+    | Charamel_ansi.Parser.Csi { params; final = 'm'; _ } -> update_sgr params
+    | Charamel_ansi.Parser.Osc fields -> (
         match fields with
         | "8" :: _params :: url :: _ ->
             style := { !style with link = (if url = "" then None else Some url) }
         | _ -> ())
-    | Charm_ansi.Parser.Csi _ | Charm_ansi.Parser.Execute _ | Charm_ansi.Parser.Esc _
-    | Charm_ansi.Parser.Dcs _ | Charm_ansi.Parser.Apc _ | Charm_ansi.Parser.Pm _
-    | Charm_ansi.Parser.Sos _ ->
+    | Charamel_ansi.Parser.Csi _ | Charamel_ansi.Parser.Execute _
+    | Charamel_ansi.Parser.Esc _ | Charamel_ansi.Parser.Dcs _ | Charamel_ansi.Parser.Apc _
+    | Charamel_ansi.Parser.Pm _ | Charamel_ansi.Parser.Sos _ ->
         ()
   in
   List.iter handle actions;
@@ -224,14 +226,14 @@ let parse_runs text =
 
 let theme_for name =
   match String.lowercase_ascii name with
-  | "dracula" -> Charm_highlight.Theme.dracula
-  | "github" -> Charm_highlight.Theme.github ~is_dark:false
-  | "github-dark" -> Charm_highlight.Theme.github ~is_dark:true
-  | "monokai" -> Charm_highlight.Theme.monokai
-  | "nord" -> Charm_highlight.Theme.nord
-  | "solarized-light" -> Charm_highlight.Theme.solarized ~is_dark:false
-  | "solarized-dark" -> Charm_highlight.Theme.solarized ~is_dark:true
-  | _ -> Charm_highlight.Theme.charm ~is_dark:true
+  | "dracula" -> Charamel_highlight.Theme.dracula
+  | "github" -> Charamel_highlight.Theme.github ~is_dark:false
+  | "github-dark" -> Charamel_highlight.Theme.github ~is_dark:true
+  | "monokai" -> Charamel_highlight.Theme.monokai
+  | "nord" -> Charamel_highlight.Theme.nord
+  | "solarized-light" -> Charamel_highlight.Theme.solarized ~is_dark:false
+  | "solarized-dark" -> Charamel_highlight.Theme.solarized ~is_dark:true
+  | _ -> Charamel_highlight.Theme.charm ~is_dark:true
 
 let xml_escape text =
   let buffer = Buffer.create (String.length text + 8) in
@@ -249,14 +251,14 @@ let xml_escape text =
 let color_hex color =
   Option.map
     (fun (r, g, b) -> Fmt.str "#%02X%02X%02X" r g b)
-    (Charm_ansi.Color.to_rgb color)
+    (Charamel_ansi.Color.to_rgb color)
 
 let attr name value = Fmt.str " %s=\"%s\"" name (xml_escape value)
 let float value = Fmt.str "%.2f" value
 
 let visual_width ~tab_width text =
   let base =
-    Charm_ansi.Text.width (String.map (fun c -> if c = '\t' then ' ' else c) text)
+    Charamel_ansi.Text.width (String.map (fun c -> if c = '\t' then ' ' else c) text)
   in
   let tabs =
     String.fold_left
@@ -277,7 +279,7 @@ let style_attrs (run : run) =
   | None -> ());
   if run.italic then Buffer.add_string buffer (attr "font-style" "italic");
   let decorations =
-    (if run.underline <> Charm_ansi.Style.No_underline then [ "underline" ] else [])
+    (if run.underline <> Charamel_ansi.Style.No_underline then [ "underline" ] else [])
     @ if run.strike then [ "line-through" ] else []
   in
   if decorations <> [] then
@@ -350,15 +352,16 @@ let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
       match language with
       | None -> text
       | Some spec ->
-          Charm_highlight.render ~theme:(theme_for config.Config.theme) spec text
+          Charamel_highlight.render ~theme:(theme_for config.Config.theme) spec text
   in
   let source =
-    if config.Config.wrap > 0 then Charm_ansi.Text.wrap ~width:config.Config.wrap source
+    if config.Config.wrap > 0 then
+      Charamel_ansi.Text.wrap ~width:config.Config.wrap source
     else source
   in
   let line_selection = List.map (fun line -> line - 1) config.Config.lines in
   let source = Input.cut_lines ~lines:line_selection source in
-  let source_plain = Charm_ansi.Text.strip source in
+  let source_plain = Charamel_ansi.Text.strip source in
   if source_plain = "" then Error "No input"
   else
     let lines = parse_runs source in
@@ -483,8 +486,8 @@ let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
           ^ attr "height" (float terminal_height)
           ^ attr "fill"
               ( Option.value
-                  (Charm_ansi.Color.of_hex config.Config.background)
-                  ~default:Charm_ansi.Color.Default
+                  (Charamel_ansi.Color.of_hex config.Config.background)
+                  ~default:Charamel_ansi.Color.Default
               |> fun color -> Option.value (color_hex color) ~default:"#171717" )
         in
         let radius =

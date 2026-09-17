@@ -1,8 +1,14 @@
 (library
- (name charm_glamour)
- (public_name charm.glamour)
- (modules charm_glamour emoji)
- (libraries charm.ansi charm.lipgloss charm.highlight cmarkit fmt uri)
+ (name charamel_glamour)
+ (public_name charamel.glamour)
+ (modules charamel_glamour emoji)
+ (libraries
+  charamel.ansi
+  charamel.lipgloss
+  charamel.highlight
+  cmarkit
+  fmt
+  uri)
  (flags
   (:standard
    -strict-sequence

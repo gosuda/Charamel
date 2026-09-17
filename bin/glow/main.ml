@@ -142,20 +142,20 @@ let render_document ~env ~is_tty:stdout_is_tty (config : Config.t) document =
     if document.Source.markdown then Source.remove_frontmatter document.Source.content
     else "```\n" ^ document.Source.content ^ "\n```"
   in
-  let is_dark = Charm_cli.is_dark ~env:Sys.getenv_opt in
+  let is_dark = Charamel_cli.is_dark ~env:Sys.getenv_opt in
   let theme =
     match String.lowercase_ascii config.Config.style with
-    | "dark" -> Charm_glamour.Theme.dark
-    | "light" -> Charm_glamour.Theme.light
-    | "dracula" -> Charm_glamour.Theme.dracula
-    | "tokyo-night" | "tokyo_night" -> Charm_glamour.Theme.tokyo_night
-    | "pink" -> Charm_glamour.Theme.pink
-    | "ascii" -> Charm_glamour.Theme.ascii
-    | "notty" -> Charm_glamour.Theme.notty
-    | "auto" -> Charm_glamour.Theme.auto ~is_dark
+    | "dark" -> Charamel_glamour.Theme.dark
+    | "light" -> Charamel_glamour.Theme.light
+    | "dracula" -> Charamel_glamour.Theme.dracula
+    | "tokyo-night" | "tokyo_night" -> Charamel_glamour.Theme.tokyo_night
+    | "pink" -> Charamel_glamour.Theme.pink
+    | "ascii" -> Charamel_glamour.Theme.ascii
+    | "notty" -> Charamel_glamour.Theme.notty
+    | "auto" -> Charamel_glamour.Theme.auto ~is_dark
     | value -> Fmt.failwith "glow: unknown style %S" value
   in
-  Charm_glamour.render ~width ~theme ?base_url:document.Source.base_url
+  Charamel_glamour.render ~width ~theme ?base_url:document.Source.base_url
     ~preserve_newlines:config.Config.preserve_new_lines body
 
 let executable program =
@@ -275,39 +275,39 @@ let write_config env options =
 let run_config env options =
   match write_config env options with
   | Ok message -> Eio.Flow.copy_string (message ^ "\n") env#stdout
-  | Error message -> Charm_cli.error message
+  | Error message -> Charamel_cli.error message
 
 let run_default env options =
   match resolved_config env options with
-  | Error message -> Charm_cli.error message
+  | Error message -> Charamel_cli.error message
   | Ok (config, _) -> (
       if config.Config.pager && config.Config.tui then
-        Charm_cli.error "glow: cannot use both --pager and --tui";
+        Charamel_cli.error "glow: cannot use both --pager and --tui";
       let stdout_is_tty = is_tty env#stdout in
       let stdin_is_tty = is_tty env#stdin in
       let cwd = Eio.Path.native_exn env#cwd in
       match Source.classify ~argument:options.source ~cwd ~stdin_is_tty with
-      | Error error -> Charm_cli.error (source_error error)
+      | Error error -> Charamel_cli.error (source_error error)
       | Ok location -> (
           let ui_required =
             config.Config.tui
             || match location with Source.Directory _ -> true | _ -> false
           in
           if ui_required then
-            if not stdout_is_tty then Charm_cli.error "glow: --tui needs a terminal"
+            if not stdout_is_tty then Charamel_cli.error "glow: --tui needs a terminal"
             else
               match Ui.run env ~config ~location with
               | Ok () -> ()
-              | Error message -> Charm_cli.error (Fmt.str "glow: %s" message)
+              | Error message -> Charamel_cli.error (Fmt.str "glow: %s" message)
           else
             match Source.read ~env ~clock:env#clock ~net:env#net location with
-            | Error error -> Charm_cli.error (source_error error)
+            | Error error -> Charamel_cli.error (source_error error)
             | Ok document ->
                 let output = render_document ~env ~is_tty:stdout_is_tty config document in
                 if config.Config.pager then
                   match run_pager output with
                   | Ok () -> ()
-                  | Error message -> Charm_cli.error message
+                  | Error message -> Charamel_cli.error message
                 else Eio.Flow.copy_string output env#stdout))
 
 let default env =
@@ -340,6 +340,6 @@ let config_command env =
   Cmd.v (Cmd.info "config" ~doc:"Create and open the Glow JSON configuration.") term
 
 let () =
-  Charm_cli.run ~name:"glow" ~version:Charm_cli.Version.current
+  Charamel_cli.run ~name:"glow" ~version:Charamel_cli.Version.current
     ~doc:"Render Markdown on the command line, with a terminal browser and pager."
     ~default [ config_command ]

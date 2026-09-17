@@ -1,8 +1,8 @@
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module Style = Charm_lipgloss.Style
-module Text = Charm_ansi.Text
-module Layout = Charm_lipgloss.Layout
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module Style = Charamel_lipgloss.Style
+module Text = Charamel_ansi.Text
+module Layout = Charamel_lipgloss.Layout
 
 let clamp n lo hi =
   let lo, hi = if lo <= hi then (lo, hi) else (hi, lo) in
@@ -39,12 +39,12 @@ type styles = { header : Style.t; cell : Style.t; selected : Style.t }
 let default_styles =
   {
     selected =
-      Style.foreground (Charm_ansi.Color.Indexed 212) (Style.bold true Style.empty);
+      Style.foreground (Charamel_ansi.Color.Indexed 212) (Style.bold true Style.empty);
     header =
       Style.padding
-        (Charm_lipgloss.Sides.v ~right:1 ~left:1 ())
+        (Charamel_lipgloss.Sides.v ~right:1 ~left:1 ())
         (Style.bold true Style.empty);
-    cell = Style.padding (Charm_lipgloss.Sides.v ~right:1 ~left:1 ()) Style.empty;
+    cell = Style.padding (Charamel_lipgloss.Sides.v ~right:1 ~left:1 ()) Style.empty;
   }
 
 type msg =

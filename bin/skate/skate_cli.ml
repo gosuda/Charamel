@@ -4,7 +4,7 @@ let max_value_size = 64 * 1024 * 1024
 
 type target = { key : string; db : string option }
 
-let root env = Eio.Path.(env#fs / Charm_cli.Xdg.data_dir ~app:"skate")
+let root env = Eio.Path.(env#fs / Charamel_cli.Xdg.data_dir ~app:"skate")
 
 let store_error = function
   | `No_such_db _ -> "skate: no such database"
@@ -15,7 +15,7 @@ let store_error = function
 
 let unwrap = function
   | Ok value -> value
-  | Error error -> Charm_cli.error (store_error error)
+  | Error error -> Charamel_cli.error (store_error error)
 
 let parse_key target =
   if target = "" then Error "skate: key must not be empty"
@@ -65,7 +65,7 @@ let output_get env ~show_binary = function
 
 let run_get env ~target ~show_binary =
   match parse_key target with
-  | Error message -> Charm_cli.error message
+  | Error message -> Charamel_cli.error message
   | Ok target ->
       let db = Option.value target.db ~default:"default" in
       let value = unwrap (Store.get ~root:(root env) ~db target.key) in
@@ -73,7 +73,7 @@ let run_get env ~target ~show_binary =
 
 let run_set env ~target ~value =
   match parse_key target with
-  | Error message -> Charm_cli.error message
+  | Error message -> Charamel_cli.error message
   | Ok target ->
       let db = Option.value target.db ~default:"default" in
       let value =
@@ -85,23 +85,23 @@ let run_set env ~target ~value =
         match value with
         | Ok value -> value
         | Error message ->
-            Charm_cli.error (Fmt.str "skate: could not read stdin: %s" message)
+            Charamel_cli.error (Fmt.str "skate: could not read stdin: %s" message)
       in
       unwrap (Store.set ~root:(root env) ~db target.key value)
 
 let run_delete env ~target =
   match parse_key target with
-  | Error message -> Charm_cli.error message
+  | Error message -> Charamel_cli.error message
   | Ok target ->
       let db = Option.value target.db ~default:"default" in
       unwrap (Store.delete ~root:(root env) ~db target.key)
 
 let run_list env ~database ~keys_only ~values_only ~show_binary =
   if keys_only && values_only then
-    Charm_cli.error "skate: --keys-only and --values-only cannot be combined"
+    Charamel_cli.error "skate: --keys-only and --values-only cannot be combined"
   else
     match parse_database database "default" with
-    | Error message -> Charm_cli.error message
+    | Error message -> Charamel_cli.error message
     | Ok db ->
         let entries = unwrap (Store.list ~root:(root env) ~db) in
         let rec emit = function
@@ -119,7 +119,7 @@ let run_list env ~database ~keys_only ~values_only ~show_binary =
 
 let run_delete_db env database =
   match parse_database (Some database) database with
-  | Error message -> Charm_cli.error message
+  | Error message -> Charamel_cli.error message
   | Ok db -> unwrap (Store.delete_db ~root:(root env) ~db)
 
 let run_dbs env =

@@ -87,6 +87,6 @@ let render ?(theme = Theme.charm ~is_dark:true) spec source =
   let buffer = Buffer.create (String.length source + 32) in
   List.iter
     (fun (kind, text) ->
-      Buffer.add_string buffer (Charm_lipgloss.Style.render (theme kind) text))
+      Buffer.add_string buffer (Charamel_lipgloss.Style.render (theme kind) text))
     tokens;
   Buffer.contents buffer

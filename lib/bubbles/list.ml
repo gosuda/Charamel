@@ -1,9 +1,9 @@
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module Style = Charm_lipgloss.Style
-module Layout = Charm_lipgloss.Layout
-module Text = Charm_ansi.Text
-module Color = Charm_ansi.Color
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module Style = Charamel_lipgloss.Style
+module Layout = Charamel_lipgloss.Layout
+module Text = Charamel_ansi.Text
+module Color = Charamel_ansi.Color
 
 let clamp n lo hi =
   let lo, hi = if lo <= hi then (lo, hi) else (hi, lo) in
@@ -13,7 +13,7 @@ let color_hex value =
   match Color.of_hex value with Some color -> color | None -> Color.Default
 
 let light_dark ~is_dark ~light ~dark =
-  Charm_lipgloss.light_dark ~is_dark ~light:(color_hex light) ~dark:(color_hex dark)
+  Charamel_lipgloss.light_dark ~is_dark ~light:(color_hex light) ~dark:(color_hex dark)
 
 type filter_state = Unfiltered | Filtering | Filter_applied
 type rank = { index : int; matched : int list }
@@ -92,13 +92,13 @@ let default_styles ~is_dark =
   let subdued = light_dark ~is_dark ~light:"#9B9B9B" ~dark:"#5C5C5C" in
   let very_subdued = light_dark ~is_dark ~light:"#DDDADA" ~dark:"#3C3C3C" in
   let title_bar =
-    Style.padding (Charm_lipgloss.Sides.v ~bottom:1 ~left:2 ()) Style.empty
+    Style.padding (Charamel_lipgloss.Sides.v ~bottom:1 ~left:2 ()) Style.empty
   in
   {
     title_bar;
     title =
       Style.padding
-        (Charm_lipgloss.Sides.v ~right:1 ~left:1 ())
+        (Charamel_lipgloss.Sides.v ~right:1 ~left:1 ())
         (Style.foreground (Color.Indexed 230)
            (Style.background (Color.Indexed 62) Style.empty));
     spinner =
@@ -109,7 +109,7 @@ let default_styles ~is_dark =
     default_filter_character_match = Style.underline true Style.empty;
     status_bar =
       Style.padding
-        (Charm_lipgloss.Sides.v ~bottom:1 ~left:2 ())
+        (Charamel_lipgloss.Sides.v ~bottom:1 ~left:2 ())
         (Style.foreground
            (light_dark ~is_dark ~light:"#A49FA5" ~dark:"#777777")
            Style.empty);
@@ -119,8 +119,8 @@ let default_styles ~is_dark =
     status_bar_filter_count = Style.foreground very_subdued Style.empty;
     no_items =
       Style.foreground (light_dark ~is_dark ~light:"#909090" ~dark:"#626262") Style.empty;
-    pagination_style = Style.padding (Charm_lipgloss.Sides.v ~left:2 ()) Style.empty;
-    help_style = Style.padding (Charm_lipgloss.Sides.v ~top:1 ~left:2 ()) Style.empty;
+    pagination_style = Style.padding (Charamel_lipgloss.Sides.v ~left:2 ()) Style.empty;
+    help_style = Style.padding (Charamel_lipgloss.Sides.v ~top:1 ~left:2 ()) Style.empty;
     active_pagination_dot =
       Style.foreground (light_dark ~is_dark ~light:"#847A85" ~dark:"#979797") Style.empty;
     inactive_pagination_dot = Style.foreground very_subdued Style.empty;
@@ -158,7 +158,7 @@ type item_styles = {
 let default_item_styles ~is_dark =
   let normal_title =
     Style.padding
-      (Charm_lipgloss.Sides.v ~left:2 ())
+      (Charamel_lipgloss.Sides.v ~left:2 ())
       (Style.foreground
          (light_dark ~is_dark ~light:"#1a1a1a" ~dark:"#dddddd")
          Style.empty)
@@ -168,19 +168,19 @@ let default_item_styles ~is_dark =
   in
   let selected_title =
     Style.padding
-      (Charm_lipgloss.Sides.v ~left:1 ())
+      (Charamel_lipgloss.Sides.v ~left:1 ())
       (Style.foreground (color_hex "#EE6FF8")
          (Style.border_left true
             (Style.border_foreground
-               (Charm_lipgloss.Sides_color.v ~left:(color_hex "#F793FF") ())
-               (Style.border Charm_lipgloss.Border.normal Style.empty))))
+               (Charamel_lipgloss.Sides_color.v ~left:(color_hex "#F793FF") ())
+               (Style.border Charamel_lipgloss.Border.normal Style.empty))))
   in
   let selected_desc =
     Style.foreground (light_dark ~is_dark ~light:"#F793FF" ~dark:"#AD58B4") selected_title
   in
   let dimmed_title =
     Style.padding
-      (Charm_lipgloss.Sides.v ~left:2 ())
+      (Charamel_lipgloss.Sides.v ~left:2 ())
       (Style.foreground
          (light_dark ~is_dark ~light:"#A49FA5" ~dark:"#777777")
          Style.empty)
@@ -200,7 +200,7 @@ let default_item_styles ~is_dark =
 
 let style_padding_width style =
   match Style.get_padding style with
-  | Some p -> p.Charm_lipgloss.Sides.left + p.Charm_lipgloss.Sides.right
+  | Some p -> p.Charamel_lipgloss.Sides.left + p.Charamel_lipgloss.Sides.right
   | None -> 0
 
 let default_delegate ?(show_description = true) ?(height = 2) ?(spacing = 1) ?styles

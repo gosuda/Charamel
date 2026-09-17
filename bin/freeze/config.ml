@@ -393,7 +393,9 @@ let load ~fs ~name =
     | "default" | "base" -> Ok base_json
     | "full" -> Ok full_json
     | "user" -> (
-        let path = Filename.concat (Charm_cli.Xdg.config_dir ~app:"freeze") "user.json" in
+        let path =
+          Filename.concat (Charamel_cli.Xdg.config_dir ~app:"freeze") "user.json"
+        in
         match read_path fs path with Ok source -> Ok source | Error _ -> Ok base_json)
     | _ -> (
         match read_path fs name with Ok _ as value -> value | Error _ -> Ok base_json)
@@ -502,7 +504,7 @@ let encode_json (config : t) =
     ]
 
 let save_user ~fs config =
-  let path = Filename.concat (Charm_cli.Xdg.config_dir ~app:"freeze") "user.json" in
+  let path = Filename.concat (Charamel_cli.Xdg.config_dir ~app:"freeze") "user.json" in
   let directory = Filename.dirname path in
   let encoded =
     match

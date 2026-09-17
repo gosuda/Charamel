@@ -4,8 +4,8 @@ synopsis: "SSH libraries for the Charm ecosystem"
 maintainer: ["metaphorics <152830360+metaphorics@users.noreply.github.com>"]
 authors: ["metaphorics <152830360+metaphorics@users.noreply.github.com>"]
 license: "Apache-2.0"
-homepage: "https://github.com/metaphorics/charm"
-bug-reports: "https://github.com/metaphorics/charm/issues"
+homepage: "https://github.com/metaphorics/Charamel"
+bug-reports: "https://github.com/metaphorics/Charamel/issues"
 depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.24"}
@@ -15,7 +15,7 @@ depends: [
   "fmt"
   "logs"
   "jsont" {>= "0.4"}
-  "charm"
+  "charamel"
   "awa" {>= "0.6.1"}
   "mirage-crypto" {>= "2.4.1"}
   "mirage-crypto-ec"
@@ -23,6 +23,8 @@ depends: [
   "x509"
   "base64"
   "digestif"
+  "cstruct"
+  "mtime"
   "alcotest" {with-test}
   "odoc" {with-doc}
 ]
@@ -40,5 +42,5 @@ build: [
     "@doc" {with-doc}
   ]
 ]
-dev-repo: "git+https://github.com/metaphorics/charm.git"
+dev-repo: "git+https://github.com/metaphorics/Charamel.git"
 x-maintenance-intent: ["(latest)"]

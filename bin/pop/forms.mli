@@ -1,7 +1,7 @@
 (** Missing email fields for [pop].
 
-    [run] presents the missing-value form through [Charm_huh]. Supplied values remain as
-    defaults, so the form can fill only the fields that were absent. *)
+    [run] presents the missing-value form through [Charamel_huh]. Supplied values remain
+    as defaults, so the form can fill only the fields that were absent. *)
 
 type values = {
   to_ : string;

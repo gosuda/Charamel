@@ -12,5 +12,5 @@ val build :
 val find : Tool.t list -> string -> Tool.t option
 (** [find tools name] is the tool named [name], or [None] when absent. *)
 
-val fantasy : Tool.t list -> Charm_fantasy.Tool.t list
+val fantasy : Tool.t list -> Charamel_fantasy.Tool.t list
 (** [fantasy tools] converts [tools] to the provider tool definitions. *)

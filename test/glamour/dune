@@ -1,7 +1,7 @@
 (test
  (name test_glamour)
- (package charm)
- (libraries charm.glamour charm.ansi alcotest)
+ (package charamel)
+ (libraries charamel.glamour charamel.ansi alcotest)
  (modules test_glamour)
  (deps
   (source_tree data))

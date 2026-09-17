@@ -2,13 +2,13 @@ open Result.Syntax
 
 type credential =
   | Api_key of string
-  | Oauth of Charm_fantasy.Oauth.Credential.t
+  | Oauth of Charamel_fantasy.Oauth.Credential.t
   | Disabled of { reason : string; at_ms : int }
 
 type error = [ `Io of string * string | `Parse of string * string ]
 
 type refresh_error =
-  [ error | `Disabled of string | `No_credential | `Refresh of Charm_fantasy.Error.t ]
+  [ error | `Disabled of string | `No_credential | `Refresh of Charamel_fantasy.Error.t ]
 
 type login_error = [ error | `Oauth of string | `Timeout | `Aborted ]
 
@@ -30,9 +30,9 @@ let pp_refresh_error ppf = function
   | (`Io _ | `Parse _) as error -> pp_error ppf error
   | `Disabled reason -> Fmt.pf ppf "provider credential disabled: %s" reason
   | `No_credential -> Fmt.string ppf "no credential"
-  | `Refresh error -> Charm_fantasy.Error.pp ppf error
+  | `Refresh error -> Charamel_fantasy.Error.pp ppf error
 
-let path () = Filename.concat (Charm_cli.Xdg.config_dir ~app:"crush") "auth.json"
+let path () = Filename.concat (Charamel_cli.Xdg.config_dir ~app:"crush") "auth.json"
 
 let path_text path =
   Option.value (Eio.Path.native path) ~default:(Fmt.str "%a" Eio.Path.pp path)
@@ -267,8 +267,8 @@ let remove_entry provider entries =
   List.filter (fun (name, _) -> not (String.equal name provider)) entries
 
 let to_fantasy = function
-  | Api_key key -> Some (Charm_fantasy.Provider.Api_key key)
-  | Oauth credential -> Some (Charm_fantasy.Provider.Oauth credential)
+  | Api_key key -> Some (Charamel_fantasy.Provider.Api_key key)
+  | Oauth credential -> Some (Charamel_fantasy.Provider.Oauth credential)
   | Disabled _ -> None
 
 let nonempty = function
@@ -353,28 +353,29 @@ let remove t ~provider =
 let now_ms t = int_of_float (Eio.Time.now t.clock *. 1000.)
 
 let definitive_refresh_error = function
-  | (`Oauth_invalid_grant reason : Charm_fantasy.Error.t) -> Some reason
-  | `Http ({ status = 401; message; _ } : Charm_fantasy.Error.http_error) -> Some message
+  | (`Oauth_invalid_grant reason : Charamel_fantasy.Error.t) -> Some reason
+  | `Http ({ status = 401; message; _ } : Charamel_fantasy.Error.http_error) ->
+      Some message
   | _ -> None
 
 let auth_equal left right = left = right
 
 let refresh_oauth ~force ~sw ~net t ~provider ~entries old :
-    (Charm_fantasy.Provider.auth, refresh_error) result =
+    (Charamel_fantasy.Provider.auth, refresh_error) result =
   let outcome =
-    if force then Charm_fantasy.Oauth.Anthropic.refresh ~sw ~clock:t.clock ~net old
-    else Charm_fantasy.Oauth.Anthropic.ensure_fresh ~sw ~clock:t.clock ~net old
+    if force then Charamel_fantasy.Oauth.Anthropic.refresh ~sw ~clock:t.clock ~net old
+    else Charamel_fantasy.Oauth.Anthropic.ensure_fresh ~sw ~clock:t.clock ~net old
   in
   match outcome with
   | Ok fresh ->
       let updated = replace_entry provider (Oauth fresh) entries in
       if fresh = old then (
         t.entries <- entries;
-        Ok (Charm_fantasy.Provider.Oauth fresh))
+        Ok (Charamel_fantasy.Provider.Oauth fresh))
       else (
         t.entries <- updated;
         match Eio.Cancel.protect (fun () -> persist_entries t updated) with
-        | Ok () -> Ok (Charm_fantasy.Provider.Oauth fresh)
+        | Ok () -> Ok (Charamel_fantasy.Provider.Oauth fresh)
         | Error error ->
             t.persistence_fault <- Some error;
             Error error)
@@ -393,13 +394,13 @@ let refresh_oauth ~force ~sw ~net t ~provider ~entries old :
               Error error))
 
 let ensure_fresh ~sw ~net ~config ~env t ~provider :
-    (Charm_fantasy.Provider.auth, refresh_error) result =
+    (Charamel_fantasy.Provider.auth, refresh_error) result =
   let callback ~previous:_ entries : (_, refresh_error) result =
     t.entries <- entries;
     match resolve_entries entries ~config ~env ~provider with
     | None -> Error `No_credential
     | Some (Disabled { reason; _ }) -> Error (`Disabled reason)
-    | Some (Api_key key) -> Ok (Charm_fantasy.Provider.Api_key key)
+    | Some (Api_key key) -> Ok (Charamel_fantasy.Provider.Api_key key)
     | Some (Oauth old) ->
         Eio.Cancel.protect (fun () ->
             refresh_oauth ~force:false ~sw ~net t ~provider ~entries old)
@@ -407,15 +408,15 @@ let ensure_fresh ~sw ~net ~config ~env t ~provider :
   with_loaded t ~on_fault:(fun error -> Error (error :> refresh_error)) callback
 
 let refresh ~sw ~net ~config ~env t ~provider ~rejected :
-    (Charm_fantasy.Provider.auth, refresh_error) result =
+    (Charamel_fantasy.Provider.auth, refresh_error) result =
   let callback ~previous:_ entries : (_, refresh_error) result =
     t.entries <- entries;
     match resolve_entries entries ~config ~env ~provider with
     | None -> Error `No_credential
     | Some (Disabled { reason; _ }) -> Error (`Disabled reason)
-    | Some (Api_key key) -> Ok (Charm_fantasy.Provider.Api_key key)
+    | Some (Api_key key) -> Ok (Charamel_fantasy.Provider.Api_key key)
     | Some (Oauth old) ->
-        let current = Charm_fantasy.Provider.Oauth old in
+        let current = Charamel_fantasy.Provider.Oauth old in
         let force = auth_equal current rejected in
         Eio.Cancel.protect (fun () ->
             refresh_oauth ~force ~sw ~net t ~provider ~entries old)
@@ -492,7 +493,7 @@ module Login = struct
     loop 0 0
 
   let anthropic ~sw ~net ~open_browser ~prompt_paste t =
-    let login = Charm_fantasy.Oauth.Anthropic.begin_login ~redirect_uri () in
+    let login = Charamel_fantasy.Oauth.Anthropic.begin_login ~redirect_uri () in
     let listener_result =
       try
         Ok
@@ -529,9 +530,10 @@ module Login = struct
                                    if Uri.path uri <> "/callback" then None
                                    else
                                      match
-                                       Charm_fantasy.Oauth.Anthropic.extract_code
+                                       Charamel_fantasy.Oauth.Anthropic.extract_code
                                          ~url_or_code:(Uri.to_string uri)
-                                         ~state:login.Charm_fantasy__Oauth.Anthropic.state
+                                         ~state:
+                                           login.Charamel_fantasy__Oauth.Anthropic.state
                                      with
                                      | Ok code -> Some code
                                      | Error _ -> None)
@@ -579,7 +581,7 @@ module Login = struct
           | None -> Aborted
           | Some value -> Paste value
         in
-        open_browser login.Charm_fantasy__Oauth.Anthropic.uri;
+        open_browser login.Charamel_fantasy__Oauth.Anthropic.uri;
         let timeout () =
           Eio.Time.sleep t.clock 300.;
           Timeout
@@ -590,11 +592,11 @@ module Login = struct
         | Accept_error message -> Error (`Oauth message)
         | Callback code | Paste code -> (
             match
-              Charm_fantasy.Oauth.Anthropic.exchange ~sw ~clock:t.clock ~net ~redirect_uri
-                ~login ~code ()
+              Charamel_fantasy.Oauth.Anthropic.exchange ~sw ~clock:t.clock ~net
+                ~redirect_uri ~login ~code ()
             with
             | Error oauth_error ->
-                Error (`Oauth (Charm_fantasy.Error.message oauth_error))
+                Error (`Oauth (Charamel_fantasy.Error.message oauth_error))
             | Ok credential -> (
                 match set t ~provider:"anthropic" (Oauth credential) with
                 | Ok () -> Ok ()

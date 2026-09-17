@@ -5,23 +5,23 @@ type t
 
 val v :
   ?width:int ->
-  ?colors:Charm_ansi.Color.t list ->
+  ?colors:Charamel_ansi.Color.t list ->
   ?scaled:bool ->
-  ?color_func:(total:float -> current:float -> Charm_ansi.Color.t) ->
+  ?color_func:(total:float -> current:float -> Charamel_ansi.Color.t) ->
   ?full:string ->
   ?empty:string ->
   ?show_percentage:bool ->
   ?percent_format:(float -> string) ->
-  ?percentage_style:Charm_lipgloss.Style.t ->
+  ?percentage_style:Charamel_lipgloss.Style.t ->
   ?spring:float * float ->
   unit ->
   t
 
-val update : msg -> t -> t * msg Charm_tea.Cmd.t
+val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 val view : t -> string
 val view_as : float -> t -> string
-val key : t -> Charm_tea.Key.t -> msg option
-val subscriptions : t -> msg Charm_tea.Sub.t
+val key : t -> Charamel_tea.Key.t -> msg option
+val subscriptions : t -> msg Charamel_tea.Sub.t
 val percent : t -> float
 val set_percent : float -> t -> t
 val incr_percent : float -> t -> t

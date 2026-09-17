@@ -1,8 +1,8 @@
 (test
  (name test_cli)
- (package charm)
+ (package charamel)
  (modules test_cli test_xdg)
- (libraries charm.cli alcotest eio eio_main)
+ (libraries charamel.cli alcotest eio eio_main)
  (flags
   (:standard
    -strict-sequence
@@ -14,9 +14,9 @@
 
 (test
  (name test_cli_behavior)
- (package charm)
+ (package charamel)
  (modules test_cli_behavior test_cli_nearest)
- (libraries charm.cli alcotest eio eio_main cmdliner)
+ (libraries charamel.cli alcotest eio eio_main cmdliner)
  (flags
   (:standard
    -strict-sequence

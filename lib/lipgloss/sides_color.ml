@@ -1,8 +1,8 @@
 type t = {
-  top : Charm_ansi.Color.t option;
-  right : Charm_ansi.Color.t option;
-  bottom : Charm_ansi.Color.t option;
-  left : Charm_ansi.Color.t option;
+  top : Charamel_ansi.Color.t option;
+  right : Charamel_ansi.Color.t option;
+  bottom : Charamel_ansi.Color.t option;
+  left : Charamel_ansi.Color.t option;
 }
 
 let none = { top = None; right = None; bottom = None; left = None }

@@ -1,11 +1,11 @@
 (test
  (name test_bubbles)
- (package charm)
+ (package charamel)
  (libraries
-  charm.bubbles
-  charm.tea
-  charm.ansi
-  charm.lipgloss
+  charamel.bubbles
+  charamel.tea
+  charamel.ansi
+  charamel.lipgloss
   alcotest
   eio
   eio.unix

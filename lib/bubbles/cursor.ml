@@ -1,5 +1,5 @@
-module Style = Charm_lipgloss.Style
-module Sub = Charm_tea.Sub
+module Style = Charamel_lipgloss.Style
+module Sub = Charamel_tea.Sub
 
 let default_blink_speed = 0.53
 

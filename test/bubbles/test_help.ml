@@ -1,7 +1,7 @@
-module Help = Charm_bubbles.Help
-module Binding = Charm_bubbles.Key_binding
-module Text = Charm_ansi.Text
-module Layout = Charm_lipgloss.Layout
+module Help = Charamel_bubbles.Help
+module Binding = Charamel_bubbles.Key_binding
+module Text = Charamel_ansi.Text
+module Layout = Charamel_lipgloss.Layout
 
 let bindings () =
   [

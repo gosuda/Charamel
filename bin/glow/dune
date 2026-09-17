@@ -3,12 +3,12 @@
  (wrapped false)
  (modules config source ui)
  (libraries
-  charm.cli
-  charm.glamour
-  charm.bubbles
-  charm.tea
-  charm.ansi
-  charm.lipgloss
+  charamel.cli
+  charamel.glamour
+  charamel.bubbles
+  charamel.tea
+  charamel.ansi
+  charamel.lipgloss
   eio
   eio.unix
   eio_main
@@ -41,12 +41,12 @@
  (modules main)
  (libraries
   glow_core
-  charm.cli
-  charm.glamour
-  charm.bubbles
-  charm.tea
-  charm.ansi
-  charm.lipgloss
+  charamel.cli
+  charamel.glamour
+  charamel.bubbles
+  charamel.tea
+  charamel.ansi
+  charamel.lipgloss
   eio
   eio.unix
   eio_main

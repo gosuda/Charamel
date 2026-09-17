@@ -1,8 +1,8 @@
 type resolved = {
   role : [ `Large | `Small ];
   provider_id : string;
-  provider : Charm_fantasy.Provider.t;
-  model : Charm_fantasy.Model.t;
+  provider : Charamel_fantasy.Provider.t;
+  model : Charamel_fantasy.Model.t;
   reasoning : Config.reasoning;
   max_tokens : int;
 }
@@ -39,9 +39,9 @@ let pp_error ppf = function
   | `Auth error -> Fmt.pf ppf "%a" Auth.pp_error error
 
 let catalog_cache_path () =
-  Filename.concat (Charm_cli.Xdg.cache_dir ~app:"crush") "providers.json"
+  Filename.concat (Charamel_cli.Xdg.cache_dir ~app:"crush") "providers.json"
 
-let provider_json json = Jsont.Json.decode Charm_fantasy.Provider_info.jsont json
+let provider_json json = Jsont.Json.decode Charamel_fantasy.Provider_info.jsont json
 
 let catalog_json json =
   match json with
@@ -78,7 +78,7 @@ let load_cache fs =
   | Eio.Io _ -> Error "providers cache cannot be read"
   | Unix.Unix_error _ -> Error "providers cache cannot be read"
 
-let model_id model = model.Charm_fantasy.Model.id
+let model_id model = model.Charamel_fantasy.Model.id
 
 let prepend_models configured existing =
   let configured_ids = List.map model_id configured in
@@ -95,17 +95,17 @@ let overlay_provider (id, existing) config =
   | Some configured ->
       let base_url =
         Option.value configured.Config.base_url
-          ~default:existing.Charm_fantasy.Provider_info.base_url
+          ~default:existing.Charamel_fantasy.Provider_info.base_url
       in
       let models =
         prepend_models configured.Config.models
-          existing.Charm_fantasy.Provider_info.models
+          existing.Charamel_fantasy.Provider_info.models
       in
       ( id,
         {
           existing with
-          Charm_fantasy.Provider_info.base_url;
-          Charm_fantasy.Provider_info.models;
+          Charamel_fantasy.Provider_info.base_url;
+          Charamel_fantasy.Provider_info.models;
         } )
 
 let configured_only config existing_ids =
@@ -117,10 +117,10 @@ let configured_only config existing_ids =
         Some
           ( id,
             {
-              Charm_fantasy.Provider_info.id;
-              Charm_fantasy.Provider_info.name = id;
-              Charm_fantasy.Provider_info.base_url;
-              Charm_fantasy.Provider_info.models = provider.Config.models;
+              Charamel_fantasy.Provider_info.id;
+              Charamel_fantasy.Provider_info.name = id;
+              Charamel_fantasy.Provider_info.base_url;
+              Charamel_fantasy.Provider_info.models = provider.Config.models;
             } ))
     config.Config.providers
 
@@ -128,9 +128,9 @@ let catalog ~fs config =
   let base =
     match load_cache fs with
     | Ok values -> values
-    | Error _ -> Charm_fantasy.Catalog.embedded
+    | Error _ -> Charamel_fantasy.Catalog.embedded
   in
-  let with_ids = List.map (fun p -> (p.Charm_fantasy.Provider_info.id, p)) base in
+  let with_ids = List.map (fun p -> (p.Charamel_fantasy.Provider_info.id, p)) base in
   let known_ids = List.map fst with_ids in
   let overlaid = List.map (fun pair -> overlay_provider pair config) with_ids in
   List.map snd (overlaid @ configured_only config known_ids)
@@ -156,7 +156,7 @@ let make_provider ~env ~catalog_provider ~config_provider ~auth ~id config =
   in
   let configured_base = Option.bind config_provider (fun p -> p.Config.base_url) in
   let catalog_base =
-    Config.expand_env ~env catalog_provider.Charm_fantasy.Provider_info.base_url
+    Config.expand_env ~env catalog_provider.Charamel_fantasy.Provider_info.base_url
   in
   let base_url = configured_base in
   match kind with
@@ -166,7 +166,7 @@ let make_provider ~env ~catalog_provider ~config_provider ~auth ~id config =
           ~default:
             (if catalog_base = "" then "https://api.anthropic.com" else catalog_base)
       in
-      Ok (Charm_fantasy.Provider.anthropic ~base_url:base ~auth ())
+      Ok (Charamel_fantasy.Provider.anthropic ~base_url:base ~auth ())
   | Config.Openai ->
       let base = Option.value base_url ~default:"https://api.openai.com/v1" in
       let headers =
@@ -174,7 +174,7 @@ let make_provider ~env ~catalog_provider ~config_provider ~auth ~id config =
           ~some:(fun (p : Config.provider) -> p.Config.headers)
           config_provider
       in
-      Ok (Charm_fantasy.Provider.openai_compatible ~base_url:base ~headers ~auth ())
+      Ok (Charamel_fantasy.Provider.openai_compatible ~base_url:base ~headers ~auth ())
   | Config.Openai_compatible ->
       let base = Option.value base_url ~default:catalog_base in
       if base = "" then Error (`Unknown_provider id)
@@ -184,10 +184,10 @@ let make_provider ~env ~catalog_provider ~config_provider ~auth ~id config =
             ~some:(fun (p : Config.provider) -> p.Config.headers)
             config_provider
         in
-        Ok (Charm_fantasy.Provider.openai_compatible ~base_url:base ~headers ~auth ())
+        Ok (Charamel_fantasy.Provider.openai_compatible ~base_url:base ~headers ~auth ())
   | Config.Openai_responses ->
       let base = Option.value base_url ~default:"https://api.openai.com/v1" in
-      Ok (Charm_fantasy.Provider.openai_responses ~base_url:base ~auth ())
+      Ok (Charamel_fantasy.Provider.openai_responses ~base_url:base ~auth ())
   | Config.Google ->
       let base =
         Option.value base_url
@@ -195,15 +195,15 @@ let make_provider ~env ~catalog_provider ~config_provider ~auth ~id config =
             (if catalog_base = "" then "https://generativelanguage.googleapis.com"
              else catalog_base)
       in
-      Ok (Charm_fantasy.Provider.google ~base_url:base ~auth ())
+      Ok (Charamel_fantasy.Provider.google ~base_url:base ~auth ())
 
 let find_provider providers id =
-  List.find_opt (fun p -> String.equal p.Charm_fantasy.Provider_info.id id) providers
+  List.find_opt (fun p -> String.equal p.Charamel_fantasy.Provider_info.id id) providers
 
 let find_model provider wanted_id =
   List.find_opt
     (fun model -> String.equal (model_id model) wanted_id)
-    provider.Charm_fantasy.Provider_info.models
+    provider.Charamel_fantasy.Provider_info.models
 
 let preferred_model id models =
   let predicate =
@@ -291,7 +291,7 @@ let resolve ~fs config ~auth ~env ~role =
               | Error error -> Error error
               | Ok _ -> (
                   match
-                    preferred_model id provider.Charm_fantasy.Provider_info.models
+                    preferred_model id provider.Charamel_fantasy.Provider_info.models
                   with
                   | None -> choose rest
                   | Some model -> Ok (id, provider, model, None, None))))
@@ -309,7 +309,7 @@ let resolve ~fs config ~auth ~env ~role =
                 (fun large ->
                   Option.value
                     (small_model_with_fallback selected.Config.provider
-                       provider.Charm_fantasy.Provider_info.models
+                       provider.Charamel_fantasy.Provider_info.models
                        ~fallback_id:selected.Config.model)
                     ~default:large)
                 (find_model provider selected.Config.model)
@@ -330,7 +330,7 @@ let resolve ~fs config ~auth ~env ~role =
               let reasoning = Option.value selected.Config.reasoning ~default:`Off in
               let max_tokens =
                 Option.value selected.Config.max_tokens
-                  ~default:model.Charm_fantasy.Model.default_max_tokens
+                  ~default:model.Charamel_fantasy.Model.default_max_tokens
               in
               Ok
                 {
@@ -348,7 +348,7 @@ let resolve ~fs config ~auth ~env ~role =
         | `Large -> large_model
         | `Small ->
             Option.value
-              (small_model provider_id provider.Charm_fantasy.Provider_info.models)
+              (small_model provider_id provider.Charamel_fantasy.Provider_info.models)
               ~default:large_model
       in
       let config_provider = provider_config provider_id config in
@@ -365,7 +365,7 @@ let resolve ~fs config ~auth ~env ~role =
           provider = provider_handle;
           model;
           reasoning;
-          max_tokens = model.Charm_fantasy.Model.default_max_tokens;
+          max_tokens = model.Charamel_fantasy.Model.default_max_tokens;
         }
 
 let with_auth ~fs config ~env resolved provider_auth =
@@ -380,33 +380,35 @@ let with_auth ~fs config ~env resolved provider_auth =
       in
       Ok { resolved with provider }
 
-let cost (model : Charm_fantasy.Model.t) (usage : Charm_fantasy.Usage.t) =
-  ((float_of_int usage.Charm_fantasy.Usage.input *. model.Charm_fantasy.Model.cost_in)
-  +. (float_of_int usage.Charm_fantasy.Usage.output *. model.Charm_fantasy.Model.cost_out)
-  +. float_of_int usage.Charm_fantasy.Usage.cache_read
-     *. model.Charm_fantasy.Model.cost_cache_read
-  +. float_of_int usage.Charm_fantasy.Usage.cache_write
-     *. model.Charm_fantasy.Model.cost_cache_write)
+let cost (model : Charamel_fantasy.Model.t) (usage : Charamel_fantasy.Usage.t) =
+  (float_of_int usage.Charamel_fantasy.Usage.input
+   *. model.Charamel_fantasy.Model.cost_in
+  +. float_of_int usage.Charamel_fantasy.Usage.output
+     *. model.Charamel_fantasy.Model.cost_out
+  +. float_of_int usage.Charamel_fantasy.Usage.cache_read
+     *. model.Charamel_fantasy.Model.cost_cache_read
+  +. float_of_int usage.Charamel_fantasy.Usage.cache_write
+     *. model.Charamel_fantasy.Model.cost_cache_write)
   /. 1_000_000.
 
 let list ~fs config ~auth ~env =
   let providers = catalog ~fs config in
   List.map
     (fun provider ->
-      let id = provider.Charm_fantasy.Provider_info.id in
+      let id = provider.Charamel_fantasy.Provider_info.id in
       let state =
         match Auth.resolve auth ~config ~env ~provider:id with
         | Ok (Some (Auth.Disabled _)) -> `Disabled
         | Ok (Some credential) when Option.is_some (Auth.to_fantasy credential) -> `Ready
         | _ -> `No_credential
       in
-      (id, provider.Charm_fantasy.Provider_info.models, state))
+      (id, provider.Charamel_fantasy.Provider_info.models, state))
     providers
 
 type update_result = Updated of string | Not_modified
 
 type update_error =
-  [ `Io of string * string | `Parse of string | `Fetch of Charm_fantasy.Error.t ]
+  [ `Io of string * string | `Parse of string | `Fetch of Charamel_fantasy.Error.t ]
 
 let cache_etag fs =
   let filename = catalog_cache_path () in
@@ -425,7 +427,7 @@ let cache_etag fs =
 
 let cache_document ~etag providers =
   let providers_text =
-    Jsonx.encode (Jsont.list Charm_fantasy.Provider_info.jsont) providers
+    Jsonx.encode (Jsont.list Charamel_fantasy.Provider_info.jsont) providers
   in
   let providers_json =
     match Jsonx.json_of_string providers_text with
@@ -441,7 +443,7 @@ let cache_document ~etag providers =
 let pp_update_error ppf = function
   | `Io (path, message) -> Fmt.pf ppf "catalog cache I/O error at %s: %s" path message
   | `Parse message -> Fmt.pf ppf "catalog cache parse error: %s" message
-  | `Fetch error -> Fmt.pf ppf "catalog fetch error: %a" Charm_fantasy.Error.pp error
+  | `Fetch error -> Fmt.pf ppf "catalog fetch error: %a" Charamel_fantasy.Error.pp error
 
 let save_catalog ~fs ~etag providers =
   let filename = catalog_cache_path () in
@@ -468,8 +470,8 @@ let save_catalog ~fs ~etag providers =
 
 let update_catalog ?source ~fs ~net ~clock () =
   let etag = cache_etag fs in
-  match Charm_fantasy.Catalog.fetch ?base_url:source ?etag ~net ~clock () with
+  match Charamel_fantasy.Catalog.fetch ?base_url:source ?etag ~net ~clock () with
   | Error `Not_modified -> Ok Not_modified
-  | Error (#Charm_fantasy.Error.t as error) -> Error (`Fetch error)
+  | Error (#Charamel_fantasy.Error.t as error) -> Error (`Fetch error)
   | Ok (providers, new_etag) ->
       save_catalog ~fs ~etag:new_etag providers |> Result.map (fun () -> Updated new_etag)

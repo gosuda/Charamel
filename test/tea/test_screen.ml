@@ -1,6 +1,6 @@
-module Screen = Charm_tea__Screen
-module View = Charm_tea.View
-module Cursor = Charm_tea.Cursor
+module Screen = Charamel_tea__Screen
+module View = Charamel_tea.View
+module Cursor = Charamel_tea.Cursor
 
 let sync body = "\x1b[?2026h" ^ body ^ "\x1b[?2026l"
 let check_string name expected actual = Alcotest.(check string) name expected actual
@@ -76,8 +76,8 @@ let test_cursor_colors_and_progress () =
   let cursor = { Cursor.row = 0; col = 1; shape = Cursor.Underline; blink = false } in
   let view =
     View.v ~cursor
-      ~background:(Charm_ansi.Color.Rgb (1, 2, 3))
-      ~foreground:(Charm_ansi.Color.Rgb (4, 5, 6))
+      ~background:(Charamel_ansi.Color.Rgb (1, 2, 3))
+      ~foreground:(Charamel_ansi.Color.Rgb (4, 5, 6))
       ~progress:(View.Progress_value 150) "x"
   in
   check_string "cursor colors and progress are mode-only"

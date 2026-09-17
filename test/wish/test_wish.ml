@@ -1,5 +1,5 @@
-module W = Charm_ssh_wish
-module K = Charm_ssh_keygen
+module W = Charamel_ssh_wish
+module K = Charamel_ssh_keygen
 
 exception Test_done
 
@@ -16,21 +16,21 @@ let write_all socket data = List.iter (write socket) data
 let key_from_seed seed = Awa.Keys.of_seed `Ed25519 seed
 
 type counter_model = { count : int }
-type counter_msg = Key of Charm_tea.Key.t
+type counter_msg = Key of Charamel_tea.Key.t
 
-let counter_app _session : (counter_model, counter_msg) Charm_tea.app =
+let counter_app _session : (counter_model, counter_msg) Charamel_tea.app =
   {
-    Charm_tea.init = (fun () -> ({ count = 0 }, Charm_tea.Cmd.none));
+    Charamel_tea.init = (fun () -> ({ count = 0 }, Charamel_tea.Cmd.none));
     update =
       (fun (Key key) model ->
-        match key.Charm_tea.Key.code with
-        | Charm_tea.Key.Char code when Uchar.equal code (Uchar.of_char 'q') ->
-            (model, Charm_tea.Cmd.quit)
-        | Charm_tea.Key.Char code when Uchar.equal code (Uchar.of_char 'k') ->
-            ({ count = model.count + 1 }, Charm_tea.Cmd.none)
-        | _ -> (model, Charm_tea.Cmd.none));
-    view = (fun model -> Charm_tea.View.v (Fmt.str "count: %d" model.count));
-    subscriptions = (fun _ -> Charm_tea.Sub.key (fun key -> Key key));
+        match key.Charamel_tea.Key.code with
+        | Charamel_tea.Key.Char code when Uchar.equal code (Uchar.of_char 'q') ->
+            (model, Charamel_tea.Cmd.quit)
+        | Charamel_tea.Key.Char code when Uchar.equal code (Uchar.of_char 'k') ->
+            ({ count = model.count + 1 }, Charamel_tea.Cmd.none)
+        | _ -> (model, Charamel_tea.Cmd.none));
+    view = (fun model -> Charamel_tea.View.v (Fmt.str "count: %d" model.count));
+    subscriptions = (fun _ -> Charamel_tea.Sub.key (fun key -> Key key));
   }
 
 let send_request client socket request =
@@ -104,7 +104,7 @@ let run_connection_case ~env ~name ~authorized ~client_key ~expect_code ~expect_
   let server_awa = key_from_seed (Option.get (K.ed25519_seed server_key)) in
   let server_public = Awa.Hostkey.pub_of_priv server_awa in
   let client_awa = key_from_seed (Option.get (K.ed25519_seed client_key)) in
-  let path = Fmt.str "/tmp/charm-wish-%d-%s.sock" (Unix.getpid ()) name in
+  let path = Fmt.str "/tmp/charamel-wish-%d-%s.sock" (Unix.getpid ()) name in
   let unlink_if_present () =
     try Unix.unlink path with Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   in
@@ -170,4 +170,4 @@ let suites () =
     ("access-control", [ Alcotest.test_case "unknown key rejected" `Quick rejected_case ]);
   ]
 
-let () = Alcotest.run "charm-ssh.wish" (suites ())
+let () = Alcotest.run "charamel-ssh.wish" (suites ())

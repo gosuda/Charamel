@@ -126,11 +126,11 @@ let parse_decimal text =
 let color text =
   match parse_decimal text with
   | Some index -> (
-      match Charm_ansi.Color.indexed index with
+      match Charamel_ansi.Color.indexed index with
       | Some color -> Ok color
       | None -> Error (errorf "invalid color %S" text))
   | None -> (
-      match Charm_ansi.Color.of_hex text with
+      match Charamel_ansi.Color.of_hex text with
       | Some color -> Ok color
       | None -> Error (errorf "invalid color %S" text))
 
@@ -146,20 +146,20 @@ let style_call name args =
     match (arg_count 1, args) with
     | Ok (), [ Literal text ] ->
         Ok
-          ( f Charm_lipgloss.Style.empty |> fun style ->
-            Charm_lipgloss.Style.render style text )
+          ( f Charamel_lipgloss.Style.empty |> fun style ->
+            Charamel_lipgloss.Style.render style text )
     | (Error _ as error), _ -> error
     | Ok (), _ -> Error (errorf "%s expects one argument" name)
   in
   match name with
   | "Overline" -> unary name (fun style -> style)
-  | "Bold" -> unary name (Charm_lipgloss.Style.bold true)
-  | "Faint" -> unary name (Charm_lipgloss.Style.faint true)
-  | "Italic" -> unary name (Charm_lipgloss.Style.italic true)
-  | "Underline" -> unary name (Charm_lipgloss.Style.underline true)
-  | "Blink" -> unary name (Charm_lipgloss.Style.blink true)
-  | "Reverse" -> unary name (Charm_lipgloss.Style.reverse true)
-  | "CrossOut" -> unary name (Charm_lipgloss.Style.strikethrough true)
+  | "Bold" -> unary name (Charamel_lipgloss.Style.bold true)
+  | "Faint" -> unary name (Charamel_lipgloss.Style.faint true)
+  | "Italic" -> unary name (Charamel_lipgloss.Style.italic true)
+  | "Underline" -> unary name (Charamel_lipgloss.Style.underline true)
+  | "Blink" -> unary name (Charamel_lipgloss.Style.blink true)
+  | "Reverse" -> unary name (Charamel_lipgloss.Style.reverse true)
+  | "CrossOut" -> unary name (Charamel_lipgloss.Style.strikethrough true)
   | "Foreground" | "Background" -> (
       match args with
       | [ Literal colour; Literal text ] -> (
@@ -168,10 +168,11 @@ let style_call name args =
           | Ok colour ->
               let style =
                 if name = "Foreground" then
-                  Charm_lipgloss.Style.foreground colour Charm_lipgloss.Style.empty
-                else Charm_lipgloss.Style.background colour Charm_lipgloss.Style.empty
+                  Charamel_lipgloss.Style.foreground colour Charamel_lipgloss.Style.empty
+                else
+                  Charamel_lipgloss.Style.background colour Charamel_lipgloss.Style.empty
               in
-              Ok (Charm_lipgloss.Style.render style text))
+              Ok (Charamel_lipgloss.Style.render style text))
       | _ -> Error (errorf "%s expects a color and text" name))
   | "Color" -> (
       match args with
@@ -180,20 +181,21 @@ let style_call name args =
           | Error _ as error -> error
           | Ok foreground ->
               let style =
-                Charm_lipgloss.Style.foreground foreground Charm_lipgloss.Style.empty
+                Charamel_lipgloss.Style.foreground foreground
+                  Charamel_lipgloss.Style.empty
               in
-              Ok (Charm_lipgloss.Style.render style text))
+              Ok (Charamel_lipgloss.Style.render style text))
       | [ Literal foreground; Literal background; Literal text ] -> (
           match (color foreground, color background) with
           | (Error _ as error), _ -> error
           | _, (Error _ as error) -> error
           | Ok foreground, Ok background ->
               let style =
-                Charm_lipgloss.Style.empty
-                |> Charm_lipgloss.Style.foreground foreground
-                |> Charm_lipgloss.Style.background background
+                Charamel_lipgloss.Style.empty
+                |> Charamel_lipgloss.Style.foreground foreground
+                |> Charamel_lipgloss.Style.background background
               in
-              Ok (Charm_lipgloss.Style.render style text))
+              Ok (Charamel_lipgloss.Style.render style text))
       | _ ->
           Error
             (errorf

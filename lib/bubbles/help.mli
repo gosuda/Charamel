@@ -1,13 +1,13 @@
 (** Pure rendering of short and full keyboard-help views. *)
 
 type styles = {
-  ellipsis : Charm_lipgloss.Style.t;
-  short_key : Charm_lipgloss.Style.t;
-  short_desc : Charm_lipgloss.Style.t;
-  short_separator : Charm_lipgloss.Style.t;
-  full_key : Charm_lipgloss.Style.t;
-  full_desc : Charm_lipgloss.Style.t;
-  full_separator : Charm_lipgloss.Style.t;
+  ellipsis : Charamel_lipgloss.Style.t;
+  short_key : Charamel_lipgloss.Style.t;
+  short_desc : Charamel_lipgloss.Style.t;
+  short_separator : Charamel_lipgloss.Style.t;
+  full_key : Charamel_lipgloss.Style.t;
+  full_desc : Charamel_lipgloss.Style.t;
+  full_separator : Charamel_lipgloss.Style.t;
 }
 
 val default_styles : is_dark:bool -> styles

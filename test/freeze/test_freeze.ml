@@ -34,7 +34,8 @@ let with_fixture env f =
   let parent = fixture_parent env in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 parent;
   let path =
-    Filename.temp_file ~temp_dir:(Eio.Path.native_exn parent) "charm-freeze-cli-" ".dir"
+    Filename.temp_file ~temp_dir:(Eio.Path.native_exn parent) "charamel-freeze-cli-"
+      ".dir"
   in
   Sys.remove path;
   let root = Eio.Path.(env#fs / path) in
@@ -54,7 +55,7 @@ let test_side_expansion () =
     "vertical/horizontal sides" [| 2.; 4.; 2.; 4. |] actual
 
 let test_svg_escapes_and_styles env =
-  let language = Option.get (Charm_highlight.find "ocaml") in
+  let language = Option.get (Charamel_highlight.find "ocaml") in
   let config = { Config.default with output = "capture.svg" } in
   let rendered =
     Svg.render ~fs:env#fs ~config ~language:(Some language) ~text:"let x = <&>"

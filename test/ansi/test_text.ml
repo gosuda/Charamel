@@ -1,4 +1,4 @@
-module Text = Charm_ansi.Text
+module Text = Charamel_ansi.Text
 
 let check_string name expected actual =
   Alcotest.check Alcotest.string name expected actual

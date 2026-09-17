@@ -18,8 +18,8 @@
  (package melt)
  (libraries
   melt_core
-  charm.cli
-  charm-ssh.keygen
+  charamel.cli
+  charamel-ssh.keygen
   eio
   eio.unix
   unix

@@ -1,4 +1,4 @@
-(** Common Charm Tea execution wrapper for interactive gum commands. *)
+(** Common Charamel Tea execution wrapper for interactive gum commands. *)
 
 type outcome =
   | Submitted
@@ -8,7 +8,7 @@ type outcome =
 val run :
   ?timeout:float ->
   Eio_unix.Stdenv.base ->
-  ('model, 'msg) Charm_tea.app ->
+  ('model, 'msg) Charamel_tea.app ->
   finished:('model -> outcome) ->
   'model
 (** [run ?timeout env app ~finished] runs [app] on {!Gum_io.ui_terminal} and returns its

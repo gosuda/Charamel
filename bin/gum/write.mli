@@ -54,7 +54,7 @@ val normalize_lines : max_lines:int -> string -> string
 val make : options -> model
 (** [make options] creates a focused textarea model. *)
 
-val app : options -> (model, msg) Charm_tea.app
+val app : options -> (model, msg) Charamel_tea.app
 (** [app options] is the scripted or terminal write application. *)
 
 val value : model -> string

@@ -1,4 +1,4 @@
-module Key = Charm_ssh_keygen
+module Key = Charamel_ssh_keygen
 module Keygen = Keygen_core.Keygen
 
 let run env algorithm path comment force =
@@ -6,10 +6,10 @@ let run env algorithm path comment force =
     if String.equal path "" then Keygen.default_path algorithm else Ok path
   in
   match path_result with
-  | Error error -> Charm_cli.error (Fmt.str "%a" Keygen.pp_error error)
+  | Error error -> Charamel_cli.error (Fmt.str "%a" Keygen.pp_error error)
   | Ok path -> (
       match Keygen.generate ~fs:(fst env#fs) ~path ~algorithm ~comment ~force () with
-      | Error error -> Charm_cli.error (Fmt.str "%a" Keygen.pp_error error)
+      | Error error -> Charamel_cli.error (Fmt.str "%a" Keygen.pp_error error)
       | Ok fingerprint -> Eio.Flow.copy_string (fingerprint ^ "\n") env#stdout)
 
 let algorithm_arg () =
@@ -55,7 +55,7 @@ let term env =
 
 let () =
   Mirage_crypto_rng_unix.use_default ();
-  Charm_cli.run ~name:"keygen" ~version:Charm_cli.Version.current
+  Charamel_cli.run ~name:"keygen" ~version:Charamel_cli.Version.current
     ~doc:"Generate an OpenSSH key pair."
     ~default:(fun env -> term env)
     []

@@ -17,7 +17,7 @@ type event =
   | Permission_asked of Permission.request
   | Permission_resolved of Permission.request * Permission.outcome
   | Usage of {
-      usage : Charm_fantasy.Usage.t;
+      usage : Charamel_fantasy.Usage.t;
       cost_usd : float;
       total_cost_usd : float;
       context_tokens : int;
@@ -118,6 +118,6 @@ val set_plan_mode : t -> bool -> unit
 (** [set_plan_mode t enabled] changes the permission policy and records the mode change in
     the session. *)
 
-val stats : t -> Charm_fantasy.Usage.t * float * int
+val stats : t -> Charamel_fantasy.Usage.t * float * int
 (** [stats t] is total usage, total cost in US dollars, and the latest context token
     count. *)

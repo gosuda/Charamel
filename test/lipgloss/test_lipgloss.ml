@@ -1,4 +1,4 @@
-open Charm_lipgloss
+open Charamel_lipgloss
 
 let check_string name expected actual = Alcotest.(check string) name expected actual
 let check_int name expected actual = Alcotest.(check int) name expected actual

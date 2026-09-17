@@ -18,7 +18,7 @@
  (modules main)
  (libraries
   hotdiva_core
-  charm.cli
+  charamel.cli
   cmdliner
   eio
   eio.unix

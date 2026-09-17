@@ -1,4 +1,4 @@
-module Key = Charm_tea.Key
+module Key = Charamel_tea.Key
 
 let no_mods =
   {

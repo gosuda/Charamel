@@ -1,4 +1,4 @@
-(** Observable contract cases for [Charm_lipgloss.Layout].
+(** Observable contract cases for [Charamel_lipgloss.Layout].
 
     The cases cover escape-aware and grapheme-aware measurements, horizontal and vertical
     joining, placement and odd-cell alignment, patterned and styled whitespace, and range-

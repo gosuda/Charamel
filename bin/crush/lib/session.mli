@@ -26,7 +26,7 @@ type decision =
   | Deny  (** A recorded permission decision. *)
 
 type event =
-  | Message of { ms : int; message : Charm_fantasy.Message.t }
+  | Message of { ms : int; message : Charamel_fantasy.Message.t }
   | Tool_call of { ms : int; id : string; name : string; input : Jsont.json }
   | Tool_result of {
       ms : int;
@@ -38,7 +38,7 @@ type event =
     }
   | Usage of {
       ms : int;
-      usage : Charm_fantasy.Usage.t;
+      usage : Charamel_fantasy.Usage.t;
       cost_usd : float;
       model : model_ref;
     }
@@ -60,10 +60,10 @@ val event_jsont : event Jsont.t
 (** [event_jsont] decodes and encodes every event variant. The discriminator member [t] is
     emitted first. *)
 
-val message_jsont : Charm_fantasy.Message.t Jsont.t
+val message_jsont : Charamel_fantasy.Message.t Jsont.t
 (** [message_jsont] is the canonical message codec used by [Message] events. *)
 
-val part_jsont : Charm_fantasy.Message.part Jsont.t
+val part_jsont : Charamel_fantasy.Message.part Jsont.t
 (** [part_jsont] is the canonical message-part codec. *)
 
 val tool_output_jsont : tool_output Jsont.t
@@ -76,7 +76,7 @@ type index_entry = {
   created_ms : int;
   updated_ms : int;
   message_count : int;
-  usage : Charm_fantasy.Usage.t;
+  usage : Charamel_fantasy.Usage.t;
   cost_usd : float;
 }
 (** One row in [sessions.json]. *)
@@ -158,12 +158,12 @@ val append : t -> clock:_ Eio.Time.clock -> event -> (unit, error) result
 val set_title : t -> title:string -> (unit, error) result
 (** [set_title session ~title] updates the indexed title without adding an event. *)
 
-val messages : t -> Charm_fantasy.Message.t list
+val messages : t -> Charamel_fantasy.Message.t list
 (** [messages session] replays model-visible messages. The latest summary is represented
     by a synthetic user summary and assistant acknowledgement; observability-only tool
     events are not duplicated. *)
 
-val usage_total : t -> Charm_fantasy.Usage.t * float
+val usage_total : t -> Charamel_fantasy.Usage.t * float
 (** [usage_total session] sums all usage events and their dollar costs. *)
 
 val delete : store -> id:string -> (unit, error) result

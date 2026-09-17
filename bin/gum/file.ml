@@ -48,22 +48,22 @@ let default_options =
     header_style = style ~foreground:"99" ();
   }
 
-let key_name key = Charm_tea.Key.to_string key
+let key_name key = Charamel_tea.Key.to_string key
 let is_quit key = match key_name key with "q" | "esc" -> true | _ -> false
 let is_abort key = String.equal (key_name key) "ctrl+c"
 
 type status = Running | Selected of string | Quit | Aborted
-type model = { picker : Charm_bubbles.Filepicker.t; status : status }
+type model = { picker : Charamel_bubbles.Filepicker.t; status : status }
 
 type msg =
-  | Picker of Charm_bubbles.Filepicker.msg
-  | Key of Charm_tea.Key.t
+  | Picker of Charamel_bubbles.Filepicker.msg
+  | Key of Charamel_tea.Key.t
   | Resize of int
 
 let help_line = "↑/↓ navigate • enter select • esc quit"
 
 let apply_styles (options : options) picker =
-  let defaults = Charm_bubbles.Filepicker.default_styles in
+  let defaults = Charamel_bubbles.Filepicker.default_styles in
   let styles =
     {
       defaults with
@@ -76,77 +76,81 @@ let apply_styles (options : options) picker =
       file_size = Gum_style.to_style options.file_size_style;
     }
   in
-  Charm_bubbles.Filepicker.set_styles styles picker
+  Charamel_bubbles.Filepicker.set_styles styles picker
 
 let app ~env (options : options) ~padding ~directory =
   let picker =
-    Charm_bubbles.Filepicker.v ~fs:env#fs ~current_directory:directory
+    Charamel_bubbles.Filepicker.v ~fs:env#fs ~current_directory:directory
       ~height:options.height ~auto_height:(options.height = 0) ~cursor:options.cursor
       ~dir_allowed:options.directory ~file_allowed:options.file
       ~show_permissions:options.permissions ~show_size:options.size
       ~show_hidden:options.all ()
   in
   let picker = apply_styles options picker in
-  let picker, init_cmd = Charm_bubbles.Filepicker.init picker in
+  let picker, init_cmd = Charamel_bubbles.Filepicker.init picker in
   let initial = { picker; status = Running } in
-  let init_cmd = Charm_tea.Cmd.map (fun message -> Picker message) init_cmd in
+  let init_cmd = Charamel_tea.Cmd.map (fun message -> Picker message) init_cmd in
   let update message model =
     match message with
     | Key key when is_abort key ->
-        ({ model with status = Aborted }, Charm_tea.Cmd.interrupt)
-    | Key key when is_quit key -> ({ model with status = Quit }, Charm_tea.Cmd.quit)
+        ({ model with status = Aborted }, Charamel_tea.Cmd.interrupt)
+    | Key key when is_quit key -> ({ model with status = Quit }, Charamel_tea.Cmd.quit)
     | Key key -> (
-        match Charm_bubbles.Filepicker.key model.picker key with
-        | None -> (model, Charm_tea.Cmd.none)
+        match Charamel_bubbles.Filepicker.key model.picker key with
+        | None -> (model, Charamel_tea.Cmd.none)
         | Some message -> (
-            match Charm_bubbles.Filepicker.did_select_file message model.picker with
-            | Some path -> ({ model with status = Selected path }, Charm_tea.Cmd.quit)
+            match Charamel_bubbles.Filepicker.did_select_file message model.picker with
+            | Some path -> ({ model with status = Selected path }, Charamel_tea.Cmd.quit)
             | None ->
                 let picker, command =
-                  Charm_bubbles.Filepicker.update message model.picker
+                  Charamel_bubbles.Filepicker.update message model.picker
                 in
                 ( { model with picker },
-                  Charm_tea.Cmd.map (fun message -> Picker message) command )))
+                  Charamel_tea.Cmd.map (fun message -> Picker message) command )))
     | Resize rows ->
         let picker, command =
-          Charm_bubbles.Filepicker.update (Charm_bubbles.Filepicker.Resize rows)
+          Charamel_bubbles.Filepicker.update (Charamel_bubbles.Filepicker.Resize rows)
             model.picker
         in
-        ({ model with picker }, Charm_tea.Cmd.map (fun message -> Picker message) command)
+        ( { model with picker },
+          Charamel_tea.Cmd.map (fun message -> Picker message) command )
     | Picker message -> (
-        match Charm_bubbles.Filepicker.did_select_file message model.picker with
-        | Some path -> ({ model with status = Selected path }, Charm_tea.Cmd.quit)
+        match Charamel_bubbles.Filepicker.did_select_file message model.picker with
+        | Some path -> ({ model with status = Selected path }, Charamel_tea.Cmd.quit)
         | None ->
-            let picker, command = Charm_bubbles.Filepicker.update message model.picker in
+            let picker, command =
+              Charamel_bubbles.Filepicker.update message model.picker
+            in
             ( { model with picker },
-              Charm_tea.Cmd.map (fun message -> Picker message) command ))
+              Charamel_tea.Cmd.map (fun message -> Picker message) command ))
   in
   let view model =
-    let picker_view = Charm_bubbles.Filepicker.view model.picker in
+    let picker_view = Charamel_bubbles.Filepicker.view model.picker in
     let parts =
       (if options.header = "" then []
        else
          [
            ( Gum_style.to_style options.header_style |> fun style ->
-             Charm_lipgloss.Style.render style options.header );
+             Charamel_lipgloss.Style.render style options.header );
          ])
       @ [ picker_view ]
     in
     let parts = if options.show_help then parts @ [ help_line ] else parts in
     let content = String.concat "\n" parts in
-    Charm_tea.View.v ~alt_screen:false
-      (Charm_lipgloss.Style.render
-         (Charm_lipgloss.Style.padding padding Charm_lipgloss.Style.empty)
+    Charamel_tea.View.v ~alt_screen:false
+      (Charamel_lipgloss.Style.render
+         (Charamel_lipgloss.Style.padding padding Charamel_lipgloss.Style.empty)
          content)
   in
   let subscriptions _ =
-    Charm_tea.Sub.batch
+    Charamel_tea.Sub.batch
       [
-        Charm_tea.Sub.key (fun key -> Key key);
-        Charm_tea.Sub.resize (fun ~rows ~cols:_ -> Resize rows);
+        Charamel_tea.Sub.key (fun key -> Key key);
+        Charamel_tea.Sub.resize (fun ~rows ~cols:_ -> Resize rows);
       ]
   in
-  ({ Charm_tea.init = (fun () -> (initial, init_cmd)); update; view; subscriptions }, ())
+  ( { Charamel_tea.init = (fun () -> (initial, init_cmd)); update; view; subscriptions },
+    () )
 
 let absolute_directory path =
   let path =
@@ -156,20 +160,20 @@ let absolute_directory path =
 
 let run env (options : options) =
   if (not options.file) && not options.directory then
-    Charm_cli.error "at least one between --file and --directory must be set";
+    Charamel_cli.error "at least one between --file and --directory must be set";
   let directory =
     try absolute_directory (if options.path = "" then "." else options.path)
     with Unix.Unix_error (error, _, _) ->
-      Charm_cli.error (Fmt.str "file not found: %s" (Unix.error_message error))
+      Charamel_cli.error (Fmt.str "file not found: %s" (Unix.error_message error))
   in
   let is_directory =
     try Eio.Path.is_directory Eio.Path.(env#fs / directory) with Eio.Io _ -> false
   in
-  if not is_directory then Charm_cli.error (Fmt.str "file not found: %s" directory);
+  if not is_directory then Charamel_cli.error (Fmt.str "file not found: %s" directory);
   let padding =
     match Gum_flag.parse_padding options.padding with
     | Ok value -> value
-    | Error (`Msg message) -> Charm_cli.error message
+    | Error (`Msg message) -> Charamel_cli.error message
   in
   let app, () = app ~env options ~padding ~directory in
   let model =
@@ -180,12 +184,12 @@ let run env (options : options) =
           | Quit -> Gum_run.Quit
           | Aborted -> Gum_run.Aborted
           | Running -> Gum_run.Quit)
-    with Gum_io.No_tty -> Charm_cli.error "file: requires a terminal"
+    with Gum_io.No_tty -> Charamel_cli.error "file: requires a terminal"
   in
   match model.status with
   | Selected path -> Gum_io.print_raw env path
-  | Quit | Running -> Charm_cli.error "no file selected"
-  | Aborted -> Charm_cli.exit 130
+  | Quit | Running -> Charamel_cli.error "no file selected"
+  | Aborted -> Charamel_cli.exit 130
 
 let options path cursor all permissions size file directory show_help timeout header
     height padding cursor_style symlink_style directory_style file_style permissions_style

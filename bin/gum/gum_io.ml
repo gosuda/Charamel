@@ -39,7 +39,7 @@ let read_stdin ?(strip_ansi = true) ?(single_line = false) env =
     | None -> Error `Empty
     | Some raw ->
         let value = String.trim raw in
-        let value = if strip_ansi then Charm_ansi.Text.strip value else value in
+        let value = if strip_ansi then Charamel_ansi.Text.strip value else value in
         if value = "" then Error `Empty else Ok value
 
 let split ~delimiter text =
@@ -59,13 +59,13 @@ let split ~delimiter text =
 
 let println (env : Eio_unix.Stdenv.base) text =
   let profile =
-    Charm_colorprofile.detect ~is_tty:(stdout_is_tty env) ~env:Sys.getenv_opt
+    Charamel_colorprofile.detect ~is_tty:(stdout_is_tty env) ~env:Sys.getenv_opt
   in
   let writer =
-    Charm_colorprofile.Writer.create ~profile
+    Charamel_colorprofile.Writer.create ~profile
       (env#stdout :> Eio.Flow.sink_ty Eio.Resource.t)
   in
-  Charm_colorprofile.Writer.write writer (text ^ "\n")
+  Charamel_colorprofile.Writer.write writer (text ^ "\n")
 
 let print_raw env text = Eio.Flow.copy_string (text ^ "\n") env#stdout
 
@@ -113,7 +113,7 @@ let terminal_size env =
 
 let ui_terminal ?sw env =
   if stdin_is_tty env && stderr_is_tty env then
-    Charm_tea.Terminal.local ~output:`Stderr env
+    Charamel_tea.Terminal.local ~output:`Stderr env
   else if not (stderr_is_tty env) then raise No_tty
   else
     let tty_switch = match sw with Some sw -> sw | None -> raise No_tty in
@@ -123,6 +123,6 @@ let ui_terminal ?sw env =
       | Eio.Io (Eio.Exn.Not_available _, _) -> raise No_tty
       | Unix.Unix_error (_, _, _) -> raise No_tty
     in
-    Charm_tea.Terminal.custom ~input ~output:env#stderr
+    Charamel_tea.Terminal.custom ~input ~output:env#stderr
       ~size:(fun () -> terminal_size env)
       ~on_resize:None ~env:Sys.getenv_opt ~is_tty:true

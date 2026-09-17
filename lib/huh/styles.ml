@@ -1,12 +1,12 @@
-module Style = Charm_lipgloss.Style
-module Color = Charm_ansi.Color
+module Style = Charamel_lipgloss.Style
+module Color = Charamel_ansi.Color
 
 type text_input = {
-  cursor : Charm_lipgloss.Style.t;
-  cursor_text : Charm_lipgloss.Style.t;
-  placeholder : Charm_lipgloss.Style.t;
-  prompt : Charm_lipgloss.Style.t;
-  text : Charm_lipgloss.Style.t;
+  cursor : Charamel_lipgloss.Style.t;
+  cursor_text : Charamel_lipgloss.Style.t;
+  placeholder : Charamel_lipgloss.Style.t;
+  prompt : Charamel_lipgloss.Style.t;
+  text : Charamel_lipgloss.Style.t;
 }
 
 type indicators = {
@@ -20,40 +20,40 @@ type indicators = {
 }
 
 type field = {
-  base : Charm_lipgloss.Style.t;
-  title : Charm_lipgloss.Style.t;
-  description : Charm_lipgloss.Style.t;
-  error_indicator : Charm_lipgloss.Style.t;
-  error_message : Charm_lipgloss.Style.t;
-  select_selector : Charm_lipgloss.Style.t;
-  option_ : Charm_lipgloss.Style.t;
-  next_indicator : Charm_lipgloss.Style.t;
-  prev_indicator : Charm_lipgloss.Style.t;
-  directory : Charm_lipgloss.Style.t;
-  file : Charm_lipgloss.Style.t;
-  multi_select_selector : Charm_lipgloss.Style.t;
-  selected_option : Charm_lipgloss.Style.t;
-  selected_prefix : Charm_lipgloss.Style.t;
-  unselected_option : Charm_lipgloss.Style.t;
-  unselected_prefix : Charm_lipgloss.Style.t;
-  focused_button : Charm_lipgloss.Style.t;
-  blurred_button : Charm_lipgloss.Style.t;
-  card : Charm_lipgloss.Style.t;
-  note_title : Charm_lipgloss.Style.t;
-  next : Charm_lipgloss.Style.t;
+  base : Charamel_lipgloss.Style.t;
+  title : Charamel_lipgloss.Style.t;
+  description : Charamel_lipgloss.Style.t;
+  error_indicator : Charamel_lipgloss.Style.t;
+  error_message : Charamel_lipgloss.Style.t;
+  select_selector : Charamel_lipgloss.Style.t;
+  option_ : Charamel_lipgloss.Style.t;
+  next_indicator : Charamel_lipgloss.Style.t;
+  prev_indicator : Charamel_lipgloss.Style.t;
+  directory : Charamel_lipgloss.Style.t;
+  file : Charamel_lipgloss.Style.t;
+  multi_select_selector : Charamel_lipgloss.Style.t;
+  selected_option : Charamel_lipgloss.Style.t;
+  selected_prefix : Charamel_lipgloss.Style.t;
+  unselected_option : Charamel_lipgloss.Style.t;
+  unselected_prefix : Charamel_lipgloss.Style.t;
+  focused_button : Charamel_lipgloss.Style.t;
+  blurred_button : Charamel_lipgloss.Style.t;
+  card : Charamel_lipgloss.Style.t;
+  note_title : Charamel_lipgloss.Style.t;
+  next : Charamel_lipgloss.Style.t;
   text_input : text_input;
   indicators : indicators;
 }
 
 type t = {
-  form_base : Charm_lipgloss.Style.t;
-  group_base : Charm_lipgloss.Style.t;
-  group_title : Charm_lipgloss.Style.t;
-  group_description : Charm_lipgloss.Style.t;
+  form_base : Charamel_lipgloss.Style.t;
+  group_base : Charamel_lipgloss.Style.t;
+  group_title : Charamel_lipgloss.Style.t;
+  group_description : Charamel_lipgloss.Style.t;
   field_separator : string;
   focused : field;
   blurred : field;
-  help : Charm_bubbles.Help.styles;
+  help : Charamel_bubbles.Help.styles;
 }
 
 let hex value =
@@ -65,15 +65,15 @@ let ld ~is_dark light dark = if is_dark then dark else light
 
 let button =
   Style.empty
-  |> Style.padding (Charm_lipgloss.Sides.v ~right:2 ~left:2 ())
-  |> Style.margin (Charm_lipgloss.Sides.v ~right:1 ())
+  |> Style.padding (Charamel_lipgloss.Sides.v ~right:2 ~left:2 ())
+  |> Style.margin (Charamel_lipgloss.Sides.v ~right:1 ())
 
 let no_style = Style.empty
 
 let focus_base =
   no_style
-  |> Style.padding (Charm_lipgloss.Sides.v ~left:1 ())
-  |> Style.border Charm_lipgloss.Border.thick
+  |> Style.padding (Charamel_lipgloss.Sides.v ~left:1 ())
+  |> Style.border Charamel_lipgloss.Border.thick
   |> Style.border_top false |> Style.border_right false |> Style.border_bottom false
 
 let base_field () =
@@ -126,7 +126,7 @@ let base_field () =
 let blurred_from_focused focused =
   let base =
     focused.base
-    |> Style.border Charm_lipgloss.Border.hidden
+    |> Style.border Charamel_lipgloss.Border.hidden
     |> Style.border_top false |> Style.border_right false |> Style.border_bottom false
   in
   {
@@ -145,7 +145,7 @@ let blurred_from_focused focused =
       };
   }
 
-let base_help ~is_dark = Charm_bubbles.Help.default_styles ~is_dark
+let base_help ~is_dark = Charamel_bubbles.Help.default_styles ~is_dark
 
 let base ~is_dark:_ =
   let initial = base_field () in
@@ -203,9 +203,9 @@ let charm ~is_dark =
       focused0 with
       base =
         focused0.base
-        |> Style.border Charm_lipgloss.Border.thick
+        |> Style.border Charamel_lipgloss.Border.thick
         |> Style.border_top false |> Style.border_right false |> Style.border_bottom false
-        |> Style.border_foreground (Charm_lipgloss.Sides_color.all (Color.Indexed 238));
+        |> Style.border_foreground (Charamel_lipgloss.Sides_color.all (Color.Indexed 238));
       title = Style.bold true (Style.foreground indigo no_style);
       description =
         Style.foreground (ld ~is_dark Color.Default (Color.Indexed 243)) no_style;
@@ -214,17 +214,17 @@ let charm ~is_dark =
       select_selector = Style.foreground fuchsia no_style;
       next_indicator =
         Style.foreground fuchsia
-          (Style.margin (Charm_lipgloss.Sides.v ~left:1 ()) no_style);
+          (Style.margin (Charamel_lipgloss.Sides.v ~left:1 ()) no_style);
       prev_indicator =
         Style.foreground fuchsia
-          (Style.margin (Charm_lipgloss.Sides.v ~right:1 ()) no_style);
+          (Style.margin (Charamel_lipgloss.Sides.v ~right:1 ()) no_style);
       directory = Style.foreground indigo no_style;
       file = Style.foreground normal_fg no_style;
       card =
         focused0.base
-        |> Style.border Charm_lipgloss.Border.thick
+        |> Style.border Charamel_lipgloss.Border.thick
         |> Style.border_top false |> Style.border_right false |> Style.border_bottom false
-        |> Style.border_foreground (Charm_lipgloss.Sides_color.all (Color.Indexed 238));
+        |> Style.border_foreground (Charamel_lipgloss.Sides_color.all (Color.Indexed 238));
       next = Style.bold true (Style.foreground cream (Style.background fuchsia button));
       selected_option = Style.foreground green no_style;
       selected_prefix =
@@ -239,7 +239,7 @@ let charm ~is_dark =
           (Style.background (ld ~is_dark (Color.Indexed 252) (Color.Indexed 237)) button);
       note_title =
         Style.margin
-          (Charm_lipgloss.Sides.v ~bottom:1 ())
+          (Charamel_lipgloss.Sides.v ~bottom:1 ())
           (Style.bold true (Style.foreground indigo no_style));
       text_input =
         {
@@ -300,7 +300,8 @@ let dracula ~is_dark:_ =
   let focused =
     {
       f with
-      base = f.base |> Style.border_foreground (Charm_lipgloss.Sides_color.all selection);
+      base =
+        f.base |> Style.border_foreground (Charamel_lipgloss.Sides_color.all selection);
       title = Style.foreground purple no_style;
       description = Style.foreground comment no_style;
       error_indicator = Style.foreground red no_style;
@@ -308,13 +309,14 @@ let dracula ~is_dark:_ =
       select_selector = Style.foreground yellow no_style;
       next_indicator =
         Style.foreground yellow
-          (Style.margin (Charm_lipgloss.Sides.v ~left:1 ()) no_style);
+          (Style.margin (Charamel_lipgloss.Sides.v ~left:1 ()) no_style);
       prev_indicator =
         Style.foreground yellow
-          (Style.margin (Charm_lipgloss.Sides.v ~right:1 ()) no_style);
+          (Style.margin (Charamel_lipgloss.Sides.v ~right:1 ()) no_style);
       directory = Style.foreground purple no_style;
       file = Style.foreground foreground no_style;
-      card = f.base |> Style.border_foreground (Charm_lipgloss.Sides_color.all selection);
+      card =
+        f.base |> Style.border_foreground (Charamel_lipgloss.Sides_color.all selection);
       next = Style.foreground yellow no_style;
       selected_option = Style.foreground green no_style;
       selected_prefix = Style.foreground green no_style;
@@ -351,18 +353,19 @@ let base16 ~is_dark:_ =
   let focused =
     {
       f with
-      base = f.base |> Style.border_foreground (Charm_lipgloss.Sides_color.all (c 8));
+      base = f.base |> Style.border_foreground (Charamel_lipgloss.Sides_color.all (c 8));
       title = Style.foreground (c 6) no_style;
       description = Style.foreground (c 8) no_style;
       error_indicator = Style.foreground (c 9) no_style;
       error_message = Style.foreground (c 9) no_style;
       select_selector = Style.foreground (c 3) no_style;
       next_indicator =
-        Style.foreground (c 3) (Style.margin (Charm_lipgloss.Sides.v ~left:1 ()) no_style);
+        Style.foreground (c 3)
+          (Style.margin (Charamel_lipgloss.Sides.v ~left:1 ()) no_style);
       prev_indicator =
         Style.foreground (c 3)
-          (Style.margin (Charm_lipgloss.Sides.v ~right:1 ()) no_style);
-      card = f.base |> Style.border_foreground (Charm_lipgloss.Sides_color.all (c 8));
+          (Style.margin (Charamel_lipgloss.Sides.v ~right:1 ()) no_style);
+      card = f.base |> Style.border_foreground (Charamel_lipgloss.Sides_color.all (c 8));
       next = Style.foreground (c 3) no_style;
       directory = Style.foreground (c 6) no_style;
       file = Style.foreground (c 7) no_style;
@@ -426,19 +429,23 @@ let catppuccin ~is_dark =
   let focused =
     {
       f with
-      base = f.base |> Style.border_foreground (Charm_lipgloss.Sides_color.all subtext1);
+      base =
+        f.base |> Style.border_foreground (Charamel_lipgloss.Sides_color.all subtext1);
       title = Style.foreground mauve no_style;
       description = Style.foreground subtext0 no_style;
       error_indicator = Style.foreground red no_style;
       error_message = Style.foreground red no_style;
       select_selector = Style.foreground pink no_style;
       next_indicator =
-        Style.foreground pink (Style.margin (Charm_lipgloss.Sides.v ~left:1 ()) no_style);
+        Style.foreground pink
+          (Style.margin (Charamel_lipgloss.Sides.v ~left:1 ()) no_style);
       prev_indicator =
-        Style.foreground pink (Style.margin (Charm_lipgloss.Sides.v ~right:1 ()) no_style);
+        Style.foreground pink
+          (Style.margin (Charamel_lipgloss.Sides.v ~right:1 ()) no_style);
       directory = Style.foreground mauve no_style;
       file = Style.foreground text_c no_style;
-      card = f.base |> Style.border_foreground (Charm_lipgloss.Sides_color.all subtext1);
+      card =
+        f.base |> Style.border_foreground (Charamel_lipgloss.Sides_color.all subtext1);
       next = Style.foreground pink no_style;
       multi_select_selector = Style.foreground pink no_style;
       option_ = Style.foreground text_c no_style;
@@ -475,7 +482,7 @@ let catppuccin ~is_dark =
         };
     }
   in
-  let help : Charm_bubbles.Help.styles =
+  let help : Charamel_bubbles.Help.styles =
     {
       short_key = Style.foreground subtext0 no_style;
       short_desc = Style.foreground overlay1 no_style;

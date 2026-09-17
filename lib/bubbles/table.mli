@@ -17,9 +17,9 @@ type keymap = {
 val default_keymap : keymap
 
 type styles = {
-  header : Charm_lipgloss.Style.t;
-  cell : Charm_lipgloss.Style.t;
-  selected : Charm_lipgloss.Style.t;
+  header : Charamel_lipgloss.Style.t;
+  cell : Charamel_lipgloss.Style.t;
+  selected : Charamel_lipgloss.Style.t;
 }
 
 val default_styles : styles
@@ -47,10 +47,10 @@ val v :
   unit ->
   t
 
-val update : msg -> t -> t * msg Charm_tea.Cmd.t
+val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 val view : t -> string
-val key : t -> Charm_tea.Key.t -> msg option
-val subscriptions : t -> msg Charm_tea.Sub.t
+val key : t -> Charamel_tea.Key.t -> msg option
+val subscriptions : t -> msg Charamel_tea.Sub.t
 val focus : t -> t
 val blur : t -> t
 val focused : t -> bool

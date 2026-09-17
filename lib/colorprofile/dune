@@ -1,7 +1,7 @@
 (library
- (name charm_colorprofile)
- (public_name charm.colorprofile)
- (libraries charm.ansi eio)
+ (name charamel_colorprofile)
+ (public_name charamel.colorprofile)
+ (libraries charamel.ansi eio)
  (flags
   (:standard
    -strict-sequence

@@ -132,7 +132,7 @@ let form_values_of_options ~cwd (options : Pop_lib.options) : Forms.values =
     | None, Some path -> (
         match Pop_lib.read_file ~cwd path with
         | Ok body -> body
-        | Error error -> Charm_cli.error (error_message Pop_lib.pp_error error))
+        | Error error -> Charamel_cli.error (error_message Pop_lib.pp_error error))
   in
   {
     to_ = String.concat ", " (Pop_lib.split_addresses options.Pop_lib.to_);
@@ -183,10 +183,11 @@ let run env cli =
   Eio.Switch.run (fun sw ->
       match prepare_with_form ~sw env options with
       | Error (`Form error) ->
-          Charm_cli.error
+          Charamel_cli.error
             ~code:(match error with `Timeout -> 124 | `Aborted -> 130)
             (error_message Forms.pp_error error)
-      | Error (`Compose error) -> Charm_cli.error (error_message Pop_lib.pp_error error)
+      | Error (`Compose error) ->
+          Charamel_cli.error (error_message Pop_lib.pp_error error)
       | Ok prepared -> (
           if cli.preview then Preview.write env#stdout prepared.Pop_lib.message
           else
@@ -201,14 +202,15 @@ let run env cli =
               | None -> (
                   match Pop_lib.config_of_env ~env:Sys.getenv_opt with
                   | Ok config -> Some config
-                  | Error error -> Charm_cli.error (error_message Pop_lib.pp_error error))
+                  | Error error ->
+                      Charamel_cli.error (error_message Pop_lib.pp_error error))
             in
             match
               Send.deliver ~sw ~clock:env#clock ~net:env#net ~resend_key ~smtp
                 prepared.Pop_lib.message
             with
             | Ok () -> Eio.Flow.copy_string (summary prepared.Pop_lib.message) env#stdout
-            | Error error -> Charm_cli.error (error_message Send.pp_error error)))
+            | Error error -> Charamel_cli.error (error_message Send.pp_error error)))
 
 let default env =
   let action = run env in
@@ -216,5 +218,5 @@ let default env =
 
 let () =
   Mirage_crypto_rng_unix.use_default ();
-  Charm_cli.run ~name:"pop" ~version:Charm_cli.Version.current
+  Charamel_cli.run ~name:"pop" ~version:Charamel_cli.Version.current
     ~doc:"Send Markdown email from the command line." ~default []

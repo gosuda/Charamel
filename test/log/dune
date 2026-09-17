@@ -1,10 +1,10 @@
 (test
  (name test_log)
- (package charm)
+ (package charamel)
  (libraries
-  charm.log
-  charm.ansi
-  charm.colorprofile
+  charamel.log
+  charamel.ansi
+  charamel.colorprofile
   eio
   eio.mock
   logs

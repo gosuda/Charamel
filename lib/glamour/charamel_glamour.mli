@@ -2,7 +2,7 @@
 
     [render] parses CommonMark and renders it with a built-in or supplied theme. *)
 
-module Color = Charm_ansi.Color
+module Color = Charamel_ansi.Color
 (** Terminal colors used by themes. *)
 
 module Theme : sig
@@ -41,7 +41,7 @@ module Theme : sig
     emph : block;
     strike : block;
     code : block;
-    code_block : block * Charm_highlight.Theme.t;
+    code_block : block * Charamel_highlight.Theme.t;
     hr : block;
     link : block;
     link_text : block;

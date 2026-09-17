@@ -1,6 +1,6 @@
 (library
- (name charm_ansi)
- (public_name charm.ansi)
+ (name charamel_ansi)
+ (public_name charamel.ansi)
  (libraries fmt uucp uuseg base64)
  (flags
   (:standard

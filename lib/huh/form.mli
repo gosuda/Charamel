@@ -20,18 +20,18 @@ val v :
   t
 (** [v groups] creates a pure form. Width defaults to [80], height to fit. *)
 
-val init : Env.t -> t -> t * msg Charm_tea.Cmd.t
+val init : Env.t -> t -> t * msg Charamel_tea.Cmd.t
 (** [init env form] attaches explicit capabilities, evaluates dynamic fields, focuses the
     first visible field, and requests the terminal background. *)
 
-val update : msg -> t -> t * msg Charm_tea.Cmd.t
+val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 (** [update message form] applies one event. It raises [Invalid_argument] if [init] has
     not attached an explicit [Env.t]. *)
 
 val view : t -> string
-val key : Charm_tea.Key.t -> msg option
+val key : Charamel_tea.Key.t -> msg option
 val paste : string -> msg
-val subscriptions : t -> msg Charm_tea.Sub.t
+val subscriptions : t -> msg Charamel_tea.Sub.t
 val state : t -> [ `Normal | `Completed of Results.t | `Aborted ]
 val set_size : rows:int -> cols:int -> t -> t
 val results : t -> Results.t

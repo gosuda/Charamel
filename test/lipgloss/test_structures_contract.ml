@@ -1,7 +1,7 @@
 (* These cases encode the approved Step 6 target contract. They cover the
    width-aware table, tree callback, and flat-list behavior that consumers observe. *)
 
-open Charm_lipgloss
+open Charamel_lipgloss
 
 let check_render name expected actual = Alcotest.(check string) name expected actual
 

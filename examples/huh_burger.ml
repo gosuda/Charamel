@@ -1,10 +1,10 @@
-let name_key = Charm_huh.Key.v "name"
-let bun_key = Charm_huh.Key.v "bun"
-let toppings_key = Charm_huh.Key.v "toppings"
-let confirm_key = Charm_huh.Key.v "confirm"
+let name_key = Charamel_huh.Key.v "name"
+let bun_key = Charamel_huh.Key.v "bun"
+let toppings_key = Charamel_huh.Key.v "toppings"
+let confirm_key = Charamel_huh.Key.v "confirm"
 
 let form =
-  let open Charm_huh in
+  let open Charamel_huh in
   Form.v
     [
       Group.v ~title:"Burger" ~description:"Build your burger"
@@ -23,7 +23,7 @@ let form =
     ]
 
 let print_results results =
-  let get key default = Option.value (Charm_huh.Results.get key results) ~default in
+  let get key default = Option.value (Charamel_huh.Results.get key results) ~default in
   let name = get name_key "" in
   let bun = get bun_key "" in
   let toppings = get toppings_key [] in
@@ -33,7 +33,7 @@ let print_results results =
 
 let () =
   Eio_main.run (fun env ->
-      match Charm_huh.run ~clock:env#clock form env with
+      match Charamel_huh.run ~clock:env#clock form env with
       | Ok results -> print_results results
       | Error `Aborted -> Fmt.epr "Order cancelled.@."
       | Error `Timeout -> Fmt.epr "Order timed out.@.")

@@ -6,7 +6,7 @@ type rendered = { svg : string; width : float; height : float }
 val render :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   config:Config.t ->
-  language:Charm_highlight.spec option ->
+  language:Charamel_highlight.spec option ->
   text:string ->
   is_ansi:bool ->
   (rendered, string) result

@@ -2,17 +2,17 @@ module Core = Crush_core
 module Agent = Core.Agent
 module Tool = Core.Tool
 module Permission = Core.Permission
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module Key = Charm_tea.Key
-module View = Charm_tea.View
-module Style = Charm_lipgloss.Style
-module Layout = Charm_lipgloss.Layout
-module Color = Charm_ansi.Color
-module Textarea = Charm_bubbles.Textarea
-module Viewport = Charm_bubbles.Viewport
-module Bubble_list = Charm_bubbles.List
-module Huh = Charm_huh
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module Key = Charamel_tea.Key
+module View = Charamel_tea.View
+module Style = Charamel_lipgloss.Style
+module Layout = Charamel_lipgloss.Layout
+module Color = Charamel_ansi.Color
+module Textarea = Charamel_bubbles.Textarea
+module Viewport = Charamel_bubbles.Viewport
+module Bubble_list = Charamel_bubbles.List
+module Huh = Charamel_huh
 open Result.Syntax
 
 type session = { id : string; title : string; model : string; created_ms : int }
@@ -384,7 +384,7 @@ let status_text m =
   let yolo = if m.backend.yolo () then " YOLO" else "" in
   let busy = if Agent.busy !(m.backend.agent) then " working" else " ready" in
   Fmt.str "%s%s%s | %a | $%.4f | ctx %d | LSP %s | MCP %s" busy plan yolo
-    Charm_fantasy.Usage.pp usage cost context (m.backend.lsp_status ())
+    Charamel_fantasy.Usage.pp usage cost context (m.backend.lsp_status ())
     (m.backend.mcp_status ())
 
 let sessions_list (backend : backend) =
@@ -703,7 +703,7 @@ let append_agent_event (m : ui_model) = function
       append m
         {
           kind = Status;
-          text = Fmt.str "usage %a" Charm_fantasy.Usage.pp usage;
+          text = Fmt.str "usage %a" Charamel_fantasy.Usage.pp usage;
           id = None;
           name = None;
           input = None;
@@ -1175,7 +1175,7 @@ let subscriptions m =
       Sub.map (fun _ -> Tick) (Bubble_list.subscriptions m.sessions);
     ]
 
-let app backend : (ui_model, ui_msg) Charm_tea.app =
+let app backend : (ui_model, ui_msg) Charamel_tea.app =
   {
     init = (fun () -> init backend);
     update = (fun message model -> (model, update model message));
@@ -1188,10 +1188,10 @@ let run backend =
     ~finally:(fun () ->
       Agent.cancel !(backend.agent);
       Bridge.close backend.events)
-    (fun () -> Charm_tea.run ~clock:backend.clock (app backend) backend.env)
+    (fun () -> Charamel_tea.run ~clock:backend.clock (app backend) backend.env)
 
 let run_with backend ~events ~size =
   let events = `Wait 0. :: events in
   Fun.protect
     ~finally:(fun () -> Bridge.close backend.events)
-    (fun () -> Charm_tea.Test.run (app backend) ~events ~size)
+    (fun () -> Charamel_tea.Test.run (app backend) ~events ~size)

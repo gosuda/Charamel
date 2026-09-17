@@ -1,4 +1,4 @@
-open Charm_lipgloss
+open Charamel_lipgloss
 
 let check_string name expected actual = Alcotest.(check string) name expected actual
 let check_int name expected actual = Alcotest.(check int) name expected actual
@@ -55,7 +55,7 @@ let test_bool_props_set_unset () =
     (Style.get_bold (Style.bold false Style.empty))
 
 let test_hyperlink_render_and_inherit () =
-  let link : Charm_ansi.Link.t = { url = "https://example.test"; params = [] } in
+  let link : Charamel_ansi.Link.t = { url = "https://example.test"; params = [] } in
   let styled =
     Style.hyperlink link
       (Style.padding (Sides.all 1) (Style.border Border.normal Style.empty))
@@ -209,7 +209,7 @@ let test_inherit_margin_background_fallback () =
    `underline` bool, which is where upstream's OWN SGR encoder
    double-emits the underline attribute (once as a bare "4", again as the
    specific style code, e.g. upstream's expected "\x1b[4;4m" for Single).
-   Our Charm_ansi.Style.to_sgr emits the attribute once, in the fixed order
+   Our Charamel_ansi.Style.to_sgr emits the attribute once, in the fixed order
    bold,faint,italic,blink,reverse,conceal,strike,underline,fg,bg,
    underline_color (lib/ansi/style.ml:101-116), so the exact bytes diverge
    from upstream's literals by construction, not by behavior: every glyph
@@ -237,17 +237,17 @@ let test_underline_family () =
   check_string "underline(true) alone (derived; upstream doubles the SGR '4')"
     "\x1b[4ma\x1b[m\x1b[4mb\x1b[m\x1b[4m \x1b[m\x1b[4mc\x1b[m" plain_underline;
   (* Case: Underline(true) + UnderlineSpaces(false) -- the space is left
-     completely bare (te_space collapses to Charm_ansi.Style.default). *)
+     completely bare (te_space collapses to Charamel_ansi.Style.default). *)
   check_string "underline(true).underline_spaces(false) leaves the space bare"
     "\x1b[4ma\x1b[m\x1b[4mb\x1b[m \x1b[4mc\x1b[m"
     (Style.render
        (Style.underline_spaces false (Style.underline true Style.empty))
        "ab c")
 (* Note: UnderlineStyle(Curly) cases (upstream tests 5-6) are not ported
-     here. Style.underline_style requires a Charm_ansi.Style.underline
-     value as its argument (style.mli), and Charm_lipgloss re-exports only
-     Charm_ansi.Color, not Charm_ansi.Style; this test file has no access
-     to that module without adding charm.ansi as an explicit dependency of
+     here. Style.underline_style requires a Charamel_ansi.Style.underline
+     value as its argument (style.mli), and Charamel_lipgloss re-exports only
+     Charamel_ansi.Color, not Charamel_ansi.Style; this test file has no access
+     to that module without adding charamel.ansi as an explicit dependency of
      test/lipgloss's dune stanza, which is outside this file-only scope
      (see report). *)
 

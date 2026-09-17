@@ -56,7 +56,7 @@ let response model_id severity guidance =
   ^ "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 
 let model ~base_url =
-  let model : Charm_fantasy.Model.t =
+  let model : Charamel_fantasy.Model.t =
     {
       id = "advisor-model";
       name = "Advisor fixture";
@@ -72,8 +72,8 @@ let model ~base_url =
     }
   in
   let provider =
-    Charm_fantasy.Provider.anthropic ~base_url
-      ~auth:(Charm_fantasy.Provider.Api_key "fixture-key") ()
+    Charamel_fantasy.Provider.anthropic ~base_url
+      ~auth:(Charamel_fantasy.Provider.Api_key "fixture-key") ()
   in
   {
     Crush_core.Models.role = `Small;
@@ -107,7 +107,7 @@ let test_quarantine () =
     Advisor.create { Config.enabled = true; model = `Small; every_n_turns = 1 }
   in
   let turn =
-    [ Charm_fantasy.Message.text Charm_fantasy.Message.User "change the file" ]
+    [ Charamel_fantasy.Message.text Charamel_fantasy.Message.User "change the file" ]
   in
   let review () =
     Advisor.review advisor ~sw ~clock:env#clock ~net:env#net provider ~context:"rules"

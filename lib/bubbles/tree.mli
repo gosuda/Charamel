@@ -40,17 +40,17 @@ val default_keymap : keymap
 (** [default_keymap] is the standard tree navigation and expansion map. *)
 
 type styles = {
-  tree_style : Charm_lipgloss.Style.t;
-  help_style : Charm_lipgloss.Style.t;
-  node_style : Charm_lipgloss.Style.t;
-  selected_node_style : Charm_lipgloss.Style.t;
-  root_node_style : Charm_lipgloss.Style.t;
-  parent_node_style : Charm_lipgloss.Style.t;
-  cursor_style : Charm_lipgloss.Style.t;
-  enumerator_style : Charm_lipgloss.Style.t;
-  selected_enumerator_style : Charm_lipgloss.Style.t;
-  indenter_style : Charm_lipgloss.Style.t;
-  open_indicator_style : Charm_lipgloss.Style.t;
+  tree_style : Charamel_lipgloss.Style.t;
+  help_style : Charamel_lipgloss.Style.t;
+  node_style : Charamel_lipgloss.Style.t;
+  selected_node_style : Charamel_lipgloss.Style.t;
+  root_node_style : Charamel_lipgloss.Style.t;
+  parent_node_style : Charamel_lipgloss.Style.t;
+  cursor_style : Charamel_lipgloss.Style.t;
+  enumerator_style : Charamel_lipgloss.Style.t;
+  selected_enumerator_style : Charamel_lipgloss.Style.t;
+  indenter_style : Charamel_lipgloss.Style.t;
+  open_indicator_style : Charamel_lipgloss.Style.t;
 }
 
 val default_styles : is_dark:bool -> styles
@@ -88,17 +88,17 @@ val v :
 (** [v ~width ~height root] creates a tree with the standard indicators ["▼"], ["▶"],
     cursor ["→"], scroll-off [5], and help enabled. *)
 
-val update : msg -> t -> t * msg Charm_tea.Cmd.t
+val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 (** [update msg t] applies one navigation, expansion, or help action. *)
 
 val view : t -> string
 (** [view t] renders the visible tree and optional help footer. *)
 
-val key : t -> Charm_tea.Key.t -> msg option
+val key : t -> Charamel_tea.Key.t -> msg option
 (** [key t key] returns the enabled action bound to [key]. *)
 
-val subscriptions : t -> msg Charm_tea.Sub.t
-(** [subscriptions t] is {!Charm_tea.Sub.none}. *)
+val subscriptions : t -> msg Charamel_tea.Sub.t
+(** [subscriptions t] is {!Charamel_tea.Sub.none}. *)
 
 val set_root : node -> t -> t
 val root : t -> node

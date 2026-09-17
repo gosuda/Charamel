@@ -1,4 +1,4 @@
-module Terminal = Charm_tea__Terminal
+module Terminal = Charamel_tea__Terminal
 
 let check_source name source expected =
   let buffer = Cstruct.create (String.length expected) in

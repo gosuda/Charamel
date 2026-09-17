@@ -1,6 +1,6 @@
 (** Shared Bubbles components.
 
-    [Charm_bubbles] is the public umbrella module. Each submodule is the corresponding
+    [Charamel_bubbles] is the public umbrella module. Each submodule is the corresponding
     component module; values retain the component's abstract types and no private helper
     modules are exposed. *)
 

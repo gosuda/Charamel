@@ -2,7 +2,7 @@
  (name sequin_core)
  (modules explain)
  (wrapped true)
- (libraries charm.ansi fmt)
+ (libraries charamel.ansi fmt)
  (flags
   (:standard
    -strict-sequence
@@ -19,8 +19,8 @@
  (package sequin)
  (libraries
   sequin_core
-  charm.ansi
-  charm.cli
+  charamel.ansi
+  charamel.cli
   eio
   eio.unix
   eio_main

@@ -43,7 +43,7 @@ val delimiter :
 (** [delimiter ~cmd ~default ~doc name] parses a delimiter and decodes the escapes [\\n],
     [\\t], and [\\0]. *)
 
-val parse_padding : string -> (Charm_lipgloss.Sides.t, [ `Msg of string ]) result
+val parse_padding : string -> (Charamel_lipgloss.Sides.t, [ `Msg of string ]) result
 (** [parse_padding text] parses one, two, three, or four integer side values. One value
     applies to every side; two are vertical and horizontal; three are top, horizontal, and
     bottom; four are top, right, bottom, and left. Spaces and commas separate values.
@@ -53,14 +53,14 @@ val padding : cmd:string -> string Cmdliner.Term.t
 (** [padding ~cmd] parses the raw [--padding] value, defaulting to ["0 0"], with
     environment fallback [GUM_<CMD>_PADDING]. *)
 
-val align : string -> Charm_lipgloss.Position.t option
-(** [align text] maps [left] and [top] to {!Charm_lipgloss.Position.left}, [center] and
+val align : string -> Charamel_lipgloss.Position.t option
+(** [align text] maps [left] and [top] to {!Charamel_lipgloss.Position.left}, [center] and
     [middle] to [center], and [right] and [bottom] to [right]. *)
 
-val border : string -> Charm_lipgloss.Border.t option
+val border : string -> Charamel_lipgloss.Border.t option
 (** [border text] parses a named Lipgloss border. Unknown names return [None]. *)
 
-val color : string -> (Charm_ansi.Color.t option, [ `Msg of string ]) result
+val color : string -> (Charamel_ansi.Color.t option, [ `Msg of string ]) result
 (** [color text] parses an empty color as [Ok None], a decimal palette index, or a
     [#rgb]/[#rrggbb] value. Invalid input returns a usage message. *)
 

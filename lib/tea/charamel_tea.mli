@@ -247,7 +247,7 @@ module Test : sig
   (** [run app ~events ~size] runs [app] against a mock terminal of [size] rows by
       columns, delivers [events] in order and is the final model paired with the last
       rendered frame as plain text with every escape sequence stripped. The same run loop,
-      commands and subscriptions as {!Charm_tea.run} are used. [`Key k] delivers [k].
+      commands and subscriptions as {!Charamel_tea.run} are used. [`Key k] delivers [k].
       [`Text s] is the key presses that type [s]. [`Resize (rows, cols)] resizes the
       terminal. [`Msg m] delivers [m] to [update]. [`Wait seconds] lets [seconds] of
       simulated time pass, so timers and {!Cmd.after} fire, without waiting in real time.

@@ -1,9 +1,9 @@
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module Style = Charm_lipgloss.Style
-module Color = Charm_ansi.Color
-module Text = Charm_ansi.Text
-module Sides = Charm_lipgloss.Sides
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module Style = Charamel_lipgloss.Style
+module Color = Charamel_ansi.Color
+module Text = Charamel_ansi.Text
+module Sides = Charamel_lipgloss.Sides
 
 let clamp n lo hi = max lo (min hi n)
 let key_binding ?help names = Key_binding.v ?help names
@@ -74,7 +74,7 @@ let color_hex fallback text =
   match Color.of_hex text with Some color -> color | None -> fallback
 
 let default_styles ~is_dark =
-  let light_dark light dark = Charm_lipgloss.light_dark ~is_dark ~light ~dark in
+  let light_dark light dark = Charamel_lipgloss.light_dark ~is_dark ~light ~dark in
   let subdued =
     light_dark
       (color_hex (Color.Indexed 245) "#9B9B9B")
@@ -405,5 +405,5 @@ let view t =
   let content = Style.render t.styles.tree_style (tree_content t) in
   if not t.show_help then content
   else
-    Charm_lipgloss.Layout.join_vertical
+    Charamel_lipgloss.Layout.join_vertical
       [ content; Style.render t.styles.help_style (help_content t) ]

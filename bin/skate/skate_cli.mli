@@ -1,6 +1,6 @@
 (** Skate command definitions.
 
-    The commands provide local JSON key-value storage through [Charm_cli.run]. Each
+    The commands provide local JSON key-value storage through [Charamel_cli.run]. Each
     command receives the standard Eio environment from the application runtime. Keys and
     database names preserve case. A trailing ["@"] suffix selects the default database. *)
 

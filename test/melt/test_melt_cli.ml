@@ -1,4 +1,4 @@
-module Key = Charm_ssh_keygen
+module Key = Charamel_ssh_keygen
 module Mnemonic = Melt_core.Mnemonic
 
 let source_root () =
@@ -65,7 +65,7 @@ let with_root env f =
   let parent = fixture_parent env in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 parent;
   let path =
-    Filename.temp_file ~temp_dir:(Eio.Path.native_exn parent) "charm-melt-cli-" ".dir"
+    Filename.temp_file ~temp_dir:(Eio.Path.native_exn parent) "charamel-melt-cli-" ".dir"
   in
   Sys.remove path;
   let root = Eio.Path.(env#fs / path) in

@@ -1,6 +1,6 @@
 let plain s =
   let out = Buffer.create (String.length s) in
-  String.split_on_char '\n' (Charm_ansi.Text.strip s)
+  String.split_on_char '\n' (Charamel_ansi.Text.strip s)
   |> List.iteri (fun i line ->
       if i > 0 then Buffer.add_char out '\n';
       Buffer.add_string out (String.trim line));
@@ -15,10 +15,13 @@ let contains haystack needle =
   in
   if n = 0 then true else loop 0
 
-let test_empty () = Alcotest.(check string) "empty markdown" "" (Charm_glamour.render "")
+let test_empty () =
+  Alcotest.(check string) "empty markdown" "" (Charamel_glamour.render "")
 
 let test_heading_and_inline_nodes () =
-  let output = Charm_glamour.render "# Hello *world* **again** ~~old~~ `code`" |> plain in
+  let output =
+    Charamel_glamour.render "# Hello *world* **again** ~~old~~ `code`" |> plain
+  in
   Alcotest.(check bool) "heading text" true (contains output "Hello");
   Alcotest.(check bool) "emphasis text" true (contains output "world");
   Alcotest.(check bool) "strong text" true (contains output "again");
@@ -27,36 +30,36 @@ let test_heading_and_inline_nodes () =
 
 let test_width_and_no_wrap () =
   let source = "one two three four five six seven" in
-  let wrapped = Charm_glamour.render ~width:12 source |> plain in
+  let wrapped = Charamel_glamour.render ~width:12 source |> plain in
   let lines = String.split_on_char '\n' wrapped in
   Alcotest.(check bool) "wrap produces multiple lines" true (List.length lines > 1);
-  let unwrapped = Charm_glamour.render ~width:0 source |> plain in
+  let unwrapped = Charamel_glamour.render ~width:0 source |> plain in
   Alcotest.(check bool) "zero disables wrapping" true (contains unwrapped source)
 
 let test_preserve_newlines () =
   let source = "first\nsecond" in
-  let folded = Charm_glamour.render source |> plain in
-  let preserved = Charm_glamour.render ~preserve_newlines:true source |> plain in
+  let folded = Charamel_glamour.render source |> plain in
+  let preserved = Charamel_glamour.render ~preserve_newlines:true source |> plain in
   Alcotest.(check bool) "default folds a soft break" true (contains folded "first second");
   Alcotest.(check bool)
     "preserve keeps a soft break" true
     (contains preserved "first\nsecond")
 
 let test_emoji () =
-  let output = Charm_glamour.render ~emoji:true ":smile: :heart:" |> plain in
+  let output = Charamel_glamour.render ~emoji:true ":smile: :heart:" |> plain in
   Alcotest.(check bool) "github shortcode smile" true (contains output "😄");
   Alcotest.(check bool) "github shortcode heart" true (contains output "❤")
 
 let test_lists_and_tasks () =
   let markdown = "- one\n  - nested\n- [x] done\n- [ ] todo" in
-  let output = Charm_glamour.render markdown |> plain in
+  let output = Charamel_glamour.render markdown |> plain in
   Alcotest.(check bool) "nested item" true (contains output "nested");
   Alcotest.(check bool) "checked task" true (contains output "[✓]");
   Alcotest.(check bool) "unchecked task" true (contains output "[ ]")
 
 let test_links_and_table_footer () =
   let markdown = "| Name | Link |\n| --- | --- |\n| Charm | [site](https://charm.sh) |" in
-  let output = Charm_glamour.render markdown |> plain in
+  let output = Charamel_glamour.render markdown |> plain in
   Alcotest.(check bool) "table content" true (contains output "Charm");
   Alcotest.(check bool)
     "table link footer" true
@@ -68,34 +71,34 @@ let test_table_alignment_and_truncation () =
      | :--- | :----: | ---: |\n\
      | a very long value | middle | another very long value |"
   in
-  let output = Charm_glamour.render ~width:36 ~table_wrap:false markdown |> plain in
+  let output = Charamel_glamour.render ~width:36 ~table_wrap:false markdown |> plain in
   Alcotest.(check bool) "table truncates with ellipsis" true (contains output "…");
   Alcotest.(check bool) "table keeps all columns" true (contains output "Centre")
 
 let test_relative_url () =
   let output =
-    Charm_glamour.render ~base_url:"https://example.com/docs/" "[guide](guide.md)"
+    Charamel_glamour.render ~base_url:"https://example.com/docs/" "[guide](guide.md)"
   in
   Alcotest.(check bool)
     "resolved href" true
     (contains output "https://example.com/docs/guide.md")
 
 let test_code_block_highlighting () =
-  let output = Charm_glamour.render "```ocaml\nlet x = 1\n```" in
+  let output = Charamel_glamour.render "```ocaml\nlet x = 1\n```" in
   Alcotest.(check bool) "code text survives" true (contains (plain output) "let x = 1");
   Alcotest.(check bool) "known lexer styles" true (contains output "\027[")
 
 let test_footnotes_and_html () =
   let markdown = "See note[^1].\n\n[^1]: Footnote text\n\n<div>raw</div>" in
-  let output = Charm_glamour.render markdown |> plain in
+  let output = Charamel_glamour.render markdown |> plain in
   Alcotest.(check bool) "footnote reference" true (contains output "[1]");
   Alcotest.(check bool) "footnote body" true (contains output "Footnote text");
   Alcotest.(check bool) "html block" true (contains output "<div>raw</div>")
 
 let test_example_golden_scenarios () =
   let source = In_channel.with_open_bin "data/example.md" In_channel.input_all in
-  let output_80 = Charm_glamour.render ~width:80 source |> plain in
-  let output_120 = Charm_glamour.render ~width:120 source |> plain in
+  let output_80 = Charamel_glamour.render ~width:80 source |> plain in
+  let output_120 = Charamel_glamour.render ~width:120 source |> plain in
   Alcotest.(check bool) "80-column example" true (contains output_80 "Glamour");
   Alcotest.(check bool) "120-column example" true (contains output_120 "artichoke");
   Alcotest.(check bool) "width changes layout" true (output_80 <> output_120)
@@ -112,7 +115,7 @@ let test_upstream_regressions () =
       |> List.iter (fun file ->
           let path = Filename.concat directory file in
           let source = In_channel.with_open_bin path In_channel.input_all in
-          let output = Charm_glamour.render source in
+          let output = Charamel_glamour.render source in
           (* Source fixtures copied from Charmbracelet/glamour v2.0.1,
                 styles/examples and testdata/issues; upstream is MIT.
                 These are smoke regressions only; this port does not claim
@@ -123,7 +126,7 @@ let test_upstream_regressions () =
     directories
 
 let () =
-  Alcotest.run "charm.glamour"
+  Alcotest.run "charamel.glamour"
     [
       ( "renderer",
         [

@@ -1,6 +1,6 @@
 (** Typed terminal forms and their runners.
 
-    [Charm_huh] is the public namespace. The module aliases below deliberately preserve
+    [Charamel_huh] is the public namespace. The module aliases below deliberately preserve
     the private representation and type equalities of keys, results, fields, groups and
     forms; callers should construct values through the smart constructors in those
     modules. *)

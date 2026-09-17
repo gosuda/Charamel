@@ -1,5 +1,5 @@
-module Seq = Charm_ansi.Seq
-module Link = Charm_ansi.Link
+module Seq = Charamel_ansi.Seq
+module Link = Charamel_ansi.Link
 
 let wire name expected actual =
   Alcotest.test_case name `Quick (fun () ->

@@ -1,4 +1,4 @@
-module BList = Charm_bubbles.List
+module BList = Charamel_bubbles.List
 
 let make () =
   let delegate = BList.default_delegate ~title:(fun item -> item) () in
@@ -39,7 +39,7 @@ let empty_and_view () =
   let delegate = BList.default_delegate ~title:(fun item -> item) () in
   let model = BList.v ~width:30 ~height:8 ~delegate ~filter_value:(fun item -> item) [] in
   Alcotest.(check (option string)) "empty selection" None (BList.selected_item model);
-  let plain = Charm_ansi.Text.strip (BList.view model) in
+  let plain = Charamel_ansi.Text.strip (BList.view model) in
   Alcotest.(check bool) "empty status" true (String.length plain > 0)
 
 let cases =

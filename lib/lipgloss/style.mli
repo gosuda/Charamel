@@ -11,8 +11,8 @@ val empty : t
 val bold : bool -> t -> t
 val italic : bool -> t -> t
 val underline : bool -> t -> t
-val underline_style : Charm_ansi.Style.underline -> t -> t
-val underline_color : Charm_ansi.Color.t -> t -> t
+val underline_style : Charamel_ansi.Style.underline -> t -> t
+val underline_color : Charamel_ansi.Color.t -> t -> t
 val strikethrough : bool -> t -> t
 val reverse : bool -> t -> t
 val blink : bool -> t -> t
@@ -20,8 +20,8 @@ val faint : bool -> t -> t
 val underline_spaces : bool -> t -> t
 val strikethrough_spaces : bool -> t -> t
 val color_whitespace : bool -> t -> t
-val foreground : Charm_ansi.Color.t -> t -> t
-val background : Charm_ansi.Color.t -> t -> t
+val foreground : Charamel_ansi.Color.t -> t -> t
+val background : Charamel_ansi.Color.t -> t -> t
 val width : int -> t -> t
 val height : int -> t -> t
 val max_width : int -> t -> t
@@ -31,7 +31,7 @@ val align_horizontal : Position.t -> t -> t
 val align_vertical : Position.t -> t -> t
 val padding : Sides.t -> t -> t
 val margin : Sides.t -> t -> t
-val margin_background : Charm_ansi.Color.t -> t -> t
+val margin_background : Charamel_ansi.Color.t -> t -> t
 val border : Border.t -> t -> t
 val border_top : bool -> t -> t
 val border_right : bool -> t -> t
@@ -45,13 +45,13 @@ val tab_width : int -> t -> t
 val transform : (string -> string) -> t -> t
 (** [transform f t] applies [f] to rendered text before layout. *)
 
-val hyperlink : Charm_ansi.Link.t -> t -> t
+val hyperlink : Charamel_ansi.Link.t -> t -> t
 (** [hyperlink link t] associates [link] with the rendered core text. *)
 
 val unset_hyperlink : t -> t
 (** [unset_hyperlink t] removes the hyperlink from [t]. *)
 
-val get_hyperlink : t -> Charm_ansi.Link.t option
+val get_hyperlink : t -> Charamel_ansi.Link.t option
 (** [get_hyperlink t] is the hyperlink of [t], or [None] when unset. *)
 
 val get_border_foreground : t -> Sides_color.t option
@@ -110,8 +110,8 @@ val get_max_width : t -> int option
 val get_max_height : t -> int option
 val get_padding : t -> Sides.t option
 val get_margin : t -> Sides.t option
-val get_foreground : t -> Charm_ansi.Color.t option
-val get_background : t -> Charm_ansi.Color.t option
+val get_foreground : t -> Charamel_ansi.Color.t option
+val get_background : t -> Charamel_ansi.Color.t option
 val get_border : t -> Border.t option
 val get_align_horizontal : t -> Position.t option
 val get_align_vertical : t -> Position.t option
@@ -119,8 +119,8 @@ val get_tab_width : t -> int option
 val get_bold : t -> bool option
 val get_italic : t -> bool option
 val get_underline : t -> bool option
-val get_underline_style : t -> Charm_ansi.Style.underline option
-val get_underline_color : t -> Charm_ansi.Color.t option
+val get_underline_style : t -> Charamel_ansi.Style.underline option
+val get_underline_color : t -> Charamel_ansi.Color.t option
 val get_strikethrough : t -> bool option
 val get_reverse : t -> bool option
 val get_blink : t -> bool option
@@ -128,7 +128,7 @@ val get_faint : t -> bool option
 val get_underline_spaces : t -> bool option
 val get_strikethrough_spaces : t -> bool option
 val get_color_whitespace : t -> bool option
-val get_margin_background : t -> Charm_ansi.Color.t option
+val get_margin_background : t -> Charamel_ansi.Color.t option
 val get_border_top : t -> bool option
 val get_border_right : t -> bool option
 val get_border_bottom : t -> bool option

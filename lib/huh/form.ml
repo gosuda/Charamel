@@ -1,8 +1,8 @@
-module Cmd = Charm_tea.Cmd
-module Sub = Charm_tea.Sub
-module Key = Charm_tea.Key
-module Event = Charm_tea.Event
-module Style = Charm_lipgloss.Style
+module Cmd = Charamel_tea.Cmd
+module Sub = Charamel_tea.Sub
+module Key = Charamel_tea.Key
+module Event = Charamel_tea.Event
+module Style = Charamel_lipgloss.Style
 
 type state = Normal | Completed of Results.t | Aborted
 
@@ -424,7 +424,7 @@ let dispatch_field_message t ~group_index ~field_index field_message =
           (adjust_offset t group_index, wrap_field_cmd group_index field_index command)
 
 let is_dark_color color =
-  match Charm_ansi.Color.to_rgb color with
+  match Charamel_ansi.Color.to_rgb color with
   | None -> true
   | Some (red, green, blue) ->
       (0.299 *. float red) +. (0.587 *. float green) +. (0.114 *. float blue) < 127.5
@@ -473,7 +473,7 @@ let raw_group_height t group_index =
               (List.filter (fun value -> value <> "") [ title; description ])
           in
           if text = "" then ""
-          else Charm_ansi.Text.wrap ~width:(max 1 (Group.width group)) text
+          else Charamel_ansi.Text.wrap ~width:(max 1 (Group.width group)) text
         in
         let errors = Group.errors group in
         let show_errors = Option.value ~default:group.Group.show_errors t.show_errors in
@@ -522,11 +522,11 @@ let paste text = Paste text
 
 let update message t =
   if Option.is_none t.env then
-    invalid_arg "Charm_huh.Form.update: Form.init must be called before update"
+    invalid_arg "Charamel_huh.Form.update: Form.init must be called before update"
   else if not (normal_state t.state) then (t, cmd_none)
   else
     match message with
-    | Key_press key when Charm_bubbles.Key_binding.matches key t.keymap.Keymap.quit ->
+    | Key_press key when Charamel_bubbles.Key_binding.matches key t.keymap.Keymap.quit ->
         ({ t with state = Aborted }, cmd_none)
     | Key_press key -> dispatch_key t key
     | Paste text -> dispatch_paste t text
@@ -575,7 +575,8 @@ let render_header t group =
   let text =
     String.concat "\n" (List.filter (fun value -> value <> "") [ title; description ])
   in
-  if text = "" then "" else Charm_ansi.Text.wrap ~width:(max 1 (Group.width group)) text
+  if text = "" then ""
+  else Charamel_ansi.Text.wrap ~width:(max 1 (Group.width group)) text
 
 let render_group t group_index =
   let group = t.groups.(group_index) in
@@ -610,7 +611,7 @@ let render_group t group_index =
             |> List.map (fun error ->
                 Style.render t.styles.Styles.focused.Styles.error_message error)
             |> String.concat "\n"
-            |> Charm_ansi.Text.wrap ~width:(max 1 (Group.width group))
+            |> Charamel_ansi.Text.wrap ~width:(max 1 (Group.width group))
           else ""
         else if show_help then
           match Group.focused_field group with
@@ -618,10 +619,10 @@ let render_group t group_index =
           | Some field ->
               let field_index = Group.selected group in
               let help =
-                Charm_bubbles.Help.v ~width:(Group.width group)
+                Charamel_bubbles.Help.v ~width:(Group.width group)
                   ~styles:t.styles.Styles.help ()
               in
-              Charm_bubbles.Help.short_view help
+              Charamel_bubbles.Help.short_view help
                 (Field_impl.key_binds field (context t ~env group_index field_index))
         else ""
       in

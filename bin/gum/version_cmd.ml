@@ -31,9 +31,9 @@ let cmd env =
   let term =
     let open Term.Syntax in
     let+ constraint_ = constraint_ in
-    match display ~current:Charm_cli.Version.current constraint_ with
+    match display ~current:Charamel_cli.Version.current constraint_ with
     | Ok output when output <> "" -> Gum_io.println env output
     | Ok _ -> ()
-    | Error (`Msg message) -> Charm_cli.error message
+    | Error (`Msg message) -> Charamel_cli.error message
   in
   Cmd.v (command_info "version" "Print or check the gum version.") term

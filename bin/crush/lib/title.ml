@@ -18,15 +18,15 @@ let strip_think text =
 
 let generate ~sw ~clock ~net ~(small : Models.resolved) ~first_prompt =
   let prompt = utf8_prefix first_prompt 2_000 in
-  let messages = [ Charm_fantasy.Message.text Charm_fantasy.Message.User prompt ] in
+  let messages = [ Charamel_fantasy.Message.text Charamel_fantasy.Message.User prompt ] in
   let stream =
-    Charm_fantasy.Provider.stream small.Models.provider ~sw ~clock ~net
+    Charamel_fantasy.Provider.stream small.Models.provider ~sw ~clock ~net
       ~model:small.Models.model ~system:[ Prompt_title.text ] ~max_tokens:40 messages
   in
   let output = Buffer.create 128 in
   let rec consume () =
     match Eio.Stream.take stream with
-    | Charm_fantasy.Stream_part.Text_delta text ->
+    | Charamel_fantasy.Stream_part.Text_delta text ->
         Buffer.add_string output text;
         consume ()
     | Reasoning_delta _ -> consume ()

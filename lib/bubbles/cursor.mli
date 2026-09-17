@@ -12,8 +12,8 @@ type t
 
 val v :
   ?blink_speed:float ->
-  ?style:Charm_lipgloss.Style.t ->
-  ?text_style:Charm_lipgloss.Style.t ->
+  ?style:Charamel_lipgloss.Style.t ->
+  ?text_style:Charamel_lipgloss.Style.t ->
   unit ->
   t
 (** [v ?blink_speed ?style ?text_style ()] constructs an unfocused blinking cursor. The
@@ -23,7 +23,7 @@ val update : msg -> t -> t
 (** [update Tick t] advances the blink state. The first tick after [show] is absorbed so
     movement does not immediately hide the cursor. *)
 
-val subscriptions : t -> msg Charm_tea.Sub.t
+val subscriptions : t -> msg Charamel_tea.Sub.t
 (** [subscriptions t] subscribes to ticks only when [t] is focused and blinking. *)
 
 val view : t -> string
@@ -47,10 +47,10 @@ val set_mode : mode -> t -> t
 val set_char : string -> t -> t
 (** [set_char char t] sets the text cell displayed by [t]. *)
 
-val set_style : Charm_lipgloss.Style.t -> t -> t
+val set_style : Charamel_lipgloss.Style.t -> t -> t
 (** [set_style style t] sets the visible cursor style. *)
 
-val set_text_style : Charm_lipgloss.Style.t -> t -> t
+val set_text_style : Charamel_lipgloss.Style.t -> t -> t
 (** [set_text_style style t] sets the style used while the cursor is hidden. *)
 
 val blink_speed : t -> float

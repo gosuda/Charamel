@@ -2,7 +2,7 @@
  (name test_glow)
  (package glow)
  (modules test_glow test_config test_source test_ui test_cli)
- (libraries glow_core charm.tea alcotest eio eio_main unix)
+ (libraries glow_core charamel.tea alcotest eio eio_main unix)
  (deps %{exe:../../bin/glow/main.exe})
  (flags
   (:standard

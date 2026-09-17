@@ -34,7 +34,7 @@ val search_lines : pattern:string -> string -> int list
 val make : options -> model
 (** [make options] creates a pager model. *)
 
-val app : options -> (model, msg) Charm_tea.app
+val app : options -> (model, msg) Charamel_tea.app
 (** [app options] is the scripted or terminal pager application. *)
 
 val run : Eio_unix.Stdenv.base -> options -> unit

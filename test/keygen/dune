@@ -1,8 +1,8 @@
 (test
  (name test_keygen)
- (package charm-ssh)
+ (package charamel-ssh)
  (modules test_keygen)
- (libraries alcotest charm-ssh.keygen eio eio_main mirage-crypto-rng.unix)
+ (libraries alcotest charamel-ssh.keygen eio eio_main mirage-crypto-rng.unix)
  (flags
   (:standard
    -strict-sequence

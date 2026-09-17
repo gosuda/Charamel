@@ -1,10 +1,10 @@
 (library
- (name charm_ssh_wish)
- (public_name charm-ssh.wish)
+ (name charamel_ssh_wish)
+ (public_name charamel-ssh.wish)
  (libraries
-  charm.tea
-  charm.colorprofile
-  charm-ssh.keygen
+  charamel.tea
+  charamel.colorprofile
+  charamel-ssh.keygen
   awa
   eio
   eio.unix

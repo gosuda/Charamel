@@ -4,7 +4,7 @@
  (modules test_melt test_mnemonic test_melt_cli)
  (libraries
   melt_core
-  charm-ssh.keygen
+  charamel-ssh.keygen
   alcotest
   fmt
   eio

@@ -45,16 +45,16 @@ let rec cut_lines ~lines text =
 let language ~override ~path =
   let explicit = String.trim override in
   if explicit <> "" && String.lowercase_ascii explicit <> "ansi" then
-    Charm_highlight.find explicit
+    Charamel_highlight.find explicit
   else
     match path with
     | Some path when explicit = "" ->
         let extension = Filename.extension path in
-        if extension <> "" then Charm_highlight.find extension
-        else Charm_highlight.find path
+        if extension <> "" then Charamel_highlight.find extension
+        else Charamel_highlight.find path
     | _ -> None
 
 let is_ansi ~language text =
-  String.lowercase_ascii language = "ansi" || Charm_ansi.Text.strip text <> text
+  String.lowercase_ascii language = "ansi" || Charamel_ansi.Text.strip text <> text
 
-let wrap ~width text = if width > 0 then Charm_ansi.Text.wrap ~width text else text
+let wrap ~width text = if width > 0 then Charamel_ansi.Text.wrap ~width text else text

@@ -1,4 +1,4 @@
-open Charm_fantasy
+open Charamel_fantasy
 
 let model : Model.t =
   {

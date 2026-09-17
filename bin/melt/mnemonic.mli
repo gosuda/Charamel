@@ -3,7 +3,7 @@
     [encode] and [decode] are the standard BIP-39 procedure (entropy, an appended SHA-256
     checksum, 11-bit big-endian word indices) specialized to Ed25519's 32-byte private
     seed, so the 24-word mnemonic round-trips the exact seed bytes
-    {!Charm_ssh_keygen.generate} produces and {!Charm_ssh_keygen.of_ed25519_seed}
+    {!Charamel_ssh_keygen.generate} produces and {!Charamel_ssh_keygen.of_ed25519_seed}
     consumes. No OpenSSH container, comment, or fingerprint is involved. Words are looked
     up in {!Wordlist.words}; failures are a closed variant so a malformed seed, a
     corrupted mnemonic, and a foreign (non-BIP-39) word list are distinguishable. *)

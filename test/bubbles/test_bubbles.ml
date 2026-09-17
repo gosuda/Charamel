@@ -1,19 +1,19 @@
 let wrapper_exports () =
   let key =
-    match Charm_tea.Key.of_string "q" with
+    match Charamel_tea.Key.of_string "q" with
     | Ok value -> value
     | Error (`Msg message) -> Alcotest.fail message
   in
-  let binding = Charm_bubbles.Key_binding.v [ "q" ] in
+  let binding = Charamel_bubbles.Key_binding.v [ "q" ] in
   Alcotest.(check bool)
     "key binding export" true
-    (Charm_bubbles.Key_binding.matches key binding);
-  Alcotest.(check string) "duration export" "1s" (Charm_bubbles.Duration.to_string 1.);
+    (Charamel_bubbles.Key_binding.matches key binding);
+  Alcotest.(check string) "duration export" "1s" (Charamel_bubbles.Duration.to_string 1.);
   Alcotest.(check (list int))
     "fuzzy export" [ 0 ]
     (Stdlib.List.map
-       (fun (m : Charm_bubbles.Fuzzy.match_) -> m.Charm_bubbles.Fuzzy.index)
-       (Charm_bubbles.Fuzzy.find ~pattern:"a" [ "a" ]))
+       (fun (m : Charamel_bubbles.Fuzzy.match_) -> m.Charamel_bubbles.Fuzzy.index)
+       (Charamel_bubbles.Fuzzy.find ~pattern:"a" [ "a" ]))
 
 let cases = [ Alcotest.test_case "wrapper exports" `Quick wrapper_exports ]
 

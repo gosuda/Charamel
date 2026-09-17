@@ -10,7 +10,7 @@ val string_width : string -> int
 (** [string_width s] is the number of terminal cells [s] occupies when rendered on a line.
     Control characters occupy no cell. [s] is measured as given, so escape sequences are
     not recognised and the printable bytes of a sequence count as text. See
-    [Charm_ansi.Text] for escape-aware measurement. *)
+    [Charamel_ansi.Text] for escape-aware measurement. *)
 
 val grapheme_width : string -> int
 (** [grapheme_width s] is the number of terminal cells occupied by the first grapheme

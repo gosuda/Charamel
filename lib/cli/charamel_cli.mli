@@ -41,5 +41,5 @@ val run :
     exits are [0]. Command diagnostics use [1], usage errors use [2], timeouts use [124],
     and interrupts use [130]. [ -v ] and [ -q ] are accepted as global verbosity controls
     and are removed before Cmdliner evaluates the command. The runtime owns the one
-    [Eio_main.run] invocation, installs the colour-aware [Charm_log] reporter for the
+    [Eio_main.run] invocation, installs the colour-aware [Charamel_log] reporter for the
     command lifetime, and exits only after Eio resources have unwound. *)

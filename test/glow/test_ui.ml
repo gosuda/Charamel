@@ -5,8 +5,8 @@ let command_split () =
     "spaces" [ "sh"; "-c"; "echo hi" ]
     (Ui.split_words "sh -c \"echo hi\"")
 
-let key code = Charm_tea.Key.v (Charm_tea.Key.Char (Uchar.of_char code))
-let enter = Charm_tea.Key.v Charm_tea.Key.Enter
+let key code = Charamel_tea.Key.v (Charamel_tea.Key.Char (Uchar.of_char code))
+let enter = Charamel_tea.Key.v Charamel_tea.Key.Enter
 
 let scripted_pager () =
   let events =

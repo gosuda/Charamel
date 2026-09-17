@@ -1,4 +1,4 @@
-(** Lossless lexical scanning for {!Charm_highlight.Spec.t} values. *)
+(** Lossless lexical scanning for {!Charamel_highlight.Spec.t} values. *)
 
 val tokenize : Spec.t -> string -> (Spec.kind * string) list
 (** [tokenize spec source] returns the longest-match token stream for [source]. Token

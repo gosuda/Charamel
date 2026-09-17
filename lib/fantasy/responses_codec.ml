@@ -17,7 +17,7 @@
    (responses_language_model.go:1083-1103), not when it opens, so a
    truncated stream still finishes as a stop. *)
 
-let log_src = Logs.Src.create "charm.fantasy.responses_codec"
+let log_src = Logs.Src.create "charamel.fantasy.responses_codec"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
 open Json

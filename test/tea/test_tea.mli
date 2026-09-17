@@ -1,4 +1,4 @@
-(** Alcotest driver for the [charm.tea] suites.
+(** Alcotest driver for the [charamel.tea] suites.
 
     The driver contributes no cases of its own. It groups the case lists exported by the
     sibling modules into the suites {!suites} names, so the whole Tea runtime is exercised

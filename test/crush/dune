@@ -34,9 +34,9 @@
  (libraries
   crush.core
   crush.ui
-  charm.fantasy
-  charm.huh
-  charm.tea
+  charamel.fantasy
+  charamel.huh
+  charamel.tea
   alcotest
   eio
   eio_main

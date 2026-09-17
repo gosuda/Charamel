@@ -210,15 +210,15 @@ let parse_padding text =
   in
   match values_result with
   | Error _ as error -> error
-  | Ok [ value ] -> Ok (Charm_lipgloss.Sides.all value)
+  | Ok [ value ] -> Ok (Charamel_lipgloss.Sides.all value)
   | Ok [ vertical; horizontal ] ->
       Ok
-        (Charm_lipgloss.Sides.v ~top:vertical ~right:horizontal ~bottom:vertical
+        (Charamel_lipgloss.Sides.v ~top:vertical ~right:horizontal ~bottom:vertical
            ~left:horizontal ())
   | Ok [ top; horizontal; bottom ] ->
-      Ok (Charm_lipgloss.Sides.v ~top ~right:horizontal ~bottom ~left:horizontal ())
+      Ok (Charamel_lipgloss.Sides.v ~top ~right:horizontal ~bottom ~left:horizontal ())
   | Ok [ top; right; bottom; left ] ->
-      Ok (Charm_lipgloss.Sides.v ~top ~right ~bottom ~left ())
+      Ok (Charamel_lipgloss.Sides.v ~top ~right ~bottom ~left ())
   | Ok [] -> Error (`Msg "padding requires one to four integer values")
   | Ok _ -> Error (`Msg "padding requires one to four integer values")
 
@@ -239,31 +239,31 @@ let padding ~cmd =
 
 let align text =
   match String.lowercase_ascii (String.trim text) with
-  | "left" | "top" -> Some Charm_lipgloss.Position.left
-  | "center" | "middle" -> Some Charm_lipgloss.Position.center
-  | "right" | "bottom" -> Some Charm_lipgloss.Position.right
+  | "left" | "top" -> Some Charamel_lipgloss.Position.left
+  | "center" | "middle" -> Some Charamel_lipgloss.Position.center
+  | "right" | "bottom" -> Some Charamel_lipgloss.Position.right
   | _ -> None
 
 let border text =
   match String.lowercase_ascii (String.trim text) with
-  | "none" -> Some Charm_lipgloss.Border.none
-  | "hidden" -> Some Charm_lipgloss.Border.hidden
-  | "normal" -> Some Charm_lipgloss.Border.normal
-  | "rounded" -> Some Charm_lipgloss.Border.rounded
-  | "thick" -> Some Charm_lipgloss.Border.thick
-  | "double" -> Some Charm_lipgloss.Border.double
+  | "none" -> Some Charamel_lipgloss.Border.none
+  | "hidden" -> Some Charamel_lipgloss.Border.hidden
+  | "normal" -> Some Charamel_lipgloss.Border.normal
+  | "rounded" -> Some Charamel_lipgloss.Border.rounded
+  | "thick" -> Some Charamel_lipgloss.Border.thick
+  | "double" -> Some Charamel_lipgloss.Border.double
   | _ -> None
 
 let color text =
   let text = String.trim text in
   if text = "" then Ok None
   else
-    match Charm_ansi.Color.of_hex text with
+    match Charamel_ansi.Color.of_hex text with
     | Some color -> Ok (Some color)
     | None -> (
         match int_of_string_opt text with
         | Some index -> (
-            match Charm_ansi.Color.indexed index with
+            match Charamel_ansi.Color.indexed index with
             | Some color -> Ok (Some color)
             | None -> Error (`Msg (Fmt.str "invalid color: %s" text)))
         | None -> Error (`Msg (Fmt.str "invalid color: %s" text)))

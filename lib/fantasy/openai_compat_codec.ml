@@ -19,7 +19,7 @@
    ([lib/fantasy/message.mli]), so it is copied into the request verbatim;
    re-encoding would corrupt it. *)
 
-let log_src = Logs.Src.create "charm.fantasy.openai_compat_codec"
+let log_src = Logs.Src.create "charamel.fantasy.openai_compat_codec"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
 open Json

@@ -24,8 +24,8 @@ type t = {
   report_focus : bool;
   title : string option;
   keyboard : keyboard;
-  background : Charm_ansi.Color.t option;
-  foreground : Charm_ansi.Color.t option;
+  background : Charamel_ansi.Color.t option;
+  foreground : Charamel_ansi.Color.t option;
   progress : progress;
 }
 

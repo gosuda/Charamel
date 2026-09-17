@@ -59,7 +59,7 @@ let all_renderers () =
   let emoji =
     expect_ok "emoji" (Format.render ~theme:"ascii" Format.Emoji "hello :heart:")
   in
-  let plain value = Charm_ansi.Text.strip value in
+  let plain value = Charamel_ansi.Text.strip value in
   Alcotest.(check bool) "markdown output" true (contains_sub (plain markdown) "# Title");
   Alcotest.(check bool) "code output" true (contains_sub (plain code) "let x = 1");
   Alcotest.(check bool) "emoji output" true (contains_sub (plain emoji) "hello ❤️")

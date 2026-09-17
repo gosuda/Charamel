@@ -1,10 +1,10 @@
-open Charm_colorprofile
+open Charamel_colorprofile
 
 let sink_output profile chunks =
   let output = Buffer.create 128 in
   let sink = Eio.Flow.buffer_sink output in
-  let writer = Charm_colorprofile.Writer.create ~profile sink in
-  List.iter (Charm_colorprofile.Writer.write writer) chunks;
+  let writer = Charamel_colorprofile.Writer.create ~profile sink in
+  List.iter (Charamel_colorprofile.Writer.write writer) chunks;
   Buffer.contents output
 
 let writer_case name input expected_truecolor expected_ansi256 expected_ansi
@@ -12,10 +12,10 @@ let writer_case name input expected_truecolor expected_ansi256 expected_ansi
   Alcotest.test_case name `Quick (fun () ->
       let expected profile =
         match profile with
-        | Charm_colorprofile.True_color -> expected_truecolor
-        | Charm_colorprofile.Ansi256 -> expected_ansi256
-        | Charm_colorprofile.Ansi -> expected_ansi
-        | Charm_colorprofile.Ascii | Charm_colorprofile.No_tty -> expected_ascii
+        | Charamel_colorprofile.True_color -> expected_truecolor
+        | Charamel_colorprofile.Ansi256 -> expected_ansi256
+        | Charamel_colorprofile.Ansi -> expected_ansi
+        | Charamel_colorprofile.Ascii | Charamel_colorprofile.No_tty -> expected_ascii
       in
       List.iter
         (fun profile ->
@@ -37,7 +37,7 @@ let writer_case name input expected_truecolor expected_ansi256 expected_ansi
                 (expected profile)
                 (sink_output profile [ fst chunks; snd chunks ]))
             chunks)
-        [ Charm_colorprofile.True_color; Ansi256; Ansi; Ascii; No_tty ])
+        [ Charamel_colorprofile.True_color; Ansi256; Ansi; Ascii; No_tty ])
 
 let writers =
   [
@@ -96,7 +96,7 @@ let lookup bindings name = List.assoc_opt name bindings
 let detect_case name ~is_tty bindings expected =
   Alcotest.test_case name `Quick (fun () ->
       Alcotest.check Alcotest.string name expected
-        (match Charm_colorprofile.detect ~is_tty ~env:(lookup bindings) with
+        (match Charamel_colorprofile.detect ~is_tty ~env:(lookup bindings) with
         | No_tty -> "no-tty"
         | Ascii -> "ascii"
         | Ansi -> "ansi"
@@ -151,4 +151,4 @@ let detect =
       "ansi";
   ]
 
-let () = Alcotest.run "charm_colorprofile" [ ("writer", writers); ("detect", detect) ]
+let () = Alcotest.run "charamel_colorprofile" [ ("writer", writers); ("detect", detect) ]

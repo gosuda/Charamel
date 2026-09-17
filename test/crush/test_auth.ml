@@ -4,7 +4,7 @@ module Config = Crush_core.Config
 let oauth =
   Auth.Oauth
     {
-      Charm_fantasy.Oauth.Credential.access = "access-token";
+      Charamel_fantasy.Oauth.Credential.access = "access-token";
       refresh = "refresh-token";
       expires_at_ms = 9_000_000;
       account = Some "account";
@@ -57,7 +57,7 @@ let test_codec_roundtrip () =
       (match List.assoc_opt "anthropic" decoded with
       | Some (Auth.Oauth credential) ->
           Alcotest.(check string)
-            "access" "access-token" credential.Charm_fantasy__Oauth.Credential.access
+            "access" "access-token" credential.Charamel_fantasy__Oauth.Credential.access
       | _ -> Alcotest.fail "oauth entry did not round-trip");
       match List.assoc_opt "old" decoded with
       | Some (Auth.Disabled { reason; _ }) ->

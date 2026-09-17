@@ -631,10 +631,10 @@ let parse_color s =
     match String.split_on_char '/' (String.sub s 4 (String.length s - 4)) with
     | [ r; g; b ] -> (
         match (parse_hex_component r, parse_hex_component g, parse_hex_component b) with
-        | Some r, Some g, Some b -> Charm_ansi.Color.rgb r g b
+        | Some r, Some g, Some b -> Charamel_ansi.Color.rgb r g b
         | _ -> None)
     | _ -> None
-  else Charm_ansi.Color.of_hex s
+  else Charamel_ansi.Color.of_hex s
 
 let parse_osc s start =
   match find_termination ~accept_bel:true s start with
@@ -981,7 +981,7 @@ let decode_plain s =
       | Some u, scalar_len ->
           let look = min 256 (String.length s) in
           let text =
-            match Charm_ansi.Width.graphemes (String.sub s 0 look) with
+            match Charamel_ansi.Width.graphemes (String.sub s 0 look) with
             | first :: _ when String.length first >= scalar_len -> first
             | _ -> utf8_of_uchar u
           in

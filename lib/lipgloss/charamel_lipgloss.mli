@@ -4,7 +4,7 @@
 
 module Position = Position
 module Sides = Sides
-module Color = Charm_ansi.Color
+module Color = Charamel_ansi.Color
 module Sides_color = Sides_color
 module Border = Border
 

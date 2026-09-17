@@ -59,7 +59,7 @@ let view layout ~width:_width ~selected items =
                 if position / columns = segment then Some item.content else None)
           in
           let joined =
-            Charm_lipgloss.Layout.join_horizontal ~pos:Charm_lipgloss.Position.top
+            Charamel_lipgloss.Layout.join_horizontal ~pos:Charamel_lipgloss.Position.top
               contents
           in
           with_footer_plain (join_vertical [ selected_page.header; joined ])
@@ -102,7 +102,8 @@ let view layout ~width:_width ~selected items =
           let rows =
             chunks columns page_items
             |> List.map (fun row ->
-                Charm_lipgloss.Layout.join_horizontal ~pos:Charm_lipgloss.Position.top
+                Charamel_lipgloss.Layout.join_horizontal
+                  ~pos:Charamel_lipgloss.Position.top
                   (List.map (fun item -> item.content) row))
           in
           with_footer (String.concat "\n\n" rows)

@@ -1,13 +1,13 @@
 (test
  (name test_huh)
- (package charm)
+ (package charamel)
  (modules test_huh test_accessible test_spinner)
  (libraries
-  charm.huh
-  charm.tea
-  charm.bubbles
-  charm.lipgloss
-  charm.ansi
+  charamel.huh
+  charamel.tea
+  charamel.bubbles
+  charamel.lipgloss
+  charamel.ansi
   eio
   eio.unix
   unix

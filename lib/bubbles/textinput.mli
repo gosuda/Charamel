@@ -6,16 +6,16 @@
 type echo = Normal | Password | No_echo  (** How the value is displayed. *)
 
 type style_state = {
-  text : Charm_lipgloss.Style.t;
-  placeholder : Charm_lipgloss.Style.t;
-  suggestion : Charm_lipgloss.Style.t;
-  prompt : Charm_lipgloss.Style.t;
+  text : Charamel_lipgloss.Style.t;
+  placeholder : Charamel_lipgloss.Style.t;
+  suggestion : Charamel_lipgloss.Style.t;
+  prompt : Charamel_lipgloss.Style.t;
 }
 (** Styles selected according to focus state. *)
 
 type cursor_style = {
-  color : Charm_ansi.Color.t;
-  shape : Charm_tea.Cursor.shape;
+  color : Charamel_ansi.Color.t;
+  shape : Charamel_tea.Cursor.shape;
   blink : bool;
   blink_speed : float option;
 }
@@ -96,22 +96,22 @@ val v :
     password character, no character limit, unlimited width, no validator or suggestions,
     dark styles, and a virtual cursor. *)
 
-val update : msg -> t -> t * msg Charm_tea.Cmd.t
+val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 (** [update message t] applies one editing transition. A blurred input ignores all
-    messages. Editing always returns [Charm_tea.Cmd.none]. *)
+    messages. Editing always returns [Charamel_tea.Cmd.none]. *)
 
 val view : t -> string
 (** [view t] renders the prompt, visible value window, placeholder or completion, and
     virtual cursor. *)
 
-val key : t -> Charm_tea.Key.t -> msg option
+val key : t -> Charamel_tea.Key.t -> msg option
 (** [key t key] maps an enabled binding or printable key to a message. It returns [None]
     for a blurred input or an unbound key. *)
 
-val subscriptions : t -> msg Charm_tea.Sub.t
+val subscriptions : t -> msg Charamel_tea.Sub.t
 (** [subscriptions t] subscribes to virtual-cursor ticks while focused. *)
 
-val focus : t -> t * msg Charm_tea.Cmd.t
+val focus : t -> t * msg Charamel_tea.Cmd.t
 (** [focus t] focuses the input and returns a command for the cursor. *)
 
 val blur : t -> t
@@ -204,7 +204,7 @@ val set_virtual_cursor : bool -> t -> t
 val virtual_cursor : t -> bool
 (** [virtual_cursor t] reports whether the embedded cursor is enabled. *)
 
-val cursor : t -> Charm_tea.Cursor.t option
+val cursor : t -> Charamel_tea.Cursor.t option
 (** [cursor t] returns a real cursor request when the input is focused and virtual cursor
     output is disabled. *)
 

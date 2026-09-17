@@ -34,24 +34,25 @@ let output_string = function
   | `Media (mime, data) -> Fmt.str "media <%s> (%d bytes)" mime (String.length data)
 
 let part_text = function
-  | Charm_fantasy.Message.Text text -> text
-  | Charm_fantasy.Message.Reasoning { text; _ } -> "<reasoning>" ^ text ^ "</reasoning>"
-  | Charm_fantasy.Message.File { mime; data; name } ->
+  | Charamel_fantasy.Message.Text text -> text
+  | Charamel_fantasy.Message.Reasoning { text; _ } ->
+      "<reasoning>" ^ text ^ "</reasoning>"
+  | Charamel_fantasy.Message.File { mime; data; name } ->
       Fmt.str "<file mime=%s name=%s bytes=%d>" mime
         (Option.value ~default:"" name)
         (String.length data)
-  | Charm_fantasy.Message.Tool_call { id; name; input } ->
+  | Charamel_fantasy.Message.Tool_call { id; name; input } ->
       Fmt.str "call %s (%s): %s" id name (Jsonx.display_string input)
-  | Charm_fantasy.Message.Tool_result { id; name; output } ->
+  | Charamel_fantasy.Message.Tool_result { id; name; output } ->
       Fmt.str "result %s (%s): %s" id name (output_string output)
 
-let message_text { Charm_fantasy.Message.role; parts } =
+let message_text { Charamel_fantasy.Message.role; parts } =
   let role =
     match role with
-    | Charm_fantasy.Message.System -> "system"
-    | Charm_fantasy.Message.User -> "user"
-    | Charm_fantasy.Message.Assistant -> "assistant"
-    | Charm_fantasy.Message.Tool -> "tool"
+    | Charamel_fantasy.Message.System -> "system"
+    | Charamel_fantasy.Message.User -> "user"
+    | Charamel_fantasy.Message.Assistant -> "assistant"
+    | Charamel_fantasy.Message.Tool -> "tool"
   in
   role ^ ": " ^ String.concat "" (List.map part_text parts)
 
@@ -101,16 +102,16 @@ let review t ~sw ~clock ~net (model : Models.resolved) ~context ~last_turn =
   else
     let user = render_last_turn last_turn in
     let stream =
-      Charm_fantasy.Provider.stream model.Models.provider ~sw ~clock ~net
+      Charamel_fantasy.Provider.stream model.Models.provider ~sw ~clock ~net
         ~model:model.Models.model
         ~system:[ Prompt_advisor.text; context ]
         ~max_tokens:512
-        [ Charm_fantasy.Message.text Charm_fantasy.Message.User user ]
+        [ Charamel_fantasy.Message.text Charamel_fantasy.Message.User user ]
     in
     let text = Buffer.create 512 in
     let rec consume () =
       match Eio.Stream.take stream with
-      | Charm_fantasy.Stream_part.Text_delta delta ->
+      | Charamel_fantasy.Stream_part.Text_delta delta ->
           Buffer.add_string text delta;
           consume ()
       | Reasoning_delta _ -> consume ()
@@ -138,7 +139,7 @@ let review t ~sw ~clock ~net (model : Models.resolved) ~context ~last_turn =
     consume ()
 
 let steering_message verdict =
-  Charm_fantasy.Message.text Charm_fantasy.Message.User
+  Charamel_fantasy.Message.text Charamel_fantasy.Message.User
     ("[advisor blocker] " ^ verdict.guidance)
 
 let reset t =

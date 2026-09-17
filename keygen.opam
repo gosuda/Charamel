@@ -4,13 +4,13 @@ synopsis: "Generate OpenSSH key pairs"
 maintainer: ["metaphorics <152830360+metaphorics@users.noreply.github.com>"]
 authors: ["metaphorics <152830360+metaphorics@users.noreply.github.com>"]
 license: "Apache-2.0"
-homepage: "https://github.com/metaphorics/charm"
-bug-reports: "https://github.com/metaphorics/charm/issues"
+homepage: "https://github.com/metaphorics/charamel"
+bug-reports: "https://github.com/metaphorics/charamel/issues"
 depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.24"}
-  "charm"
-  "charm-ssh"
+  "charamel"
+  "charamel-ssh"
   "alcotest" {with-test}
   "odoc" {with-doc}
 ]
@@ -28,5 +28,5 @@ build: [
     "@doc" {with-doc}
   ]
 ]
-dev-repo: "git+https://github.com/metaphorics/charm.git"
+dev-repo: "git+https://github.com/metaphorics/charamel.git"
 x-maintenance-intent: ["(latest)"]

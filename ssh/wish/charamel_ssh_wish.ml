@@ -1,4 +1,4 @@
-let log_src = Logs.Src.create "charm.ssh.wish" ~doc:"Charm SSH wish server"
+let log_src = Logs.Src.create "charamel.ssh.wish" ~doc:"Charamel SSH wish server"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
 
@@ -565,7 +565,7 @@ let serve ~sw ~net ~(clock : float Eio.Time.clock_ty Eio.Resource.t) ~host_key ~
   let idle_timeout = Option.map (valid_timeout "idle_timeout") idle_timeout in
   let max_timeout = Option.map (valid_timeout "max_timeout") max_timeout in
   let awa_host_key =
-    match Charm_ssh_keygen.ed25519_seed host_key with
+    match Charamel_ssh_keygen.ed25519_seed host_key with
     | Some seed -> Awa.Keys.of_seed `Ed25519 seed
     | None -> invalid_arg "wish requires an Ed25519 host key with awa 0.6.1"
   in
@@ -619,12 +619,12 @@ let tea ~env make _next session =
         done
       with Eio.Cancel.Cancelled _ -> ());
   let terminal =
-    Charm_tea.Terminal.custom ~input:(Session.stdin session)
+    Charamel_tea.Terminal.custom ~input:(Session.stdin session)
       ~output:(Session.stdout session) ~size ~on_resize:(Some resize_callbacks)
       ~env:environment
       ~is_tty:(Option.is_some (Session.pty session))
   in
-  match Charm_tea.run ~terminal ~clock:(Eio.Stdenv.clock env) (make session) env with
+  match Charamel_tea.run ~terminal ~clock:(Eio.Stdenv.clock env) (make session) env with
   | Ok _ -> Session.exit session 0
   | Error `Interrupted -> Session.exit session 130
   | Error `Killed -> Session.exit session 137

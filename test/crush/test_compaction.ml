@@ -3,7 +3,7 @@ module Session = Crush_core.Session
 
 let message text =
   Session.Message
-    { ms = 0; message = Charm_fantasy.Message.text Charm_fantasy.Message.User text }
+    { ms = 0; message = Charamel_fantasy.Message.text Charamel_fantasy.Message.User text }
 
 let reserve_cases () =
   Alcotest.(check int) "zero window" 0 (Compaction.reserve ~context_window:0);

@@ -1,4 +1,4 @@
-module Width = Charm_ansi.Width
+module Width = Charamel_ansi.Width
 
 (* Width vectors restated as codepoints from the grapheme column of
    .references/x/ansi/wcwidth_test.go and the width column of

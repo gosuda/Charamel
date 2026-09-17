@@ -2,8 +2,8 @@ type t = {
   bold : bool option;
   italic : bool option;
   underline : bool option;
-  underline_style : Charm_ansi.Style.underline option;
-  underline_color : Charm_ansi.Color.t option;
+  underline_style : Charamel_ansi.Style.underline option;
+  underline_color : Charamel_ansi.Color.t option;
   strikethrough : bool option;
   reverse : bool option;
   blink : bool option;
@@ -11,8 +11,8 @@ type t = {
   underline_spaces : bool option;
   strikethrough_spaces : bool option;
   color_whitespace : bool option;
-  foreground : Charm_ansi.Color.t option;
-  background : Charm_ansi.Color.t option;
+  foreground : Charamel_ansi.Color.t option;
+  background : Charamel_ansi.Color.t option;
   width : int option;
   height : int option;
   max_width : int option;
@@ -21,7 +21,7 @@ type t = {
   align_vertical : Position.t option;
   padding : Sides.t option;
   margin : Sides.t option;
-  margin_background : Charm_ansi.Color.t option;
+  margin_background : Charamel_ansi.Color.t option;
   border : Border.t option;
   border_top : bool option;
   border_right : bool option;
@@ -32,7 +32,7 @@ type t = {
   inline : bool option;
   tab_width : int option;
   transform : (string -> string) option;
-  hyperlink : Charm_ansi.Link.t option;
+  hyperlink : Charamel_ansi.Link.t option;
 }
 
 let empty =
@@ -81,13 +81,13 @@ let underline x t =
     t with
     underline = Some x;
     underline_style =
-      Some (if x then Charm_ansi.Style.Single else Charm_ansi.Style.No_underline);
+      Some (if x then Charamel_ansi.Style.Single else Charamel_ansi.Style.No_underline);
   }
 
 let underline_style x t =
   {
     t with
-    underline = Some (x <> Charm_ansi.Style.No_underline);
+    underline = Some (x <> Charamel_ansi.Style.No_underline);
     underline_style = Some x;
   }
 
@@ -245,26 +245,26 @@ let get_border_foreground t = t.border_foreground
 let get_border_background t = t.border_background
 
 let apply_ansi style text =
-  if Charm_ansi.Style.equal style Charm_ansi.Style.default then text
-  else Charm_ansi.Style.to_sgr style ^ text ^ "\x1b[m"
+  if Charamel_ansi.Style.equal style Charamel_ansi.Style.default then text
+  else Charamel_ansi.Style.to_sgr style ^ text ^ "\x1b[m"
 
 let resolve_underline t =
   match (t.underline, t.underline_style) with
-  | Some false, _ -> Charm_ansi.Style.No_underline
+  | Some false, _ -> Charamel_ansi.Style.No_underline
   | _, Some u -> u
   | _ ->
-      if Option.value ~default:false t.underline then Charm_ansi.Style.Single
-      else Charm_ansi.Style.No_underline
+      if Option.value ~default:false t.underline then Charamel_ansi.Style.Single
+      else Charamel_ansi.Style.No_underline
 
-let underline_active t = resolve_underline t <> Charm_ansi.Style.No_underline
+let underline_active t = resolve_underline t <> Charamel_ansi.Style.No_underline
 
 let ansi_style t =
   {
-    Charm_ansi.Style.fg =
-      (match t.foreground with Some c -> c | None -> Charm_ansi.Color.Default);
-    bg = (match t.background with Some c -> c | None -> Charm_ansi.Color.Default);
+    Charamel_ansi.Style.fg =
+      (match t.foreground with Some c -> c | None -> Charamel_ansi.Color.Default);
+    bg = (match t.background with Some c -> c | None -> Charamel_ansi.Color.Default);
     underline_color =
-      (match t.underline_color with Some c -> c | None -> Charm_ansi.Color.Default);
+      (match t.underline_color with Some c -> c | None -> Charamel_ansi.Color.Default);
     bold = Option.value ~default:false t.bold;
     faint = Option.value ~default:false t.faint;
     italic = Option.value ~default:false t.italic;
@@ -363,7 +363,7 @@ let render_line t te te_space line =
               (fun g ->
                 let style = if is_space g then te_space else te in
                 Buffer.add_string out (apply_ansi style g))
-              (Charm_ansi.Width.graphemes text))
+              (Charamel_ansi.Width.graphemes text))
       (escape_spans line);
     Buffer.contents out
   end
@@ -382,7 +382,7 @@ let replace_tabs width s =
 
 let lines s = String.split_on_char '\n' s
 let join_lines = String.concat "\n"
-let line_width = Charm_ansi.Text.width
+let line_width = Charamel_ansi.Text.width
 let max_line_width xs = Stdlib.List.fold_left (fun m x -> max m (line_width x)) 0 xs
 let spaces n = String.make (max 0 n) ' '
 let styled_pad style n = if n <= 0 then "" else apply_ansi style (spaces n)
@@ -428,14 +428,14 @@ let border_enabled t side =
   | Some _, `Bottom -> Option.value ~default:all_unspecified t.border_bottom
   | Some _, `Left -> Option.value ~default:all_unspecified t.border_left
 
-let first_glyph s = match Charm_ansi.Width.graphemes s with g :: _ -> g | [] -> " "
+let first_glyph s = match Charamel_ansi.Width.graphemes s with g :: _ -> g | [] -> " "
 
 let max_glyph_width s =
-  match Charm_ansi.Width.graphemes s with
+  match Charamel_ansi.Width.graphemes s with
   | [] -> 1
   | gs ->
       Stdlib.List.fold_left
-        (fun width glyph -> max width (Charm_ansi.Width.grapheme_width glyph))
+        (fun width glyph -> max width (Charamel_ansi.Width.grapheme_width glyph))
         0 gs
 
 let border_edge_width (b : Border.t) side ~top ~bottom =
@@ -484,9 +484,9 @@ let color_text t side text =
   let background = side_color t.border_background side in
   let style =
     {
-      Charm_ansi.Style.default with
-      fg = (match foreground with Some c -> c | None -> Charm_ansi.Color.Default);
-      bg = (match background with Some c -> c | None -> Charm_ansi.Color.Default);
+      Charamel_ansi.Style.default with
+      fg = (match foreground with Some c -> c | None -> Charamel_ansi.Color.Default);
+      bg = (match background with Some c -> c | None -> Charamel_ansi.Color.Default);
     }
   in
   apply_ansi style text
@@ -506,13 +506,15 @@ let apply_border t ls =
         let left_w = if left then border_edge_width b `Left ~top ~bottom else 0
         and right_w = if right then border_edge_width b `Right ~top ~bottom else 0 in
         let cycle_glyphs s =
-          match Charm_ansi.Width.graphemes s with [] -> [ " " ] | gs -> gs
+          match Charamel_ansi.Width.graphemes s with [] -> [ " " ] | gs -> gs
         in
         let fill_edge gs target_width =
           if
             target_width <= 0
             || not
-                 (Stdlib.List.exists (fun g -> Charm_ansi.Width.grapheme_width g > 0) gs)
+                 (Stdlib.List.exists
+                    (fun g -> Charamel_ansi.Width.grapheme_width g > 0)
+                    gs)
           then ""
           else
             let out = Buffer.create (max 16 target_width) in
@@ -520,7 +522,7 @@ let apply_border t ls =
             while !columns < target_width do
               let g = Stdlib.List.nth gs (!i mod Stdlib.List.length gs) in
               Buffer.add_string out g;
-              columns := !columns + Charm_ansi.Width.grapheme_width g;
+              columns := !columns + Charamel_ansi.Width.grapheme_width g;
               incr i
             done;
             Buffer.contents out
@@ -575,8 +577,8 @@ let apply_margins t ls =
   | Some m ->
       let margin_style =
         match t.margin_background with
-        | None -> Charm_ansi.Style.default
-        | Some c -> { Charm_ansi.Style.default with bg = c }
+        | None -> Charamel_ansi.Style.default
+        | Some c -> { Charamel_ansi.Style.default with bg = c }
       in
       let content_width = max_line_width ls + m.Sides.left + m.Sides.right in
       let body =
@@ -646,7 +648,7 @@ let render t input =
     let requested_height = Option.value ~default:0 t.height - border_v in
     let input =
       if (not inline) && requested_width > 0 then
-        Charm_ansi.Text.wrap
+        Charamel_ansi.Text.wrap
           ~width:(requested_width - padding.Sides.left - padding.Sides.right)
           input
       else input
@@ -660,19 +662,20 @@ let render t input =
       || Option.value ~default:false t.underline_spaces
       || Option.value ~default:false t.strikethrough_spaces
     in
-    let color_or_default = function Some c -> c | None -> Charm_ansi.Color.Default in
+    let color_or_default = function Some c -> c | None -> Charamel_ansi.Color.Default in
     let te_whitespace =
       {
-        Charm_ansi.Style.default with
+        Charamel_ansi.Style.default with
         reverse = is_reverse;
         fg =
-          (if is_reverse then color_or_default t.foreground else Charm_ansi.Color.Default);
+          (if is_reverse then color_or_default t.foreground
+           else Charamel_ansi.Color.Default);
         bg =
           (if color_spaces then color_or_default t.background
-           else Charm_ansi.Color.Default);
+           else Charamel_ansi.Color.Default);
         underline_color =
           (if color_spaces then color_or_default t.underline_color
-           else Charm_ansi.Color.Default);
+           else Charamel_ansi.Color.Default);
       }
     in
     let underline_spaces_effective =
@@ -685,19 +688,19 @@ let render t input =
     in
     let te_space =
       {
-        Charm_ansi.Style.default with
+        Charamel_ansi.Style.default with
         fg =
           (if use_space_styler then color_or_default t.foreground
-           else Charm_ansi.Color.Default);
+           else Charamel_ansi.Color.Default);
         bg =
           (if use_space_styler then color_or_default t.background
-           else Charm_ansi.Color.Default);
+           else Charamel_ansi.Color.Default);
         underline_color =
           (if use_space_styler then color_or_default t.underline_color
-           else Charm_ansi.Color.Default);
+           else Charamel_ansi.Color.Default);
         underline =
-          (if underline_spaces_effective then Charm_ansi.Style.Single
-           else Charm_ansi.Style.No_underline);
+          (if underline_spaces_effective then Charamel_ansi.Style.Single
+           else Charamel_ansi.Style.No_underline);
         strike = strikethrough_spaces_effective;
       }
     in
@@ -707,10 +710,10 @@ let render t input =
       | None, _ -> rendered
       | Some _, [] -> []
       | Some link, [ line ] ->
-          [ Charm_ansi.Link.osc8 (Some link) ^ line ^ Charm_ansi.Link.osc8 None ]
+          [ Charamel_ansi.Link.osc8 (Some link) ^ line ^ Charamel_ansi.Link.osc8 None ]
       | Some link, lines ->
-          let open_link = Charm_ansi.Link.osc8 (Some link) in
-          let close_link = Charm_ansi.Link.osc8 None in
+          let open_link = Charamel_ansi.Link.osc8 (Some link) in
+          let close_link = Charamel_ansi.Link.osc8 None in
           let last = Stdlib.List.length lines - 1 in
           Stdlib.List.mapi
             (fun index line ->
@@ -752,7 +755,8 @@ let render t input =
     let rendered = if inline then rendered else apply_margins t rendered in
     let rendered =
       match t.max_width with
-      | Some n when n > 0 -> Stdlib.List.map (Charm_ansi.Text.truncate ~width:n) rendered
+      | Some n when n > 0 ->
+          Stdlib.List.map (Charamel_ansi.Text.truncate ~width:n) rendered
       | None | Some _ -> rendered
     in
     let rendered =
@@ -769,7 +773,9 @@ let get_underline t =
   match t.underline with
   | Some value -> Some value
   | None ->
-      Option.map (fun style -> style <> Charm_ansi.Style.No_underline) t.underline_style
+      Option.map
+        (fun style -> style <> Charamel_ansi.Style.No_underline)
+        t.underline_style
 
 let get_underline_style t = t.underline_style
 let get_underline_color t = t.underline_color

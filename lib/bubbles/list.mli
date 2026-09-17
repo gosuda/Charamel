@@ -27,23 +27,23 @@ type keymap = {
 val default_keymap : keymap
 
 type styles = {
-  title_bar : Charm_lipgloss.Style.t;
-  title : Charm_lipgloss.Style.t;
-  spinner : Charm_lipgloss.Style.t;
-  filter_prompt : Charm_lipgloss.Style.t;
-  filter_cursor : Charm_lipgloss.Style.t;
-  default_filter_character_match : Charm_lipgloss.Style.t;
-  status_bar : Charm_lipgloss.Style.t;
-  status_empty : Charm_lipgloss.Style.t;
-  status_bar_active_filter : Charm_lipgloss.Style.t;
-  status_bar_filter_count : Charm_lipgloss.Style.t;
-  no_items : Charm_lipgloss.Style.t;
-  pagination_style : Charm_lipgloss.Style.t;
-  help_style : Charm_lipgloss.Style.t;
-  active_pagination_dot : Charm_lipgloss.Style.t;
-  inactive_pagination_dot : Charm_lipgloss.Style.t;
-  arabic_pagination : Charm_lipgloss.Style.t;
-  divider_dot : Charm_lipgloss.Style.t;
+  title_bar : Charamel_lipgloss.Style.t;
+  title : Charamel_lipgloss.Style.t;
+  spinner : Charamel_lipgloss.Style.t;
+  filter_prompt : Charamel_lipgloss.Style.t;
+  filter_cursor : Charamel_lipgloss.Style.t;
+  default_filter_character_match : Charamel_lipgloss.Style.t;
+  status_bar : Charamel_lipgloss.Style.t;
+  status_empty : Charamel_lipgloss.Style.t;
+  status_bar_active_filter : Charamel_lipgloss.Style.t;
+  status_bar_filter_count : Charamel_lipgloss.Style.t;
+  no_items : Charamel_lipgloss.Style.t;
+  pagination_style : Charamel_lipgloss.Style.t;
+  help_style : Charamel_lipgloss.Style.t;
+  active_pagination_dot : Charamel_lipgloss.Style.t;
+  inactive_pagination_dot : Charamel_lipgloss.Style.t;
+  arabic_pagination : Charamel_lipgloss.Style.t;
+  divider_dot : Charamel_lipgloss.Style.t;
 }
 
 val default_styles : is_dark:bool -> styles
@@ -66,13 +66,13 @@ type 'a delegate = {
 }
 
 type item_styles = {
-  normal_title : Charm_lipgloss.Style.t;
-  normal_desc : Charm_lipgloss.Style.t;
-  selected_title : Charm_lipgloss.Style.t;
-  selected_desc : Charm_lipgloss.Style.t;
-  dimmed_title : Charm_lipgloss.Style.t;
-  dimmed_desc : Charm_lipgloss.Style.t;
-  filter_match : Charm_lipgloss.Style.t;
+  normal_title : Charamel_lipgloss.Style.t;
+  normal_desc : Charamel_lipgloss.Style.t;
+  selected_title : Charamel_lipgloss.Style.t;
+  selected_desc : Charamel_lipgloss.Style.t;
+  dimmed_title : Charamel_lipgloss.Style.t;
+  dimmed_desc : Charamel_lipgloss.Style.t;
+  filter_match : Charamel_lipgloss.Style.t;
 }
 
 val default_item_styles : is_dark:bool -> item_styles
@@ -129,10 +129,10 @@ val v :
   'a list ->
   'a t
 
-val update : 'a msg -> 'a t -> 'a t * 'a msg Charm_tea.Cmd.t
+val update : 'a msg -> 'a t -> 'a t * 'a msg Charamel_tea.Cmd.t
 val view : 'a t -> string
-val key : 'a t -> Charm_tea.Key.t -> 'a msg option
-val subscriptions : 'a t -> 'a msg Charm_tea.Sub.t
+val key : 'a t -> Charamel_tea.Key.t -> 'a msg option
+val subscriptions : 'a t -> 'a msg Charamel_tea.Sub.t
 val items : 'a t -> 'a list
 val set_items : 'a list -> 'a t -> 'a t
 val visible_items : 'a t -> 'a list
@@ -177,7 +177,7 @@ val set_show_pagination : bool -> 'a t -> 'a t
 val show_help : 'a t -> bool
 val set_show_help : bool -> 'a t -> 'a t
 val set_status_bar_item_name : string -> string -> 'a t -> 'a t
-val new_status_message : string -> 'a t -> 'a t * 'a msg Charm_tea.Cmd.t
+val new_status_message : string -> 'a t -> 'a t * 'a msg Charamel_tea.Cmd.t
 val start_spinner : 'a t -> 'a t
 val stop_spinner : 'a t -> 'a t
 val toggle_spinner : 'a t -> 'a t

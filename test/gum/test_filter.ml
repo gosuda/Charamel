@@ -1,5 +1,5 @@
 let key name =
-  match Charm_tea.Key.of_string name with
+  match Charamel_tea.Key.of_string name with
   | Ok key -> key
   | Error (`Msg message) -> Alcotest.fail message
 
@@ -22,7 +22,9 @@ let fuzzy_script () =
     }
   in
   let model, _frame =
-    Charm_tea.Test.run (Filter.app options) ~events:[ `Key (key "enter") ] ~size:(12, 80)
+    Charamel_tea.Test.run (Filter.app options)
+      ~events:[ `Key (key "enter") ]
+      ~size:(12, 80)
   in
   Alcotest.(check bool) "submitted" true (Filter.submitted model)
 

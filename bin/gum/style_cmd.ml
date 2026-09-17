@@ -3,7 +3,7 @@ let trim_lines text =
 
 let render style ~trim text =
   let text = if trim then trim_lines text else text in
-  Charm_lipgloss.Style.render (Gum_style.to_style style) text
+  Charamel_lipgloss.Style.render (Gum_style.to_style style) text
 
 let command_info name doc = Cmdliner.Cmd.info name ~doc
 
@@ -33,9 +33,9 @@ let cmd env =
     let open Term.Syntax in
     let+ trim = trim and+ strip_ansi = strip_ansi and+ style = style and+ texts = texts in
     match read_input env ~strip_ansi texts with
-    | Error (`Msg message) -> Charm_cli.error message
+    | Error (`Msg message) -> Charamel_cli.error message
     | Ok text when text = "" ->
-        Charm_cli.error "no input provided, see `gum style --help`"
+        Charamel_cli.error "no input provided, see `gum style --help`"
     | Ok text -> Gum_io.println env (render style ~trim text)
   in
   Cmd.v (command_info "style" "Apply terminal styles to text.") term

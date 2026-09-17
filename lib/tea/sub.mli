@@ -2,8 +2,8 @@
 
     Building a subscription starts nothing. [t] is a pure description; the program's
     runtime diffs the subscription set the model's [subscriptions] function returns after
-    every update and starts or stops the fibers that back it. [Charm_tea] re-exports [t]
-    abstract. Constructors are [private]: every value of [t] is built through the
+    every update and starts or stops the fibers that back it. [Charamel_tea] re-exports
+    [t] abstract. Constructors are [private]: every value of [t] is built through the
     functions below, and any module may still pattern-match one. *)
 
 type 'msg t = private

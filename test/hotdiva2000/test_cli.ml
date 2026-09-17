@@ -36,7 +36,8 @@ let with_fixture env f =
   let parent = fixture_parent env in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 parent;
   let path =
-    Filename.temp_file ~temp_dir:(Eio.Path.native_exn parent) "charm-hotdiva-cli-" ".dir"
+    Filename.temp_file ~temp_dir:(Eio.Path.native_exn parent) "charamel-hotdiva-cli-"
+      ".dir"
   in
   Sys.remove path;
   let root = Eio.Path.(env#fs / path) in

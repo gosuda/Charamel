@@ -189,9 +189,9 @@ let none =
 
 let max_rune_width s =
   Stdlib.List.fold_left
-    (fun m g -> max m (Charm_ansi.Width.grapheme_width g))
+    (fun m g -> max m (Charamel_ansi.Width.grapheme_width g))
     0
-    (Charm_ansi.Width.graphemes s)
+    (Charamel_ansi.Width.graphemes s)
 
 let edge_size a b c = max (max_rune_width a) (max (max_rune_width b) (max_rune_width c))
 let top_size b = edge_size b.top_left b.top b.top_right

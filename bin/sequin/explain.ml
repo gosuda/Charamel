@@ -5,9 +5,9 @@
    shape of each explanation is redone in OCaml. Control mnemonics are the standard
    ECMA-48 abbreviations. *)
 
-module Parser = Charm_ansi.Parser
-module Color = Charm_ansi.Color
-module Seq = Charm_ansi.Seq
+module Parser = Charamel_ansi.Parser
+module Color = Charamel_ansi.Color
+module Seq = Charamel_ansi.Seq
 
 let ctrl_name code =
   match code with
@@ -273,7 +273,7 @@ let describe_erase_line ~selective n =
   | None -> "Unknown"
 
 (* DEC private mode names grounded in .references/sequin/mode.go and the numbers
-   Charm_ansi.Seq exposes; a mode not in either grounded set explains as unknown rather
+   Charamel_ansi.Seq exposes; a mode not in either grounded set explains as unknown rather
    than guessed. *)
 let private_mode_name m =
   match m with

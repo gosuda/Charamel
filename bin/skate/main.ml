@@ -9,5 +9,5 @@ let commands =
   ]
 
 let () =
-  Charm_cli.run ~name:"skate" ~version:Charm_cli.Version.current
+  Charamel_cli.run ~name:"skate" ~version:Charamel_cli.Version.current
     ~doc:"Personal key-value store" commands

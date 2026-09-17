@@ -47,12 +47,13 @@ let set_y_offset offset g = { g with y_offset = max 0 offset }
 let field_count g = Array.length g.fields
 
 let field index g =
-  if index < 0 || index >= Array.length g.fields then invalid_arg "Charm_huh.Group.field"
+  if index < 0 || index >= Array.length g.fields then
+    invalid_arg "Charamel_huh.Group.field"
   else g.fields.(index)
 
 let set_field index value g =
   if index < 0 || index >= Array.length g.fields then
-    invalid_arg "Charm_huh.Group.set_field"
+    invalid_arg "Charamel_huh.Group.set_field"
   else
     let fields = Array.copy g.fields in
     fields.(index) <- value;

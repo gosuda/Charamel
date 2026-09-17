@@ -1,7 +1,7 @@
 (** Running a cancellable action with a terminal spinner.
 
     Accessible mode prints the title and runs the action without taking terminal
-    ownership. Interactive mode runs the action in a child fiber while a [Charm_tea]
+    ownership. Interactive mode runs the action in a child fiber while a [Charamel_tea]
     application renders frames. Ctrl-C is a user interruption; cancellation from the
     enclosing switch remains cancellation. *)
 
@@ -10,9 +10,9 @@ type 'e error = [ `Interrupted | `Failed of 'e ]
 
 val run :
   ?title:string ->
-  ?style:Charm_bubbles.Spinner.kind ->
+  ?style:Charamel_bubbles.Spinner.kind ->
   ?accessible:bool ->
-  ?theme:(is_dark:bool -> Charm_lipgloss.Style.t * Charm_lipgloss.Style.t) ->
+  ?theme:(is_dark:bool -> Charamel_lipgloss.Style.t * Charamel_lipgloss.Style.t) ->
   clock:_ Eio.Time.clock ->
   (unit -> ('a, 'e) result) ->
   Eio_unix.Stdenv.base ->

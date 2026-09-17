@@ -1,6 +1,6 @@
 (test
  (name test_fantasy)
- (package charm)
+ (package charamel)
  (modules
   test_fantasy
   fixture_server
@@ -15,7 +15,7 @@
   stream_test_support)
  (libraries
   alcotest
-  charm.fantasy
+  charamel.fantasy
   eio
   eio.unix
   eio_main

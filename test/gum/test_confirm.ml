@@ -1,12 +1,12 @@
 let key name =
-  match Charm_tea.Key.of_string name with
+  match Charamel_tea.Key.of_string name with
   | Ok key -> key
   | Error (`Msg message) -> Alcotest.fail message
 
 let negative_answer () =
   let options = { Confirm.default_options with show_help = false; padding = "0" } in
   let model, _frame =
-    Charm_tea.Test.run (Confirm.app options) ~events:[ `Key (key "n") ] ~size:(8, 80)
+    Charamel_tea.Test.run (Confirm.app options) ~events:[ `Key (key "n") ] ~size:(8, 80)
   in
   Alcotest.(check bool) "negative" false (Confirm.answer model);
   Alcotest.(check bool) "submitted" true (Confirm.submitted model)
@@ -14,7 +14,7 @@ let negative_answer () =
 let toggle_answer () =
   let options = { Confirm.default_options with show_help = false; padding = "0" } in
   let model, _ =
-    Charm_tea.Test.run (Confirm.app options)
+    Charamel_tea.Test.run (Confirm.app options)
       ~events:[ `Key (key "left"); `Key (key "enter") ]
       ~size:(8, 80)
   in

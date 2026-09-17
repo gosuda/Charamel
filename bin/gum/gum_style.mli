@@ -51,12 +51,12 @@ val term :
     [GUM_*_MATCH_HIGH_*]. [hidden] defaults to [true] and only affects Cmdliner
     documentation. *)
 
-val to_style : t -> Charm_lipgloss.Style.t
+val to_style : t -> Charamel_lipgloss.Style.t
 (** [to_style t] converts all validated properties into an immutable Lipgloss style in the
     contract's order. *)
 
-val inline : t -> Charm_lipgloss.Style.t
+val inline : t -> Charamel_lipgloss.Style.t
 (** [inline t] is [to_style t] with Lipgloss inline rendering enabled. *)
 
-val foreground : t -> Charm_ansi.Color.t option
+val foreground : t -> Charamel_ansi.Color.t option
 (** [foreground t] is the configured foreground color, if any. *)

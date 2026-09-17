@@ -12,17 +12,18 @@ let positive_timeout = function
 
 let timeout_command timeout =
   match positive_timeout timeout with
-  | None -> Charm_tea.Cmd.none
-  | Some seconds -> Charm_tea.Cmd.after seconds (fun () -> Timed_out)
+  | None -> Charamel_tea.Cmd.none
+  | Some seconds -> Charamel_tea.Cmd.after seconds (fun () -> Timed_out)
 
 let app env ?timeout form =
   let init () =
     let form, command = Form.init env form in
-    let command = Charm_tea.Cmd.map (fun message -> Form_msg message) command in
+    let command = Charamel_tea.Cmd.map (fun message -> Form_msg message) command in
     let command =
       match Form.state form with
-      | `Normal -> Charm_tea.Cmd.batch [ command; timeout_command timeout ]
-      | `Completed _ | `Aborted -> Charm_tea.Cmd.batch [ command; Charm_tea.Cmd.quit ]
+      | `Normal -> Charamel_tea.Cmd.batch [ command; timeout_command timeout ]
+      | `Completed _ | `Aborted ->
+          Charamel_tea.Cmd.batch [ command; Charamel_tea.Cmd.quit ]
     in
     ({ form; timed_out = false }, command)
   in
@@ -30,25 +31,28 @@ let app env ?timeout form =
     match message with
     | Timed_out -> (
         match Form.state model.form with
-        | `Normal -> ({ model with timed_out = true }, Charm_tea.Cmd.quit)
-        | `Completed _ | `Aborted -> (model, Charm_tea.Cmd.none))
+        | `Normal -> ({ model with timed_out = true }, Charamel_tea.Cmd.quit)
+        | `Completed _ | `Aborted -> (model, Charamel_tea.Cmd.none))
     | Form_msg message ->
         let form, command = Form.update message model.form in
-        let command = Charm_tea.Cmd.map (fun value -> Form_msg value) command in
+        let command = Charamel_tea.Cmd.map (fun value -> Form_msg value) command in
         let command =
           match Form.state form with
           | `Normal -> command
-          | `Completed _ | `Aborted -> Charm_tea.Cmd.batch [ command; Charm_tea.Cmd.quit ]
+          | `Completed _ | `Aborted ->
+              Charamel_tea.Cmd.batch [ command; Charamel_tea.Cmd.quit ]
         in
         ({ model with form }, command)
   in
-  let view model = Charm_tea.View.v ~alt_screen:false (Form.view model.form) in
+  let view model = Charamel_tea.View.v ~alt_screen:false (Form.view model.form) in
   let subscriptions model =
-    if model.timed_out then Charm_tea.Sub.none
+    if model.timed_out then Charamel_tea.Sub.none
     else
-      Charm_tea.Sub.map (fun message -> Form_msg message) (Form.subscriptions model.form)
+      Charamel_tea.Sub.map
+        (fun message -> Form_msg message)
+        (Form.subscriptions model.form)
   in
-  { Charm_tea.init; update; view; subscriptions }
+  { Charamel_tea.init; update; view; subscriptions }
 
 let is_tty base =
   let stdin_fd = Eio_unix.Resource.fd base#stdin in
@@ -91,9 +95,9 @@ let run ?timeout ?(accessible = false) ?env ~clock form base =
   let env = match env with Some value -> value | None -> default_env base in
   if accessible then run_accessible ~clock ?timeout ~env ~is_tty:tty ~base form
   else
-    let terminal = Charm_tea.Terminal.local ~output:`Stderr base in
+    let terminal = Charamel_tea.Terminal.local ~output:`Stderr base in
     let application = app env ?timeout form in
-    match Charm_tea.run ~terminal ~clock application base with
+    match Charamel_tea.run ~terminal ~clock application base with
     | Error `Interrupted | Error `Killed -> Error `Aborted
     | Error (`Exn (exception_, backtrace)) ->
         Printexc.raise_with_backtrace exception_ backtrace

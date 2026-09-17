@@ -1,25 +1,25 @@
-module W = Charm_ssh_wish
-module K = Charm_ssh_keygen
+module W = Charamel_ssh_wish
+module K = Charamel_ssh_keygen
 
 type model = { count : int }
-type msg = Key of Charm_tea.Key.t
+type msg = Key of Charamel_tea.Key.t
 
-let app _session : (model, msg) Charm_tea.app =
+let app _session : (model, msg) Charamel_tea.app =
   {
-    Charm_tea.init = (fun () -> ({ count = 0 }, Charm_tea.Cmd.none));
+    Charamel_tea.init = (fun () -> ({ count = 0 }, Charamel_tea.Cmd.none));
     update =
       (fun (Key key) model ->
-        match key.Charm_tea.Key.code with
-        | Charm_tea.Key.Char c when Uchar.equal c (Uchar.of_char 'q') ->
-            (model, Charm_tea.Cmd.quit)
-        | Charm_tea.Key.Char c when Uchar.equal c (Uchar.of_char 'k') ->
-            ({ count = model.count + 1 }, Charm_tea.Cmd.none)
-        | _ -> (model, Charm_tea.Cmd.none));
+        match key.Charamel_tea.Key.code with
+        | Charamel_tea.Key.Char c when Uchar.equal c (Uchar.of_char 'q') ->
+            (model, Charamel_tea.Cmd.quit)
+        | Charamel_tea.Key.Char c when Uchar.equal c (Uchar.of_char 'k') ->
+            ({ count = model.count + 1 }, Charamel_tea.Cmd.none)
+        | _ -> (model, Charamel_tea.Cmd.none));
     view =
       (fun model ->
-        Charm_tea.View.v
+        Charamel_tea.View.v
           (Fmt.str "count: %d\n\npress k to increment, q to quit" model.count));
-    subscriptions = (fun _ -> Charm_tea.Sub.key (fun key -> Key key));
+    subscriptions = (fun _ -> Charamel_tea.Sub.key (fun key -> Key key));
   }
 
 let error_message = function

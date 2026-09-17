@@ -67,9 +67,9 @@ let fantasy_case () =
     }
   in
   let converted = Tool.to_fantasy tool in
-  Alcotest.(check string) "fantasy tool name" "read" converted.Charm_fantasy.Tool.name;
+  Alcotest.(check string) "fantasy tool name" "read" converted.Charamel_fantasy.Tool.name;
   Alcotest.(check string)
-    "fantasy tool description" "Read a file" converted.Charm_fantasy.Tool.description
+    "fantasy tool description" "Read a file" converted.Charamel_fantasy.Tool.description
 
 let cases =
   [

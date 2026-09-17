@@ -97,7 +97,7 @@ let permission_round_trip () =
 
 let make_model () =
   {
-    Charm_fantasy.Model.id = "ui-fixture";
+    Charamel_fantasy.Model.id = "ui-fixture";
     name = "UI fixture";
     provider = "anthropic";
     context_window = 200_000;
@@ -135,7 +135,7 @@ let with_ui_backend f =
     let selected : Config.selected_model =
       {
         provider = "anthropic";
-        model = model.Charm_fantasy.Model.id;
+        model = model.Charamel_fantasy.Model.id;
         reasoning = None;
         max_tokens = None;
       }
@@ -161,7 +161,7 @@ let with_ui_backend f =
       Session.create store ~clock:env#clock
         ~random:(fun n -> String.make n '\000')
         ~title:"UI fixture" ~cwd:root
-        ~model:{ Session.provider = "anthropic"; model = model.Charm_fantasy.Model.id }
+        ~model:{ Session.provider = "anthropic"; model = model.Charamel_fantasy.Model.id }
         ()
     with
     | Ok value -> value
@@ -226,7 +226,7 @@ let with_ui_backend f =
       events = bridge;
       clock = env#clock;
       env;
-      form_env = Charm_huh.Form.Env.v ~fs:env#fs ~temp_dir:env#fs ~editor:[ "true" ];
+      form_env = Charamel_huh.Form.Env.v ~fs:env#fs ~temp_dir:env#fs ~editor:[ "true" ];
       project = root;
       session_id = (fun () -> Session.id session);
       new_session = (fun () -> Ok agent);
@@ -237,12 +237,12 @@ let with_ui_backend f =
         (fun () ->
           [
             {
-              Ui.id = model.Charm_fantasy.Model.id;
-              provider = model.Charm_fantasy.Model.provider;
-              context_window = model.Charm_fantasy.Model.context_window;
-              max_tokens = model.Charm_fantasy.Model.default_max_tokens;
-              can_reason = model.Charm_fantasy.Model.can_reason;
-              supports_attachments = model.Charm_fantasy.Model.supports_attachments;
+              Ui.id = model.Charamel_fantasy.Model.id;
+              provider = model.Charamel_fantasy.Model.provider;
+              context_window = model.Charamel_fantasy.Model.context_window;
+              max_tokens = model.Charamel_fantasy.Model.default_max_tokens;
+              can_reason = model.Charamel_fantasy.Model.can_reason;
+              supports_attachments = model.Charamel_fantasy.Model.supports_attachments;
             };
           ]);
       select_model = (fun _ -> Ok ());
@@ -273,7 +273,7 @@ let with_ui_backend f =
       Eio.Path.rmtree ~missing_ok:true Eio.Path.(env#fs / root))
 
 let ui_key name =
-  match Charm_tea.Key.of_string name with
+  match Charamel_tea.Key.of_string name with
   | Ok key -> key
   | Error (`Msg message) -> Alcotest.fail message
 
@@ -376,15 +376,15 @@ let scripted_ui_stream () =
 
 let scripted_counter () =
   let model, _frame =
-    Charm_tea.Test.run
+    Charamel_tea.Test.run
       {
-        init = (fun () -> (0, Charm_tea.Cmd.none));
+        init = (fun () -> (0, Charamel_tea.Cmd.none));
         update =
           (fun message value ->
-            if message = `Tick then (value + 1, Charm_tea.Cmd.quit)
-            else (value, Charm_tea.Cmd.none));
-        view = (fun value -> Charm_tea.View.v (string_of_int value));
-        subscriptions = (fun _ -> Charm_tea.Sub.none);
+            if message = `Tick then (value + 1, Charamel_tea.Cmd.quit)
+            else (value, Charamel_tea.Cmd.none));
+        view = (fun value -> Charamel_tea.View.v (string_of_int value));
+        subscriptions = (fun _ -> Charamel_tea.Sub.none);
       }
       ~events:[ `Msg `Tick ]
       ~size:(24, 80)
