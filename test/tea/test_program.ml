@@ -119,6 +119,57 @@ let test_quit_cancels_long_command () =
   let count, _ = Test.run app ~events:[] ~size:(4, 20) in
   Alcotest.(check int) "quit cancels pending commands" 0 count
 
+let open_input =
+  let module Open = struct
+    type t = unit
+
+    let read_methods = []
+    let single_read () _ = Eio.Promise.await (fst (Eio.Promise.create ()))
+  end in
+  let ops = Eio.Flow.Pi.source (module Open) in
+  Eio.Resource.T ((), ops)
+
+let rendered_bytes app =
+  Eio_main.run (fun env ->
+      let output = Buffer.create 256 in
+      let terminal =
+        Terminal.custom ~input:open_input ~output:(Eio.Flow.buffer_sink output)
+          ~size:(fun () -> (4, 20))
+          ~on_resize:None
+          ~env:(fun _ -> None)
+          ~is_tty:false
+      in
+      match run ~terminal ~fps:120 ~clock:env#clock app env with
+      | Ok _ -> Buffer.contents output
+      | Error _ -> Alcotest.fail "program did not finish normally")
+
+let test_every_frame_reaches_terminal () =
+  let word = function 0 -> "alpha" | 1 -> "bravo" | _ -> "charlie" in
+  let step = Cmd.after 0.02 (fun () -> `Step) in
+  let app =
+    {
+      init = (fun () -> (0, step));
+      update =
+        (fun message count ->
+          match message with
+          | `Step ->
+              let count = count + 1 in
+              (count, if count < 2 then step else Cmd.after 0.02 (fun () -> `Quit))
+          | `Quit -> (count, Cmd.quit));
+      view = (fun count -> View.v (word count));
+      subscriptions = (fun _ -> Sub.none);
+    }
+  in
+  let bytes = rendered_bytes app in
+  let contains needle =
+    Alcotest.(check bool)
+      (needle ^ " frame rendered") true
+      (Option.is_some (Re.exec_opt (Re.compile (Re.str needle)) bytes))
+  in
+  contains "alpha";
+  contains "bravo";
+  contains "charlie"
+
 let cases =
   [
     Alcotest.test_case "scripted_message" `Quick test_scripted_message;
@@ -131,4 +182,6 @@ let cases =
     Alcotest.test_case "print_then_message" `Quick test_print_then_message;
     Alcotest.test_case "large_command_batch" `Quick test_large_command_batch;
     Alcotest.test_case "quit_cancels_long_command" `Quick test_quit_cancels_long_command;
+    Alcotest.test_case "every_frame_reaches_terminal" `Quick
+      test_every_frame_reaches_terminal;
   ]

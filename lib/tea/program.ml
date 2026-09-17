@@ -370,15 +370,13 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   state.last_frame <- Charamel_ansi.Text.strip view.View.content)
             in
             let render_with_rate ~immediate =
-              if not immediate then
-                match !last_render_time with
-                | Some before ->
-                    let remaining = (1. /. float fps) -. (Eio.Time.now clock -. before) in
-                    if remaining > 0. then Eio.Time.sleep clock remaining
-                | None ->
-                    ();
-                    render_locked ();
-                    last_render_time := Some (Eio.Time.now clock)
+              (match (immediate, !last_render_time) with
+              | false, Some before ->
+                  let remaining = (1. /. float fps) -. (Eio.Time.now clock -. before) in
+                  if remaining > 0. then Eio.Time.sleep clock remaining
+              | _ -> ());
+              render_locked ();
+              last_render_time := Some (Eio.Time.now clock)
             in
             let enqueue_output action =
               Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->

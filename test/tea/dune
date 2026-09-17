@@ -16,6 +16,7 @@
   eio
   eio.unix
   eio_main
+  re
   fmt
   cstruct
   unix)
