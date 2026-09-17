@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type error =
   [ `Csv of Csv.error
   | `No_data
@@ -86,25 +88,23 @@ let parse_input options input =
   | None -> (
       if String.trim input = "" then Error `No_data
       else
-        match separator_char options.separator with
-        | Error error -> Error error
-        | Ok separator -> (
-            match
-              Csv.parse ~separator ~lazy_quotes:options.lazy_quotes
-                ~fields_per_record:
-                  (if options.fields_per_record = 0 then -1 else options.fields_per_record)
-                input
-            with
-            | Error error -> Error (`Csv error)
-            | Ok [] -> Error `No_data
-            | Ok rows ->
-                let headers, data =
-                  match options.columns with
-                  | [] -> (List.hd rows, List.tl rows)
-                  | columns -> (columns, rows)
-                in
-                if headers = [] then Error `No_data
-                else Result.map (fun data -> (headers, data)) (pad_rows headers data)))
+        let* separator = separator_char options.separator in
+        match
+          Csv.parse ~separator ~lazy_quotes:options.lazy_quotes
+            ~fields_per_record:
+              (if options.fields_per_record = 0 then -1 else options.fields_per_record)
+            input
+        with
+        | Error error -> Error (`Csv error)
+        | Ok [] -> Error `No_data
+        | Ok rows ->
+            let headers, data =
+              match options.columns with
+              | [] -> (List.hd rows, List.tl rows)
+              | columns -> (columns, rows)
+            in
+            if headers = [] then Error `No_data
+            else Result.map (fun data -> (headers, data)) (pad_rows headers data))
 
 let resolve_widths options headers rows =
   let header_widths =

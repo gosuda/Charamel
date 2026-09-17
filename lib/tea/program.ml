@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type error = [ `Interrupted | `Killed | `Exn of exn * Printexc.raw_backtrace ]
 
 type 'msg script_event =
@@ -993,10 +995,9 @@ let run ?terminal ?fps ?filter ~clock app env =
     if terminal.Terminal.is_tty then Unix.kill (Unix.getpid ()) Sys.sigstop
     else invalid_arg "suspend requires a local terminal"
   in
-  match
+  let* model, _ =
     run_core ~terminal ~fps ~filter ~clock
       ~now:(fun () -> Eio.Time.Mono.now (Eio.Stdenv.mono_clock env))
       ~exec ~suspend ~signals:true app
-  with
-  | Ok (model, _) -> Ok model
-  | Error error -> Error error
+  in
+  Ok model

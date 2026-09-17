@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type location = Stdin | File of string | Directory of string | Url of string
 
 type document = {
@@ -201,26 +203,24 @@ let repo_readme ~net ~sw ~host ~owner ~repo =
       ( Fmt.str "https://%s/api/v4/projects/%s" host (Uri.pct_encode (owner ^ "/" ^ repo)),
         "readme_url" )
   in
-  match fetch_url ~net ~sw (Uri.of_string api) with
-  | Error error -> Error error
-  | Ok (body, _) -> (
-      match parse_download field body with
-      | Some url ->
-          let url =
-            if host <> "github.com" then
-              Re.replace_string (Re.compile (Re.str "/blob/")) ~by:"/raw/" url
-            else url
-          in
-          fetch_url ~net ~sw (Uri.of_string url)
-      | None ->
-          let rec fallback = function
-            | [] -> Error (`Http "can't find README in repository")
-            | candidate :: rest -> (
-                match fetch_url ~net ~sw (Uri.of_string candidate) with
-                | Ok result -> Ok result
-                | Error _ -> fallback rest)
-          in
-          fallback (readme_candidates ~host ~owner ~repo))
+  let* body, _ = fetch_url ~net ~sw (Uri.of_string api) in
+  match parse_download field body with
+  | Some url ->
+      let url =
+        if host <> "github.com" then
+          Re.replace_string (Re.compile (Re.str "/blob/")) ~by:"/raw/" url
+        else url
+      in
+      fetch_url ~net ~sw (Uri.of_string url)
+  | None ->
+      let rec fallback = function
+        | [] -> Error (`Http "can't find README in repository")
+        | candidate :: rest -> (
+            match fetch_url ~net ~sw (Uri.of_string candidate) with
+            | Ok result -> Ok result
+            | Error _ -> fallback rest)
+      in
+      fallback (readme_candidates ~host ~owner ~repo)
 
 let fetch_document ~clock ~net raw =
   try

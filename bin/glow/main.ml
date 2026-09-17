@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type options = {
   source : string option;
   config : string option;
@@ -260,9 +262,8 @@ let write_config env options =
           Eio.Cancel.protect (fun () ->
               Eio.Path.save ~create:(`Or_truncate 0o600) (path_for env path)
                 Config.default_json);
-        match run_editor path with
-        | Ok () -> Ok (Fmt.str "Wrote config file to: %s" path)
-        | Error message -> Error message
+        let* () = run_editor path in
+        Ok (Fmt.str "Wrote config file to: %s" path)
       with
       | Eio.Io _ as exception_ ->
           Error (Fmt.str "glow: unable to write config: %a" Eio.Exn.pp exception_)

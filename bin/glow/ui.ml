@@ -1,3 +1,4 @@
+open Result.Syntax
 module Cmd = Charm_tea.Cmd
 module Sub = Charm_tea.Sub
 module Key = Charm_tea.Key
@@ -524,16 +525,13 @@ let run env ~(config : Config.t) ~location =
                  (make_pager env config document ~width:initial_width
                     ~height:initial_height)))
   in
-  match initial with
-  | Error message -> Error message
-  | Ok initial -> (
-      match
-        Charm_tea.run
-          ~terminal:(Charm_tea.Terminal.local env)
-          ~clock:env#clock (app initial) env
-      with
-      | Ok _ -> Ok ()
-      | Error `Interrupted -> Error "interrupted"
-      | Error `Killed -> Error "killed"
-      | Error (`Exn (exception_, _)) ->
-          Error (Fmt.str "%s" (Printexc.to_string exception_)))
+  let* initial = initial in
+  match
+    Charm_tea.run
+      ~terminal:(Charm_tea.Terminal.local env)
+      ~clock:env#clock (app initial) env
+  with
+  | Ok _ -> Ok ()
+  | Error `Interrupted -> Error "interrupted"
+  | Error `Killed -> Error "killed"
+  | Error (`Exn (exception_, _)) -> Error (Fmt.str "%s" (Printexc.to_string exception_))

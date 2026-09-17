@@ -1,3 +1,5 @@
+open Result.Syntax
+
 module Credential = struct
   type t = {
     access : string;
@@ -77,20 +79,18 @@ module Anthropic = struct
     in
     if state = "" then invalid "missing expected state"
     else
-      match
+      let* uri =
         try Ok (Uri.of_string code)
         with Invalid_argument _ -> Error (`Oauth "invalid authorization code")
-      with
-      | Error error -> Error error
-      | Ok uri -> (
-          match Option.map String.lowercase_ascii (Uri.scheme uri) with
-          | Some ("http" | "https") -> (
-              if single_param uri "state" <> Some state then invalid "state mismatch"
-              else
-                match single_param uri "code" with
-                | Some value when value <> "" -> Ok value
-                | _ -> invalid "no authorization code in redirect URL")
-          | _ -> bare_code ())
+      in
+      match Option.map String.lowercase_ascii (Uri.scheme uri) with
+      | Some ("http" | "https") -> (
+          if single_param uri "state" <> Some state then invalid "state mismatch"
+          else
+            match single_param uri "code" with
+            | Some value when value <> "" -> Ok value
+            | _ -> invalid "no authorization code in redirect URL")
+      | _ -> bare_code ()
 
   let member name members = Option.map snd (Jsont.Json.find_mem name members)
 

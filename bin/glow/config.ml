@@ -237,12 +237,10 @@ let load ~explicit ~cwd ~env ~read =
         match read path with
         | None -> find rest
         | Some (Error message) -> Error (`Io (path, message))
-        | Some (Ok text) -> (
-            match parse_partial path text with
-            | Error error -> Error error
-            | Ok partial ->
-                let merged = merge_partial default partial in
-                let* merged = merge_env path env merged in
-                Ok (merged, Some path)))
+        | Some (Ok text) ->
+            let* partial = parse_partial path text in
+            let merged = merge_partial default partial in
+            let* merged = merge_env path env merged in
+            Ok (merged, Some path))
   in
   find candidates

@@ -1142,7 +1142,7 @@ let multi_toggle_current state =
 
 let multi_validate state =
   let values = selected_values state in
-  match state.validate values with Ok () -> Ok () | Error error -> Error error
+  state.validate values
 
 let multi_filter_update ctx child state =
   let filter_input, command = Charm_bubbles.Textinput.update child state.filter_input in

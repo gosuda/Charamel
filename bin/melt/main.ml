@@ -1,5 +1,6 @@
 module Key = Charm_ssh_keygen
 module Mnemonic = Melt_core.Mnemonic
+open Result.Syntax
 
 type error =
   [ `No_home
@@ -69,35 +70,28 @@ let read_key ~fs path =
            (path, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
 
 let backup ~fs ~path =
-  match resolve_path path with
-  | Error error -> Error error
-  | Ok path -> (
-      match read_key ~fs path with
-      | Error error -> Error error
-      | Ok private_key -> (
-          match Key.of_openssh_private private_key with
-          | Error `Unsupported_type -> Error `Unsupported_key
-          | Error error -> Error (`Parse_key error)
-          | Ok key -> (
-              match Key.ed25519_seed key with
-              | None -> Error `Unsupported_key
-              | Some seed ->
-                  Result.map_error (fun error -> `Mnemonic error) (Mnemonic.encode seed)))
-      )
+  let* path = resolve_path path in
+  let* private_key = read_key ~fs path in
+  match Key.of_openssh_private private_key with
+  | Error `Unsupported_type -> Error `Unsupported_key
+  | Error error -> Error (`Parse_key error)
+  | Ok key -> (
+      match Key.ed25519_seed key with
+      | None -> Error `Unsupported_key
+      | Some seed ->
+          Result.map_error (fun error -> `Mnemonic error) (Mnemonic.encode seed))
 
 let restore ~fs ~words ~output =
-  match resolve_path output with
-  | Error error -> Error error
-  | Ok output -> (
-      match Mnemonic.decode (split_words words) with
-      | Error error -> Error (`Mnemonic error)
-      | Ok seed -> (
-          match Key.of_ed25519_seed seed with
-          | Error error -> Error (`Write_key error)
-          | Ok key ->
-              Result.map_error
-                (fun error -> `Write_key error)
-                (Key.write ~fs ~path:output key)))
+  let* output = resolve_path output in
+  match Mnemonic.decode (split_words words) with
+  | Error error -> Error (`Mnemonic error)
+  | Ok seed -> (
+      match Key.of_ed25519_seed seed with
+      | Error error -> Error (`Write_key error)
+      | Ok key ->
+          Result.map_error
+            (fun error -> `Write_key error)
+            (Key.write ~fs ~path:output key))
 
 let run_backup env path =
   match backup ~fs:(fst env#fs) ~path with

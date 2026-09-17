@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type border = { radius : float; width : float; color : string }
 type shadow = { blur : float; x : float; y : float }
 type font = { family : string; file : string; size : float; ligatures : bool }
@@ -371,10 +373,7 @@ let with_root value (config : t) =
         : t)
   | _ -> config
 
-let decode_json text =
-  match Jsont_bytesrw.decode_string Jsont.json text with
-  | Ok value -> Ok value
-  | Error message -> Error message
+let decode_json text = Jsont_bytesrw.decode_string Jsont.json text
 
 let base_json =
   "{\"window\":false,\"theme\":\"charm\",\"border\":{\"radius\":0,\"width\":0,\"color\":\"#515151\"},\"shadow\":{\"blur\":0,\"x\":0,\"y\":0},\"padding\":[20,40,20,20],\"margin\":\"0\",\"background\":\"#171717\",\"font\":{\"family\":\"JetBrains \
@@ -403,12 +402,10 @@ let load ~fs ~name =
     | _ -> (
         match read_path fs name with Ok _ as value -> value | Error _ -> Ok base_json)
   in
-  match source with
-  | Error message -> Error message
-  | Ok source -> (
-      match decode_json source with
-      | Error message -> Error (Fmt.str "invalid configuration JSON: %s" message)
-      | Ok value -> Ok (with_root value { default with config = name }))
+  let* source = source in
+  match decode_json source with
+  | Error message -> Error (Fmt.str "invalid configuration JSON: %s" message)
+  | Ok value -> Ok (with_root value { default with config = name })
 
 let apply_cli (config : t) (cli : cli) =
   let border : border =
