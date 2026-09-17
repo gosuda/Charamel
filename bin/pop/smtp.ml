@@ -121,7 +121,8 @@ let write_raw t data =
 let write_command t command = write_raw t (command ^ "\r\n")
 
 let exchange t command =
-  match write_command t command with Error error -> Error error | Ok () -> read_reply t
+  let* () = write_command t command in
+  read_reply t
 
 let require_code expected reply =
   if reply.code = expected then Ok ()
@@ -188,18 +189,16 @@ let has_capability capabilities name =
     capabilities
 
 let ehlo t hostname =
-  match exchange t ("EHLO " ^ hostname) with
-  | Error error -> Error error
-  | Ok reply when reply.code = 250 ->
-      t.capabilities <- capability_lines reply;
-      Ok ()
-  | Ok _ -> (
-      match exchange t ("HELO " ^ hostname) with
-      | Error error -> Error error
-      | Ok reply when reply.code = 250 ->
-          t.capabilities <- [];
-          Ok ()
-      | Ok reply -> Error (`Unexpected reply))
+  let* reply = exchange t ("EHLO " ^ hostname) in
+  if reply.code = 250 then (
+    t.capabilities <- capability_lines reply;
+    Ok ())
+  else
+    let* reply = exchange t ("HELO " ^ hostname) in
+    if reply.code = 250 then (
+      t.capabilities <- [];
+      Ok ())
+    else Error (`Unexpected reply)
 
 let make_tls_config hostname =
   match Ca_certs.authenticator () with
@@ -291,40 +290,29 @@ let connect ~sw ~clock ~net ~host ~port ~security ?hostname ?(timeout = 30.) ?tl
 
 let auth_plain t ~user ~pass =
   let payload = Base64.encode_string ("\000" ^ user ^ "\000" ^ pass) in
-  match exchange t ("AUTH PLAIN " ^ payload) with
-  | Ok reply when reply.code = 235 -> Ok ()
-  | Ok reply when reply.code = 334 -> (
-      match exchange t payload with
-      | Ok final when final.code = 235 -> Ok ()
-      | Ok final -> Error (`Auth_refused final)
-      | Error error -> Error error)
-  | Ok reply -> Error (`Auth_refused reply)
-  | Error error -> Error error
+  let* reply = exchange t ("AUTH PLAIN " ^ payload) in
+  if reply.code = 235 then Ok ()
+  else if reply.code = 334 then
+    let* final = exchange t payload in
+    if final.code = 235 then Ok () else Error (`Auth_refused final)
+  else Error (`Auth_refused reply)
 
 let auth_login t ~user ~pass =
   let user64 = Base64.encode_string user in
   let pass64 = Base64.encode_string pass in
-  match exchange t "AUTH LOGIN" with
-  | Error error -> Error error
-  | Ok challenge when challenge.code <> 334 -> Error (`Auth_refused challenge)
-  | Ok _ -> (
-      match exchange t user64 with
-      | Error error -> Error error
-      | Ok challenge when challenge.code <> 334 -> Error (`Auth_refused challenge)
-      | Ok _ -> (
-          match exchange t pass64 with
-          | Error error -> Error error
-          | Ok reply when reply.code = 235 -> Ok ()
-          | Ok reply -> Error (`Auth_refused reply)))
+  let* challenge = exchange t "AUTH LOGIN" in
+  if challenge.code <> 334 then Error (`Auth_refused challenge)
+  else
+    let* challenge = exchange t user64 in
+    if challenge.code <> 334 then Error (`Auth_refused challenge)
+    else
+      let* reply = exchange t pass64 in
+      if reply.code = 235 then Ok () else Error (`Auth_refused reply)
 
 let authenticate t (user, pass) =
   match auth_plain t ~user ~pass with
   | Ok () -> Ok ()
-  | Error (`Auth_refused _) -> (
-      match auth_login t ~user ~pass with
-      | Ok () -> Ok ()
-      | Error (`Auth_refused _ as second_error) -> Error second_error
-      | Error error -> Error error)
+  | Error (`Auth_refused _) -> auth_login t ~user ~pass
   | Error error -> Error error
 
 let has_envelope_control value =
