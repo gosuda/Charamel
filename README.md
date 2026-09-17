@@ -53,10 +53,6 @@ their own C). Highlighting uses `re`-based data-driven lexers. Config
 files are JSON via `jsont`. Sessions are JSONL. The OCaml floor is
 `>= 5.4`. Tests use alcotest.
 
-Every pin above was checked at its release channel;
-`docs/adr/2026-09-16-grounded-toolchain.md` records the grounding and the
-one open follow-up.
-
 ## Licensing
 
 - This work is Apache-2.0. Read `LICENSE` for the license body and `NOTICE`
