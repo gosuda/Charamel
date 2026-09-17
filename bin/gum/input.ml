@@ -66,11 +66,6 @@ let default_options =
     header_style = Gum_style.defaults ~foreground:"240" ();
   }
 
-let parsed_padding value =
-  match Gum_flag.parse_padding value with
-  | Ok sides -> sides
-  | Error (`Msg message) -> invalid_arg message
-
 let textinput_styles (options : options) : Textinput.styles =
   let styles = Textinput.default_styles ~is_dark:true in
   let prompt = Gum_style.to_style options.prompt_style in
@@ -103,7 +98,7 @@ let make (options : options) =
     input;
     submitted = false;
     quitting = false;
-    padding = parsed_padding options.padding;
+    padding = Gum_flag.parsed_padding options.padding;
   }
 
 let initial_value env (options : options) =
@@ -183,22 +178,6 @@ let run env (options : options) =
   if not (submitted model) then Charamel_cli.error "not submitted";
   Gum_io.print_raw env (value model)
 
-let validated_padding_term ~cmd =
-  let open Cmdliner in
-  let parse value =
-    match Gum_flag.parse_padding value with
-    | Ok _ -> Ok value
-    | Error (`Msg message) -> Error (`Msg message)
-  in
-  let padding_conv =
-    Arg.conv (parse, fun ppf value -> Stdlib.Format.pp_print_string ppf value)
-  in
-  Arg.(
-    value
-      (opt padding_conv "0 0"
-         (info [ "padding" ] ~doc:"Padding as one to four integers."
-            ~env:(Gum_flag.env ~cmd "padding"))))
-
 let string_arg ~cmd name ~default ~doc =
   Cmdliner.Arg.(
     value (opt string default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
@@ -242,7 +221,7 @@ let cmd env =
     and+ strip_ansi =
       Gum_flag.negatable ~cmd:"input" ~default:true ~doc:"Strip ANSI from stdin."
         "strip-ansi"
-    and+ padding = validated_padding_term ~cmd:"input"
+    and+ padding = Gum_flag.validated_padding_term ~cmd:"input" ()
     and+ prompt_style =
       Gum_style.term ~cmd:"input" ~prefix:"prompt." ~defaults:Gum_style.empty ()
     and+ placeholder_style =

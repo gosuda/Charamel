@@ -49,9 +49,19 @@ val parse_padding : string -> (Charamel_lipgloss.Sides.t, [ `Msg of string ]) re
     bottom; four are top, right, bottom, and left. Spaces and commas separate values.
     Malformed input is a typed [Error], never a silent zero padding. *)
 
-val padding : cmd:string -> string Cmdliner.Term.t
-(** [padding ~cmd] parses the raw [--padding] value, defaulting to ["0 0"], with
-    environment fallback [GUM_<CMD>_PADDING]. *)
+val parsed_padding : string -> Charamel_lipgloss.Sides.t
+(** [parsed_padding text] parses padding and raises [Invalid_argument] with the parser
+    diagnostic when [text] is malformed. *)
+
+val validated_padding_term :
+  ?doc:string ->
+  ?pp:(Stdlib.Format.formatter -> string -> unit) ->
+  cmd:string ->
+  unit ->
+  string Cmdliner.Term.t
+(** [validated_padding_term ?doc ?pp ~cmd ()] is a command-line padding term that
+    preserves the raw value after validating one to four integer values. [doc] defaults to
+    ["Padding as one to four integers."]. [pp] defaults to printing the raw value. *)
 
 val align : string -> Charamel_lipgloss.Position.t option
 (** [align text] maps [left] and [top] to {!Charamel_lipgloss.Position.left}, [center] and

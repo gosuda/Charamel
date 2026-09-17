@@ -74,18 +74,13 @@ let default_options =
         ();
   }
 
-let parsed_padding value =
-  match Gum_flag.parse_padding value with
-  | Ok sides -> sides
-  | Error (`Msg message) -> invalid_arg message
-
 let make (options : options) =
   {
     options;
     confirmation = options.default;
     submitted = false;
     quitting = false;
-    padding = parsed_padding options.padding;
+    padding = Gum_flag.parsed_padding options.padding;
   }
 
 let answer model = model.confirmation
@@ -187,22 +182,6 @@ let run env (options : options) =
       print_answer env options confirmation;
       if confirmation then () else Charamel_cli.exit 1
 
-let validated_padding_term ~cmd =
-  let open Cmdliner in
-  let parse value =
-    match Gum_flag.parse_padding value with
-    | Ok _ -> Ok value
-    | Error (`Msg message) -> Error (`Msg message)
-  in
-  let padding_conv =
-    Arg.conv (parse, fun ppf value -> Stdlib.Format.pp_print_string ppf value)
-  in
-  Arg.(
-    value
-      (opt padding_conv "0 0"
-         (info [ "padding" ] ~doc:"Padding as one to four integers."
-            ~env:(Gum_flag.env ~cmd "padding"))))
-
 let string_arg ~cmd names ~default ~doc =
   Cmdliner.Arg.(
     value (opt string default (info [ names ] ~doc ~env:(Gum_flag.env ~cmd names))))
@@ -249,7 +228,7 @@ let cmd env =
         "show-help"
     and+ timeout =
       Gum_flag.seconds ~cmd:"confirm" ~doc:"Timeout until confirmation." "timeout"
-    and+ padding = validated_padding_term ~cmd:"confirm"
+    and+ padding = Gum_flag.validated_padding_term ~cmd:"confirm" ()
     and+ prompt_style = prompt_style
     and+ selected_style = selected_style
     and+ unselected_style = unselected_style in

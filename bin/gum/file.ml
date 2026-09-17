@@ -251,18 +251,9 @@ let cmd env =
       ~doc:"Show file sizes." "size"
   in
   let typed_padding =
-    let parse value =
-      match Gum_flag.parse_padding value with
-      | Ok _ -> Ok value
-      | Error (`Msg message) -> Error (`Msg message)
-    in
-    let padding_conv =
-      Arg.conv (parse, fun formatter _ -> Stdlib.Format.pp_print_string formatter "")
-    in
-    Arg.(
-      value
-        (opt padding_conv "0 0"
-           (info [ "padding" ] ~env:(Gum_flag.env ~cmd:"file" "padding") ~doc:"Padding.")))
+    Gum_flag.validated_padding_term ~doc:"Padding."
+      ~pp:(fun formatter _ -> Stdlib.Format.pp_print_string formatter "")
+      ~cmd:"file" ()
   in
   let file = bool "file" "file" ~default:true ~doc:"Allow file selection." in
   let directory =

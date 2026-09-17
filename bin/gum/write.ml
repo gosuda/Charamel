@@ -88,11 +88,6 @@ let default_options =
     prompt_style = Gum_style.defaults ~foreground:"7" ();
   }
 
-let parsed_padding value =
-  match Gum_flag.parse_padding value with
-  | Ok sides -> sides
-  | Error (`Msg message) -> invalid_arg message
-
 let take count values =
   let rec loop remaining acc = function
     | [] -> List.rev acc
@@ -165,7 +160,7 @@ let make (options : options) =
     textarea;
     submitted = false;
     quitting = false;
-    padding = parsed_padding options.padding;
+    padding = Gum_flag.parsed_padding options.padding;
   }
 
 let value model = Textarea.value model.textarea
@@ -287,22 +282,6 @@ let run env (options : options) =
   if not (submitted model) then Charamel_cli.error "not submitted";
   Gum_io.print_raw env (value model)
 
-let validated_padding_term ~cmd =
-  let open Cmdliner in
-  let parse value =
-    match Gum_flag.parse_padding value with
-    | Ok _ -> Ok value
-    | Error (`Msg message) -> Error (`Msg message)
-  in
-  let padding_conv =
-    Arg.conv (parse, fun ppf value -> Stdlib.Format.pp_print_string ppf value)
-  in
-  Arg.(
-    value
-      (opt padding_conv "0 0"
-         (info [ "padding" ] ~doc:"Padding as one to four integers."
-            ~env:(Gum_flag.env ~cmd "padding"))))
-
 let string_arg ~cmd name ~default ~doc =
   Cmdliner.Arg.(
     value (opt string default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
@@ -349,7 +328,7 @@ let cmd env =
     and+ strip_ansi =
       Gum_flag.negatable ~cmd:"write" ~default:true ~doc:"Strip ANSI from stdin."
         "strip-ansi"
-    and+ padding = validated_padding_term ~cmd:"write"
+    and+ padding = Gum_flag.validated_padding_term ~cmd:"write" ()
     and+ base_style =
       Gum_style.term ~cmd:"write" ~prefix:"base." ~defaults:Gum_style.empty ()
     and+ cursor_line_number_style =

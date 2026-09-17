@@ -152,11 +152,6 @@ let single_option (options : options) =
 let effective_limit (options : options) count =
   if options.no_limit then count + 1 else max 1 options.limit
 
-let parsed_padding value =
-  match Gum_flag.parse_padding value with
-  | Ok sides -> sides
-  | Error (`Msg message) -> invalid_arg message
-
 let make (options : options) =
   let raw_items =
     match parse_options ~delimiter:options.label_delimiter options.options with
@@ -211,7 +206,7 @@ let make (options : options) =
     paginator;
     submitted = false;
     quitting = false;
-    padding = parsed_padding options.padding;
+    padding = Gum_flag.parsed_padding options.padding;
   }
 
 let selected model =
@@ -449,22 +444,6 @@ let run env (options : options) =
       if values = [] then Charamel_cli.error "nothing selected"
       else Gum_io.println env (String.concat options.output_delimiter values)
 
-let validated_padding_term ~cmd =
-  let open Cmdliner in
-  let parse value =
-    match Gum_flag.parse_padding value with
-    | Ok _ -> Ok value
-    | Error (`Msg message) -> Error (`Msg message)
-  in
-  let padding_conv =
-    Arg.conv (parse, fun ppf value -> Stdlib.Format.pp_print_string ppf value)
-  in
-  Arg.(
-    value
-      (opt padding_conv "0 0"
-         (info [ "padding" ] ~doc:"Padding as one to four integers."
-            ~env:(Gum_flag.env ~cmd "padding"))))
-
 let string_arg ~cmd name ~default ~doc =
   Cmdliner.Arg.(
     value (opt string default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
@@ -543,7 +522,7 @@ let cmd env =
     and+ strip_ansi =
       Gum_flag.negatable ~cmd:"choose" ~default:true ~doc:"Strip ANSI from stdin."
         "strip-ansi"
-    and+ padding = validated_padding_term ~cmd:"choose"
+    and+ padding = Gum_flag.validated_padding_term ~cmd:"choose" ()
     and+ cursor_style = cursor_style
     and+ header_style = header_style
     and+ item_style = item_style

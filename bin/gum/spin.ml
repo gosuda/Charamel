@@ -558,18 +558,9 @@ let cmd env =
     Gum_flag.seconds ~cmd:"spin" ~doc:"Terminate after this duration." "timeout"
   in
   let padding =
-    let parse value =
-      match Gum_flag.parse_padding value with
-      | Ok _ -> Ok value
-      | Error (`Msg message) -> Error (`Msg message)
-    in
-    let padding_conv =
-      Arg.conv (parse, fun formatter _ -> Stdlib.Format.pp_print_string formatter "")
-    in
-    Arg.(
-      value
-        (opt padding_conv "0 0"
-           (info [ "padding" ] ~env:(Gum_flag.env ~cmd:"spin" "padding") ~doc:"Padding.")))
+    Gum_flag.validated_padding_term ~doc:"Padding."
+      ~pp:(fun formatter _ -> Stdlib.Format.pp_print_string formatter "")
+      ~cmd:"spin" ()
   in
   let spinner_style =
     Gum_style.term ~cmd:"spin" ~prefix:"spinner" ~defaults:default_options.spinner_style
