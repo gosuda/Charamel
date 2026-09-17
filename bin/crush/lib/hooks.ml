@@ -35,20 +35,6 @@ let json_object fields =
 let json_string value = Jsont.Json.string value
 let json_bool value = Jsont.Json.bool value
 
-let json_encode value =
-  match Jsont_bytesrw.encode_string Jsont.json value with
-  | Ok encoded -> encoded
-  | Error message -> Fmt.failwith "cannot encode hook payload: %s" message
-
-let member name = function
-  | Jsont.Object (members, _) -> Option.map snd (Jsont.Json.find_mem name members)
-  | _ -> None
-
-let string_member name json =
-  match member name json with Some (Jsont.String (value, _)) -> Some value | _ -> None
-
-let json_member name json = member name json
-
 let read_flow flow =
   match Eio.Buf_read.parse ~max_size:max_output_size Eio.Buf_read.take_all flow with
   | Ok value -> { text = value; truncated = false }
@@ -186,7 +172,7 @@ let payload_pre ~session ~cwd ~tool ~input =
       ("tool", json_string tool);
       ("input", input);
     ]
-  |> json_encode
+  |> Jsonx.string_of_json
 
 let payload_post ~session ~cwd ~tool ~input ~output ~is_error =
   json_object
@@ -199,7 +185,7 @@ let payload_post ~session ~cwd ~tool ~input ~output ~is_error =
       ("output", json_string output);
       ("is_error", json_bool is_error);
     ]
-  |> json_encode
+  |> Jsonx.string_of_json
 
 let payload_session ~event ~session ~cwd ~reason ~message =
   let fields =
@@ -219,7 +205,7 @@ let payload_session ~event ~session ~cwd ~reason ~message =
     | None -> fields @ [ ("message", Jsont.Json.null ()) ]
     | Some value -> fields @ [ ("message", json_string value) ]
   in
-  json_object fields |> json_encode
+  json_object fields |> Jsonx.string_of_json
 
 let payload_session_start ~session ~cwd =
   json_object
@@ -228,7 +214,7 @@ let payload_session_start ~session ~cwd =
       ("session", json_string session);
       ("cwd", json_string cwd);
     ]
-  |> json_encode
+  |> Jsonx.string_of_json
 
 let parse_pre_output output =
   if String.equal (String.trim output) "" then Continue
@@ -236,11 +222,12 @@ let parse_pre_output output =
     match Jsont_bytesrw.decode_string Jsont.json output with
     | Error _ -> Continue
     | Ok json -> (
-        match string_member "decision" json with
+        match Jsonx.string_member "decision" json with
         | Some "deny" ->
-            Refuse (Option.value (string_member "reason" json) ~default:"denied by hook")
+            Refuse
+              (Option.value (Jsonx.string_member "reason" json) ~default:"denied by hook")
         | Some "allow" -> (
-            match json_member "input" json with
+            match Jsonx.member "input" json with
             | Some input -> Replace input
             | None -> Continue)
         | _ -> Continue)

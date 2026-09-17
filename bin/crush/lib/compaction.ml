@@ -8,11 +8,6 @@ let needed ~context_window ~prompt_tokens ~completion_tokens ~disabled =
     let remaining = context_window - (max 0 prompt_tokens + max 0 completion_tokens) in
     remaining <= reserve ~context_window
 
-let json_string json =
-  match Jsont_bytesrw.encode_string ~format:Jsont.Minify Jsont.json json with
-  | Ok text -> text
-  | Error _ -> "<invalid-json>"
-
 let output_string = function
   | `Text text -> text
   | `Error text -> "error: " ^ text
@@ -26,7 +21,7 @@ let part_text = function
         (Option.value ~default:"" name)
         (String.length data)
   | Charm_fantasy.Message.Tool_call { id; name; input } ->
-      Fmt.str "call %s (%s): %s" id name (json_string input)
+      Fmt.str "call %s (%s): %s" id name (Jsonx.display_string input)
   | Charm_fantasy.Message.Tool_result { id; name; output } ->
       Fmt.str "result %s (%s): %s" id name (output_string output)
 
@@ -79,7 +74,7 @@ let render_prefix events through =
       | Session.Summary { text; _ } -> lines := ("summary: " ^ text) :: !lines
       | Session.Note { text; _ } -> lines := ("note: " ^ text) :: !lines
       | Session.Tool_call { name; input; _ } ->
-          lines := Fmt.str "call %s: %s" name (json_string input) :: !lines
+          lines := Fmt.str "call %s: %s" name (Jsonx.display_string input) :: !lines
       | Session.Tool_result { name; output; _ } ->
           let result =
             match output with

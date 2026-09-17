@@ -6,6 +6,11 @@ let string_of_json ?(minify = true) json =
   | Ok text -> text
   | Error message -> invalid_arg (Fmt.str "JSON encoding failed: %s" message)
 
+let display_string json =
+  match Jsont_bytesrw.encode_string ~format:Jsont.Minify Jsont.json json with
+  | Ok text -> text
+  | Error _ -> "<invalid-json>"
+
 let decode codec text =
   match json_of_string text with
   | Error message -> Error message

@@ -162,12 +162,6 @@ let append_logged t event =
   | Error error -> Log.err (fun m -> m "session append failed: %a" pp_error error)
 
 let emit t event = t.deps.events event
-
-let json_string json =
-  match Jsont_bytesrw.encode_string ~format:Jsont.Minify Jsont.json json with
-  | Ok text -> text
-  | Error _ -> "<invalid-json>"
-
 let decode_json text = Jsont_bytesrw.decode_string Jsont.json text
 
 let git_command t turn_sw args =
@@ -552,7 +546,7 @@ let execute_calls t turn_sw calls =
       else ())
     jobs;
   let window_add name input output =
-    let canonical = json_string input in
+    let canonical = Jsonx.display_string input in
     let fingerprint =
       Digestif.SHA256.(
         digest_string (name ^ "\000" ^ canonical ^ "\000" ^ output ^ "\000") |> to_hex)

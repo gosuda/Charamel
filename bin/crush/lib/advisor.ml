@@ -28,11 +28,6 @@ let create (config : Config.advisor) =
     quarantined = false;
   }
 
-let json_string json =
-  match Jsont_bytesrw.encode_string ~format:Jsont.Minify Jsont.json json with
-  | Ok text -> text
-  | Error _ -> "<invalid-json>"
-
 let output_string = function
   | `Text text -> text
   | `Error text -> "error: " ^ text
@@ -46,7 +41,7 @@ let part_text = function
         (Option.value ~default:"" name)
         (String.length data)
   | Charm_fantasy.Message.Tool_call { id; name; input } ->
-      Fmt.str "call %s (%s): %s" id name (json_string input)
+      Fmt.str "call %s (%s): %s" id name (Jsonx.display_string input)
   | Charm_fantasy.Message.Tool_result { id; name; output } ->
       Fmt.str "result %s (%s): %s" id name (output_string output)
 

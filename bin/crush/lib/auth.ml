@@ -35,36 +35,22 @@ let path () = Filename.concat (Charm_cli.Xdg.config_dir ~app:"crush") "auth.json
 let path_text path =
   Option.value (Eio.Path.native path) ~default:(Fmt.str "%a" Eio.Path.pp path)
 
-let json_string name json =
-  match Jsonx.member name json with
-  | Some (Jsont.String (value, _)) -> Some value
-  | _ -> None
-
-let json_int name json =
-  match Jsonx.member name json with
-  | Some (Jsont.Number (value, _))
-    when Float.is_finite value && Float.is_integer value
-         && value >= float_of_int min_int
-         && value <= float_of_int max_int ->
-      Some (int_of_float value)
-  | _ -> None
-
 let json_object = function Jsont.Object (members, _) -> Some members | _ -> None
 
 let credential_of_json json =
   match json_object json with
   | None -> Error "credential must be an object"
   | Some _ -> (
-      match json_string "type" json with
+      match Jsonx.string_member "type" json with
       | Some "api_key" -> (
-          match json_string "key" json with
+          match Jsonx.string_member "key" json with
           | Some key when String.trim key <> "" -> Ok (Api_key key)
           | _ -> Error "api_key credential requires a non-empty key")
       | Some "oauth" -> (
           match
-            ( json_string "access" json,
-              json_string "refresh" json,
-              json_int "expires_at_ms" json,
+            ( Jsonx.string_member "access" json,
+              Jsonx.string_member "refresh" json,
+              Jsonx.int_member "expires_at_ms" json,
               Jsonx.member "account" json )
           with
           | Some access, Some refresh, Some expires_at_ms, Some (Jsont.Null _) ->
@@ -80,7 +66,7 @@ let credential_of_json json =
               Error "oauth credential requires access, refresh, expires_at_ms and account"
           )
       | Some "disabled" -> (
-          match (json_string "reason" json, json_int "at_ms" json) with
+          match (Jsonx.string_member "reason" json, Jsonx.int_member "at_ms" json) with
           | Some reason, Some at_ms when reason <> "" -> Ok (Disabled { reason; at_ms })
           | _ -> Error "disabled credential requires reason and at_ms")
       | Some kind -> Error (Fmt.str "unknown credential type %S" kind)

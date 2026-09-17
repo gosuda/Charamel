@@ -11,6 +11,10 @@ val string_of_json : ?minify:bool -> Jsont.json -> string
 (** [string_of_json ?minify json] encodes [json] without a trailing newline. [minify]
     defaults to [true]. *)
 
+val display_string : Jsont.json -> string
+(** [display_string json] is the minified encoding of [json], or ["<invalid-json>"] when
+    [json] cannot be encoded. *)
+
 val decode : 'a Jsont.t -> string -> ('a, string) result
 (** [decode codec text] parses and decodes [text] with [codec]. *)
 

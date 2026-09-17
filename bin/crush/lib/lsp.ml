@@ -132,10 +132,6 @@ let json_object fields =
   Jsont.Json.object'
     (List.map (fun (name, value) -> Jsont.Json.mem (Jsont.Json.name name) value) fields)
 
-let string_member name value = Jsonx.string_member name value
-let int_member name value = Jsonx.int_member name value
-let member name value = Jsonx.member name value
-
 let object_value value =
   match value with Jsont.Object (members, _) -> Some members | _ -> None
 
@@ -452,7 +448,7 @@ let request t server ~timeout ~method_ ~params =
       | Ok (`Error (code, message)) ->
           Error (`Rpc (server.name, Fmt.str "[%d] %s" code message)))
 
-let response_id value = int_member "id" value
+let response_id value = Jsonx.int_member "id" value
 
 let diagnostic_severity = function
   | Some 1 -> `Error
@@ -462,12 +458,12 @@ let diagnostic_severity = function
   | _ -> `Info
 
 let position_of_json value =
-  match (int_member "line" value, int_member "character" value) with
+  match (Jsonx.int_member "line" value, Jsonx.int_member "character" value) with
   | Some line, Some character when line >= 0 && character >= 0 -> Ok (line, character)
   | _ -> Error "invalid LSP position"
 
 let range_json value =
-  match (member "start" value, member "end" value) with
+  match (Jsonx.member "start" value, Jsonx.member "end" value) with
   | Some start, Some finish ->
       let* start_line, start_col = position_of_json start in
       let* end_line, end_col = position_of_json finish in
@@ -478,12 +474,12 @@ let range_json value =
 
 let location_of_json ~cwd ~server value =
   let uri =
-    match (string_member "uri" value, string_member "targetUri" value) with
+    match (Jsonx.string_member "uri" value, Jsonx.string_member "targetUri" value) with
     | Some uri, _ -> Some uri
     | None, Some uri -> Some uri
     | None, None -> None
   in
-  match (uri, member "range" value, member "targetRange" value) with
+  match (uri, Jsonx.member "range" value, Jsonx.member "targetRange" value) with
   | Some uri, Some range, _ | Some uri, None, Some range -> (
       match range_json range with
       | Error message -> Error (`Rpc (server.name, message))
@@ -547,20 +543,20 @@ let rec symbol_of_json ~cwd ~server ~path ~depth value =
   if depth > 128 then Error (`Rpc (server.name, "symbol nesting exceeds limit"))
   else
     let* name =
-      match string_member "name" value with
+      match Jsonx.string_member "name" value with
       | Some name -> Ok name
       | None -> Error (`Rpc (server.name, "symbol has no name"))
     in
-    let location_value = Option.value ~default:value (member "location" value) in
+    let location_value = Option.value ~default:value (Jsonx.member "location" value) in
     let* range =
-      match member "range" location_value with
+      match Jsonx.member "range" location_value with
       | None -> Error (`Rpc (server.name, "symbol has no range"))
       | Some range -> (
           match range_json range with
           | Error message -> Error (`Rpc (server.name, message))
           | Ok (line, col, end_line, end_col) ->
               let range_path =
-                match string_member "uri" location_value with
+                match Jsonx.string_member "uri" location_value with
                 | Some uri -> normalize_path ~cwd (path_of_uri uri)
                 | None -> path
               in
@@ -574,13 +570,13 @@ let rec symbol_of_json ~cwd ~server ~path ~depth value =
                 })
     in
     let kind =
-      match (string_member "kind" value, int_member "kind" value) with
+      match (Jsonx.string_member "kind" value, Jsonx.int_member "kind" value) with
       | Some kind, _ -> kind
       | None, Some kind -> symbol_kind_name kind
       | None, None -> "Unknown"
     in
     let* children =
-      match member "children" value with
+      match Jsonx.member "children" value with
       | None -> Ok []
       | Some (Jsont.Array (values, _)) ->
           let rec collect acc = function
@@ -611,29 +607,29 @@ let symbols_of_result ~cwd server ~path value =
 
 let parse_diagnostic ~path value =
   let* range =
-    match member "range" value with
+    match Jsonx.member "range" value with
     | None -> Error "diagnostic has no range"
     | Some range -> range_json range
   in
   let* message =
-    match string_member "message" value with
+    match Jsonx.string_member "message" value with
     | Some text -> Ok text
     | None -> Error "diagnostic has no message"
   in
-  let source = string_member "source" value in
-  let severity = diagnostic_severity (int_member "severity" value) in
+  let source = Jsonx.string_member "source" value in
+  let severity = diagnostic_severity (Jsonx.int_member "severity" value) in
   let line, col, _, _ = range in
   Ok { path; line = line + 1; col = col + 1; severity; message; source }
 
 let update_diagnostics t value =
-  match member "params" value with
+  match Jsonx.member "params" value with
   | Some params -> (
-      match string_member "uri" params with
+      match Jsonx.string_member "uri" params with
       | None -> ()
       | Some uri ->
           let path = normalize_path ~cwd:t.cwd (path_of_uri uri) in
           let values =
-            match member "diagnostics" params with
+            match Jsonx.member "diagnostics" params with
             | Some (Jsont.Array (diagnostics, _)) ->
                 List.fold_left
                   (fun acc value ->
@@ -678,15 +674,16 @@ let handle_response t server value =
   | None -> fail_server t server "response has no request id"
   | Some id ->
       let reply =
-        match member "error" value with
+        match Jsonx.member "error" value with
         | Some error ->
-            let code = Option.value ~default:(-32000) (int_member "code" error) in
+            let code = Option.value ~default:(-32000) (Jsonx.int_member "code" error) in
             let message =
-              Option.value ~default:"unknown LSP error" (string_member "message" error)
+              Option.value ~default:"unknown LSP error"
+                (Jsonx.string_member "message" error)
             in
             `Error (code, message)
         | None -> (
-            match member "result" value with
+            match Jsonx.member "result" value with
             | Some result -> `Result result
             | None -> `Error (-32603, "response has no result"))
       in
@@ -705,9 +702,9 @@ let handle_message t server value =
   match object_value value with
   | None -> fail_server t server "JSON-RPC message is not an object"
   | Some _ -> (
-      match string_member "method" value with
+      match Jsonx.string_member "method" value with
       | Some method_ -> (
-          match member "id" value with
+          match Jsonx.member "id" value with
           | Some id -> handle_server_request server ~id ~method_
           | None ->
               if method_ = "textDocument/publishDiagnostics" then
@@ -1131,7 +1128,7 @@ let current_version server path =
 
 let parse_text_edit server value =
   let* range =
-    match member "range" value with
+    match Jsonx.member "range" value with
     | None -> Error (`Rpc (server.name, "text edit has no range"))
     | Some range -> (
         match range_json range with
@@ -1147,7 +1144,7 @@ let parse_text_edit server value =
               })
   in
   let* new_text =
-    match string_member "newText" value with
+    match Jsonx.string_member "newText" value with
     | Some text when String.is_valid_utf_8 text -> Ok text
     | Some _ -> Error (`Rpc (server.name, "text edit is not valid UTF-8"))
     | None -> Error (`Rpc (server.name, "text edit has no newText"))
@@ -1199,19 +1196,19 @@ let parse_workspace_edit ~cwd server value =
           | [] -> Ok ()
           | value :: rest ->
               let* document =
-                match member "textDocument" value with
+                match Jsonx.member "textDocument" value with
                 | Some document -> Ok document
                 | None ->
                     Error (`Rpc (server.name, "resource operations are not supported"))
               in
               let* uri =
-                match string_member "uri" document with
+                match Jsonx.string_member "uri" document with
                 | Some uri -> Ok uri
                 | None -> Error (`Rpc (server.name, "document change has no URI"))
               in
               let path = normalize_path ~cwd (path_of_uri uri) in
               let* () =
-                match int_member "version" document with
+                match Jsonx.int_member "version" document with
                 | Some version -> (
                     match current_version server path with
                     | Some current when current <> version ->
@@ -1222,7 +1219,7 @@ let parse_workspace_edit ~cwd server value =
                 | None -> Ok ()
               in
               let* edits =
-                match member "edits" value with
+                match Jsonx.member "edits" value with
                 | Some edits -> parse_file_edits server path edits
                 | None -> Error (`Rpc (server.name, "document change has no edits"))
               in
@@ -1232,12 +1229,12 @@ let parse_workspace_edit ~cwd server value =
         loop values
   in
   let* () =
-    match member "changes" value with
+    match Jsonx.member "changes" value with
     | Some changes -> parse_changes changes
     | None -> Ok ()
   in
   let* () =
-    match member "documentChanges" value with
+    match Jsonx.member "documentChanges" value with
     | Some changes -> parse_document_changes changes
     | None -> Ok ()
   in

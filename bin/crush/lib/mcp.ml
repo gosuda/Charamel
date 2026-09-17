@@ -63,37 +63,15 @@ let json_object members =
   |> List.map (fun (name, value) -> Jsont.Json.mem (Jsont.Json.name name) value)
   |> Jsont.Json.object'
 
-let member name = function
-  | Jsont.Object (members, _) -> Option.map snd (Jsont.Json.find_mem name members)
-  | _ -> None
-
-let string_member name value =
-  match member name value with Some (Jsont.String (value, _)) -> Some value | _ -> None
-
-let bool_member name value =
-  match member name value with Some (Jsont.Bool (value, _)) -> Some value | _ -> None
-
-let int_member name value =
-  match member name value with
-  | Some (Jsont.Number (value, _))
-    when Float.is_integer value
-         && value >= float_of_int min_int
-         && value <= float_of_int max_int ->
-      Some (int_of_float value)
-  | _ -> None
-
 let array_member name value =
-  match member name value with Some (Jsont.Array (values, _)) -> Some values | _ -> None
+  match Jsonx.member name value with
+  | Some (Jsont.Array (values, _)) -> Some values
+  | _ -> None
 
 let object_member name value =
-  match member name value with Some (Jsont.Object _ as value) -> Some value | _ -> None
-
-let json_of_string value = Jsont_bytesrw.decode_string Jsont.json value
-
-let string_of_json value =
-  match Jsont_bytesrw.encode_string Jsont.json value with
-  | Ok value -> value
-  | Error message -> Fmt.failwith "cannot encode MCP JSON: %s" message
+  match Jsonx.member name value with
+  | Some (Jsont.Object _ as value) -> Some value
+  | _ -> None
 
 let error_message = function
   | `Unknown_server server -> Fmt.str "unknown MCP server %s" server
@@ -257,13 +235,15 @@ let close_server (server : server) =
 let response_error server value =
   match object_member "error" value with
   | Some error ->
-      let code = Option.value (int_member "code" error) ~default:(-32_000) in
+      let code = Option.value (Jsonx.int_member "code" error) ~default:(-32_000) in
       let message =
-        Option.value (string_member "message" error) ~default:"malformed JSON-RPC error"
+        Option.value
+          (Jsonx.string_member "message" error)
+          ~default:"malformed JSON-RPC error"
       in
       Error (`Rpc (server.name, code, message))
   | None -> (
-      match member "result" value with
+      match Jsonx.member "result" value with
       | Some result -> Ok result
       | None ->
           Error (`Transport (server.name, "JSON-RPC response has no result or error")))
@@ -277,7 +257,7 @@ let id_as_int value =
   | _ -> None
 
 let id_member value =
-  match member "id" value with
+  match Jsonx.member "id" value with
   | Some (Jsont.Null _) | None -> None
   | Some value -> Some value
 
@@ -318,7 +298,7 @@ let server_reply method_name id =
 let timeout_seconds server = max 0. (float_of_int server.config.Config.timeout_s)
 
 let write_stdio (server : server) (stdio : stdio) value =
-  let line = string_of_json value ^ "\n" in
+  let line = Jsonx.string_of_json value ^ "\n" in
   match
     Eio.Time.with_timeout server.clock (timeout_seconds server) (fun () ->
         Eio.Mutex.lock stdio.writer_lock;
@@ -346,8 +326,8 @@ let resolve_pending (server : server) id result =
 
 let dispatch_stdio server stdio value =
   match value with
-  | Jsont.Object _ when string_member "jsonrpc" value = Some "2.0" -> (
-      match string_member "method" value with
+  | Jsont.Object _ when Jsonx.string_member "jsonrpc" value = Some "2.0" -> (
+      match Jsonx.string_member "method" value with
       | Some method_name -> (
           match id_member value with
           | None -> `Ok
@@ -369,7 +349,7 @@ let dispatch_stdio server stdio value =
   | _ -> `Malformed "JSON-RPC message is not an object"
 
 let parse_and_dispatch_stdio server stdio line =
-  match json_of_string line with
+  match Jsonx.json_of_string line with
   | Error message -> `Malformed (Fmt.str "invalid JSON from stdio server: %s" message)
   | Ok value -> dispatch_stdio server stdio value
 
@@ -461,8 +441,8 @@ type http_read_state = {
 
 let rpc_response_of_http server expected_id state value =
   match value with
-  | Jsont.Object _ when string_member "jsonrpc" value = Some "2.0" -> (
-      match string_member "method" value with
+  | Jsont.Object _ when Jsonx.string_member "jsonrpc" value = Some "2.0" -> (
+      match Jsonx.string_member "method" value with
       | Some method_name -> (
           match id_member value with
           | None -> Ok ()
@@ -499,7 +479,7 @@ let dispatch_sse_event server expected_id state =
     let data = Buffer.contents state.data in
     Buffer.clear state.data;
     state.data_lines <- 0;
-    match json_of_string data with
+    match Jsonx.json_of_string data with
     | Error message -> Error (Fmt.str "invalid SSE JSON: %s" message)
     | Ok value -> rpc_response_of_http server expected_id state value
 
@@ -564,7 +544,7 @@ let read_json_body server expected_id ~on_request body =
   if String.trim payload = "" then
     Ok { data = Buffer.create 0; data_lines = 0; answer = None; replies = []; on_request }
   else
-    match json_of_string payload with
+    match Jsonx.json_of_string payload with
     | Error message ->
         Error (`Transport (server.name, Fmt.str "invalid HTTP JSON: %s" message))
     | Ok value -> (
@@ -622,7 +602,7 @@ let update_session http response =
 
 let http_exchange_raw server http ~expected_id ~on_request value =
   Eio.Switch.run @@ fun sw ->
-  let body = Cohttp_eio.Body.of_string (string_of_json value) in
+  let body = Cohttp_eio.Body.of_string (Jsonx.string_of_json value) in
   let response, response_body_flow =
     Cohttp_eio.Client.call http.client ~sw ~headers:(request_headers http) ~body `POST
       http.uri
@@ -786,7 +766,7 @@ let rpc server ~method_name ~params =
   | Ok () -> rpc_unchecked server ~method_name ~params
 
 let parse_required_string server field value =
-  match string_member field value with
+  match Jsonx.string_member field value with
   | Some text -> Ok text
   | None ->
       Error
@@ -794,24 +774,26 @@ let parse_required_string server field value =
 
 let parse_tool server value : (tool, error) result =
   let* name = parse_required_string server "name" value in
-  let description = Option.value (string_member "description" value) ~default:"" in
-  let schema = Option.value (member "inputSchema" value) ~default:(json_object []) in
+  let description = Option.value (Jsonx.string_member "description" value) ~default:"" in
+  let schema =
+    Option.value (Jsonx.member "inputSchema" value) ~default:(json_object [])
+  in
   Ok { server = server.name; name; description; schema }
 
 let parse_resource server value : (resource, error) result =
   let* uri = parse_required_string server "uri" value in
-  let name = Option.value (string_member "name" value) ~default:uri in
-  let mime = string_member "mimeType" value in
-  let description = string_member "description" value in
+  let name = Option.value (Jsonx.string_member "name" value) ~default:uri in
+  let mime = Jsonx.string_member "mimeType" value in
+  let description = Jsonx.string_member "description" value in
   Ok { server = server.name; uri; name; mime; description }
 
 let parse_prompt_argument server value =
   let* name = parse_required_string server "name" value in
-  Ok (name, Option.value (bool_member "required" value) ~default:false)
+  Ok (name, Option.value (Jsonx.bool_member "required" value) ~default:false)
 
 let parse_prompt server value : (prompt, error) result =
   let* name = parse_required_string server "name" value in
-  let description = Option.value (string_member "description" value) ~default:"" in
+  let description = Option.value (Jsonx.string_member "description" value) ~default:"" in
   let* arguments =
     match array_member "arguments" value with
     | None -> Ok []
@@ -827,7 +809,7 @@ let parse_prompt server value : (prompt, error) result =
   Ok { server = server.name; name; description; arguments }
 
 let next_cursor value =
-  match member "nextCursor" value with
+  match Jsonx.member "nextCursor" value with
   | Some (Jsont.String (cursor, _)) when cursor <> "" -> Some cursor
   | _ -> None
 
@@ -1172,7 +1154,9 @@ let content_of_json server value =
   | "image" ->
       let* data = parse_required_string server "data" value in
       let mime =
-        Option.value (string_member "mimeType" value) ~default:"application/octet-stream"
+        Option.value
+          (Jsonx.string_member "mimeType" value)
+          ~default:"application/octet-stream"
       in
       Ok (Image { mime; data })
   | "resource" -> (
@@ -1181,12 +1165,12 @@ let content_of_json server value =
           Error (`Transport (server.name, "MCP resource content is missing resource"))
       | Some resource -> (
           let* uri = parse_required_string server "uri" resource in
-          let text = string_member "text" resource in
-          match string_member "blob" resource with
+          let text = Jsonx.string_member "text" resource in
+          match Jsonx.string_member "blob" resource with
           | Some data ->
               let mime =
                 Option.value
-                  (string_member "mimeType" resource)
+                  (Jsonx.string_member "mimeType" resource)
                   ~default:"application/octet-stream"
               in
               Ok (Image { mime; data })
@@ -1213,7 +1197,7 @@ let call t ~server ~tool ~input =
       let params = json_object [ ("name", json_string tool); ("arguments", input) ] in
       let* result = rpc server ~method_name:"tools/call" ~params in
       let* content = contents_of_result server result in
-      Ok (content, Option.value (bool_member "isError" result) ~default:false)
+      Ok (content, Option.value (Jsonx.bool_member "isError" result) ~default:false)
 
 let read_resource t ~server ~uri =
   match find_server t server with
@@ -1229,14 +1213,18 @@ let read_resource t ~server ~uri =
           let rec loop acc = function
             | [] -> Ok (List.rev acc)
             | value :: rest ->
-                let uri = string_member "uri" value in
+                let uri = Jsonx.string_member "uri" value in
                 let mime =
                   Option.value
-                    (string_member "mimeType" value)
+                    (Jsonx.string_member "mimeType" value)
                     ~default:"application/octet-stream"
                 in
                 let* parsed =
-                  match (string_member "blob" value, string_member "text" value, uri) with
+                  match
+                    ( Jsonx.string_member "blob" value,
+                      Jsonx.string_member "text" value,
+                      uri )
+                  with
                   | Some data, _, _ -> Ok (Image { mime; data })
                   | None, Some text, Some uri -> Ok (Resource { uri; text = Some text })
                   | None, None, Some uri -> Ok (Resource { uri; text = None })
@@ -1258,7 +1246,7 @@ let content_text contents =
   String.concat "\n" (List.map render contents)
 
 let prompt_message_text server value =
-  match member "content" value with
+  match Jsonx.member "content" value with
   | Some content -> (
       match content with
       | Jsont.Array (values, _) ->

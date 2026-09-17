@@ -73,23 +73,17 @@ let run_read_resource (ctx : Tool.ctx) input =
   | Error error -> Error (map_mcp_error error)
   | Ok content -> Ok (truncate_output ctx (Mcp.content_text content))
 
-let member name value =
-  match value with
-  | Jsont.Object (members, _) -> Option.map snd (Jsont.Json.find_mem name members)
+let array_member name value =
+  match Jsonx.member name value with
+  | Some (Jsont.Array (values, _)) -> Some values
   | _ -> None
 
-let string_member name value =
-  match member name value with Some (Jsont.String (text, _)) -> Some text | _ -> None
-
-let array_member name value =
-  match member name value with Some (Jsont.Array (values, _)) -> Some values | _ -> None
-
 let object_member name value =
-  match member name value with
+  match Jsonx.member name value with
   | Some (Jsont.Object (values, _)) -> Some values
   | _ -> None
 
-let has_member name value = Option.is_some (member name value)
+let has_member name value = Option.is_some (Jsonx.member name value)
 
 let json_kind = function
   | Jsont.Null _ -> "null"
@@ -113,7 +107,7 @@ let type_matches expected value =
 
 let rec validate_schema schema value path =
   let fail message = Error (Fmt.str "%s: %s" path message) in
-  match string_member "type" schema with
+  match Jsonx.string_member "type" schema with
   | Some expected when not (type_matches expected value) ->
       fail (Fmt.str "expected %s, got %s" expected (json_kind value))
   | _ -> (
@@ -140,7 +134,7 @@ let rec validate_schema schema value path =
                       let rec check = function
                         | [] -> Ok ()
                         | ((name, _), property) :: rest -> (
-                            match member name value with
+                            match Jsonx.member name value with
                             | None -> check rest
                             | Some property_value ->
                                 let* () =
@@ -151,7 +145,7 @@ let rec validate_schema schema value path =
                       in
                       check properties))
           | Jsont.Array (values, _) -> (
-              match member "items" schema with
+              match Jsonx.member "items" schema with
               | None -> Ok ()
               | Some item_schema ->
                   let rec check index = function
