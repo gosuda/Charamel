@@ -7,8 +7,12 @@
   qualified with behavior-preserving module-qualified record labels.
 
 ## State
-- HEAD = f9879db (this ledger's own commit). Tree clean, green under OLD flags
-  (`+a-4-9-29-30-40..42-44..46-48-58-66-67`, classes 4/40-44 suppressed).
+- HEAD = 7bd9699 "Rewrite README as the Charamel front page". Tree clean,
+  green under OLD flags (`+a-4-9-29-30-40..42-44..46-48-58-66-67`, classes
+  4/40-44 suppressed).
+- `c56f3a7` renamed the namespace: every `Charm_` prefix is now `Charamel_`,
+  so the ~5,600 remaining sites below are qualified by the new module names.
+  Site counts and classes are unaffected; only the prefix changed.
 - b3622d2 "Update README.md" (deletes verified toolchain pins) — authored
   by the user from another window (later observed on origin/main). Resolved.
 
