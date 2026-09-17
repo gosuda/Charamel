@@ -26,6 +26,7 @@
   test_tools_meta
   test_tools_net
   test_tools_search
+  test_tools_test_support
   test_tools_shell
   test_tools_agent
   test_tools_protocol
@@ -39,6 +40,7 @@
   charamel.tea
   alcotest
   eio
+  eio.unix
   eio_main
   fmt
   jsont
