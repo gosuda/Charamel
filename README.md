@@ -1,59 +1,148 @@
-# charm
+# Charamel
 
-The Charm ecosystem re-derived in pure OCaml. Typed messages, `result`
-errors, and Eio fibers replace the Go originals. No CLI flag, environment
-variable, or file format is kept for Go compatibility.
+**The Charm terminal ecosystem, re-derived in OCaml.** Fourteen libraries and ten command-line
+tools for building terminal software: typed messages instead of Go interfaces, `result` instead of
+`error`, and Eio fibers instead of goroutines.
 
-## Packages
+Charamel is a re-derivation, not a binding. There is no Go runtime, no CGo, and no C in the
+repository. Nothing is kept for Go compatibility either: flags, environment variables, and file
+formats are re-derived for OCaml, so a Charamel tool is not a drop-in replacement for its upstream
+namesake.
 
-`charamel.ansi` parses and measures terminal sequences. `charamel.colorprofile`
-detects color support from the environment. `charamel.tea` runs Elm-style
-terminal apps on a cell grid with per-frame diff. `charamel.lipgloss` styles
-text with borders, layout, tables, trees, and lists.
-`charamel.harmonica` integrates spring and projectile motion.
-`charamel.log` reports through `Logs` in text, logfmt, or JSON.
-`charamel.highlight` tokenizes source with data-driven lexers.
-`charamel.glamour` renders Markdown through `cmarkit` and `lipgloss`.
-`charamel.bubbles` ships reusable TUI components over `charamel.tea`.
-`charamel.huh` builds typed forms with accessible fallbacks.
-`charamel.cli` runs apps with XDG paths and styled errors.
-`charamel.fantasy` streams chat completions from Anthropic, OpenAI-compatible,
-OpenAI Responses, and Google providers plus a vendored model catalog.
-`charamel-ssh.keygen` generates and reads OpenSSH keys in pure OCaml.
-`charamel-ssh.wish` serves TUI apps over SSH through the pure `awa` state
-machine.
+- **Pure OCaml** — no `.c` or `.h` files and no `foreign_stubs` stanza anywhere in the tree; only
+  dependencies such as `eio` and `mirage-crypto` carry C.
+- **Fourteen libraries** — twelve under `charamel.*`, two under `charamel-ssh.*`. Each library's
+  `.mli` is its documentation.
+- **Ten tools** — `gum`, `glow`, `freeze`, `sequin`, `pop`, `skate`, `melt`, `keygen`,
+  `hotdiva2000`, `crush`.
+- **Tested per unit** — one suite directory for each of the 24 libraries and tools: 127 test files,
+  25 alcotest suites, 1,275 cases run by `dune runtest`.
+- **One width model** — grapheme-based measurement shared by every renderer, so East Asian and
+  combining text align in tables, borders, and layout.
+- **OCaml >= 5.4** with Eio for concurrency, `jsont` for JSON, `cmarkit` for Markdown, and `re` for
+  data-driven lexers.
 
-`gum` prompts for input, choices, and values. `glow` reads and browses
-Markdown. `freeze` renders code to SVG and PNG. `sequin` explains escape
-sequences. `pop` composes and sends mail. `skate` keeps a local key-value
-store. `melt` backs up Ed25519 keys as mnemonic words. `keygen` writes
-OpenSSH key pairs. `hotdiva2000` prints memorable names. `crush` is the
-agentic coding harness with tools, permissions, MCP, LSP, and a TUI.
+## Contents
 
-## Build and test
+- [Quick start](#quick-start)
+- [Libraries](#libraries)
+- [Tools](#tools)
+- [Examples](#examples)
+- [Development](#development)
+- [License](#license)
+
+## Quick start
+
+Build the workspace:
+
+```sh
+eval $(opam env --switch=rd --set-switch)   # any switch with OCaml >= 5.4
+opam install . --deps-only --with-test
+dune build --profile release
+```
+
+Run a tool. `sequin` reads terminal bytes on standard input and explains them:
+
+```sh
+printf '\033[3A' | dune exec sequin
+# CSI 3 A  Cursor up 3
+```
+
+Use a library. `charamel.lipgloss` styles and lays out text:
+
+```ocaml
+open Charamel_lipgloss
+
+let () =
+  Table.v ~headers:[ "Name"; "Value" ] ~rows:[ [ "a"; "1" ]; [ "b"; "2" ] ] ()
+  |> Table.render |> print_endline
+
+(* ┌────┬─────┐
+   │Name│Value│
+   ├────┼─────┤
+   │a   │1    │
+   │b   │2    │
+   └────┴─────┘ *)
+```
+
+Compile it by adding `(libraries charamel.lipgloss)` to your `dune` stanza.
+
+## Libraries
+
+| Library | What it does |
+|---|---|
+| `charamel.ansi` | Terminal sequences, incremental decoding, colors, styles, and grapheme-based width |
+| `charamel.colorprofile` | Color support detected from the environment, with writers that reduce SGR colors |
+| `charamel.tea` | Elm-style terminal apps: typed messages, commands, subscriptions, per-frame diff |
+| `charamel.lipgloss` | Immutable styles with borders, layout, tables, trees, and lists |
+| `charamel.bubbles` | Seventeen reusable components over `charamel.tea`, from `textinput` to `viewport` |
+| `charamel.huh` | Typed forms with accessible fallbacks |
+| `charamel.glamour` | CommonMark rendered to ANSI with typed themes |
+| `charamel.highlight` | Byte-preserving syntax highlighting from data-driven lexers |
+| `charamel.log` | A styled `Logs` reporter in text, logfmt, or JSON |
+| `charamel.harmonica` | Spring and projectile motion advanced by a fixed time step |
+| `charamel.cli` | Application runtime with XDG base directories and styled errors |
+| `charamel.fantasy` | Streaming chat completions for Anthropic, OpenAI-compatible, OpenAI Responses, and Google, with a bundled model catalog |
+| `charamel-ssh.keygen` | OpenSSH key pairs and parsing for Ed25519 and NIST P-256, P-384, P-521 |
+| `charamel-ssh.wish` | TUI apps served over SSH through the pure `awa` state machine |
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `gum` | Prompts for input, choices, and values |
+| `glow` | Reads and browses Markdown |
+| `freeze` | Renders code and terminal output to SVG and PNG |
+| `sequin` | Explains terminal escape sequences |
+| `pop` | Composes and sends mail |
+| `skate` | Keeps a local key-value store |
+| `melt` | Backs up Ed25519 keys as mnemonic words and restores them |
+| `keygen` | Writes OpenSSH key pairs |
+| `hotdiva2000` | Prints memorable names |
+| `crush` | An agentic coding harness with tools, permissions, MCP, LSP, and a TUI |
+
+Run any of them through dune, for example `dune exec gum -- --help`, or from
+`_build/install/default/bin` after `dune build --profile release`.
+
+## Examples
+
+| Program | Shows |
+|---|---|
+| `tea_counter` | A counter application for the Tea terminal runtime |
+| `tea_inline` | An inline Tea application that prints output above a live view |
+| `huh_burger` | An interactive burger-ordering form |
+| `wish_counter` | A small counter served over SSH |
+| `confetti` | A tiny confetti animation served over SSH |
+
+```sh
+dune exec examples/tea_counter.exe
+```
+
+## Development
+
+Three gates, the same three the pre-commit hook runs:
 
 ```sh
 eval $(opam env --switch=rd --set-switch)
-opam install awa
-opam exec -- dune build --profile release
-opam exec -- dune runtest --profile release
-opam exec -- dune build @fmt
+dune build @fmt
+dune build --profile release
+dune runtest --profile release
 ```
 
-A pre-commit hook runs the same three gates. Enable it with
-`git config core.hooksPath .githooks`. The hook calls `opam exec`, which
-resolves `dune` through `OPAMSWITCH` rather than `PATH`, so commit from a
-shell bootstrapped with `--set-switch` as above. When the hook reports
-`Command not found 'dune'`, fix the switch and retry instead of passing
-`--no-verify`.
+- **Hook.** `.githooks/pre-commit` runs those gates; enable it with
+  `git config core.hooksPath .githooks`. It resolves `dune` through `opam exec`, which reads
+  `OPAMSWITCH` rather than `PATH`, so commit from a shell bootstrapped with `--set-switch` as above.
+  When it reports `Command not found 'dune'`, fix the switch and retry rather than passing
+  `--no-verify`. The hook names the switch `rd`.
+- **Formatter.** `.ocamlformat` pins `ocamlformat` to 0.29.0 with `margin = 90`; `dune build @fmt`
+  fails on any other version.
+- **Warnings.** Every stanza compiles with `-strict-sequence -strict-formats -short-paths
+  -principal`, and the release profile adds `-warn-error +a`.
+- **Layout.** `lib/` libraries, `ssh/` the SSH tier, `bin/` tools, `test/` one directory per unit,
+  `examples/` runnable programs. `.references/` holds the Go originals as local, git-ignored
+  `data_only_dirs` material that provenance comments cite.
 
-Pure OCaml in this repository: no `foreign_stubs`, no C files.
-Dependencies keep whatever they ship (`eio` and `mirage-crypto` carry
-their own C). Highlighting uses `re`-based data-driven lexers. Config
-files are JSON via `jsont`. Sessions are JSONL. The OCaml floor is
-`>= 5.4`. Tests use alcotest.
+## License
 
-## Licensing
-
-- This work is Apache-2.0. Read `LICENSE` for the license body and `NOTICE`
-  for copyright and third-party attributions.
+Apache-2.0. [LICENSE](LICENSE) carries the license body; [NOTICE](NOTICE) carries the copyright and
+the MIT attributions for upstream material transcribed from charmbracelet and others.
