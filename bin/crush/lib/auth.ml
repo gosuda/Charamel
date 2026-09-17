@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type credential =
   | Api_key of string
   | Oauth of Charm_fantasy.Oauth.Credential.t
@@ -235,21 +237,19 @@ let with_loaded t ~on_fault f =
 let create ~path ~clock () =
   match Eio.Path.split path with
   | None -> Error (`Io (path_text path, "credential path has no parent directory"))
-  | Some (parent, basename) -> (
+  | Some (parent, basename) ->
       let lock_path = Eio.Path.(parent / (basename ^ ".lock")) in
-      match load_entries path with
-      | Error error -> Error error
-      | Ok entries ->
-          Ok
-            {
-              path;
-              parent;
-              lock_path;
-              clock;
-              entries;
-              mutex = Eio.Mutex.create ();
-              persistence_fault = None;
-            })
+      let* entries = load_entries path in
+      Ok
+        {
+          path;
+          parent;
+          lock_path;
+          clock;
+          entries;
+          mutex = Eio.Mutex.create ();
+          persistence_fault = None;
+        }
 
 let find t ~provider = List.assoc_opt provider t.entries
 let providers t = List.map fst t.entries
@@ -324,20 +324,18 @@ let validate_credential t = function
   | _ -> Ok ()
 
 let set t ~provider credential =
-  match validate_credential t credential with
-  | Error error -> Error error
-  | Ok () ->
-      with_loaded t
-        ~on_fault:(fun error -> Error error)
-        (fun ~previous entries ->
-          let updated = replace_entry provider credential entries in
-          match Eio.Cancel.protect (fun () -> persist_entries t updated) with
-          | Ok () ->
-              t.entries <- updated;
-              Ok ()
-          | Error error ->
-              t.entries <- previous;
-              Error error)
+  let* () = validate_credential t credential in
+  with_loaded t
+    ~on_fault:(fun error -> Error error)
+    (fun ~previous entries ->
+      let updated = replace_entry provider credential entries in
+      match Eio.Cancel.protect (fun () -> persist_entries t updated) with
+      | Ok () ->
+          t.entries <- updated;
+          Ok ()
+      | Error error ->
+          t.entries <- previous;
+          Error error)
 
 let remove t ~provider =
   with_loaded t
@@ -505,106 +503,103 @@ module Login = struct
       | Unix.Unix_error (error, fn, arg) ->
           Error (`Oauth (Fmt.str "%s (%s %s)" (Unix.error_message error) fn arg))
     in
-    match listener_result with
-    | Error error -> Error error
-    | Ok socket ->
-        Fun.protect
-          ~finally:(fun () -> Eio.Cancel.protect (fun () -> Eio.Resource.close socket))
-          (fun () ->
-            let parse_connection flow =
-              Fun.protect
-                ~finally:(fun () -> close_flow flow)
-                (fun () ->
-                  let reader = Eio.Buf_read.of_flow ~max_size:8192 flow in
-                  let outcome =
-                    try
-                      let timed =
-                        Eio.Time.with_timeout t.clock 10. (fun () ->
-                            Ok
-                              (try
-                                 let line = Eio.Buf_read.line reader in
-                                 let headers_ok = drain_headers reader in
-                                 if not headers_ok then None
-                                 else
-                                   match request_path line with
-                                   | None -> None
-                                   | Some target -> (
-                                       let uri =
-                                         Uri.of_string ("http://127.0.0.1" ^ target)
-                                       in
-                                       if Uri.path uri <> "/callback" then None
-                                       else
-                                         match
-                                           Charm_fantasy.Oauth.Anthropic.extract_code
-                                             ~url_or_code:(Uri.to_string uri)
-                                             ~state:
-                                               login.Charm_fantasy__Oauth.Anthropic.state
-                                         with
-                                         | Ok code -> Some code
-                                         | Error _ -> None)
-                               with
-                              | End_of_file -> None
-                              | Eio.Buf_read.Buffer_limit_exceeded -> None
-                              | Eio.Io _ -> None
-                              | Unix.Unix_error _ -> None
-                              | Invalid_argument _ -> None))
-                      in
-                      match timed with Ok outcome -> outcome | Error `Timeout -> None
-                    with
-                    | Eio.Io _ -> None
-                    | Unix.Unix_error _ -> None
+    let* socket = listener_result in
+    Fun.protect
+      ~finally:(fun () -> Eio.Cancel.protect (fun () -> Eio.Resource.close socket))
+      (fun () ->
+        let parse_connection flow =
+          Fun.protect
+            ~finally:(fun () -> close_flow flow)
+            (fun () ->
+              let reader = Eio.Buf_read.of_flow ~max_size:8192 flow in
+              let outcome =
+                try
+                  let timed =
+                    Eio.Time.with_timeout t.clock 10. (fun () ->
+                        Ok
+                          (try
+                             let line = Eio.Buf_read.line reader in
+                             let headers_ok = drain_headers reader in
+                             if not headers_ok then None
+                             else
+                               match request_path line with
+                               | None -> None
+                               | Some target -> (
+                                   let uri =
+                                     Uri.of_string ("http://127.0.0.1" ^ target)
+                                   in
+                                   if Uri.path uri <> "/callback" then None
+                                   else
+                                     match
+                                       Charm_fantasy.Oauth.Anthropic.extract_code
+                                         ~url_or_code:(Uri.to_string uri)
+                                         ~state:login.Charm_fantasy__Oauth.Anthropic.state
+                                     with
+                                     | Ok code -> Some code
+                                     | Error _ -> None)
+                           with
+                          | End_of_file -> None
+                          | Eio.Buf_read.Buffer_limit_exceeded -> None
+                          | Eio.Io _ -> None
+                          | Unix.Unix_error _ -> None
+                          | Invalid_argument _ -> None))
                   in
-                  match outcome with
-                  | Some code ->
-                      response flow ~status:200
-                        "<html>Login complete. You can return to Crush.</html>";
-                      Some code
-                  | None ->
-                      response flow ~status:400
-                        "<html>Invalid callback. Please try again.</html>";
-                      None)
-            in
-            let callback () =
-              let rec wait () =
-                let flow, _ = Eio.Net.accept ~sw socket in
-                match parse_connection flow with
-                | Some code -> Callback code
-                | None -> wait ()
-              in
-              try wait () with
-              | Eio.Io _ as exn -> Accept_error (Fmt.str "%a" Eio.Exn.pp exn)
-              | Unix.Unix_error (error, fn, arg) ->
-                  Accept_error (Fmt.str "%s (%s %s)" (Unix.error_message error) fn arg)
-            in
-            let paste () =
-              match
-                try prompt_paste () with
-                | End_of_file -> None
+                  match timed with Ok outcome -> outcome | Error `Timeout -> None
+                with
                 | Eio.Io _ -> None
                 | Unix.Unix_error _ -> None
-              with
-              | None -> Aborted
-              | Some value -> Paste value
-            in
-            open_browser login.Charm_fantasy__Oauth.Anthropic.uri;
-            let timeout () =
-              Eio.Time.sleep t.clock 300.;
-              Timeout
-            in
-            match Eio.Fiber.any [ callback; paste; timeout ] with
-            | Timeout -> Error `Timeout
-            | Aborted -> Error `Aborted
-            | Accept_error message -> Error (`Oauth message)
-            | Callback code | Paste code -> (
-                match
-                  Charm_fantasy.Oauth.Anthropic.exchange ~sw ~clock:t.clock ~net
-                    ~redirect_uri ~login ~code ()
-                with
-                | Error oauth_error ->
-                    Error (`Oauth (Charm_fantasy.Error.message oauth_error))
-                | Ok credential -> (
-                    match set t ~provider:"anthropic" (Oauth credential) with
-                    | Ok () -> Ok ()
-                    | Error error ->
-                        (Error (error :> login_error) : (_, login_error) result))))
+              in
+              match outcome with
+              | Some code ->
+                  response flow ~status:200
+                    "<html>Login complete. You can return to Crush.</html>";
+                  Some code
+              | None ->
+                  response flow ~status:400
+                    "<html>Invalid callback. Please try again.</html>";
+                  None)
+        in
+        let callback () =
+          let rec wait () =
+            let flow, _ = Eio.Net.accept ~sw socket in
+            match parse_connection flow with
+            | Some code -> Callback code
+            | None -> wait ()
+          in
+          try wait () with
+          | Eio.Io _ as exn -> Accept_error (Fmt.str "%a" Eio.Exn.pp exn)
+          | Unix.Unix_error (error, fn, arg) ->
+              Accept_error (Fmt.str "%s (%s %s)" (Unix.error_message error) fn arg)
+        in
+        let paste () =
+          match
+            try prompt_paste () with
+            | End_of_file -> None
+            | Eio.Io _ -> None
+            | Unix.Unix_error _ -> None
+          with
+          | None -> Aborted
+          | Some value -> Paste value
+        in
+        open_browser login.Charm_fantasy__Oauth.Anthropic.uri;
+        let timeout () =
+          Eio.Time.sleep t.clock 300.;
+          Timeout
+        in
+        match Eio.Fiber.any [ callback; paste; timeout ] with
+        | Timeout -> Error `Timeout
+        | Aborted -> Error `Aborted
+        | Accept_error message -> Error (`Oauth message)
+        | Callback code | Paste code -> (
+            match
+              Charm_fantasy.Oauth.Anthropic.exchange ~sw ~clock:t.clock ~net ~redirect_uri
+                ~login ~code ()
+            with
+            | Error oauth_error ->
+                Error (`Oauth (Charm_fantasy.Error.message oauth_error))
+            | Ok credential -> (
+                match set t ~provider:"anthropic" (Oauth credential) with
+                | Ok () -> Ok ()
+                | Error error -> (Error (error :> login_error) : (_, login_error) result))
+            ))
 end

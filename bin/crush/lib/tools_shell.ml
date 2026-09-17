@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type bash_params = {
   command : string;
   description : string;
@@ -401,57 +403,45 @@ let bash =
     read_only = false;
     run =
       (fun ctx value ->
-        match Tool.decode bash_params_jsont value with
-        | Error error -> Error error
-        | Ok params -> (
-            let command = params.command in
-            let timeout_s = Option.value params.timeout_s ~default:120 in
-            let run_in_background =
-              Option.value params.run_in_background ~default:false
-            in
-            let cwd =
-              match params.working_dir with
-              | Some path when String.trim path <> "" -> Tool.absolute ctx path
-              | _ -> ctx.Tool.cwd
-            in
-            if String.trim command = "" then
-              Error (`Invalid_input "command must not be empty")
-            else if String.length params.description > 80 then
-              Error (`Invalid_input "description must be at most 80 bytes")
-            else if timeout_s < 1 || timeout_s > 600 then
-              Error (`Invalid_input "timeout_s must be between 1 and 600")
-            else
-              let read_only = is_read_only command && not run_in_background in
-              let permission_path = "" in
-              match
-                Tool.request ctx ~read_only ~tool:"bash" ~action:command
-                  ~path:permission_path ~description:params.description
-              with
-              | Error error -> Error error
-              | Ok () -> (
-                  if blocked_command command then
-                    Error (`Unavailable "command is blocked by the shell safety policy")
-                  else if run_in_background then
-                    let job_id =
-                      Jobs.start ctx.Tool.jobs ~cwd ~command ~env:[] ~timeout_s
-                    in
-                    Ok (output_with_artifact ctx (Fmt.str "started %s" job_id))
-                  else
-                    try
-                      match run_foreground_with_timeout ctx ~cwd ~command ~timeout_s with
-                      | Ok output -> Ok output
-                      | Error error -> Error error
-                    with
-                    | Eio.Io _ as exception_ ->
-                        Error (`Io (cwd, Fmt.str "%a" Eio.Exn.pp exception_))
-                    | Unix.Unix_error (error, operation, argument) ->
-                        Error
-                          (`Io
-                             ( cwd,
-                               Fmt.str "%s: %s (%s)" operation (Unix.error_message error)
-                                 argument ))
-                    | Invalid_argument message -> Error (`Invalid_input message)
-                    | Failure message -> Error (`Unavailable message))));
+        let* params = Tool.decode bash_params_jsont value in
+        let command = params.command in
+        let timeout_s = Option.value params.timeout_s ~default:120 in
+        let run_in_background = Option.value params.run_in_background ~default:false in
+        let cwd =
+          match params.working_dir with
+          | Some path when String.trim path <> "" -> Tool.absolute ctx path
+          | _ -> ctx.Tool.cwd
+        in
+        if String.trim command = "" then
+          Error (`Invalid_input "command must not be empty")
+        else if String.length params.description > 80 then
+          Error (`Invalid_input "description must be at most 80 bytes")
+        else if timeout_s < 1 || timeout_s > 600 then
+          Error (`Invalid_input "timeout_s must be between 1 and 600")
+        else
+          let read_only = is_read_only command && not run_in_background in
+          let permission_path = "" in
+          let* () =
+            Tool.request ctx ~read_only ~tool:"bash" ~action:command ~path:permission_path
+              ~description:params.description
+          in
+          if blocked_command command then
+            Error (`Unavailable "command is blocked by the shell safety policy")
+          else if run_in_background then
+            let job_id = Jobs.start ctx.Tool.jobs ~cwd ~command ~env:[] ~timeout_s in
+            Ok (output_with_artifact ctx (Fmt.str "started %s" job_id))
+          else
+            try run_foreground_with_timeout ctx ~cwd ~command ~timeout_s with
+            | Eio.Io _ as exception_ ->
+                Error (`Io (cwd, Fmt.str "%a" Eio.Exn.pp exception_))
+            | Unix.Unix_error (error, operation, argument) ->
+                Error
+                  (`Io
+                     ( cwd,
+                       Fmt.str "%s: %s (%s)" operation (Unix.error_message error) argument
+                     ))
+            | Invalid_argument message -> Error (`Invalid_input message)
+            | Failure message -> Error (`Unavailable message));
   }
 
 let job_output_schema =
@@ -475,27 +465,25 @@ let job_output =
             let job_id = String.trim params.job_id in
             if job_id = "" then Error (`Invalid_input "job_id must not be empty")
             else
-              match
+              let* () =
                 Tool.request ctx ~read_only:true ~tool:"job_output" ~action:job_id
                   ~path:ctx.Tool.cwd
                   ~description:(Fmt.str "Read output for %s" job_id)
+              in
+              match
+                Jobs.output ctx.Tool.jobs ~id:job_id
+                  ~wait:(Option.value params.wait ~default:false)
               with
-              | Error error -> Error error
-              | Ok () -> (
-                  match
-                    Jobs.output ctx.Tool.jobs ~id:job_id
-                      ~wait:(Option.value params.wait ~default:false)
-                  with
-                  | Error (`Not_found id) -> Error (`Not_found id)
-                  | Ok (captured, status) ->
-                      let status_text =
-                        match status with
-                        | Jobs.Running -> "running"
-                        | Jobs.Exited code -> Fmt.str "exited %d" code
-                        | Jobs.Killed -> "killed"
-                      in
-                      let content = Fmt.str "status: %s\n%s" status_text captured in
-                      Ok (output_with_artifact ctx content))));
+              | Error (`Not_found id) -> Error (`Not_found id)
+              | Ok (captured, status) ->
+                  let status_text =
+                    match status with
+                    | Jobs.Running -> "running"
+                    | Jobs.Exited code -> Fmt.str "exited %d" code
+                    | Jobs.Killed -> "killed"
+                  in
+                  let content = Fmt.str "status: %s\n%s" status_text captured in
+                  Ok (output_with_artifact ctx content)));
   }
 
 let job_kill_schema =
@@ -510,19 +498,15 @@ let job_kill =
     read_only = false;
     run =
       (fun ctx value ->
-        match Tool.decode job_kill_params_jsont value with
-        | Error error -> Error error
-        | Ok params -> (
-            let job_id = String.trim params.job_id in
-            if job_id = "" then Error (`Invalid_input "job_id must not be empty")
-            else
-              match
-                Tool.request ctx ~read_only:false ~tool:"job_kill" ~action:job_id ~path:""
-                  ~description:(Fmt.str "Terminate %s" job_id)
-              with
-              | Error error -> Error error
-              | Ok () -> (
-                  match Jobs.kill ctx.Tool.jobs ~id:job_id with
-                  | Ok () -> Ok (output_with_artifact ctx (Fmt.str "killed %s" job_id))
-                  | Error (`Not_found id) -> Error (`Not_found id))));
+        let* params = Tool.decode job_kill_params_jsont value in
+        let job_id = String.trim params.job_id in
+        if job_id = "" then Error (`Invalid_input "job_id must not be empty")
+        else
+          let* () =
+            Tool.request ctx ~read_only:false ~tool:"job_kill" ~action:job_id ~path:""
+              ~description:(Fmt.str "Terminate %s" job_id)
+          in
+          match Jobs.kill ctx.Tool.jobs ~id:job_id with
+          | Ok () -> Ok (output_with_artifact ctx (Fmt.str "killed %s" job_id))
+          | Error (`Not_found id) -> Error (`Not_found id));
   }

@@ -763,9 +763,8 @@ let notify_unchecked server ~method_name ~params =
   | Some (Http_transport http) -> http_notify server http ~method_name ~params
 
 let rpc server ~method_name ~params =
-  match wait_ready server with
-  | Error error -> Error error
-  | Ok () -> rpc_unchecked server ~method_name ~params
+  let* () = wait_ready server in
+  rpc_unchecked server ~method_name ~params
 
 let parse_required_string server field value =
   match Jsonx.string_member field value with
@@ -910,7 +909,7 @@ let setup_http (server : server) (config : Config.mcp) =
   | Some url -> (
       let uri = Uri.of_string url in
       match (Uri.scheme uri, Uri.host uri) with
-      | Some ("http" | "https"), Some host when host <> "" -> (
+      | Some ("http" | "https"), Some host when host <> "" ->
           let tls_result =
             match Uri.scheme uri with
             | Some "https" -> (
@@ -938,26 +937,24 @@ let setup_http (server : server) (config : Config.mcp) =
                         Ok (Some https)))
             | _ -> Ok None
           in
-          match tls_result with
-          | Error message -> Error message
-          | Ok https ->
-              let client = Cohttp_eio.Client.make ~https server.net in
-              let stopped, stop = Eio.Promise.create () in
-              Ok
-                (Http_transport
-                   {
-                     client;
-                     uri;
-                     headers = config.Config.headers;
-                     session_id = None;
-                     protocol_version;
-                     session_lock = Eio.Mutex.create ();
-                     writer_lock = Eio.Mutex.create ();
-                     reply_queue = Eio.Stream.create 32;
-                     stopped;
-                     stop;
-                     closed = false;
-                   }))
+          let* https = tls_result in
+          let client = Cohttp_eio.Client.make ~https server.net in
+          let stopped, stop = Eio.Promise.create () in
+          Ok
+            (Http_transport
+               {
+                 client;
+                 uri;
+                 headers = config.Config.headers;
+                 session_id = None;
+                 protocol_version;
+                 session_lock = Eio.Mutex.create ();
+                 writer_lock = Eio.Mutex.create ();
+                 reply_queue = Eio.Stream.create 32;
+                 stopped;
+                 stop;
+                 closed = false;
+               })
       | Some ("http" | "https"), None -> Error "MCP HTTP URL must include a host"
       | Some scheme, _ -> Error (Fmt.str "unsupported MCP URL scheme %s" scheme)
       | None, _ -> Error "MCP HTTP URL must include http or https")

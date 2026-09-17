@@ -137,9 +137,8 @@ let run_diagnostics ctx input =
                 Lsp.diagnostics lsp ~path ~wait:0.5)
               paths)
       in
-      match outcome with
-      | Error error -> Error error
-      | Ok diagnostics -> Ok (truncate_output ctx (diagnostics_text diagnostics)))
+      let* diagnostics = outcome in
+      Ok (truncate_output ctx (diagnostics_text diagnostics)))
 
 let file_uri_path path =
   if String.starts_with ~prefix:"file://" path then

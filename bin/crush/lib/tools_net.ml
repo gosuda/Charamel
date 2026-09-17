@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type output_format = Text | Markdown | Html
 type render_mode = Plain | Markdown
 type params = { url : string; format : output_format option; timeout_s : int option }
@@ -413,13 +415,10 @@ let rec fetch_uri (ctx : Tool.ctx) client ~headers ~sw ~(format : output_format)
           | None ->
               Error
                 (`Unavailable (Fmt.str "HTTP %d redirect has no Location header" status))
-          | Some location -> (
+          | Some location ->
               let target = Uri.resolve "" uri (Uri.of_string location) in
-              match parse_http_uri (Uri.to_string target) with
-              | Error error -> Error error
-              | Ok target ->
-                  fetch_uri ctx client ~headers ~sw ~format ~redirects:(redirects + 1)
-                    target))
+              let* target = parse_http_uri (Uri.to_string target) in
+              fetch_uri ctx client ~headers ~sw ~format ~redirects:(redirects + 1) target)
   else
     match response_body body with
     | Error `Too_large ->
@@ -467,65 +466,53 @@ let fetch =
     read_only = true;
     run =
       (fun (ctx : Tool.ctx) value ->
-        match Tool.decode params_jsont value with
-        | Error error -> Error error
-        | Ok params -> (
-            let timeout_s = Option.value params.timeout_s ~default:30 in
-            let format = Option.value params.format ~default:(Markdown : output_format) in
-            if timeout_s < 1 || timeout_s > 120 then
-              Error (`Invalid_input "timeout_s must be between 1 and 120")
-            else
-              match parse_http_uri params.url with
-              | Error error -> Error error
-              | Ok uri -> (
-                  match
-                    Tool.request ctx ~read_only:true ~tool:"fetch" ~action:params.url
-                      ~path:""
-                      ~description:(Fmt.str "Fetch %s" params.url)
-                  with
-                  | Error error -> Error error
-                  | Ok () -> (
-                      let operation () =
-                        Eio.Switch.run @@ fun fetch_sw ->
-                        let headers =
-                          Http.Header.of_list
-                            [
-                              ("user-agent", "crush/" ^ Charm_cli.Version.current);
-                              ("accept", "text/html, text/plain, text/markdown, */*");
-                            ]
-                        in
-                        match make_client ctx with
-                        | Error error -> Error error
-                        | Ok client ->
-                            fetch_uri ctx client ~headers ~sw:fetch_sw ~format
-                              ~redirects:0 uri
-                      in
-                      try
-                        match
-                          Tool.with_timeout ctx (float_of_int timeout_s) operation
-                        with
-                        | Ok (Ok content) -> Ok (output_with_artifact ctx content)
-                        | Ok (Error error) -> Error error
-                        | Error error -> Error error
-                      with
-                      | Eio.Io _ as exception_ ->
-                          Error (`Io (params.url, Fmt.str "%a" Eio.Exn.pp exception_))
-                      | Tls_eio.Tls_alert alert ->
-                          Error
-                            (`Unavailable
-                               (Fmt.str "TLS alert while fetching %s: %s" params.url
-                                  (Tls.Packet.alert_type_to_string alert)))
-                      | Tls_eio.Tls_failure failure ->
-                          Error
-                            (`Unavailable
-                               (Fmt.str "TLS failure while fetching %s: %a" params.url
-                                  Tls.Engine.pp_failure failure))
-                      | Unix.Unix_error (error, operation, argument) ->
-                          Error
-                            (`Io
-                               ( params.url,
-                                 Fmt.str "%s: %s (%s)" operation
-                                   (Unix.error_message error) argument ))
-                      | Invalid_argument message -> Error (`Invalid_input message)
-                      | Failure message -> Error (`Unavailable message)))));
+        let* params = Tool.decode params_jsont value in
+        let timeout_s = Option.value params.timeout_s ~default:30 in
+        let format = Option.value params.format ~default:(Markdown : output_format) in
+        if timeout_s < 1 || timeout_s > 120 then
+          Error (`Invalid_input "timeout_s must be between 1 and 120")
+        else
+          let* uri = parse_http_uri params.url in
+          let* () =
+            Tool.request ctx ~read_only:true ~tool:"fetch" ~action:params.url ~path:""
+              ~description:(Fmt.str "Fetch %s" params.url)
+          in
+          let operation () =
+            Eio.Switch.run @@ fun fetch_sw ->
+            let headers =
+              Http.Header.of_list
+                [
+                  ("user-agent", "crush/" ^ Charm_cli.Version.current);
+                  ("accept", "text/html, text/plain, text/markdown, */*");
+                ]
+            in
+            let* client = make_client ctx in
+            fetch_uri ctx client ~headers ~sw:fetch_sw ~format ~redirects:0 uri
+          in
+          try
+            match Tool.with_timeout ctx (float_of_int timeout_s) operation with
+            | Ok (Ok content) -> Ok (output_with_artifact ctx content)
+            | Ok (Error error) -> Error error
+            | Error error -> Error error
+          with
+          | Eio.Io _ as exception_ ->
+              Error (`Io (params.url, Fmt.str "%a" Eio.Exn.pp exception_))
+          | Tls_eio.Tls_alert alert ->
+              Error
+                (`Unavailable
+                   (Fmt.str "TLS alert while fetching %s: %s" params.url
+                      (Tls.Packet.alert_type_to_string alert)))
+          | Tls_eio.Tls_failure failure ->
+              Error
+                (`Unavailable
+                   (Fmt.str "TLS failure while fetching %s: %a" params.url
+                      Tls.Engine.pp_failure failure))
+          | Unix.Unix_error (error, operation, argument) ->
+              Error
+                (`Io
+                   ( params.url,
+                     Fmt.str "%s: %s (%s)" operation (Unix.error_message error) argument
+                   ))
+          | Invalid_argument message -> Error (`Invalid_input message)
+          | Failure message -> Error (`Unavailable message));
   }

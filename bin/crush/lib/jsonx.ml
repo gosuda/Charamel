@@ -1,3 +1,5 @@
+open Result.Syntax
+
 let json_of_string text = Jsont_bytesrw.decode_string Jsont.json text
 
 let string_of_json ?(minify = true) json =
@@ -12,9 +14,8 @@ let display_string json =
   | Error _ -> "<invalid-json>"
 
 let decode codec text =
-  match json_of_string text with
-  | Error message -> Error message
-  | Ok json -> Jsont.Json.decode codec json
+  let* json = json_of_string text in
+  Jsont.Json.decode codec json
 
 let encode ?(minify = true) codec value =
   match Jsont.Json.encode codec value with

@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type model_ref = { provider : string; model : string }
 
 type header = {
@@ -513,9 +515,8 @@ let replace_index store entries =
 
 let update_index store f =
   Eio.Mutex.use_rw ~protect:true store.index_mutex (fun () ->
-      match load_index store with
-      | Error error -> Error error
-      | Ok entries -> replace_index store (f entries))
+      let* entries = load_index store in
+      replace_index store (f entries))
 
 let replace_entry (id : string) (entry : index_entry) (entries : index_entry list) =
   let found = ref false in
@@ -655,7 +656,7 @@ let open_ store ~id =
                 | Error _ -> Error (`Session_corrupt (target, 1))
                 | Ok header when not (String.equal header.id id) ->
                     Error (`Session_corrupt (target, 1))
-                | Ok header -> (
+                | Ok header ->
                     let rec parse line_number raw_events = function
                       | [] -> Ok (List.rev raw_events, false)
                       | line :: tail -> (
@@ -685,24 +686,13 @@ let open_ store ~id =
                               end
                           | Error _ -> Error (`Session_corrupt (target, line_number)))
                     in
-                    match parse 2 [] rest with
-                    | Error error -> Error error
-                    | Ok (events, repaired) ->
-                        if (not had_newline) && not repaired then
-                          match rewrite_prefix store target lines with
-                          | Error (`Not_found path) ->
-                              Error (`Io (path, "session disappeared while normalizing"))
-                          | Error (`Io (path, message)) -> Error (`Io (path, message))
-                          | Ok () ->
-                              Ok
-                                {
-                                  store;
-                                  path = target;
-                                  header = apply_index_title store header;
-                                  events = Array.of_list events;
-                                  mutex = Eio.Mutex.create ();
-                                }
-                        else
+                    let* events, repaired = parse 2 [] rest in
+                    if (not had_newline) && not repaired then
+                      match rewrite_prefix store target lines with
+                      | Error (`Not_found path) ->
+                          Error (`Io (path, "session disappeared while normalizing"))
+                      | Error (`Io (path, message)) -> Error (`Io (path, message))
+                      | Ok () ->
                           Ok
                             {
                               store;
@@ -710,18 +700,25 @@ let open_ store ~id =
                               header = apply_index_title store header;
                               events = Array.of_list events;
                               mutex = Eio.Mutex.create ();
-                            })))
+                            }
+                    else
+                      Ok
+                        {
+                          store;
+                          path = target;
+                          header = apply_index_title store header;
+                          events = Array.of_list events;
+                          mutex = Eio.Mutex.create ();
+                        }))
         end
     | Ok _ -> Error (`Not_found target)
 
 let list store =
-  match load_index store with
-  | Error error -> Error error
-  | Ok entries ->
-      Ok
-        (List.stable_sort
-           (fun left right -> compare right.updated_ms left.updated_ms)
-           entries)
+  let* entries = load_index store in
+  Ok
+    (List.stable_sort
+       (fun left right -> compare right.updated_ms left.updated_ms)
+       entries)
 
 let last store =
   match list store with
@@ -755,11 +752,10 @@ let append session ~clock event =
                 in
                 replace_entry session.header.id entry entries)
           in
-          begin match result with
-          | Error error -> Error error
-          | Ok () ->
-              session.events <- Array.append session.events [| event |];
-              Ok ()
+          begin
+            let* () = result in
+            session.events <- Array.append session.events [| event |];
+            Ok ()
           end)
 
 let set_title session ~title =
@@ -771,11 +767,9 @@ let set_title session ~title =
             else entry)
           entries
       in
-      match update_index session.store entry_update with
-      | Error error -> Error error
-      | Ok () ->
-          session.header <- { session.header with title };
-          Ok ())
+      let* () = update_index session.store entry_update in
+      session.header <- { session.header with title };
+      Ok ())
 
 let messages session =
   let events = session.events in
@@ -838,33 +832,29 @@ let delete store ~id =
     | Error (`Io (path, message)) -> Error (`Io (path, message))
     | Ok `Regular_file ->
         Eio.Mutex.use_rw ~protect:true store.index_mutex (fun () ->
-            match load_index store with
-            | Error error -> Error error
-            | Ok entries ->
-                let remaining =
-                  List.filter
-                    (fun (entry : index_entry) -> not (String.equal entry.id id))
-                    entries
-                in
-                begin match replace_index store remaining with
-                | Error error -> Error error
-                | Ok () ->
-                    begin match
-                      protect_io target (fun () ->
-                          Eio.Path.unlink ~missing_ok:false (fs_path store.fs target))
-                    with
-                    | Error (`Not_found _) -> Error (`Not_found target)
-                    | Error (`Io (path, message)) -> Error (`Io (path, message))
-                    | Ok () ->
-                        let directory = artifacts_dir store ~id in
-                        begin match
-                          protect_io directory (fun () ->
-                              Eio.Path.rmtree ~missing_ok:true
-                                (fs_path store.fs directory))
-                        with
-                        | Ok () | Error (`Not_found _) -> Ok ()
-                        | Error (`Io (path, message)) -> Error (`Io (path, message))
-                        end
-                    end
-                end)
+            let* entries = load_index store in
+            let remaining =
+              List.filter
+                (fun (entry : index_entry) -> not (String.equal entry.id id))
+                entries
+            in
+            begin
+              let* () = replace_index store remaining in
+              begin match
+                protect_io target (fun () ->
+                    Eio.Path.unlink ~missing_ok:false (fs_path store.fs target))
+              with
+              | Error (`Not_found _) -> Error (`Not_found target)
+              | Error (`Io (path, message)) -> Error (`Io (path, message))
+              | Ok () ->
+                  let directory = artifacts_dir store ~id in
+                  begin match
+                    protect_io directory (fun () ->
+                        Eio.Path.rmtree ~missing_ok:true (fs_path store.fs directory))
+                  with
+                  | Ok () | Error (`Not_found _) -> Ok ()
+                  | Error (`Io (path, message)) -> Error (`Io (path, message))
+                  end
+              end
+            end)
     | Ok _ -> Error (`Not_found target)

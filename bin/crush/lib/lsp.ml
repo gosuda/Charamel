@@ -340,17 +340,15 @@ let read_frame reader =
           | Some previous when previous <> value -> Error "duplicate Content-Length"
           | _ -> read_headers (Some value))
   in
-  match read_headers None with
-  | Error message -> Error message
-  | Ok length -> (
-      try
-        let body = Eio.Buf_read.take length reader in
-        match Jsonx.json_of_string body with
-        | Ok value -> Ok value
-        | Error message -> Error ("invalid JSON: " ^ message)
-      with
-      | Eio.Buf_read.Buffer_limit_exceeded -> Error "JSON frame exceeds the buffer limit"
-      | End_of_file -> Error "truncated JSON frame")
+  let* length = read_headers None in
+  try
+    let body = Eio.Buf_read.take length reader in
+    match Jsonx.json_of_string body with
+    | Ok value -> Ok value
+    | Error message -> Error ("invalid JSON: " ^ message)
+  with
+  | Eio.Buf_read.Buffer_limit_exceeded -> Error "JSON frame exceeds the buffer limit"
+  | End_of_file -> Error "truncated JSON frame"
 
 let send_json server value =
   let payload = Jsonx.string_of_json value in

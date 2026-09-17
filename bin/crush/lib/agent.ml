@@ -1,3 +1,5 @@
+open Result.Syntax
+
 exception User_cancel
 
 type event =
@@ -750,144 +752,106 @@ let disable_oauth t provider_id rejected reason =
 
 let run_turn t turn_sw first_prompt user_message attachments state =
   let user_message = add_attachments user_message attachments in
-  match append t (Session.Message { ms = now_ms t; message = user_message }) with
-  | Error error -> Error error
-  | Ok () -> (
-      let force_retry_used = ref false in
-      state.last_turn <- [ user_message ];
-      let rec loop () =
-        state.assistant_appended <- false;
-        state.parts <- [];
-        let messages = Session.messages t.session in
-        match refresh_model t turn_sw `Large with
-        | Error error -> Error error
-        | Ok (model, provider_auth) -> (
-            let rec stream_with_recovery (model : Models.resolved) provider_auth =
-              match consume_stream t turn_sw model provider_auth messages state with
-              | Error error -> Error error
-              | Ok stream_result ->
-                  let retryable =
-                    match (stream_result.finish, provider_auth) with
-                    | `Error _, Charm_fantasy.Provider.Oauth _ ->
-                        (not stream_result.emitted)
-                        && is_http_401 stream_result.typed_error
-                    | _ -> false
-                  in
-                  if retryable && not !force_retry_used then (
-                    force_retry_used := true;
-                    match
-                      refresh_model ~force:true ~rejected:provider_auth t turn_sw `Large
-                    with
-                    | Error error -> Result.Error error
-                    | Ok (fresh_model, fresh_auth) ->
-                        stream_with_recovery fresh_model fresh_auth)
-                  else if retryable then
-                    match
-                      disable_oauth t model.Models.provider_id provider_auth
-                        (provider_error_message stream_result.typed_error)
-                    with
-                    | Error error ->
-                        Result.Error (`Auth (Fmt.str "%a" Auth.pp_error error))
-                    | Ok () ->
-                        Result.Error
-                          (`Auth
-                             ("credential rejected by provider; log in again for "
-                            ^ model.Models.provider_id))
-                  else Result.Ok stream_result
-            in
-            match stream_with_recovery model provider_auth with
-            | Error error -> Error error
-            | Ok stream_result -> (
-                let empty_provider_error =
-                  match (stream_result.finish, stream_result.parts) with
-                  | `Error message, [] -> Some message
-                  | _ -> None
-                in
-                match empty_provider_error with
-                | Some message -> Error (`Provider message)
-                | None -> (
-                    List.iter (fun call -> ignore (decode_call call)) stream_result.calls;
-                    let assistant = assistant_message stream_result.parts in
-                    match
-                      append t (Session.Message { ms = now_ms t; message = assistant })
-                    with
-                    | Error error -> Error error
-                    | Ok () -> (
-                        state.assistant_appended <- true;
-                        state.last_turn <- state.last_turn @ [ assistant ];
-                        match (stream_result.finish, stream_result.calls) with
-                        | `Tool_calls, calls when calls <> [] -> (
-                            let executions, stop_turn, loop_detected =
-                              execute_calls t turn_sw calls
-                            in
-                            let results =
-                              List.map
-                                (fun execution ->
-                                  ( execution.id,
-                                    execution.name,
-                                    session_output execution.output ))
-                                executions
-                            in
-                            if results = [] then Ok `Stop
-                            else
-                              let tool_message =
-                                Charm_fantasy.Message.tool_results results
-                              in
-                              match
-                                append t
-                                  (Session.Message
-                                     { ms = now_ms t; message = tool_message })
-                              with
-                              | Error error -> Error error
-                              | Ok () -> (
-                                  state.last_turn <- state.last_turn @ [ tool_message ];
-                                  match persist_executions t executions with
-                                  | Error error -> Error error
-                                  | Ok () ->
-                                      if loop_detected then Ok `Loop_detected
-                                      else if stop_turn then Ok `Stop
-                                      else if
-                                        Compaction.needed
-                                          ~context_window:
-                                            model.Models.model
-                                              .Charm_fantasy.Model.context_window
-                                          ~prompt_tokens:stream_result.prompt_tokens
-                                          ~completion_tokens:
-                                            stream_result.completion_tokens
-                                          ~disabled:
-                                            t.deps.config.Config.options
-                                              .Config.disable_auto_compaction
-                                      then
-                                        match refresh_model t turn_sw `Small with
-                                        | Error error -> Error error
-                                        | Ok (small, small_auth) -> (
-                                            match
-                                              Compaction.run ~sw:turn_sw
-                                                ~clock:t.deps.clock ~net:t.deps.net ~small
-                                                ~auth:small_auth t.session
-                                            with
-                                            | Error (`Provider message) ->
-                                                Error (`Provider message)
-                                            | Error (`Session error) ->
-                                                Error (`Session error)
-                                            | Ok summary ->
-                                                emit t
-                                                  (Compacted
-                                                     {
-                                                       summary_chars =
-                                                         String.length summary;
-                                                     });
-                                                loop ())
-                                      else loop ()))
-                        | `Tool_calls, [] -> Ok `Stop
-                        | finish, _ -> finish_result finish))))
+  let* () = append t (Session.Message { ms = now_ms t; message = user_message }) in
+  let force_retry_used = ref false in
+  state.last_turn <- [ user_message ];
+  let rec loop () =
+    state.assistant_appended <- false;
+    state.parts <- [];
+    let messages = Session.messages t.session in
+    let* model, provider_auth = refresh_model t turn_sw `Large in
+    let rec stream_with_recovery (model : Models.resolved) provider_auth =
+      let* stream_result = consume_stream t turn_sw model provider_auth messages state in
+      let retryable =
+        match (stream_result.finish, provider_auth) with
+        | `Error _, Charm_fantasy.Provider.Oauth _ ->
+            (not stream_result.emitted) && is_http_401 stream_result.typed_error
+        | _ -> false
       in
-      let result = loop () in
-      match result with
-      | Ok finish ->
-          post_metadata t turn_sw first_prompt state;
-          Ok finish
-      | Error _ -> result)
+      if retryable && not !force_retry_used then (
+        force_retry_used := true;
+        match refresh_model ~force:true ~rejected:provider_auth t turn_sw `Large with
+        | Error error -> Result.Error error
+        | Ok (fresh_model, fresh_auth) -> stream_with_recovery fresh_model fresh_auth)
+      else if retryable then
+        match
+          disable_oauth t model.Models.provider_id provider_auth
+            (provider_error_message stream_result.typed_error)
+        with
+        | Error error -> Result.Error (`Auth (Fmt.str "%a" Auth.pp_error error))
+        | Ok () ->
+            Result.Error
+              (`Auth
+                 ("credential rejected by provider; log in again for "
+                ^ model.Models.provider_id))
+      else Result.Ok stream_result
+    in
+    match stream_with_recovery model provider_auth with
+    | Error error -> Error error
+    | Ok stream_result -> (
+        let empty_provider_error =
+          match (stream_result.finish, stream_result.parts) with
+          | `Error message, [] -> Some message
+          | _ -> None
+        in
+        match empty_provider_error with
+        | Some message -> Error (`Provider message)
+        | None -> (
+            List.iter (fun call -> ignore (decode_call call)) stream_result.calls;
+            let assistant = assistant_message stream_result.parts in
+            let* () = append t (Session.Message { ms = now_ms t; message = assistant }) in
+            state.assistant_appended <- true;
+            state.last_turn <- state.last_turn @ [ assistant ];
+            match (stream_result.finish, stream_result.calls) with
+            | `Tool_calls, calls when calls <> [] ->
+                let executions, stop_turn, loop_detected =
+                  execute_calls t turn_sw calls
+                in
+                let results =
+                  List.map
+                    (fun execution ->
+                      (execution.id, execution.name, session_output execution.output))
+                    executions
+                in
+                if results = [] then Ok `Stop
+                else
+                  let tool_message = Charm_fantasy.Message.tool_results results in
+                  let* () =
+                    append t (Session.Message { ms = now_ms t; message = tool_message })
+                  in
+                  state.last_turn <- state.last_turn @ [ tool_message ];
+                  let* () = persist_executions t executions in
+                  if loop_detected then Ok `Loop_detected
+                  else if stop_turn then Ok `Stop
+                  else if
+                    Compaction.needed
+                      ~context_window:
+                        model.Models.model.Charm_fantasy.Model.context_window
+                      ~prompt_tokens:stream_result.prompt_tokens
+                      ~completion_tokens:stream_result.completion_tokens
+                      ~disabled:
+                        t.deps.config.Config.options.Config.disable_auto_compaction
+                  then (
+                    let* small, small_auth = refresh_model t turn_sw `Small in
+                    match
+                      Compaction.run ~sw:turn_sw ~clock:t.deps.clock ~net:t.deps.net
+                        ~small ~auth:small_auth t.session
+                    with
+                    | Error (`Provider message) -> Error (`Provider message)
+                    | Error (`Session error) -> Error (`Session error)
+                    | Ok summary ->
+                        emit t (Compacted { summary_chars = String.length summary });
+                        loop ())
+                  else loop ()
+            | `Tool_calls, [] -> Ok `Stop
+            | finish, _ -> finish_result finish))
+  in
+  let result = loop () in
+  match result with
+  | Ok finish ->
+      post_metadata t turn_sw first_prompt state;
+      Ok finish
+  | Error _ -> result
 
 let finalize t state result =
   let finish, error =
@@ -1091,18 +1055,16 @@ let compact t =
   if !(t.busy_state) then Error `Busy
   else
     Eio.Switch.run (fun turn_sw ->
-        match refresh_model t turn_sw `Small with
-        | Error error -> Error error
-        | Ok (small, auth) -> (
-            match
-              Compaction.run ~sw:turn_sw ~clock:t.deps.clock ~net:t.deps.net ~small ~auth
-                t.session
-            with
-            | Error (`Provider message) -> Error (`Provider message)
-            | Error (`Session error) -> Error (`Session error)
-            | Ok summary ->
-                emit t (Compacted { summary_chars = String.length summary });
-                Ok ()))
+        let* small, auth = refresh_model t turn_sw `Small in
+        match
+          Compaction.run ~sw:turn_sw ~clock:t.deps.clock ~net:t.deps.net ~small ~auth
+            t.session
+        with
+        | Error (`Provider message) -> Error (`Provider message)
+        | Error (`Session error) -> Error (`Session error)
+        | Ok summary ->
+            emit t (Compacted { summary_chars = String.length summary });
+            Ok ())
 
 let set_plan_mode t enabled =
   Permission.set_plan_mode t.deps.permission enabled;

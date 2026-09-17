@@ -1,3 +1,5 @@
+open Result.Syntax
+
 let max_ls_entries = 1000
 let max_glob_results = 100
 let max_grep_results = 500
@@ -131,122 +133,112 @@ let compile_ignores ignores =
     (Ok []) ignores
 
 let ls_entries ctx root ~ignore ~depth =
-  match compile_ignores ignore with
+  let* ignore_patterns = compile_ignores ignore in
+  let count = ref 0 in
+  let truncated = ref false in
+  let result = ref [] in
+  let ignored relative name =
+    matches_any ignore_patterns relative || matches_any ignore_patterns name
+  in
+  let add depth name directory =
+    if !count < max_ls_entries then begin
+      incr count;
+      result := { depth; name; directory } :: !result
+    end
+    else truncated := true
+  in
+  let include_hidden = hidden_name (basename root) in
+  let include_generated = generated_name (basename root) in
+  let rec walk current relative current_depth =
+    if !count >= max_ls_entries then begin
+      truncated := true;
+      Ok ()
+    end
+    else
+      match
+        protect_io current (fun () -> Eio.Path.read_dir_entries (path ctx current))
+      with
+      | Error _ as error -> error
+      | Ok entries ->
+          let entries =
+            List.sort (fun (_, left) (_, right) -> String.compare left right) entries
+          in
+          let rec visit = function
+            | [] -> Ok ()
+            | _ when !count >= max_ls_entries ->
+                truncated := true;
+                Ok ()
+            | (kind, name) :: rest ->
+                let child = if current = "/" then "/" ^ name else current ^ "/" ^ name in
+                let child_relative =
+                  if relative = "." then name else relative ^ "/" ^ name
+                in
+                let hidden = hidden_name name && not include_hidden in
+                let generated = generated_name name && not include_generated in
+                if hidden || generated || ignored child_relative name then visit rest
+                else
+                  let directory = kind = `Directory in
+                  add (current_depth + 1) name directory;
+                  if directory && current_depth < depth then
+                    begin match walk child child_relative (current_depth + 1) with
+                    | Ok () -> visit rest
+                    | Error _ as error -> error
+                    end
+                  else visit rest
+          in
+          visit entries
+  in
+  let root_path = path ctx root in
+  match protect_io root (fun () -> Eio.Path.kind ~follow:true root_path) with
   | Error error -> Error error
-  | Ok ignore_patterns -> (
-      let count = ref 0 in
-      let truncated = ref false in
-      let result = ref [] in
-      let ignored relative name =
-        matches_any ignore_patterns relative || matches_any ignore_patterns name
-      in
-      let add depth name directory =
-        if !count < max_ls_entries then begin
-          incr count;
-          result := { depth; name; directory } :: !result
-        end
-        else truncated := true
-      in
-      let include_hidden = hidden_name (basename root) in
-      let include_generated = generated_name (basename root) in
-      let rec walk current relative current_depth =
-        if !count >= max_ls_entries then begin
-          truncated := true;
-          Ok ()
-        end
-        else
-          match
-            protect_io current (fun () -> Eio.Path.read_dir_entries (path ctx current))
-          with
-          | Error _ as error -> error
-          | Ok entries ->
-              let entries =
-                List.sort (fun (_, left) (_, right) -> String.compare left right) entries
-              in
-              let rec visit = function
-                | [] -> Ok ()
-                | _ when !count >= max_ls_entries ->
-                    truncated := true;
-                    Ok ()
-                | (kind, name) :: rest ->
-                    let child =
-                      if current = "/" then "/" ^ name else current ^ "/" ^ name
-                    in
-                    let child_relative =
-                      if relative = "." then name else relative ^ "/" ^ name
-                    in
-                    let hidden = hidden_name name && not include_hidden in
-                    let generated = generated_name name && not include_generated in
-                    if hidden || generated || ignored child_relative name then visit rest
-                    else
-                      let directory = kind = `Directory in
-                      add (current_depth + 1) name directory;
-                      if directory && current_depth < depth then
-                        begin match walk child child_relative (current_depth + 1) with
-                        | Ok () -> visit rest
-                        | Error _ as error -> error
-                        end
-                      else visit rest
-              in
-              visit entries
-      in
-      let root_path = path ctx root in
-      match protect_io root (fun () -> Eio.Path.kind ~follow:true root_path) with
-      | Error error -> Error error
-      | Ok `Directory ->
-          let root_name = basename root in
-          begin match if depth < 1 then Ok () else walk root "." 0 with
-          | Error error -> Error error
-          | Ok () ->
-              let root_item = { depth = 0; name = root_name; directory = true } in
-              let items = root_item :: List.rev !result in
-              let lines =
-                List.map
-                  (fun item ->
-                    String.make (2 * item.depth) ' '
-                    ^ item.name
-                    ^ if item.directory then "/" else "")
-                  items
-              in
-              let lines = if !truncated then lines @ [ "(truncated)" ] else lines in
-              Ok (String.concat "\n" lines)
-          end
-      | Ok _ -> Ok (basename root))
+  | Ok `Directory ->
+      let root_name = basename root in
+      begin
+        let* () = if depth < 1 then Ok () else walk root "." 0 in
+        let root_item = { depth = 0; name = root_name; directory = true } in
+        let items = root_item :: List.rev !result in
+        let lines =
+          List.map
+            (fun item ->
+              String.make (2 * item.depth) ' '
+              ^ item.name
+              ^ if item.directory then "/" else "")
+            items
+        in
+        let lines = if !truncated then lines @ [ "(truncated)" ] else lines in
+        Ok (String.concat "\n" lines)
+      end
+  | Ok _ -> Ok (basename root)
 
 let run_with_timeout ctx seconds f =
-  match Tool.with_timeout ctx seconds f with
-  | Ok value -> value
-  | Error error -> Error error
+  let* value = Tool.with_timeout ctx seconds f in
+  value
 
 let run_ls ctx json =
-  match Tool.decode ls_params_jsont json with
-  | Error error -> Error error
-  | Ok (path_opt, ignore, depth) ->
-      if depth < 0 then Error (`Invalid_input "depth must not be negative")
-      else
-        let depth = min 10 depth in
-        let absolute =
-          Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) |> trim_slashes
-        in
-        let target_result = canonical_or_abs ctx absolute in
-        let request_path =
-          match target_result with Ok target -> target | Error _ -> absolute
-        in
-        begin match
-          Tool.request ctx ~read_only:true ~tool:"ls" ~action:"ls" ~path:request_path
-            ~description:absolute
-        with
-        | Error error -> Error error
-        | Ok () ->
-            begin match target_result with
-            | Error error -> Error error
-            | Ok target ->
-                run_with_timeout ctx 30. (fun () ->
-                    match ls_entries ctx target ~ignore ~depth with
-                    | Ok text -> Ok (output ctx text)
-                    | Error error -> Error error)
-            end
-        end
+  let* path_opt, ignore, depth = Tool.decode ls_params_jsont json in
+  if depth < 0 then Error (`Invalid_input "depth must not be negative")
+  else
+    let depth = min 10 depth in
+    let absolute =
+      Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) |> trim_slashes
+    in
+    let target_result = canonical_or_abs ctx absolute in
+    let request_path =
+      match target_result with Ok target -> target | Error _ -> absolute
+    in
+    begin
+      let* () =
+        Tool.request ctx ~read_only:true ~tool:"ls" ~action:"ls" ~path:request_path
+          ~description:absolute
+      in
+      begin
+        let* target = target_result in
+        run_with_timeout ctx 30. (fun () ->
+            match ls_entries ctx target ~ignore ~depth with
+            | Ok text -> Ok (output ctx text)
+            | Error error -> Error error)
+      end
+    end
 
 let collect_files ctx ?(include_hidden = false) ?(include_generated = false) root callback
     =
@@ -260,39 +252,35 @@ let collect_files ctx ?(include_hidden = false) ?(include_generated = false) roo
     | Ok `Symbolic_link -> Ok ()
     | Ok `Regular_file ->
         callback current (if relative = "." then basename current else relative)
-    | Ok `Directory ->
-        begin match
+    | Ok `Directory -> begin
+        let* entries =
           protect_io current (fun () -> Eio.Path.read_dir_entries (path ctx current))
-        with
-        | Error error -> Error error
-        | Ok entries ->
-            let entries =
-              List.sort (fun (_, left) (_, right) -> String.compare left right) entries
-            in
-            let rec visit = function
-              | [] -> Ok ()
-              | (kind, name) :: rest ->
-                  let hidden = hidden_name name && not include_hidden in
-                  let generated = generated_name name && not include_generated in
-                  if hidden || generated then visit rest
-                  else
-                    let child =
-                      if current = "/" then "/" ^ name else current ^ "/" ^ name
-                    in
-                    let child_relative =
-                      if relative = "." then name else relative ^ "/" ^ name
-                    in
-                    begin match kind with
-                    | `Symbolic_link -> visit rest
-                    | _ ->
-                        begin match walk child child_relative with
-                        | Ok () -> visit rest
-                        | Error _ as error -> error
-                        end
+        in
+        let entries =
+          List.sort (fun (_, left) (_, right) -> String.compare left right) entries
+        in
+        let rec visit = function
+          | [] -> Ok ()
+          | (kind, name) :: rest ->
+              let hidden = hidden_name name && not include_hidden in
+              let generated = generated_name name && not include_generated in
+              if hidden || generated then visit rest
+              else
+                let child = if current = "/" then "/" ^ name else current ^ "/" ^ name in
+                let child_relative =
+                  if relative = "." then name else relative ^ "/" ^ name
+                in
+                begin match kind with
+                | `Symbolic_link -> visit rest
+                | _ ->
+                    begin match walk child child_relative with
+                    | Ok () -> visit rest
+                    | Error _ as error -> error
                     end
-            in
-            visit entries
-        end
+                end
+        in
+        visit entries
+      end
     | Ok _ -> Ok ()
   in
   walk root "."
@@ -340,62 +328,51 @@ let run_glob ctx pattern path_opt =
       let request_path =
         match target_result with Ok target -> target | Error _ -> absolute
       in
-      begin match
-        Tool.request ctx ~read_only:true ~tool:"glob" ~action:pattern ~path:request_path
-          ~description:pattern
-      with
-      | Error error -> Error error
-      | Ok () ->
-          begin match target_result with
-          | Error error -> Error error
-          | Ok target ->
-              let matches = ref [] in
-              let callback file relative =
-                let candidate =
-                  if String.starts_with ~prefix:"/" pattern then file else relative
-                in
-                if not (Re.execp expression candidate) then Ok ()
-                else
-                  match
-                    protect_io file (fun () -> Eio.Path.stat ~follow:true (path ctx file))
-                  with
-                  | Error error -> Error error
-                  | Ok stat ->
-                      matches :=
-                        {
-                          relative = relative_to_cwd ctx file;
-                          mtime = stat.Eio.File.Stat.mtime;
-                        }
-                        :: !matches;
-                      Ok ()
+      begin
+        let* () =
+          Tool.request ctx ~read_only:true ~tool:"glob" ~action:pattern ~path:request_path
+            ~description:pattern
+        in
+        begin
+          let* target = target_result in
+          let matches = ref [] in
+          let callback file relative =
+            let candidate =
+              if String.starts_with ~prefix:"/" pattern then file else relative
+            in
+            if not (Re.execp expression candidate) then Ok ()
+            else
+              let* stat =
+                protect_io file (fun () -> Eio.Path.stat ~follow:true (path ctx file))
               in
-              run_with_timeout ctx 30. (fun () ->
-                  match
-                    collect_files ctx
-                      ~include_hidden:(pattern_mentions_hidden pattern)
-                      ~include_generated:(pattern_mentions_generated pattern)
-                      target callback
-                  with
-                  | Error error -> Error error
-                  | Ok () ->
-                      let sorted =
-                        List.sort
-                          (fun left right ->
-                            let by_mtime = Float.compare right.mtime left.mtime in
-                            if by_mtime <> 0 then by_mtime
-                            else String.compare left.relative right.relative)
-                          !matches
-                      in
-                      let sorted = take max_glob_results sorted in
-                      let text =
-                        match sorted with
-                        | [] -> "No files found"
-                        | _ ->
-                            String.concat "\n"
-                              (List.map (fun item -> item.relative) sorted)
-                      in
-                      Ok (output ctx text))
-          end
+              matches :=
+                { relative = relative_to_cwd ctx file; mtime = stat.Eio.File.Stat.mtime }
+                :: !matches;
+              Ok ()
+          in
+          run_with_timeout ctx 30. (fun () ->
+              let* () =
+                collect_files ctx
+                  ~include_hidden:(pattern_mentions_hidden pattern)
+                  ~include_generated:(pattern_mentions_generated pattern)
+                  target callback
+              in
+              let sorted =
+                List.sort
+                  (fun left right ->
+                    let by_mtime = Float.compare right.mtime left.mtime in
+                    if by_mtime <> 0 then by_mtime
+                    else String.compare left.relative right.relative)
+                  !matches
+              in
+              let sorted = take max_glob_results sorted in
+              let text =
+                match sorted with
+                | [] -> "No files found"
+                | _ -> String.concat "\n" (List.map (fun item -> item.relative) sorted)
+              in
+              Ok (output ctx text))
+        end
       end
 
 let read_lines content =
@@ -457,78 +434,69 @@ let run_grep ctx pattern path_opt include_opt literal max_results =
         let request_path =
           match target_result with Ok target -> target | Error _ -> absolute
         in
-        begin match
-          Tool.request ctx ~read_only:true ~tool:"grep" ~action:pattern ~path:request_path
-            ~description:pattern
-        with
-        | Error error -> Error error
-        | Ok () ->
-            begin match target_result with
-            | Error error -> Error error
-            | Ok target ->
-                let count = ref 0 in
-                let truncated = ref false in
-                let output_lines = ref [] in
-                let callback file _relative =
-                  let name = basename file in
-                  let excluded =
-                    Option.fold ~none:false
-                      ~some:(fun expression -> not (Re.execp expression name))
-                      include_matcher
-                  in
-                  if excluded then Ok ()
-                  else
-                    match
-                      protect_io file (fun () ->
-                          Eio.Path.stat ~follow:true (path ctx file))
-                    with
-                    | Error error -> Error error
-                    | Ok stat
-                      when Optint.Int63.to_int stat.Eio.File.Stat.size > max_file_bytes ->
-                        Ok ()
-                    | Ok _ ->
-                        begin match
-                          protect_io file (fun () -> Eio.Path.load (path ctx file))
-                        with
-                        | Error error -> Error error
-                        | Ok content ->
-                            if binary content || not (String.is_valid_utf_8 content) then
+        begin
+          let* () =
+            Tool.request ctx ~read_only:true ~tool:"grep" ~action:pattern
+              ~path:request_path ~description:pattern
+          in
+          begin
+            let* target = target_result in
+            let count = ref 0 in
+            let truncated = ref false in
+            let output_lines = ref [] in
+            let callback file _relative =
+              let name = basename file in
+              let excluded =
+                Option.fold ~none:false
+                  ~some:(fun expression -> not (Re.execp expression name))
+                  include_matcher
+              in
+              if excluded then Ok ()
+              else
+                match
+                  protect_io file (fun () -> Eio.Path.stat ~follow:true (path ctx file))
+                with
+                | Error error -> Error error
+                | Ok stat
+                  when Optint.Int63.to_int stat.Eio.File.Stat.size > max_file_bytes ->
+                    Ok ()
+                | Ok _ -> begin
+                    let* content =
+                      protect_io file (fun () -> Eio.Path.load (path ctx file))
+                    in
+                    if binary content || not (String.is_valid_utf_8 content) then Ok ()
+                    else
+                      let lines = read_lines content in
+                      let rec visit line_number = function
+                        | [] -> Ok ()
+                        | line :: rest when !count >= max_results ->
+                            if Re.execp matcher line then begin
+                              truncated := true;
                               Ok ()
-                            else
-                              let lines = read_lines content in
-                              let rec visit line_number = function
-                                | [] -> Ok ()
-                                | line :: rest when !count >= max_results ->
-                                    if Re.execp matcher line then begin
-                                      truncated := true;
-                                      Ok ()
-                                    end
-                                    else visit (line_number + 1) rest
-                                | line :: rest ->
-                                    if Re.execp matcher line then begin
-                                      incr count;
-                                      output_lines :=
-                                        Fmt.str "%s:%d:%s" (relative_to_cwd ctx file)
-                                          line_number (truncate_line line)
-                                        :: !output_lines
-                                    end;
-                                    visit (line_number + 1) rest
-                              in
-                              visit 1 lines
-                        end
+                            end
+                            else visit (line_number + 1) rest
+                        | line :: rest ->
+                            if Re.execp matcher line then begin
+                              incr count;
+                              output_lines :=
+                                Fmt.str "%s:%d:%s" (relative_to_cwd ctx file) line_number
+                                  (truncate_line line)
+                                :: !output_lines
+                            end;
+                            visit (line_number + 1) rest
+                      in
+                      visit 1 lines
+                  end
+            in
+            run_with_timeout ctx 5. (fun () ->
+                let* () = collect_files ctx target callback in
+                let lines = List.rev !output_lines in
+                let lines =
+                  if !truncated then lines @ [ Fmt.str "(truncated at %d)" max_results ]
+                  else lines
                 in
-                run_with_timeout ctx 5. (fun () ->
-                    match collect_files ctx target callback with
-                    | Error error -> Error error
-                    | Ok () ->
-                        let lines = List.rev !output_lines in
-                        let lines =
-                          if !truncated then
-                            lines @ [ Fmt.str "(truncated at %d)" max_results ]
-                          else lines
-                        in
-                        Ok (output ctx (String.concat "\n" lines)))
-            end
+                Ok (output ctx (String.concat "\n" lines)))
+          end
         end
 
 let ls =
@@ -548,9 +516,8 @@ let glob =
     read_only = true;
     run =
       (fun ctx json ->
-        match Tool.decode glob_params_jsont json with
-        | Error error -> Error error
-        | Ok (pattern, path_opt) -> run_glob ctx pattern path_opt);
+        let* pattern, path_opt = Tool.decode glob_params_jsont json in
+        run_glob ctx pattern path_opt);
   }
 
 let grep =
@@ -561,9 +528,9 @@ let grep =
     read_only = true;
     run =
       (fun ctx json ->
-        match Tool.decode grep_params_jsont json with
-        | Error error -> Error error
-        | Ok (pattern, path_opt, include_opt, literal, max_results) ->
-            run_grep ctx pattern path_opt include_opt literal
-              (min max_results max_grep_results));
+        let* pattern, path_opt, include_opt, literal, max_results =
+          Tool.decode grep_params_jsont json
+        in
+        run_grep ctx pattern path_opt include_opt literal
+          (min max_results max_grep_results));
   }

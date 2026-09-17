@@ -41,10 +41,7 @@ let pp_error ppf = function
 let catalog_cache_path () =
   Filename.concat (Charm_cli.Xdg.cache_dir ~app:"crush") "providers.json"
 
-let provider_json json =
-  match Jsont.Json.decode Charm_fantasy.Provider_info.jsont json with
-  | Ok value -> Ok value
-  | Error message -> Error message
+let provider_json json = Jsont.Json.decode Charm_fantasy.Provider_info.jsont json
 
 let catalog_json json =
   match json with
@@ -345,34 +342,32 @@ let resolve ~fs config ~auth ~env ~role =
                   reasoning;
                   max_tokens;
                 }))
-  | None -> (
-      match default_selection () with
-      | Error error -> Error error
-      | Ok (provider_id, provider, large_model, _, _) ->
-          let model =
-            match role with
-            | `Large -> large_model
-            | `Small ->
-                Option.value
-                  (small_model provider_id provider.Charm_fantasy.Provider_info.models)
-                  ~default:large_model
-          in
-          let config_provider = provider_config provider_id config in
-          let* auth_value = credential_for ~auth ~config ~env provider_id in
-          let* provider_handle =
-            make_provider ~env ~catalog_provider:provider ~config_provider
-              ~auth:auth_value ~id:provider_id config
-          in
-          let reasoning = `Off in
-          Ok
-            {
-              role;
-              provider_id;
-              provider = provider_handle;
-              model;
-              reasoning;
-              max_tokens = model.Charm_fantasy.Model.default_max_tokens;
-            })
+  | None ->
+      let* provider_id, provider, large_model, _, _ = default_selection () in
+      let model =
+        match role with
+        | `Large -> large_model
+        | `Small ->
+            Option.value
+              (small_model provider_id provider.Charm_fantasy.Provider_info.models)
+              ~default:large_model
+      in
+      let config_provider = provider_config provider_id config in
+      let* auth_value = credential_for ~auth ~config ~env provider_id in
+      let* provider_handle =
+        make_provider ~env ~catalog_provider:provider ~config_provider ~auth:auth_value
+          ~id:provider_id config
+      in
+      let reasoning = `Off in
+      Ok
+        {
+          role;
+          provider_id;
+          provider = provider_handle;
+          model;
+          reasoning;
+          max_tokens = model.Charm_fantasy.Model.default_max_tokens;
+        }
 
 let with_auth ~fs config ~env resolved provider_auth =
   let providers = catalog ~fs config in

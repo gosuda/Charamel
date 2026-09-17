@@ -1,3 +1,4 @@
+open Result.Syntax
 open Crush_core
 
 type cli = {
@@ -168,18 +169,16 @@ let selected_model config target ~fs ~auth ~env =
 let config_for_model common (options : cli) =
   match options.model with
   | None -> Ok common.config
-  | Some target -> (
-      match
+  | Some target ->
+      let* selected =
         selected_model common.config target ~fs:common.env#fs ~auth:common.auth
           ~env:Sys.getenv_opt
-      with
-      | Error message -> Error message
-      | Ok selected ->
-          Ok
-            {
-              common.config with
-              models = { common.config.Config.models with large = Some selected };
-            })
+      in
+      Ok
+        {
+          common.config with
+          models = { common.config.Config.models with large = Some selected };
+        }
 
 let session_for common (options : cli) large =
   if Option.is_some options.session && options.continue_ then
@@ -417,74 +416,68 @@ let session_rows runtime =
         rows
 
 let model_config runtime ~agent target =
-  match
+  let* selected =
     selected_model runtime.common.config target ~fs:runtime.common.env#fs
       ~auth:runtime.common.auth ~env:Sys.getenv_opt
+  in
+  let config =
+    {
+      runtime.common.config with
+      models = { runtime.common.config.Config.models with large = Some selected };
+    }
+  in
+  match
+    ( Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
+        ~env:Sys.getenv_opt ~role:`Large,
+      Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
+        ~env:Sys.getenv_opt ~role:`Small )
   with
-  | Error message -> Error message
-  | Ok selected -> (
-      let config =
-        {
-          runtime.common.config with
-          models = { runtime.common.config.Config.models with large = Some selected };
-        }
-      in
-      match
-        ( Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
-            ~env:Sys.getenv_opt ~role:`Large,
-          Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
-            ~env:Sys.getenv_opt ~role:`Small )
-      with
-      | Ok large, Ok small ->
-          Agent.set_models agent ~large ~small;
-          Ok ()
-      | Error error, _ -> Error (Fmt.str "%a" Models.pp_error error)
-      | _, Error error -> Error (Fmt.str "%a" Models.pp_error error))
+  | Ok large, Ok small ->
+      Agent.set_models agent ~large ~small;
+      Ok ()
+  | Error error, _ -> Error (Fmt.str "%a" Models.pp_error error)
+  | _, Error error -> Error (Fmt.str "%a" Models.pp_error error)
 
 let replace_agent runtime options ~agent_ref session =
   Agent.cancel !agent_ref;
   let previous_plan = Permission.plan_mode !(runtime.permission) in
-  match config_for_model runtime.common options with
-  | Error message -> Error message
-  | Ok config -> (
+  let* config = config_for_model runtime.common options in
+  match
+    ( Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
+        ~env:Sys.getenv_opt ~role:`Large,
+      Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
+        ~env:Sys.getenv_opt ~role:`Small )
+  with
+  | Ok large, Ok small -> (
       match
-        ( Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
-            ~env:Sys.getenv_opt ~role:`Large,
-          Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
-            ~env:Sys.getenv_opt ~role:`Small )
+        create_agent_for_session runtime.common options config ~large ~small session
       with
-      | Ok large, Ok small -> (
-          match
-            create_agent_for_session runtime.common options config ~large ~small session
-          with
-          | Error (`Agent _) -> Error "could not create agent"
-          | Error (`Models error) -> Error (Fmt.str "%a" Models.pp_error error)
-          | Error (`Session error) -> Error ("session: " ^ error)
-          | Error (`Config message) -> Error message
-          | Ok next ->
-              if previous_plan then Agent.set_plan_mode next.agent true;
-              agent_ref := next.agent;
-              runtime.permission := !(next.permission);
-              Ok next.agent)
-      | Error error, _ -> Error (Fmt.str "%a" Models.pp_error error)
-      | _, Error error -> Error (Fmt.str "%a" Models.pp_error error))
+      | Error (`Agent _) -> Error "could not create agent"
+      | Error (`Models error) -> Error (Fmt.str "%a" Models.pp_error error)
+      | Error (`Session error) -> Error ("session: " ^ error)
+      | Error (`Config message) -> Error message
+      | Ok next ->
+          if previous_plan then Agent.set_plan_mode next.agent true;
+          agent_ref := next.agent;
+          runtime.permission := !(next.permission);
+          Ok next.agent)
+  | Error error, _ -> Error (Fmt.str "%a" Models.pp_error error)
+  | _, Error error -> Error (Fmt.str "%a" Models.pp_error error)
 
 let new_session_agent runtime options ~agent_ref =
-  match config_for_model runtime.common options with
-  | Error message -> Error message
-  | Ok config -> (
+  let* config = config_for_model runtime.common options in
+  match
+    Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
+      ~env:Sys.getenv_opt ~role:`Large
+  with
+  | Error error -> Error (Fmt.str "%a" Models.pp_error error)
+  | Ok large -> (
       match
-        Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
-          ~env:Sys.getenv_opt ~role:`Large
+        Session.create runtime.common.store ~clock:runtime.common.env#clock
+          ~random:random_bytes ~cwd:runtime.common.cwd ~model:(model_ref large) ()
       with
-      | Error error -> Error (Fmt.str "%a" Models.pp_error error)
-      | Ok large -> (
-          match
-            Session.create runtime.common.store ~clock:runtime.common.env#clock
-              ~random:random_bytes ~cwd:runtime.common.cwd ~model:(model_ref large) ()
-          with
-          | Error error -> Error (Fmt.str "%a" Session.pp_error error)
-          | Ok session -> replace_agent runtime options ~agent_ref session))
+      | Error error -> Error (Fmt.str "%a" Session.pp_error error)
+      | Ok session -> replace_agent runtime options ~agent_ref session)
 
 let resumed_agent runtime options ~agent_ref id =
   match Session.open_ runtime.common.store ~id with
