@@ -261,7 +261,6 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
       ~finally:(fun () -> Eio.Cancel.protect (fun () -> Eio.Mutex.unlock output_mutex))
       f
   in
-  let with_output_protected f = Eio.Cancel.protect (fun () -> with_output f) in
   let restore_handlers () =
     List.iter (fun (signal, behavior) -> Sys.set_signal signal behavior) !old_handlers;
     old_handlers := []
@@ -747,20 +746,19 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               end
             in
             let resume_after_foreign () =
-              terminal.Terminal.enter ();
-              Screen.reset screen;
-              update_anchor state Fresh_line;
-              set_paused state false;
-              if script = None && not state.stop_requested then start_reader ();
-              set_dirty state
+              Eio.Cancel.protect (fun () ->
+                  with_output (fun () ->
+                      terminal.Terminal.enter ();
+                      Screen.reset screen;
+                      update_anchor state Fresh_line;
+                      set_paused state false;
+                      if script = None && not state.stop_requested then start_reader ();
+                      set_dirty state))
             in
             let with_foreign fn =
               set_paused state true;
               stop_reader ();
-              Fun.protect
-                ~finally:(fun () ->
-                  with_output_protected (fun () -> resume_after_foreign ()))
-                (fun () ->
+              Fun.protect ~finally:resume_after_foreign (fun () ->
                   with_output (fun () ->
                       let bytes = Screen.restore screen in
                       write_output_locked bytes;
@@ -782,8 +780,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   end
                   else Eio.Promise.resolve resolver ()
               | Effect_resume ->
-                  if state.paused then
-                    with_output_protected (fun () -> resume_after_foreign ());
+                  if state.paused then resume_after_foreign ();
                   Eio.Promise.resolve resolver ()
               | Effect_exec (argv, callback) ->
                   let code = with_foreign (fun () -> exec argv) in
