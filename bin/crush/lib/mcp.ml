@@ -53,7 +53,9 @@ let max_http_body_bytes = 16 * 1024 * 1024
 let max_pages = 1_024
 let readiness_timeout = 10.
 let protocol_version = "2025-06-18"
-let ( let* ) = Result.bind
+
+open Result.Syntax
+
 let json_string value = Jsont.Json.string value
 let json_int value = Jsont.Json.int value
 let json_list values = Jsont.Json.list values

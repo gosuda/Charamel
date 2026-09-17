@@ -1,4 +1,4 @@
-let ( let* ) = Result.bind
+open Result.Syntax
 
 type resource_args = { server : string }
 type read_resource_args = { server : string; uri : string }

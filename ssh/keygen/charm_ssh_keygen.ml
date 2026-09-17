@@ -1,4 +1,4 @@
-let ( let* ) = Result.bind
+open Result.Syntax
 
 type algorithm = Ed25519 | Ecdsa_p256 | Ecdsa_p384 | Ecdsa_p521
 

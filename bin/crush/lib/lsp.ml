@@ -1,8 +1,7 @@
 let log_src = Logs.Src.create "crush.lsp"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
-
-let ( let* ) = Result.bind
+open Result.Syntax
 
 type diagnostic = {
   path : string;

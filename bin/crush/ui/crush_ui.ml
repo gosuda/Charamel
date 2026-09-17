@@ -13,8 +13,7 @@ module Textarea = Charm_bubbles.Textarea
 module Viewport = Charm_bubbles.Viewport
 module Bubble_list = Charm_bubbles.List
 module Huh = Charm_huh
-
-let ( let* ) = Result.bind
+open Result.Syntax
 
 type session = { id : string; title : string; model : string; created_ms : int }
 

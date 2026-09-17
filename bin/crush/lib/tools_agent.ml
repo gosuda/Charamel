@@ -1,4 +1,4 @@
-let ( let* ) = Result.bind
+open Result.Syntax
 
 type task = { prompt : string }
 type request = { prompt : string option; tasks : task list option; max_active : int }

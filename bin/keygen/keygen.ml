@@ -1,6 +1,5 @@
 module Key = Charm_ssh_keygen
-
-let ( let* ) = Result.bind
+open Result.Syntax
 
 type error =
   [ `No_home

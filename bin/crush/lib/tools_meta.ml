@@ -1,4 +1,4 @@
-let ( let* ) = Result.bind
+open Result.Syntax
 
 type todo_args = { todos : Todos.item list }
 type option_arg = { label : string; description : string option }

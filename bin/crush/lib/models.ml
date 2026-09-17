@@ -15,7 +15,7 @@ type error =
   | `Disabled of string
   | `Auth of Auth.error ]
 
-let ( let* ) = Result.bind
+open Result.Syntax
 
 let contains needle haystack =
   let needle = String.lowercase_ascii needle in

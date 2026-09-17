@@ -1,4 +1,4 @@
-let ( let* ) = Result.bind
+open Result.Syntax
 
 type path_args = { path : string option }
 type symbol_args = { symbol : string; path : string option }

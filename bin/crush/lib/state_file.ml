@@ -1,6 +1,7 @@
 type error = [ `Io of string * string ]
 
-let ( let* ) = Result.bind
+open Result.Syntax
+
 let counter = Atomic.make 0
 let path_text path = Option.value (Eio.Path.native path) ~default:"<state file>"
 let pp_error ppf (`Io (path, message)) = Fmt.pf ppf "cannot replace %s: %s" path message

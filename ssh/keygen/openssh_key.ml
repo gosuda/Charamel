@@ -31,7 +31,8 @@ let put_string buf s =
   Buffer.add_int32_be buf (Int32.of_int (String.length s));
   Buffer.add_string buf s
 
-let ( let* ) = Result.bind
+open Result.Syntax
+
 let str rd = match rd_get_string rd with Some s -> Ok s | None -> Error `Malformed
 let u32 rd = match rd_get_uint32 rd with Some v -> Ok v | None -> Error `Malformed
 

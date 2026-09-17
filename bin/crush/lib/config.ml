@@ -1,6 +1,5 @@
 module String_map = Map.Make (String)
-
-let ( let* ) = Result.bind
+open Result.Syntax
 
 type provider_kind = Anthropic | Openai | Openai_compatible | Openai_responses | Google
 
