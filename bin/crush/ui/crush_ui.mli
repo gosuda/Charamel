@@ -48,8 +48,8 @@ module Bridge : sig
   val take_question : t -> ask_request option
 
   val take_permission : t -> permission_request option
-  (** The three consumers are blocking and independent. They return [None] only after
-      [close] and after their corresponding queue is empty. *)
+  (** [take_permission t] takes the next permission request for [t], blocking until one
+      arrives. It returns [None] only after [close] and once the queue is empty. *)
 
   val questions : ask_request -> Crush_core.Tool.question list
 

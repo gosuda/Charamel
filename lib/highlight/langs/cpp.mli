@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The cpp language lexer specification. *)
+(** [spec] is the cpp language lexer specification. *)

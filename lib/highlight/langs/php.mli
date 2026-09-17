@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The php language lexer specification. *)
+(** [spec] is the php language lexer specification. *)

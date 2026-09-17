@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The go language lexer specification. *)
+(** [spec] is the go language lexer specification. *)

@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The dockerfile language lexer specification. *)
+(** [spec] is the dockerfile language lexer specification. *)

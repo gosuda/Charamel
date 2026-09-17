@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The ruby language lexer specification. *)
+(** [spec] is the ruby language lexer specification. *)

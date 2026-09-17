@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The sql language lexer specification. *)
+(** [spec] is the sql language lexer specification. *)

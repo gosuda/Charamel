@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The markdown language lexer specification. *)
+(** [spec] is the markdown language lexer specification. *)

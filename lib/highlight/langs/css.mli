@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The css language lexer specification. *)
+(** [spec] is the css language lexer specification. *)

@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The makefile language lexer specification. *)
+(** [spec] is the makefile language lexer specification. *)

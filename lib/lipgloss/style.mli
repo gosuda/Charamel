@@ -136,4 +136,5 @@ val get_border_left : t -> bool option
 val get_inline : t -> bool option
 
 val get_transform : t -> (string -> string) option
-(** The getters return [None] when the corresponding property is unset. *)
+(** [get_transform t] is the string transform of [t], or [None] when no transform is set.
+*)

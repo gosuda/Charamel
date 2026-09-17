@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The zig language lexer specification. *)
+(** [spec] is the zig language lexer specification. *)

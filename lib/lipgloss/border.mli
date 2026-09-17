@@ -32,4 +32,5 @@ val right_size : t -> int
 val bottom_size : t -> int
 
 val left_size : t -> int
-(** The size functions are the widest cell width among the three glyphs on an edge. *)
+(** [left_size t] is the widest cell width among the three glyphs on the left edge. Its
+    sibling size functions measure their own edge the same way. *)

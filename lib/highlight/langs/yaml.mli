@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The yaml language lexer specification. *)
+(** [spec] is the yaml language lexer specification. *)

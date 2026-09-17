@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The toml language lexer specification. *)
+(** [spec] is the toml language lexer specification. *)

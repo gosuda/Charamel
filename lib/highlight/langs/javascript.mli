@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The javascript language lexer specification. *)
+(** [spec] is the javascript language lexer specification. *)

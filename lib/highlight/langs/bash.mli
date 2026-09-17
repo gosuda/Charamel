@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The bash language lexer specification. *)
+(** [spec] is the bash language lexer specification. *)

@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The rust language lexer specification. *)
+(** [spec] is the rust language lexer specification. *)

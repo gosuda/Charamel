@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The swift language lexer specification. *)
+(** [spec] is the swift language lexer specification. *)

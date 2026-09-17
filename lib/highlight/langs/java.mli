@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The java language lexer specification. *)
+(** [spec] is the java language lexer specification. *)

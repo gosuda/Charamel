@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The json language lexer specification. *)
+(** [spec] is the json language lexer specification. *)

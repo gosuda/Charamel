@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The diff language lexer specification. *)
+(** [spec] is the diff language lexer specification. *)

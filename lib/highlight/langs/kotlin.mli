@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The kotlin language lexer specification. *)
+(** [spec] is the kotlin language lexer specification. *)

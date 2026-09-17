@@ -1,2 +1,2 @@
 val spec : Spec.t
-(** The typescript language lexer specification. *)
+(** [spec] is the typescript language lexer specification. *)
