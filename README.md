@@ -9,14 +9,14 @@ repository. Nothing is kept for Go compatibility either: flags, environment vari
 formats are re-derived for OCaml, so a Charamel tool is not a drop-in replacement for its upstream
 namesake.
 
-- **Pure OCaml** — no `.c` or `.h` files and no `foreign_stubs` stanza anywhere in the tree; only
-  dependencies such as `eio` and `mirage-crypto` carry C.
+- **Pure OCaml** — no `.c` or `.h` files and no `foreign_stubs` stanza anywhere in the tracked
+  tree; only dependencies such as `eio` and `mirage-crypto` carry C.
 - **Fourteen libraries** — twelve under `charamel.*`, two under `charamel-ssh.*`. Each library's
   `.mli` is its documentation.
 - **Ten tools** — `gum`, `glow`, `freeze`, `sequin`, `pop`, `skate`, `melt`, `keygen`,
   `hotdiva2000`, `crush`.
-- **Tested per unit** — one suite directory for each of the 24 libraries and tools: 127 test files,
-  25 alcotest suites, 1,275 cases run by `dune runtest`.
+- **Tested per unit** — one suite directory for each of the 24 libraries and tools: 25 alcotest
+  suites, 1,274 cases run by `dune runtest --profile release`.
 - **One width model** — grapheme-based measurement shared by every renderer, so East Asian and
   combining text align in tables, borders, and layout.
 - **OCaml >= 5.4** with Eio for concurrency, `jsont` for JSON, `cmarkit` for Markdown, and `re` for
@@ -137,10 +137,11 @@ dune runtest --profile release
 - **Formatter.** `.ocamlformat` pins `ocamlformat` to 0.29.0 with `margin = 90`; `dune build @fmt`
   fails on any other version.
 - **Warnings.** Every stanza compiles with `-strict-sequence -strict-formats -short-paths
-  -principal`, and the release profile adds `-warn-error +a`.
+  -principal -w +a` minus warnings 4, 9, 29, 30, 40-42, 44-46, 48, 58, 66, and 67; the release
+  profile adds `-warn-error +a`.
 - **Layout.** `lib/` libraries, `ssh/` the SSH tier, `bin/` tools, `test/` one directory per unit,
-  `examples/` runnable programs. `.references/` holds the Go originals as local, git-ignored
-  `data_only_dirs` material that provenance comments cite.
+  `examples/` runnable programs. `.references/` holds the upstream sources, mostly Go, as local,
+  git-ignored `data_only_dirs` material that provenance comments cite.
 
 ## License
 
