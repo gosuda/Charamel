@@ -1,9 +1,6 @@
-; sc_01.ml .. sc_05.ml and goal_fixture.ml/.mli are ocamlformatted copies of
-; .agent-tasks/task-d9e845d5c429/tests/sc-01.ml .. sc-05.ml and
-; goal_fixture.ml/.mli. The assertions are unchanged; only whitespace and the
-; module spelling (sc-01 -> sc_01) differ. copy_files cannot escape the
-; directory, so the copies are checked in. The .agent-tasks drivers remain the
-; verification authority named by GOALS.md.
+; sc_01.ml .. sc_05.ml and goal_fixture.ml/.mli are the acceptance-scenario
+; suite for the ten app binaries. They run under `dune build @goals`, which no
+; other gate depends on: `dune runtest` does not reach this alias.
 
 (executable
  (name sc_all)
