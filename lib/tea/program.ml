@@ -221,6 +221,21 @@ let drain_queue queue =
   in
   loop []
 
+let take_render_batch state =
+  Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
+      while
+        (not state.renderer_stop)
+        && (state.paused || ((not state.dirty) && Queue.is_empty state.effects))
+      do
+        Eio.Condition.await state.condition state.mutex
+      done;
+      let effects =
+        if state.paused && not state.renderer_stop then [] else drain_queue state.effects
+      in
+      let should_render = state.dirty && ((not state.paused) || state.renderer_stop) in
+      if should_render then state.dirty <- false;
+      (effects, should_render, state.renderer_stop))
+
 let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~signals
     ?script (app : ('model, 'msg) App.t) =
   if fps <= 0 then invalid_arg "fps must be positive";
@@ -407,25 +422,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
             in
             let renderer_loop () =
               let rec loop () =
-                let effects, should_render, finishing =
-                  Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                      while
-                        (not state.renderer_stop)
-                        && (state.paused
-                           || ((not state.dirty) && Queue.is_empty state.effects))
-                      do
-                        Eio.Condition.await state.condition state.mutex
-                      done;
-                      let effects =
-                        if state.paused && not state.renderer_stop then []
-                        else drain_queue state.effects
-                      in
-                      let should_render =
-                        state.dirty && ((not state.paused) || state.renderer_stop)
-                      in
-                      if should_render then state.dirty <- false;
-                      (effects, should_render, state.renderer_stop))
-                in
+                let effects, should_render, finishing = take_render_batch state in
                 if finishing && effects = [] && not should_render then ()
                 else begin
                   with_output (fun () ->
@@ -461,6 +458,17 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                     with Eio.Cancel.Cancelled _ -> ())
               end
             in
+            let rec read_input ~generation ~decoder ~buffer ~finish_input =
+              if generation <> !reader_generation || state.stop_requested then ()
+              else begin
+                let count = Eio.Flow.single_read terminal.Terminal.input buffer in
+                if count <= 0 then finish_input ()
+                else begin
+                  feed_bytes decoder (Cstruct.to_string (Cstruct.sub buffer 0 count));
+                  read_input ~generation ~decoder ~buffer ~finish_input
+                end
+              end
+            in
             let start_reader () =
               incr reader_generation;
               let generation = !reader_generation in
@@ -477,27 +485,12 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                             (Input.flush decoder);
                           queue_external state (Queued_stop `Normal)
                         in
-                        let rec loop () =
-                          if generation <> !reader_generation || state.stop_requested then
-                            ()
-                          else begin
-                            let count =
-                              Eio.Flow.single_read terminal.Terminal.input buffer
-                            in
-                            if count <= 0 then finish_input ()
-                            else begin
-                              let bytes =
-                                Cstruct.to_string (Cstruct.sub buffer 0 count)
-                              in
-                              feed_bytes decoder bytes;
-                              loop ()
-                            end
-                          end
-                        in
                         Fun.protect
                           ~finally:(fun () ->
                             if generation = !reader_generation then reader_cancel := None)
-                          (fun () -> try loop () with End_of_file -> finish_input ()))
+                          (fun () ->
+                            try read_input ~generation ~decoder ~buffer ~finish_input
+                            with End_of_file -> finish_input ()))
                   with
                   | Eio.Cancel.Cancelled _ -> ()
                   | ex ->
