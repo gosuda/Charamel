@@ -50,21 +50,24 @@ let default_body = finished {|"finishReason":"STOP"|}
 let call ?(body = default_body) ?(model = model) ?(reasoning = `Off) ?temperature
     ?max_tokens ?(system = []) ?(tools = []) ?trunc_bytes messages =
   Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let server = Fixture_server.start ~sw ~net:env#net () in
-  Fixture_server.respond server body;
-  Option.iter (Fixture_server.trunc server) trunc_bytes;
-  let provider =
-    Provider.google
-      ~base_url:(Fixture_server.base_url server)
-      ~auth:(Provider.Api_key "test-key") ()
+  let stream, observed, path, body =
+    Eio.Switch.run @@ fun sw ->
+    let server = Fixture_server.start ~sw ~net:env#net () in
+    Fixture_server.respond server body;
+    Option.iter (Fixture_server.trunc server) trunc_bytes;
+    let provider =
+      Provider.google
+        ~base_url:(Fixture_server.base_url server)
+        ~auth:(Provider.Api_key "test-key") ()
+    in
+    let stream =
+      Provider.stream provider ~sw ~clock:env#clock ~net:env#net ~model ?temperature
+        ?max_tokens ~reasoning ~system ~tools messages
+    in
+    let observed = drain stream in
+    (stream, observed, Fixture_server.last_path server, Fixture_server.last_body server)
   in
-  let stream =
-    Provider.stream provider ~sw ~clock:env#clock ~net:env#net ~model ?temperature
-      ?max_tokens ~reasoning ~system ~tools messages
-  in
-  let observed = drain stream in
-  (observed, Fixture_server.last_path server, Fixture_server.last_body server)
+  (observed @ Stream_test_support.drain_queued stream, path, body)
 
 let expect_parts expected observed =
   Alcotest.(check parts) "stream parts" expected observed

@@ -24,3 +24,11 @@ let drain stream =
     | event -> loop (event :: acc)
   in
   loop []
+
+let drain_queued stream =
+  let rec loop acc =
+    match Eio.Stream.take_nonblocking stream with
+    | None -> List.rev acc
+    | Some event -> loop (event :: acc)
+  in
+  loop []

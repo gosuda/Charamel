@@ -29,3 +29,8 @@ val single_finish :
 
 val drain : Stream_part.t Eio.Stream.t -> Stream_part.t list
 (** [drain stream] takes events until the first terminal [Finish]. *)
+
+val drain_queued : Stream_part.t Eio.Stream.t -> Stream_part.t list
+(** [drain_queued stream] is every event already queued in [stream], collected without
+    waiting. Once the producing switch has closed, this is the complete tail emitted after
+    the consumer stopped taking. *)
