@@ -6,40 +6,35 @@ module Style = Charamel_lipgloss.Style
 module Textinput = Charamel_bubbles.Textinput
 module Viewport = Charamel_bubbles.Viewport
 
-let key name =
-  match Key.of_string name with
-  | Ok value -> value
-  | Error (`Msg message) -> invalid_arg (Fmt.str "invalid pager key %s: %s" name message)
-
-let k_up = key "up"
-let k_down = key "down"
-let k_pgup = key "pgup"
-let k_pgdown = key "pgdown"
-let k_space = key " "
-let k_f = key "f"
-let k_b = key "b"
-let k_u = key "u"
-let k_ctrl_u = key "ctrl+u"
-let k_d = key "d"
-let k_ctrl_d = key "ctrl+d"
-let k_k = key "k"
-let k_j = key "j"
-let k_h = key "h"
-let k_l = key "l"
-let k_home = key "home"
-let k_g = key "g"
-let k_end = key "end"
-let k_shift_g = key "G"
-let k_slash = key "/"
-let k_enter = key "enter"
-let k_n = key "n"
-let k_shift_n = key "N"
-let k_escape = key "esc"
-let k_ctrl_c = key "ctrl+c"
-let k_ctrl_d_key = key "ctrl+d"
-let k_q = key "q"
-let is_key actual expected = Key.matches actual expected
-let any_key actual expected = List.exists (is_key actual) expected
+let k_up = Gum_flag.key ~cmd:"pager" "up"
+let k_down = Gum_flag.key ~cmd:"pager" "down"
+let k_pgup = Gum_flag.key ~cmd:"pager" "pgup"
+let k_pgdown = Gum_flag.key ~cmd:"pager" "pgdown"
+let k_space = Gum_flag.key ~cmd:"pager" " "
+let k_f = Gum_flag.key ~cmd:"pager" "f"
+let k_b = Gum_flag.key ~cmd:"pager" "b"
+let k_u = Gum_flag.key ~cmd:"pager" "u"
+let k_ctrl_u = Gum_flag.key ~cmd:"pager" "ctrl+u"
+let k_d = Gum_flag.key ~cmd:"pager" "d"
+let k_ctrl_d = Gum_flag.key ~cmd:"pager" "ctrl+d"
+let k_k = Gum_flag.key ~cmd:"pager" "k"
+let k_j = Gum_flag.key ~cmd:"pager" "j"
+let k_h = Gum_flag.key ~cmd:"pager" "h"
+let k_l = Gum_flag.key ~cmd:"pager" "l"
+let k_home = Gum_flag.key ~cmd:"pager" "home"
+let k_g = Gum_flag.key ~cmd:"pager" "g"
+let k_end = Gum_flag.key ~cmd:"pager" "end"
+let k_shift_g = Gum_flag.key ~cmd:"pager" "G"
+let k_slash = Gum_flag.key ~cmd:"pager" "/"
+let k_enter = Gum_flag.key ~cmd:"pager" "enter"
+let k_n = Gum_flag.key ~cmd:"pager" "n"
+let k_shift_n = Gum_flag.key ~cmd:"pager" "N"
+let k_escape = Gum_flag.key ~cmd:"pager" "esc"
+let k_ctrl_c = Gum_flag.key ~cmd:"pager" "ctrl+c"
+let k_ctrl_d_key = Gum_flag.key ~cmd:"pager" "ctrl+d"
+let k_q = Gum_flag.key ~cmd:"pager" "q"
+let is_key = Gum_flag.is_key
+let any_key = Gum_flag.any_key
 
 type options = {
   content : string;

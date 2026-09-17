@@ -7,6 +7,25 @@ val env : cmd:string -> string -> Cmdliner.Cmd.Env.info
 (** [env ~cmd name] describes the environment variable [GUM_<CMD>_<NAME>], with dots and
     dashes converted to underscores. *)
 
+val key : cmd:string -> string -> Charamel_tea.Key.t
+(** [key ~cmd name] parses a key name and raises [Invalid_argument] with a diagnostic
+    naming [cmd] when [name] is invalid. *)
+
+val is_key : Charamel_tea.Key.t -> Charamel_tea.Key.t -> bool
+(** [is_key actual expected] is [true] when [actual] matches [expected]. *)
+
+val any_key : Charamel_tea.Key.t -> Charamel_tea.Key.t list -> bool
+(** [any_key actual expected] is [true] when [actual] matches one of [expected]. *)
+
+val string_arg :
+  cmd:string -> string -> default:string -> doc:string -> string Cmdliner.Term.t
+(** [string_arg ~cmd name ~default ~doc] parses a string option with command-scoped
+    environment fallback [GUM_<CMD>_<NAME>]. *)
+
+val int_arg : cmd:string -> string -> default:int -> doc:string -> int Cmdliner.Term.t
+(** [int_arg ~cmd name ~default ~doc] parses an integer option with command-scoped
+    environment fallback [GUM_<CMD>_<NAME>]. *)
+
 val negatable :
   cmd:string ->
   ?env:bool ->

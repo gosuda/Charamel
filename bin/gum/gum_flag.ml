@@ -8,6 +8,22 @@ let env_name ~cmd name =
 let env ~cmd name = Cmdliner.Cmd.Env.info (env_name ~cmd name)
 let env_info = env
 
+module Key = Charamel_tea.Key
+
+let key ~cmd name =
+  match Key.of_string name with
+  | Ok value -> value
+  | Error (`Msg message) -> invalid_arg (Fmt.str "invalid %s key %s: %s" cmd name message)
+
+let is_key actual expected = Key.matches actual expected
+let any_key actual expected = List.exists (is_key actual) expected
+
+let string_arg ~cmd name ~default ~doc =
+  Cmdliner.Arg.(value (opt string default (info [ name ] ~doc ~env:(env ~cmd name))))
+
+let int_arg ~cmd name ~default ~doc =
+  Cmdliner.Arg.(value (opt int default (info [ name ] ~doc ~env:(env ~cmd name))))
+
 let env_bool value =
   match String.lowercase_ascii (String.trim value) with
   | "1" | "true" | "yes" | "on" -> Ok true

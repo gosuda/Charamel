@@ -5,15 +5,10 @@ module View = Charamel_tea.View
 module Style = Charamel_lipgloss.Style
 module Textinput = Charamel_bubbles.Textinput
 
-let key name =
-  match Key.of_string name with
-  | Ok value -> value
-  | Error (`Msg message) -> invalid_arg (Fmt.str "invalid input key %s: %s" name message)
-
-let k_enter = key "enter"
-let k_escape = key "esc"
-let k_ctrl_c = key "ctrl+c"
-let is_key actual expected = Key.matches actual expected
+let k_enter = Gum_flag.key ~cmd:"input" "enter"
+let k_escape = Gum_flag.key ~cmd:"input" "esc"
+let k_ctrl_c = Gum_flag.key ~cmd:"input" "ctrl+c"
+let is_key = Gum_flag.is_key
 
 type cursor_mode = Blink | Hide | Static
 
@@ -178,14 +173,6 @@ let run env (options : options) =
   if not (submitted model) then Charamel_cli.error "not submitted";
   Gum_io.print_raw env (value model)
 
-let string_arg ~cmd name ~default ~doc =
-  Cmdliner.Arg.(
-    value (opt string default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
-
-let int_arg ~cmd name ~default ~doc =
-  Cmdliner.Arg.(
-    value (opt int default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
-
 let cmd env =
   let open Cmdliner in
   let open Term.Syntax in
@@ -201,21 +188,24 @@ let cmd env =
   in
   let term =
     let+ placeholder =
-      string_arg ~cmd:"input" "placeholder" ~default:"Type something..."
+      Gum_flag.string_arg ~cmd:"input" "placeholder" ~default:"Type something..."
         ~doc:"Placeholder value."
-    and+ prompt = string_arg ~cmd:"input" "prompt" ~default:"> " ~doc:"Prompt to display."
+    and+ prompt =
+      Gum_flag.string_arg ~cmd:"input" "prompt" ~default:"> " ~doc:"Prompt to display."
     and+ cursor_mode = cursor_mode
-    and+ value = string_arg ~cmd:"input" "value" ~default:"" ~doc:"Initial value."
+    and+ value =
+      Gum_flag.string_arg ~cmd:"input" "value" ~default:"" ~doc:"Initial value."
     and+ char_limit =
-      int_arg ~cmd:"input" "char-limit" ~default:400
+      Gum_flag.int_arg ~cmd:"input" "char-limit" ~default:400
         ~doc:"Maximum value length (zero is unlimited)."
     and+ width =
-      int_arg ~cmd:"input" "width" ~default:0
+      Gum_flag.int_arg ~cmd:"input" "width" ~default:0
         ~doc:"Input width (zero uses terminal width)."
     and+ password = Gum_flag.flag ~cmd:"input" ~doc:"Mask input characters." "password"
     and+ show_help =
       Gum_flag.negatable ~cmd:"input" ~default:true ~doc:"Show help keybinds." "show-help"
-    and+ header = string_arg ~cmd:"input" "header" ~default:"" ~doc:"Header value."
+    and+ header =
+      Gum_flag.string_arg ~cmd:"input" "header" ~default:"" ~doc:"Header value."
     and+ timeout =
       Gum_flag.seconds ~cmd:"input" ~doc:"Timeout until input aborts." "timeout"
     and+ strip_ansi =

@@ -5,30 +5,24 @@ module View = Charamel_tea.View
 module Style = Charamel_lipgloss.Style
 module Layout = Charamel_lipgloss.Layout
 
-let key name =
-  match Key.of_string name with
-  | Ok value -> value
-  | Error (`Msg message) ->
-      invalid_arg (Fmt.str "invalid confirm key %s: %s" name message)
-
-let k_ctrl_c = key "ctrl+c"
-let k_escape = key "esc"
-let k_n = key "n"
-let k_shift_n = key "N"
-let k_q = key "q"
-let k_y = key "y"
-let k_shift_y = key "Y"
-let k_left = key "left"
-let k_h = key "h"
-let k_ctrl_n = key "ctrl+n"
-let k_shift_tab = key "shift+tab"
-let k_right = key "right"
-let k_l = key "l"
-let k_ctrl_p = key "ctrl+p"
-let k_tab = key "tab"
-let k_enter = key "enter"
-let is_key actual expected = Key.matches actual expected
-let any_key actual expected = List.exists (is_key actual) expected
+let k_ctrl_c = Gum_flag.key ~cmd:"confirm" "ctrl+c"
+let k_escape = Gum_flag.key ~cmd:"confirm" "esc"
+let k_n = Gum_flag.key ~cmd:"confirm" "n"
+let k_shift_n = Gum_flag.key ~cmd:"confirm" "N"
+let k_q = Gum_flag.key ~cmd:"confirm" "q"
+let k_y = Gum_flag.key ~cmd:"confirm" "y"
+let k_shift_y = Gum_flag.key ~cmd:"confirm" "Y"
+let k_left = Gum_flag.key ~cmd:"confirm" "left"
+let k_h = Gum_flag.key ~cmd:"confirm" "h"
+let k_ctrl_n = Gum_flag.key ~cmd:"confirm" "ctrl+n"
+let k_shift_tab = Gum_flag.key ~cmd:"confirm" "shift+tab"
+let k_right = Gum_flag.key ~cmd:"confirm" "right"
+let k_l = Gum_flag.key ~cmd:"confirm" "l"
+let k_ctrl_p = Gum_flag.key ~cmd:"confirm" "ctrl+p"
+let k_tab = Gum_flag.key ~cmd:"confirm" "tab"
+let k_enter = Gum_flag.key ~cmd:"confirm" "enter"
+let is_key = Gum_flag.is_key
+let any_key = Gum_flag.any_key
 
 type options = {
   default : bool;
@@ -182,10 +176,6 @@ let run env (options : options) =
       print_answer env options confirmation;
       if confirmation then () else Charamel_cli.exit 1
 
-let string_arg ~cmd names ~default ~doc =
-  Cmdliner.Arg.(
-    value (opt string default (info [ names ] ~doc ~env:(Gum_flag.env ~cmd names))))
-
 let cmd env =
   let open Cmdliner in
   let open Term.Syntax in
@@ -219,9 +209,10 @@ let cmd env =
     and+ show_output =
       Gum_flag.flag ~cmd:"confirm" ~doc:"Print prompt and answer." "show-output"
     and+ affirmative =
-      string_arg ~cmd:"confirm" "affirmative" ~default:"Yes" ~doc:"Affirmative label."
+      Gum_flag.string_arg ~cmd:"confirm" "affirmative" ~default:"Yes"
+        ~doc:"Affirmative label."
     and+ negative =
-      string_arg ~cmd:"confirm" "negative" ~default:"No" ~doc:"Negative label."
+      Gum_flag.string_arg ~cmd:"confirm" "negative" ~default:"No" ~doc:"Negative label."
     and+ prompt = prompt
     and+ show_help =
       Gum_flag.negatable ~cmd:"confirm" ~default:true ~doc:"Show help keybinds."

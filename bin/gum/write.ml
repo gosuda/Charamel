@@ -6,16 +6,11 @@ module Style = Charamel_lipgloss.Style
 module Textarea = Charamel_bubbles.Textarea
 module Key_binding = Charamel_bubbles.Key_binding
 
-let key name =
-  match Key.of_string name with
-  | Ok value -> value
-  | Error (`Msg message) -> invalid_arg (Fmt.str "invalid write key %s: %s" name message)
-
-let k_enter = key "enter"
-let k_escape = key "esc"
-let k_ctrl_c = key "ctrl+c"
-let k_ctrl_e = key "ctrl+e"
-let is_key actual expected = Key.matches actual expected
+let k_enter = Gum_flag.key ~cmd:"write" "enter"
+let k_escape = Gum_flag.key ~cmd:"write" "esc"
+let k_ctrl_c = Gum_flag.key ~cmd:"write" "ctrl+c"
+let k_ctrl_e = Gum_flag.key ~cmd:"write" "ctrl+e"
+let is_key = Gum_flag.is_key
 
 type cursor_mode = Blink | Hide | Static
 
@@ -282,14 +277,6 @@ let run env (options : options) =
   if not (submitted model) then Charamel_cli.error "not submitted";
   Gum_io.print_raw env (value model)
 
-let string_arg ~cmd name ~default ~doc =
-  Cmdliner.Arg.(
-    value (opt string default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
-
-let int_arg ~cmd name ~default ~doc =
-  Cmdliner.Arg.(
-    value (opt int default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
-
 let cmd env =
   let open Cmdliner in
   let open Term.Syntax in
@@ -304,22 +291,27 @@ let cmd env =
     Arg.value (Arg.opt converter Blink info)
   in
   let term =
-    let+ width = int_arg ~cmd:"write" "width" ~default:0 ~doc:"Text area width."
-    and+ height = int_arg ~cmd:"write" "height" ~default:5 ~doc:"Text area height."
-    and+ header = string_arg ~cmd:"write" "header" ~default:"" ~doc:"Header value."
+    let+ width = Gum_flag.int_arg ~cmd:"write" "width" ~default:0 ~doc:"Text area width."
+    and+ height =
+      Gum_flag.int_arg ~cmd:"write" "height" ~default:5 ~doc:"Text area height."
+    and+ header =
+      Gum_flag.string_arg ~cmd:"write" "header" ~default:"" ~doc:"Header value."
     and+ placeholder =
-      string_arg ~cmd:"write" "placeholder" ~default:"Write something..."
+      Gum_flag.string_arg ~cmd:"write" "placeholder" ~default:"Write something..."
         ~doc:"Placeholder value."
-    and+ prompt = string_arg ~cmd:"write" "prompt" ~default:"┃ " ~doc:"Prompt per line."
+    and+ prompt =
+      Gum_flag.string_arg ~cmd:"write" "prompt" ~default:"┃ " ~doc:"Prompt per line."
     and+ show_cursor_line =
       Gum_flag.flag ~cmd:"write" ~doc:"Highlight the cursor line." "show-cursor-line"
     and+ show_line_numbers =
       Gum_flag.flag ~cmd:"write" ~doc:"Show line numbers." "show-line-numbers"
-    and+ value = string_arg ~cmd:"write" "value" ~default:"" ~doc:"Initial value."
+    and+ value =
+      Gum_flag.string_arg ~cmd:"write" "value" ~default:"" ~doc:"Initial value."
     and+ char_limit =
-      int_arg ~cmd:"write" "char-limit" ~default:0 ~doc:"Maximum character count."
+      Gum_flag.int_arg ~cmd:"write" "char-limit" ~default:0
+        ~doc:"Maximum character count."
     and+ max_lines =
-      int_arg ~cmd:"write" "max-lines" ~default:0 ~doc:"Maximum logical lines."
+      Gum_flag.int_arg ~cmd:"write" "max-lines" ~default:0 ~doc:"Maximum logical lines."
     and+ show_help =
       Gum_flag.negatable ~cmd:"write" ~default:true ~doc:"Show help keybinds." "show-help"
     and+ cursor_mode = cursor_mode
