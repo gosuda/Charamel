@@ -84,10 +84,6 @@ let json s =
   | Ok j -> j
   | Error e -> Alcotest.failf "json %s: %s" s e
 
-let parse_body = function
-  | None -> Alcotest.fail "no request body was posted"
-  | Some s -> json s
-
 let mem (j : Jsont.json) k =
   match j with
   | Jsont.Object (ms, _) -> (

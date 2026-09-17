@@ -46,14 +46,8 @@ let call ?(body = sse) ?(auth = api_key) ?(reasoning = `Off) ?temperature ?max_t
   let observed = drain parts in
   (observed, Fixture_server.last_path server, Fixture_server.last_body server)
 
-let expect_parts name expected observed = Alcotest.(check parts) name expected observed
-
-let parse_body = function
-  | None -> Alcotest.fail "no request body was posted"
-  | Some s -> (
-      match Jsont_bytesrw.decode_string Jsont.json s with
-      | Ok j -> j
-      | Error e -> Alcotest.failf "posted body is not JSON: %s" e)
+let expect_parts name expected observed =
+  Stream_test_support.expect_parts ~label:name expected observed
 
 let mem (j : Jsont.json) k =
   match j with

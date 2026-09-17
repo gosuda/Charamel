@@ -17,17 +17,7 @@ let test_usage =
   { Usage.input = 8; output = 12; cache_read = 3; cache_write = 0; reasoning = 7 }
 
 let fixture_path = "data/google_codec.sse"
-
-let read_fixture () =
-  let inc = open_in_bin fixture_path in
-  let buf = Buffer.create 8192 in
-  (try
-     while true do
-       Buffer.add_string buf (input_line inc);
-       Buffer.add_char buf '\n'
-     done
-   with End_of_file -> close_in inc);
-  Buffer.contents buf
+let read_fixture () = Stream_test_support.read_fixture ~fixture_path ()
 
 let model =
   {
@@ -49,8 +39,8 @@ let default_body = finished {|"finishReason":"STOP"|}
 
 let call ?(body = default_body) ?(model = model) ?(reasoning = `Off) ?temperature
     ?max_tokens ?(system = []) ?(tools = []) ?trunc_bytes messages =
-  Eio_main.run @@ fun env ->
   let stream, observed, path, body =
+    Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
     let server = Fixture_server.start ~sw ~net:env#net () in
     Fixture_server.respond server body;
@@ -70,7 +60,7 @@ let call ?(body = default_body) ?(model = model) ?(reasoning = `Off) ?temperatur
   (observed @ Stream_test_support.drain_queued stream, path, body)
 
 let expect_parts expected observed =
-  Alcotest.(check parts) "stream parts" expected observed
+  Stream_test_support.expect_parts ~label:"stream parts" expected observed
 
 let test_fixture_stream () =
   let observed, path, _ = call ~body:(read_fixture ()) [ user "hi" ] in
@@ -287,63 +277,6 @@ let test_prompt_feedback_without_block () =
       Stream_part.Text_delta "ok"; Stream_part.Usage test_usage; Stream_part.Finish `Stop;
     ]
     observed
-
-let parse_body = function
-  | None -> Alcotest.fail "no request body was posted"
-  | Some body -> (
-      match Jsont_bytesrw.decode_string Jsont.json body with
-      | Ok json -> json
-      | Error error -> Alcotest.failf "posted body is not JSON: %s" error)
-
-let member name (json : Jsont.json) =
-  match json with
-  | Jsont.Object (members, _) -> (
-      match Jsont.Json.find_mem name members with
-      | Some (_, value) -> Some value
-      | None -> None)
-  | _ -> None
-
-let required name json =
-  match member name json with
-  | Some value -> value
-  | None -> Alcotest.failf "JSON member %s is missing" name
-
-let array name json =
-  match required name json with
-  | Jsont.Array (values, _) -> values
-  | _ -> Alcotest.failf "JSON member %s is not an array" name
-
-let object_value name json =
-  match required name json with
-  | Jsont.Object _ as value -> value
-  | _ -> Alcotest.failf "JSON member %s is not an object" name
-
-let string_value label json =
-  match json with
-  | Jsont.String (value, _) -> value
-  | _ -> Alcotest.failf "%s is not a JSON string" label
-
-let number_value label json =
-  match json with
-  | Jsont.Number (value, _) -> value
-  | _ -> Alcotest.failf "%s is not a JSON number" label
-
-let check_string label expected json =
-  Alcotest.(check string) label expected (string_value label json)
-
-let check_member_string label name expected json =
-  check_string label expected (required name json)
-
-let check_member_number label name expected json =
-  Alcotest.(check (float 0.0001)) label expected (number_value label (required name json))
-
-let check_string_array label expected json =
-  let actual =
-    match json with
-    | Jsont.Array (values, _) -> List.map (string_value label) values
-    | _ -> Alcotest.failf "%s is not an array" label
-  in
-  Alcotest.(check (list string)) label expected actual
 
 let tool =
   Tool.v ~name:"weather" ~description:"Get weather"
