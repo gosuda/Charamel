@@ -158,13 +158,11 @@ let run env (options : options) =
       if confirmation then () else Charamel_cli.exit 1
   | None ->
       let execute () =
-        try
-          let model =
-            Gum_run.run env (app options) ~finished:(fun model ->
-                if submitted model then Gum_run.Submitted else Gum_run.Quit)
-          in
-          answer model
-        with Gum_io.No_tty -> Charamel_cli.error "confirm: requires a terminal"
+        let model =
+          Gum_run.run_tui ~name:"confirm" env (app options) ~finished:(fun model ->
+              if submitted model then Gum_run.Submitted else Gum_run.Quit)
+        in
+        answer model
       in
       let confirmation =
         match options.timeout with

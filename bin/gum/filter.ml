@@ -528,10 +528,9 @@ let run env (options : options) =
   | Ok (Some value) -> Gum_io.println env value
   | Ok None ->
       let model =
-        try
-          Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun model ->
-              if submitted model then Gum_run.Submitted else Gum_run.Quit)
-        with Gum_io.No_tty -> Charamel_cli.error "filter: requires a terminal"
+        Gum_run.run_tui ~name:"filter" ?timeout:options.timeout env (app options)
+          ~finished:(fun model ->
+            if submitted model then Gum_run.Submitted else Gum_run.Quit)
       in
       if not (submitted model) then Charamel_cli.error "nothing selected";
       let values = output_values model in

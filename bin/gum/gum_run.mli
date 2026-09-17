@@ -17,3 +17,14 @@ val run :
     ["timed out"]. A Tea exception is raised again after the terminal has been restored.
     [Gum_io.No_tty] is propagated for the command to turn into its command-specific
     diagnostic. *)
+
+val run_tui :
+  name:string ->
+  ?timeout:float ->
+  Eio_unix.Stdenv.base ->
+  ('model, 'msg) Charamel_tea.app ->
+  finished:('model -> outcome) ->
+  'model
+(** [run_tui ~name ?timeout env app ~finished] runs [app] through {!run} and reports
+    ["<name>: requires a terminal"] when no terminal is available. It preserves the
+    outcome and timeout exit behavior of {!run}. *)

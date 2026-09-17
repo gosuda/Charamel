@@ -165,10 +165,8 @@ let app options : (model, msg) Charamel_tea.app =
 let run env (options : options) =
   let options = { options with value = initial_value env options } in
   let model =
-    try
-      Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun model ->
-          if submitted model then Gum_run.Submitted else Gum_run.Quit)
-    with Gum_io.No_tty -> Charamel_cli.error "input: requires a terminal"
+    Gum_run.run_tui ~name:"input" ?timeout:options.timeout env (app options)
+      ~finished:(fun model -> if submitted model then Gum_run.Submitted else Gum_run.Quit)
   in
   if not (submitted model) then Charamel_cli.error "not submitted";
   Gum_io.print_raw env (value model)

@@ -20,3 +20,7 @@ let run ?timeout env app ~finished =
       | Error `Killed -> Charamel_cli.exit 124
       | Error (`Exn (exception_value, backtrace)) ->
           Printexc.raise_with_backtrace exception_value backtrace)
+
+let run_tui ~name ?timeout env app ~finished =
+  try run ?timeout env app ~finished
+  with Gum_io.No_tty -> Charamel_cli.error (Fmt.str "%s: requires a terminal" name)
