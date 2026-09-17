@@ -680,40 +680,38 @@ let run_edit ctx json =
         begin
           let* target = target_result in
           let target_path = path ctx target in
-          begin match
+          let* kind =
             protect_io target (fun () -> Eio.Path.kind ~follow:true target_path)
-          with
-          | Error error -> Error error
-          | Ok `Regular_file ->
-              begin match protect_io target (fun () -> Eio.Path.load target_path) with
-              | Error error -> Error error
-              | Ok content when Hashline.tag content <> patch.Patch.tag ->
-                  let anchor =
-                    match patch.Patch.ops with [] -> 1 | op :: _ -> first_patch_line op
-                  in
-                  let message =
-                    Fmt.str "stale tag: %s is now #%s; re-read before editing\n%s" target
-                      (Hashline.tag content)
-                      (format_context target content anchor)
-                  in
-                  Ok (Tool.fail message)
-              | Ok content ->
-                  begin match Patch.apply content patch with
-                  | Error message -> Error (`Invalid_input message)
-                  | Ok (updated, added, removed) -> begin
-                      let* () = save_file ctx target updated in
-                      Hashtbl.replace ctx.Tool.read_tracker target
-                        (int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.));
-                      let tag = Hashline.tag updated in
-                      Ok
-                        (output ctx ~diagnostics:(diagnostics ctx target)
-                           (edit_output patch target added removed tag))
-                    end
-                  end
+          in
+          match kind with
+          | `Regular_file ->
+              let* content = protect_io target (fun () -> Eio.Path.load target_path) in
+              if Hashline.tag content <> patch.Patch.tag then begin
+                let anchor =
+                  match patch.Patch.ops with [] -> 1 | op :: _ -> first_patch_line op
+                in
+                let message =
+                  Fmt.str "stale tag: %s is now #%s; re-read before editing\n%s" target
+                    (Hashline.tag content)
+                    (format_context target content anchor)
+                in
+                Ok (Tool.fail message)
               end
-          | Ok `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
-          | Ok _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
-          end
+              else
+                begin match Patch.apply content patch with
+                | Error message -> Error (`Invalid_input message)
+                | Ok (updated, added, removed) -> begin
+                    let* () = save_file ctx target updated in
+                    Hashtbl.replace ctx.Tool.read_tracker target
+                      (int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.));
+                    let tag = Hashline.tag updated in
+                    Ok
+                      (output ctx ~diagnostics:(diagnostics ctx target)
+                         (edit_output patch target added removed tag))
+                  end
+                end
+          | `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
+          | _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
         end
       end
   end
