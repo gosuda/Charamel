@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type flow = [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Resource.t
 type reply = { code : int; lines : string list }
 
@@ -101,15 +103,13 @@ let read_reply t =
   with_deadline t (fun () ->
       let rec loop expected lines =
         let line = Eio.Buf_read.line t.reader in
-        match parse_reply_line line with
-        | Error error -> Error error
-        | Ok (code, separator, text) ->
-            let expected = Option.value expected ~default:code in
-            if code <> expected then Error (`Bad_reply line)
-            else if separator = '-' then loop (Some expected) (text :: lines)
-            else
-              let reply = { code; lines = List.rev (text :: lines) } in
-              Ok reply
+        let* code, separator, text = parse_reply_line line in
+        let expected = Option.value expected ~default:code in
+        if code <> expected then Error (`Bad_reply line)
+        else if separator = '-' then loop (Some expected) (text :: lines)
+        else
+          let reply = { code; lines = List.rev (text :: lines) } in
+          Ok reply
       in
       loop None [])
 
@@ -217,14 +217,12 @@ let upgrade_tls t ~hostname ?tls_config () =
         | Some config -> Ok config
         | None -> make_tls_config hostname
       in
-      match config with
-      | Error error -> Error error
-      | Ok config ->
-          let host = Domain_name.host_exn (Domain_name.of_string_exn hostname) in
-          let tls_flow = Tls_eio.client_of_flow config ~host t.flow in
-          t.flow <- (tls_flow :> flow);
-          t.reader <- Eio.Buf_read.of_flow ~max_size:65536 t.flow;
-          Ok ())
+      let* config = config in
+      let host = Domain_name.host_exn (Domain_name.of_string_exn hostname) in
+      let tls_flow = Tls_eio.client_of_flow config ~host t.flow in
+      t.flow <- (tls_flow :> flow);
+      t.reader <- Eio.Buf_read.of_flow ~max_size:65536 t.flow;
+      Ok ())
 
 let initialize t ~security ~hostname ?tls_config () =
   let open Result.Syntax in
@@ -397,8 +395,7 @@ and quit t =
 
 let deliver ~sw ~clock ~net ~host ~port ~security ?hostname ?timeout ?tls_config ?helo
     ?auth ~from ~recipients ~body () =
-  match
+  let* session =
     connect ~sw ~clock ~net ~host ~port ~security ?hostname ?timeout ?tls_config ()
-  with
-  | Error error -> Error error
-  | Ok session -> send ?helo ?auth ~from ~recipients ~body session
+  in
+  send ?helo ?auth ~from ~recipients ~body session

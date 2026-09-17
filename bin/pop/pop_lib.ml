@@ -1,3 +1,5 @@
+open Result.Syntax
+
 type options = {
   to_ : string list;
   cc : string list;
@@ -171,13 +173,11 @@ let read_attachments ~cwd paths =
   let rec loop acc = function
     | [] -> Ok (List.rev acc)
     | path :: rest -> (
-        match read_file ~cwd path with
-        | Error error -> Error error
-        | Ok data -> (
-            let name = Filename.basename path in
-            match Mime.attachment ~name ~data () with
-            | Ok attachment -> loop (attachment :: acc) rest
-            | Error error -> Error (`Message error)))
+        let* data = read_file ~cwd path in
+        let name = Filename.basename path in
+        match Mime.attachment ~name ~data () with
+        | Ok attachment -> loop (attachment :: acc) rest
+        | Error error -> Error (`Message error))
   in
   loop [] paths
 
@@ -190,47 +190,28 @@ let prepare ~sw:_ ~clock ~cwd ~stdin ?date options =
   if Option.is_some options.body && Option.is_some options.body_file then
     Error (`Input "--body and --body-file cannot be used together")
   else
-    match parse_from options.from with
-    | Error error -> Error error
-    | Ok from -> (
-        match parse_subject options.subject with
-        | Error error -> Error error
-        | Ok subject -> (
-            match parse_addresses options.to_ with
-            | Error error -> Error error
-            | Ok to_ -> (
-                match parse_addresses options.cc with
-                | Error error -> Error error
-                | Ok cc -> (
-                    match parse_addresses options.bcc with
-                    | Error error -> Error error
-                    | Ok bcc -> (
-                        if to_ = [] && cc = [] && bcc = [] then Error (`Missing "to")
-                        else
-                          match read_body ~cwd ~stdin options with
-                          | Error error -> Error error
-                          | Ok body -> (
-                              let body =
-                                match options.signature with
-                                | Some signature when String.trim signature <> "" ->
-                                    body ^ "\n\n" ^ signature
-                                | _ -> body
-                              in
-                              match render_body ~unsafe_html:options.unsafe_html body with
-                              | Error error -> Error error
-                              | Ok (body_text, body_html) -> (
-                                  match read_attachments ~cwd options.attachments with
-                                  | Error error -> Error error
-                                  | Ok attachments -> (
-                                      let date = Option.value date ~default:(now clock) in
-                                      match
-                                        Mime.message ~from ~subject ~date ~body_text
-                                          ~body_html ~attachments ~to_ ~cc ~bcc ()
-                                      with
-                                      | Error error -> Error (`Message error)
-                                      | Ok message ->
-                                          Ok { message; wire = Mime.serialise message })))
-                        )))))
+    let* from = parse_from options.from in
+    let* subject = parse_subject options.subject in
+    let* to_ = parse_addresses options.to_ in
+    let* cc = parse_addresses options.cc in
+    let* bcc = parse_addresses options.bcc in
+    if to_ = [] && cc = [] && bcc = [] then Error (`Missing "to")
+    else
+      let* body = read_body ~cwd ~stdin options in
+      let body =
+        match options.signature with
+        | Some signature when String.trim signature <> "" -> body ^ "\n\n" ^ signature
+        | _ -> body
+      in
+      let* body_text, body_html = render_body ~unsafe_html:options.unsafe_html body in
+      let* attachments = read_attachments ~cwd options.attachments in
+      let date = Option.value date ~default:(now clock) in
+      match
+        Mime.message ~from ~subject ~date ~body_text ~body_html ~attachments ~to_ ~cc ~bcc
+          ()
+      with
+      | Error error -> Error (`Message error)
+      | Ok message -> Ok { message; wire = Mime.serialise message }
 
 let env_raw env name =
   match env name with Some value when value <> "" -> Some value | _ -> None
@@ -260,15 +241,10 @@ let config_of_env ~env =
   match env_value env "POP_SMTP_HOST" with
   | None -> Error (`Missing "POP_SMTP_HOST")
   | Some host -> (
-      match int_env env "POP_SMTP_PORT" ~default:587 with
-      | Error error -> Error error
-      | Ok port -> (
-          match security_env env with
-          | Error error -> Error error
-          | Ok security -> (
-              let username = env_raw env "POP_SMTP_USERNAME" in
-              let password = env_raw env "POP_SMTP_PASSWORD" in
-              match (password, username) with
-              | Some _, None ->
-                  Error (`Input "POP_SMTP_PASSWORD requires POP_SMTP_USERNAME")
-              | _ -> Ok { Send.host; port; username; password; security })))
+      let* port = int_env env "POP_SMTP_PORT" ~default:587 in
+      let* security = security_env env in
+      let username = env_raw env "POP_SMTP_USERNAME" in
+      let password = env_raw env "POP_SMTP_PASSWORD" in
+      match (password, username) with
+      | Some _, None -> Error (`Input "POP_SMTP_PASSWORD requires POP_SMTP_USERNAME")
+      | _ -> Ok { Send.host; port; username; password; security })
