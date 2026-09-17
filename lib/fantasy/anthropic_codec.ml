@@ -259,23 +259,6 @@ let create () =
     terminated = false;
   }
 
-let mem (j : Jsont.json) k =
-  match j with
-  | Jsont.Object (ms, _) -> (
-      match Jsont.Json.find_mem k ms with Some (_, v) -> Some v | None -> None)
-  | _ -> None
-
-let is_object j = Jsont.Json.sort j = Jsont.Sort.Object
-let string_mem k j = match mem j k with Some (Jsont.String (s, _)) -> Some s | _ -> None
-
-let int_mem k j =
-  match mem j k with Some (Jsont.Number (f, _)) -> Some (int_of_float f) | _ -> None
-
-let string_of_json (j : Jsont.json) =
-  match Jsont_bytesrw.encode_string ~format:Jsont.Minify Jsont.json j with
-  | Ok s -> s
-  | Error _ -> invalid_arg "Anthropic codec received an unencodable JSON value"
-
 let valid_arguments args =
   args = ""
   ||
@@ -287,17 +270,20 @@ let or_zero = Option.value ~default:0
 let replace_present current = function Some n -> n | None -> current
 
 let reasoning_of (j : Jsont.json) current =
-  match mem j "output_tokens_details" with
-  | Some d when is_object d -> replace_present current (int_mem "thinking_tokens" d)
+  match Json.oopt j "output_tokens_details" with
+  | Some d when Json.is_object d ->
+      replace_present current (Json.int_option_mem d "thinking_tokens")
   | Some _ | None -> current
 
 let snapshot_usage (u : Usage.t) (j : Jsont.json) =
   {
-    Usage.input = replace_present u.Usage.input (int_mem "input_tokens" j);
-    output = replace_present u.Usage.output (int_mem "output_tokens" j);
+    Usage.input = replace_present u.Usage.input (Json.int_option_mem j "input_tokens");
+    output = replace_present u.Usage.output (Json.int_option_mem j "output_tokens");
     cache_write =
-      replace_present u.Usage.cache_write (int_mem "cache_creation_input_tokens" j);
-    cache_read = replace_present u.Usage.cache_read (int_mem "cache_read_input_tokens" j);
+      replace_present u.Usage.cache_write
+        (Json.int_option_mem j "cache_creation_input_tokens");
+    cache_read =
+      replace_present u.Usage.cache_read (Json.int_option_mem j "cache_read_input_tokens");
     reasoning = reasoning_of j u.Usage.reasoning;
   }
 
@@ -317,17 +303,18 @@ let terminal t parts =
 let malformed t msg = terminal t [ Stream_part.Finish (`Error msg) ]
 
 let event_name ~event j =
-  if event = "" || event = "message" then Option.value ~default:"" (string_mem "type" j)
+  if event = "" || event = "message" then
+    Option.value ~default:"" (Json.string_mem j "type")
   else event
 
 let content_block_start t j =
-  let index = or_zero (int_mem "index" j) in
-  match mem j "content_block" with
+  let index = or_zero (Json.int_option_mem j "index") in
+  match Json.oopt j "content_block" with
   | None -> malformed t "content_block_start has no content_block"
-  | Some cb when not (Jsont.Json.sort cb = Jsont.Sort.Object) ->
+  | Some cb when not (Json.is_object cb) ->
       malformed t "content_block_start content_block is not an object"
   | Some cb -> (
-      match string_mem "type" cb with
+      match Json.string_mem cb "type" with
       | Some "text" ->
           Hashtbl.replace t.blocks index Text;
           []
@@ -335,12 +322,12 @@ let content_block_start t j =
           Hashtbl.replace t.blocks index Thinking;
           []
       | Some "tool_use" -> (
-          match (string_mem "id" cb, string_mem "name" cb) with
+          match (Json.string_mem cb "id", Json.string_mem cb "name") with
           | Some id, Some name when id <> "" && name <> "" ->
               let arguments =
-                match mem cb "input" with
+                match Json.oopt cb "input" with
                 | Some input when Jsont.Json.sort input <> Jsont.Sort.Null ->
-                    let encoded = string_of_json input in
+                    let encoded = Json.string_of_json input in
                     if encoded = "{}" then "" else encoded
                 | Some _ | None -> ""
               in
@@ -356,23 +343,23 @@ let content_block_start t j =
       | None -> malformed t "content_block_start has no type")
 
 let content_block_delta t j =
-  let index = or_zero (int_mem "index" j) in
-  match mem j "delta" with
+  let index = or_zero (Json.int_option_mem j "index") in
+  match Json.oopt j "delta" with
   | None -> []
   | Some d -> (
-      match string_mem "type" d with
+      match Json.string_mem d "type" with
       | Some "text_delta" -> (
-          match string_mem "text" d with
+          match Json.string_mem d "text" with
           | Some s -> [ Stream_part.Text_delta s ]
           | None -> [])
       | Some "thinking_delta" -> (
-          match string_mem "thinking" d with
+          match Json.string_mem d "thinking" with
           | Some s -> [ Stream_part.Reasoning_delta s ]
           | None -> [])
       | Some "input_json_delta" -> (
           match Hashtbl.find_opt t.blocks index with
           | Some (Tool block) when not block.closed -> (
-              match string_mem "partial_json" d with
+              match Json.string_mem d "partial_json" with
               | Some s when s <> "" ->
                   block.arguments <- block.arguments ^ s;
                   [ Stream_part.Tool_input_delta { id = block.id; delta = s } ]
@@ -382,7 +369,7 @@ let content_block_delta t j =
       | _ -> [])
 
 let content_block_stop t j =
-  let index = or_zero (int_mem "index" j) in
+  let index = or_zero (Json.int_option_mem j "index") in
   match Hashtbl.find_opt t.blocks index with
   | Some (Tool block) when block.closed -> []
   | Some (Tool block) ->
@@ -394,10 +381,10 @@ let content_block_stop t j =
   | Some Text | Some Thinking | None -> []
 
 let message_start t j =
-  (match mem j "message" with
-  | Some m when Jsont.Json.sort m = Jsont.Sort.Object -> (
-      match mem m "usage" with
-      | Some u when Jsont.Json.sort u = Jsont.Sort.Object ->
+  (match Json.oopt j "message" with
+  | Some m when Json.is_object m -> (
+      match Json.oopt m "usage" with
+      | Some u when Json.is_object u ->
           t.usage <- snapshot_usage t.usage u;
           t.have_usage <- true
       | Some _ | None -> ())
@@ -405,14 +392,14 @@ let message_start t j =
   []
 
 let message_delta t j =
-  (match mem j "usage" with
-  | Some u when Jsont.Json.sort u = Jsont.Sort.Object ->
+  (match Json.oopt j "usage" with
+  | Some u when Json.is_object u ->
       t.usage <- snapshot_usage t.usage u;
       t.have_usage <- true
   | Some _ | None -> ());
-  (match mem j "delta" with
+  (match Json.oopt j "delta" with
   | Some d -> (
-      match string_mem "stop_reason" d with
+      match Json.string_mem d "stop_reason" with
       | Some s when s <> "" -> t.stop <- Some s
       | _ -> ())
   | None -> ());
@@ -441,9 +428,11 @@ let message_stop t =
 
 let error_event t j =
   let detail =
-    match mem j "error" with
+    match Json.oopt j "error" with
     | Some e -> (
-        match string_mem "message" e with Some m -> m | None -> "unknown provider error")
+        match Json.string_mem e "message" with
+        | Some m -> m
+        | None -> "unknown provider error")
     | None -> "unknown provider error"
   in
   terminal t [ Stream_part.Finish (`Error detail) ]
@@ -458,7 +447,7 @@ let feed t ~event ~data =
              (if event = "" then "data" else event)
              e)
     | Ok j -> (
-        if not (is_object j) then malformed t "event is not a JSON object"
+        if not (Json.is_object j) then malformed t "event is not a JSON object"
         else
           match event_name ~event j with
           | "" -> malformed t (Fmt.str "stream event without a type: %S" data)

@@ -1,4 +1,4 @@
-(** Generic JSON access shared by the provider codecs.
+(** JSON member access and constructors for the provider codecs.
 
     The event surface is large and mostly irrelevant, so decoding reads named members off
     the generic representation instead of declaring a jsont codec for the whole envelope.

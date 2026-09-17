@@ -180,11 +180,6 @@ let url_and_headers t auth model =
           model.Model.id,
         auth_headers ~kind:t.kind ~auth )
 
-let json_to_string json =
-  match Jsont_bytesrw.encode_string ~format:Jsont.Minify Jsont.json json with
-  | Ok body -> body
-  | Error message -> Fmt.failwith "request body encoding failed: %s" message
-
 let stream t ~sw ~clock ~net ~model ?(system = []) ?(tools = []) ?max_tokens ?temperature
     ?(reasoning = `Off) ?(on_error = fun (_ : Error.t) -> ()) messages =
   Eio.Switch.check sw;
@@ -227,7 +222,7 @@ let stream t ~sw ~clock ~net ~model ?(system = []) ?(tools = []) ?max_tokens ?te
                 (wire_messages mapping messages)
             in
             let codec = Codec.create () in
-            let body = json_to_string (Codec.encode request) in
+            let body = Json.string_of_json (Codec.encode request) in
             let url, headers = url_and_headers t auth model in
             let transport = Transport.make ~clock ~net () in
             let consume =

@@ -20,7 +20,7 @@
 let log_src = Logs.Src.create "charm.fantasy.responses_codec"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
-open Json_util
+open Json
 
 (* Request: model classification.
 
