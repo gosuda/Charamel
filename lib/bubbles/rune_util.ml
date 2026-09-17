@@ -42,8 +42,7 @@ let is_control u =
   let n = Uchar.to_int u in
   (n >= 0 && n <= 0x1f) || (n >= 0x7f && n <= 0x9f)
 
-let sanitize ?(replace_tabs = "    ") ?(replace_newlines = "\n") ?(normalize_crlf = false)
-    s =
+let sanitize ~replace_tabs ~replace_newlines ~normalize_crlf s =
   let length = String.length s in
   let out = Buffer.create length in
   let rec loop i =
