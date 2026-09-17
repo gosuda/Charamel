@@ -1,5 +1,5 @@
 (* Provenance: github.com/yuin/goldmark-emoji v1.0.5, the version pinned by
-   /home/alpha/ocaml/charm/.references/glamour/go.sum:54
+   .references/glamour/go.sum:54
    (h1:EMVWyCGPlXJfUXBXpuMu+ii3TIaxbVBnEX9uaDC4cIk=), verified against
    sum.golang.org.  Source of the data: definition/github.go lines 12-1881,
    the definition.Github() collection.  That collection is the default loaded
