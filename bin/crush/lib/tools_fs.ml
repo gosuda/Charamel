@@ -272,12 +272,13 @@ let append_components path components = List.fold_left Filename.concat path comp
 
 let rec canonical_new_target ctx current components =
   match Tool.canonical ctx current with
-  | Ok parent -> Ok (New (append_components parent components))
   | Error (`Not_found _) ->
       let parent = Filename.dirname current in
       if parent = current then Error (`Not_found current)
       else canonical_new_target ctx parent (Filename.basename current :: components)
-  | Error error -> Error error
+  | resolved ->
+      let* parent = resolved in
+      Ok (New (append_components parent components))
 
 let resolve_write_target ctx absolute =
   let target_path = path ctx absolute in
@@ -290,9 +291,8 @@ let resolve_write_target ctx absolute =
 
 let canonical_for_read ctx absolute =
   match Tool.canonical ctx absolute with
-  | Ok target -> Ok target
   | Error (`Not_found _) -> Ok absolute
-  | Error error -> Error error
+  | resolved -> resolved
 
 let output ctx ?(diagnostics = []) text =
   let content, artifact =
@@ -509,38 +509,33 @@ let run_read ctx json =
           begin
             let* target = target_result in
             let target_path = path ctx target in
-            begin match
+            let* kind =
               protect_io target (fun () -> Eio.Path.kind ~follow:true target_path)
-            with
-            | Error error -> Error error
-            | Ok `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory; use ls" target))
-            | Ok `Regular_file ->
-                begin match
+            in
+            match kind with
+            | `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory; use ls" target))
+            | `Regular_file ->
+                let* stat =
                   protect_io target (fun () -> Eio.Path.stat ~follow:true target_path)
-                with
-                | Error error -> Error error
-                | Ok stat
-                  when Optint.Int63.to_int stat.Eio.File.Stat.size > max_file_bytes ->
-                    Ok (Tool.fail (Fmt.str "%s is too large (maximum is 10 MiB)" target))
-                | Ok _ -> begin
-                    let* content =
-                      protect_io target (fun () -> Eio.Path.load target_path)
-                    in
-                    if (not (String.is_valid_utf_8 content)) || binary_content content
-                    then Ok (Tool.fail "not valid UTF-8")
-                    else begin
-                      touch_lsp ctx target;
-                      let now = int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.) in
-                      Hashtbl.replace ctx.Tool.read_tracker target now;
-                      Ok
-                        (output ctx
-                           (format_read_content target (Hashline.tag content) content
-                              selector))
-                    end
+                in
+                if Optint.Int63.to_int stat.Eio.File.Stat.size > max_file_bytes then
+                  Ok (Tool.fail (Fmt.str "%s is too large (maximum is 10 MiB)" target))
+                else
+                  let* content =
+                    protect_io target (fun () -> Eio.Path.load target_path)
+                  in
+                  if (not (String.is_valid_utf_8 content)) || binary_content content then
+                    Ok (Tool.fail "not valid UTF-8")
+                  else begin
+                    touch_lsp ctx target;
+                    let now = int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.) in
+                    Hashtbl.replace ctx.Tool.read_tracker target now;
+                    Ok
+                      (output ctx
+                         (format_read_content target (Hashline.tag content) content
+                            selector))
                   end
-                end
-            | Ok _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
-            end
+            | _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
           end
         end
   end
@@ -578,9 +573,9 @@ let run_write ctx json =
       Tool.request ctx ~read_only:false ~tool:"write" ~action:"write" ~path:request_path
         ~description:target_name
     in
-    begin match target_result with
-    | Error error -> Error error
-    | Ok (New target) -> begin
+    let* resolved = target_result in
+    match resolved with
+    | New target -> begin
         let* () = save_file ctx target content in
         Hashtbl.replace ctx.Tool.read_tracker target
           (int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.));
@@ -590,13 +585,13 @@ let run_write ctx json =
              (Fmt.str "wrote %s (%d bytes) [%s#%s]" target (String.length content) target
                 tag))
       end
-    | Ok (Existing target) ->
+    | Existing target ->
         let target_path = path ctx target in
-        begin match
+        let* kind =
           protect_io target (fun () -> Eio.Path.kind ~follow:true target_path)
-        with
-        | Error error -> Error error
-        | Ok `Regular_file ->
+        in
+        begin match kind with
+        | `Regular_file ->
             if
               not
                 (Hashtbl.mem ctx.Tool.read_tracker target
@@ -617,10 +612,9 @@ let run_write ctx json =
                    (Fmt.str "wrote %s (%d bytes) [%s#%s]" target (String.length content)
                       target tag))
             end
-        | Ok `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
-        | Ok _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
+        | `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
+        | _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
         end
-    end
   end
 
 let first_patch_line = function
