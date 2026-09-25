@@ -4,8 +4,8 @@ synopsis: "Send mail from the command line"
 maintainer: ["metaphorics <152830360+metaphorics@users.noreply.github.com>"]
 authors: ["metaphorics <152830360+metaphorics@users.noreply.github.com>"]
 license: "Apache-2.0"
-homepage: "https://github.com/metaphorics/charamel"
-bug-reports: "https://github.com/metaphorics/charamel/issues"
+homepage: "https://github.com/metaphorics/Charamel"
+bug-reports: "https://github.com/metaphorics/Charamel/issues"
 depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.24"}
@@ -13,6 +13,21 @@ depends: [
   "cohttp-eio"
   "tls-eio"
   "ca-certs"
+  "cmarkit"
+  "cohttp"
+  "http"
+  "tls"
+  "domain-name"
+  "eio"
+  "fmt"
+  "jsont"
+  "base64"
+  "digestif"
+  "ptime"
+  "uri"
+  "cmdliner"
+  "eio_main"
+  "mirage-crypto-rng"
   "alcotest" {with-test}
   "odoc" {with-doc}
 ]
@@ -30,5 +45,5 @@ build: [
     "@doc" {with-doc}
   ]
 ]
-dev-repo: "git+https://github.com/metaphorics/charamel.git"
+dev-repo: "git+https://github.com/metaphorics/Charamel.git"
 x-maintenance-intent: ["(latest)"]

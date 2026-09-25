@@ -4,8 +4,8 @@ synopsis: "Agentic coding harness"
 maintainer: ["metaphorics <152830360+metaphorics@users.noreply.github.com>"]
 authors: ["metaphorics <152830360+metaphorics@users.noreply.github.com>"]
 license: "Apache-2.0"
-homepage: "https://github.com/metaphorics/charamel"
-bug-reports: "https://github.com/metaphorics/charamel/issues"
+homepage: "https://github.com/metaphorics/Charamel"
+bug-reports: "https://github.com/metaphorics/Charamel/issues"
 depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.24"}
@@ -13,6 +13,26 @@ depends: [
   "cohttp-eio"
   "tls-eio"
   "ca-certs"
+  "eio"
+  "jsont"
+  "bytesrw"
+  "re"
+  "fmt"
+  "logs"
+  "digestif"
+  "base64"
+  "cohttp"
+  "http"
+  "uri"
+  "mtime"
+  "mirage-crypto-rng"
+  "tls"
+  "domain-name"
+  "cstruct"
+  "cmdliner"
+  "eio_main"
+  "optint"
+  "ipaddr"
   "alcotest" {with-test}
   "odoc" {with-doc}
 ]
@@ -30,5 +50,5 @@ build: [
     "@doc" {with-doc}
   ]
 ]
-dev-repo: "git+https://github.com/metaphorics/charamel.git"
+dev-repo: "git+https://github.com/metaphorics/Charamel.git"
 x-maintenance-intent: ["(latest)"]
