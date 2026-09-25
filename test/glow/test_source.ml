@@ -1,11 +1,3 @@
-let with_temp_dir f =
-  let path = Filename.temp_file "glow" "dir" in
-  Sys.remove path;
-  Unix.mkdir path 0o700;
-  Fun.protect
-    ~finally:(fun () -> ignore (Sys.command ("rm -rf " ^ Filename.quote path)))
-    (fun () -> f path)
-
 let classify_pipe () =
   match Source.classify ~argument:None ~cwd:"/tmp" ~stdin_is_tty:false with
   | Ok Source.Stdin -> ()
@@ -17,7 +9,8 @@ let classify_directory () =
   | _ -> Alcotest.fail "a tty should select the current directory"
 
 let discover_hidden () =
-  with_temp_dir (fun root ->
+  Test_support.with_temp_dir (fun dir ->
+      let root = Eio.Path.native_exn dir in
       let visible = Filename.concat root "README.md" in
       let hidden_dir = Filename.concat root ".hidden" in
       let ignored_dir = Filename.concat root "node_modules" in

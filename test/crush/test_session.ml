@@ -37,14 +37,6 @@ let random_source () =
     incr counter;
     String.init length (fun index -> Char.chr ((seed + index) land 0xFF))
 
-let contains_substring text needle =
-  let rec loop offset =
-    if offset + String.length needle > String.length text then false
-    else if String.sub text offset (String.length needle) = needle then true
-    else loop (offset + 1)
-  in
-  loop 0
-
 let text_message text = Charamel_fantasy.Message.text Charamel_fantasy.Message.User text
 
 let json_input =
@@ -266,7 +258,7 @@ let middle_corruption_is_not_repaired () =
           let contents = Eio.Path.load Eio.Path.(env#fs / Session.path session) in
           Alcotest.(check bool)
             "middle bad line retained" true
-            (contains_substring contents "not-json"))
+            (Test_support.contains ~needle:"not-json" ~haystack:contents))
 
 let header_id_mismatch_is_corrupt () =
   with_store (fun env _directory ->

@@ -1,14 +1,5 @@
 open Pop_core
 
-let contains text needle =
-  let text_length = String.length text and needle_length = String.length needle in
-  let rec search index =
-    if index + needle_length > text_length then false
-    else if String.sub text index needle_length = needle then true
-    else search (index + 1)
-  in
-  needle_length = 0 || search 0
-
 let fixed_date () =
   match Ptime.of_date_time ((2026, 9, 16), ((12, 34, 56), 0)) with
   | Some value -> value
@@ -40,9 +31,15 @@ let test_message () =
 let test_mime_and_preview () =
   let message = test_message () in
   let wire = Preview.render message in
-  Alcotest.(check bool) "Bcc header omitted" false (contains wire "Bcc:");
-  Alcotest.(check bool) "body present" true (contains wire "Hello");
-  Alcotest.(check bool) "attachment present" true (contains wire "YXR0YWNobWVudA==");
+  Alcotest.(check bool)
+    "Bcc header omitted" false
+    (Test_support.contains ~needle:"Bcc:" ~haystack:wire);
+  Alcotest.(check bool)
+    "body present" true
+    (Test_support.contains ~needle:"Hello" ~haystack:wire);
+  Alcotest.(check bool)
+    "attachment present" true
+    (Test_support.contains ~needle:"YXR0YWNobWVudA==" ~haystack:wire);
   Alcotest.(check string) "preview is serialised message" (Mime.serialise message) wire;
   match Mime.envelope message with
   | Error error -> Alcotest.failf "envelope failed: %a" Mime.pp_error error
@@ -78,13 +75,13 @@ let test_markdown_safety env =
   let unsafe_html = Option.get unsafe.Pop_lib.message.Mime.body_html in
   Alcotest.(check bool)
     "safe HTML removes raw script" false
-    (contains safe_html "<script>");
+    (Test_support.contains ~needle:"<script>" ~haystack:safe_html);
   Alcotest.(check bool)
     "unsafe HTML preserves raw script" true
-    (contains unsafe_html "<script>");
+    (Test_support.contains ~needle:"<script>" ~haystack:unsafe_html);
   Alcotest.(check bool)
     "plain rendering has heading" true
-    (contains safe.Pop_lib.message.Mime.body_text "Hello")
+    (Test_support.contains ~needle:"Hello" ~haystack:safe.Pop_lib.message.Mime.body_text)
 
 let test_config_env () =
   let bindings =
@@ -114,19 +111,23 @@ let test_config_rejects_bad_port () =
   in
   match Pop_lib.config_of_env ~env with
   | Error (`Input message) ->
-      Alcotest.(check bool) "mentions port" true (contains message "POP_SMTP_PORT")
+      Alcotest.(check bool)
+        "mentions port" true
+        (Test_support.contains ~needle:"POP_SMTP_PORT" ~haystack:message)
   | Error error -> Alcotest.failf "wrong configuration error: %a" Pop_lib.pp_error error
   | Ok _ -> Alcotest.fail "bad port was accepted"
 
 let test_resend_payload () =
   let payload = Send.resend_payload (test_message ()) in
-  Alcotest.(check bool) "payload has from field" true (contains payload "\"from\"");
+  Alcotest.(check bool)
+    "payload has from field" true
+    (Test_support.contains ~needle:"\"from\"" ~haystack:payload);
   Alcotest.(check bool)
     "payload has Bcc recipients" true
-    (contains payload "blind@example.com");
+    (Test_support.contains ~needle:"blind@example.com" ~haystack:payload);
   Alcotest.(check bool)
     "payload has base64 attachment" true
-    (contains payload "YXR0YWNobWVudA==")
+    (Test_support.contains ~needle:"YXR0YWNobWVudA==" ~haystack:payload)
 
 let test_smtp_delivery env =
   Eio.Switch.run (fun sw ->
@@ -146,8 +147,12 @@ let test_smtp_delivery env =
           match Fixture_smtp.body fixture with
           | None -> Alcotest.fail "SMTP fixture received no DATA payload"
           | Some body ->
-              Alcotest.(check bool) "DATA has From" true (contains body "From:");
-              Alcotest.(check bool) "DATA omits Bcc" false (contains body "Bcc:")))
+              Alcotest.(check bool)
+                "DATA has From" true
+                (Test_support.contains ~needle:"From:" ~haystack:body);
+              Alcotest.(check bool)
+                "DATA omits Bcc" false
+                (Test_support.contains ~needle:"Bcc:" ~haystack:body)))
 
 let suite =
   [

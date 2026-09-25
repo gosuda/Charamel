@@ -8,16 +8,6 @@ module Todos = Crush_core.Todos
 module Skills = Crush_core.Skills
 module Mcp = Crush_core.Mcp
 
-let contains needle haystack =
-  let needle_length = String.length needle in
-  let haystack_length = String.length haystack in
-  let rec loop index =
-    if index + needle_length > haystack_length then false
-    else if String.sub haystack index needle_length = needle then true
-    else loop (index + 1)
-  in
-  needle_length = 0 || loop 0
-
 let temp_root prefix =
   let path = Filename.temp_file prefix ".dir" in
   Sys.remove path;

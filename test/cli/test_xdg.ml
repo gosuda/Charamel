@@ -27,11 +27,12 @@ let () =
   | _ -> ()
 
 let capture bindings =
-  Eio_main.run (fun env ->
-      Eio.Time.with_timeout_exn env#clock 5. (fun () ->
-          Eio.Process.parse_out env#process_mgr Eio.Buf_read.take_all
-            ~env:(Array.of_list bindings)
-            [ Sys.executable_name; "--xdg-probe"; "run" ]))
+  let status, output, _stderr =
+    Test_support.run_cli ~exe:Sys.executable_name ~env:(Array.of_list bindings)
+      ~timeout:5. [ "--xdg-probe"; "run" ]
+  in
+  Alcotest.(check int) "probe exit status" 0 status;
+  output
 
 type vector = { name : string; env : string list; expect : string list }
 

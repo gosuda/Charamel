@@ -33,15 +33,6 @@ let job_value id =
 
 let job_kill_value id = Jsont.Json.object' [ json_field "job_id" (Jsont.Json.string id) ]
 
-let contains text part =
-  let text_length = String.length text and part_length = String.length part in
-  let rec at index =
-    if index + part_length > text_length then false
-    else if String.sub text index part_length = part then true
-    else at (index + 1)
-  in
-  part_length = 0 || at 0
-
 let make_ctx env sw =
   let cwd = "/tmp" in
   let config = Config.default in
@@ -116,8 +107,12 @@ let test_foreground_capture () =
       ()
   in
   let output = output_or_fail (Tools_shell.bash.Tool.run ctx input) in
-  Alcotest.(check bool) "stdout is captured" true (contains output.Tool.content "out");
-  Alcotest.(check bool) "stderr is captured" true (contains output.Tool.content "err");
+  Alcotest.(check bool)
+    "stdout is captured" true
+    (Test_support.contains ~needle:"out" ~haystack:output.Tool.content);
+  Alcotest.(check bool)
+    "stderr is captured" true
+    (Test_support.contains ~needle:"err" ~haystack:output.Tool.content);
   Alcotest.(check bool) "successful process is not an error" false output.Tool.is_error
 
 let test_timeout () =
@@ -147,7 +142,7 @@ let test_background_lifecycle () =
   let output = output_or_fail (Tools_shell.job_output.Tool.run ctx (job_value id)) in
   Alcotest.(check bool)
     "background stdout is retained" true
-    (contains output.Tool.content "background");
+    (Test_support.contains ~needle:"background" ~haystack:output.Tool.content);
   let killed_started =
     output_or_fail
       (Tools_shell.bash.Tool.run ctx
@@ -164,7 +159,7 @@ let test_background_lifecycle () =
   in
   Alcotest.(check bool)
     "job kill reports killed" true
-    (contains killed_output.Tool.content "killed")
+    (Test_support.contains ~needle:"killed" ~haystack:killed_output.Tool.content)
 
 let cases =
   [

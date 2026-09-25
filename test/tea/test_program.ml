@@ -161,14 +161,15 @@ let test_every_frame_reaches_terminal () =
     }
   in
   let bytes = rendered_bytes app in
-  let contains needle =
-    Alcotest.(check bool)
-      (needle ^ " frame rendered") true
-      (Option.is_some (Re.exec_opt (Re.compile (Re.str needle)) bytes))
-  in
-  contains "alpha";
-  contains "bravo";
-  contains "charlie"
+  Alcotest.(check bool)
+    "alpha frame rendered" true
+    (Test_support.contains ~needle:"alpha" ~haystack:bytes);
+  Alcotest.(check bool)
+    "bravo frame rendered" true
+    (Test_support.contains ~needle:"bravo" ~haystack:bytes);
+  Alcotest.(check bool)
+    "charlie frame rendered" true
+    (Test_support.contains ~needle:"charlie" ~haystack:bytes)
 
 let cases =
   [

@@ -47,5 +47,6 @@
   jsont.bytesrw
   cohttp-eio
   http
+  test_support
   unix)
  (deps %{exe:../../bin/crush/main.exe}))

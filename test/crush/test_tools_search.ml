@@ -16,19 +16,19 @@ let check_ls_skips_generated_trees () =
   let output = run_tool Tools_search.ls context (json_object []) in
   Alcotest.(check bool)
     "listing includes source file" true
-    (contains "a.ml" output.Tool.content);
+    (Test_support.contains ~needle:"a.ml" ~haystack:output.Tool.content);
   Alcotest.(check bool)
     "listing skips hidden entries" false
-    (contains ".env" output.Tool.content);
+    (Test_support.contains ~needle:".env" ~haystack:output.Tool.content);
   Alcotest.(check bool)
     "listing skips .git" false
-    (contains "ignored.ml" output.Tool.content);
+    (Test_support.contains ~needle:"ignored.ml" ~haystack:output.Tool.content);
   Alcotest.(check bool)
     "listing skips build output" false
-    (contains "generated.ml" output.Tool.content);
+    (Test_support.contains ~needle:"generated.ml" ~haystack:output.Tool.content);
   Alcotest.(check bool)
     "listing skips node_modules" false
-    (contains "dependency.ml" output.Tool.content)
+    (Test_support.contains ~needle:"dependency.ml" ~haystack:output.Tool.content)
 
 let check_glob_and_direct_hidden_path () =
   with_context @@ fun env root context ->
@@ -42,20 +42,20 @@ let check_glob_and_direct_hidden_path () =
   in
   Alcotest.(check bool)
     "glob finds source files" true
-    (contains "src/a.ml" output.Tool.content);
+    (Test_support.contains ~needle:"src/a.ml" ~haystack:output.Tool.content);
   Alcotest.(check bool)
     "glob finds all source files" true
-    (contains "src/b.ml" output.Tool.content);
+    (Test_support.contains ~needle:"src/b.ml" ~haystack:output.Tool.content);
   Alcotest.(check bool)
     "glob skips generated hidden trees" false
-    (contains "ignored.ml" output.Tool.content);
+    (Test_support.contains ~needle:"ignored.ml" ~haystack:output.Tool.content);
   let direct =
     run_tool Tools_search.glob context
       (json_object [ ("pattern", Jsont.Json.string ".env") ])
   in
   Alcotest.(check bool)
     "explicit hidden glob finds the entry" true
-    (contains ".env" direct.Tool.content)
+    (Test_support.contains ~needle:".env" ~haystack:direct.Tool.content)
 
 let check_grep_literal_regex_include_and_binary () =
   with_context @@ fun env root context ->
@@ -75,23 +75,24 @@ let check_grep_literal_regex_include_and_binary () =
   in
   Alcotest.(check bool)
     "literal grep includes matching source" true
-    (contains "src/a.ml:1:let needle = 1" literal.Tool.content);
+    (Test_support.contains ~needle:"src/a.ml:1:let needle = 1"
+       ~haystack:literal.Tool.content);
   Alcotest.(check bool)
     "include filters nonmatching basenames" false
-    (contains "src/b.txt" literal.Tool.content);
+    (Test_support.contains ~needle:"src/b.txt" ~haystack:literal.Tool.content);
   Alcotest.(check bool)
     "grep skips binary files" false
-    (contains "binary.bin" literal.Tool.content);
+    (Test_support.contains ~needle:"binary.bin" ~haystack:literal.Tool.content);
   Alcotest.(check bool)
     "grep skips hidden trees" false
-    (contains "ignored.ml" literal.Tool.content);
+    (Test_support.contains ~needle:"ignored.ml" ~haystack:literal.Tool.content);
   let regex =
     run_tool Tools_search.grep context
       (json_object [ ("pattern", Jsont.Json.string "needle.*text") ])
   in
   Alcotest.(check bool)
     "regex grep matches text" true
-    (contains "src/b.txt:1" regex.Tool.content)
+    (Test_support.contains ~needle:"src/b.txt:1" ~haystack:regex.Tool.content)
 
 let check_grep_limit_footer () =
   with_context @@ fun env root context ->
@@ -103,10 +104,10 @@ let check_grep_limit_footer () =
   in
   Alcotest.(check bool)
     "grep emits the first result" true
-    (contains ":1:needle one" output.Tool.content);
+    (Test_support.contains ~needle:":1:needle one" ~haystack:output.Tool.content);
   Alcotest.(check bool)
     "grep reports truncation" true
-    (contains "(truncated at 1)" output.Tool.content)
+    (Test_support.contains ~needle:"(truncated at 1)" ~haystack:output.Tool.content)
 
 let check_glob_no_match () =
   with_context @@ fun _env _root context ->

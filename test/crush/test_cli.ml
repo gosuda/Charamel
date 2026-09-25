@@ -52,21 +52,15 @@ let run_child env root args =
             ~cwd:Eio.Path.(env#fs / root)
             ~env:(Array.of_list child_env) (executable :: args))
 
-let contains ~needle text =
-  let n = String.length needle in
-  let length = String.length text in
-  let rec find index =
-    if index + n > length then false
-    else if String.sub text index n = needle then true
-    else find (index + 1)
-  in
-  n = 0 || find 0
-
 let dirs_command () =
   with_scratch (fun env root ->
       let output = run_child env root [ "dirs" ] in
-      Alcotest.(check bool) "config directory" true (contains ~needle:"config:" output);
-      Alcotest.(check bool) "project key" true (contains ~needle:"project-key:" output))
+      Alcotest.(check bool)
+        "config directory" true
+        (Test_support.contains ~needle:"config:" ~haystack:output);
+      Alcotest.(check bool)
+        "project key" true
+        (Test_support.contains ~needle:"project-key:" ~haystack:output))
 
 let schema_command () =
   with_scratch (fun env root ->
@@ -74,7 +68,9 @@ let schema_command () =
       Alcotest.(check bool)
         "schema object" true
         (String.length output > 2 && output.[0] = '{');
-      Alcotest.(check bool) "provider schema" true (contains ~needle:"providers" output))
+      Alcotest.(check bool)
+        "provider schema" true
+        (Test_support.contains ~needle:"providers" ~haystack:output))
 
 type fixture = { port : int; body : string }
 
@@ -192,7 +188,7 @@ let run_fixture () =
       Alcotest.(check int) "run exits successfully" 0 status;
       Alcotest.(check bool)
         "assistant text is streamed" true
-        (contains ~needle:"pong" output);
+        (Test_support.contains ~needle:"pong" ~haystack:output);
       Alcotest.(check string) "fixture diagnostics are empty" "" error)
 
 let providers_catalog_body =
@@ -228,7 +224,8 @@ let logout_missing_credential_without_force () =
       Alcotest.(check int) "logout without a stored credential fails" 1 status;
       Alcotest.(check bool)
         "missing credential is reported" true
-        (contains ~needle:"no credentials for provider anthropic" error))
+        (Test_support.contains ~needle:"no credentials for provider anthropic"
+           ~haystack:error))
 
 let logout_missing_credential_with_force () =
   with_scratch (fun env root ->
@@ -239,7 +236,7 @@ let logout_missing_credential_with_force () =
       Alcotest.(check string) "no diagnostics on stderr" "" error;
       Alcotest.(check bool)
         "logout confirmation" true
-        (contains ~needle:"Logged out of anthropic" output))
+        (Test_support.contains ~needle:"Logged out of anthropic" ~haystack:output))
 
 let login_existing_oauth_without_force () =
   with_scratch (fun env root ->
@@ -255,10 +252,11 @@ let login_existing_oauth_without_force () =
       Alcotest.(check string) "no diagnostics on stderr" "" error;
       Alcotest.(check bool)
         "already logged in notice" true
-        (contains ~needle:"You are already logged in to anthropic." output);
+        (Test_support.contains ~needle:"You are already logged in to anthropic."
+           ~haystack:output);
       Alcotest.(check bool)
         "force hint" true
-        (contains ~needle:"Use --force to re-authenticate." output);
+        (Test_support.contains ~needle:"Use --force to re-authenticate." ~haystack:output);
       Alcotest.(check string)
         "stored OAuth credential is unchanged" auth_contents (Eio.Path.load auth_path))
 
@@ -306,7 +304,7 @@ let logs_rejects_a_zero_tail () =
       Alcotest.(check int) "a zero tail is a usage error" 2 status;
       Alcotest.(check bool)
         "the tail bound is reported" true
-        (contains ~needle:"--tail must be at least 1" error))
+        (Test_support.contains ~needle:"--tail must be at least 1" ~haystack:error))
 
 let update_providers_rejects_the_embedded_source () =
   with_scratch (fun env root ->
@@ -316,7 +314,7 @@ let update_providers_rejects_the_embedded_source () =
       Alcotest.(check int) "the embedded source is rejected" 2 status;
       Alcotest.(check bool)
         "the usage message names --source" true
-        (contains ~needle:"--source expects a catalog URL" error))
+        (Test_support.contains ~needle:"--source expects a catalog URL" ~haystack:error))
 
 let update_providers_refreshes_from_a_fixture () =
   with_scratch (fun env root ->
@@ -330,7 +328,7 @@ let update_providers_refreshes_from_a_fixture () =
       Alcotest.(check string) "no diagnostics" "" error;
       Alcotest.(check bool)
         "the refresh is confirmed" true
-        (contains ~needle:"Updated provider catalog" output))
+        (Test_support.contains ~needle:"Updated provider catalog" ~haystack:output))
 
 let cases =
   [

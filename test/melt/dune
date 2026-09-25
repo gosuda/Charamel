@@ -8,7 +8,7 @@
   alcotest
   fmt
   eio
-  eio_main
+  test_support
   mirage-crypto-rng.unix
   unix)
  (deps %{exe:../../bin/melt/main.exe}))

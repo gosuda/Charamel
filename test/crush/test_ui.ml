@@ -1,13 +1,3 @@
-let contains ~needle haystack =
-  let n = String.length needle in
-  let limit = String.length haystack - n in
-  let rec loop index =
-    if index > limit then false
-    else if String.sub haystack index n = needle then true
-    else loop (index + 1)
-  in
-  n = 0 || (limit >= 0 && loop 0)
-
 module Ui = Crush_ui
 module Agent = Crush_core.Agent
 module Permission = Crush_core.Permission
@@ -360,7 +350,7 @@ let scripted_runtime_event () =
       in
       Alcotest.(check bool)
         "runtime event reaches chat frame" true
-        (contains ~needle:"runtime-produced reply" frame))
+        (Test_support.contains ~needle:"runtime-produced reply" ~haystack:frame))
 
 let scripted_ui_stream () =
   with_ui_backend (fun _env _sw backend bridge ->
@@ -372,7 +362,7 @@ let scripted_ui_stream () =
       in
       Alcotest.(check bool)
         "streamed text reaches chat frame" true
-        (contains ~needle:"streamed reply" frame))
+        (Test_support.contains ~needle:"streamed reply" ~haystack:frame))
 
 let scripted_counter () =
   let model, _frame =

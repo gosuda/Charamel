@@ -2,15 +2,6 @@ let expect_ok name = function
   | Ok value -> value
   | Error (`Msg message) -> Alcotest.failf "%s: %s" name message
 
-let contains_sub text needle =
-  let text_length = String.length text in
-  let needle_length = String.length needle in
-  let rec loop index =
-    index + needle_length <= text_length
-    && (String.sub text index needle_length = needle || loop (index + 1))
-  in
-  needle = "" || loop 0
-
 let template_styles_text () =
   let rendered =
     expect_ok "template" (Format.render Format.Template "{{ Bold \"hello\" }}")
@@ -60,9 +51,15 @@ let all_renderers () =
     expect_ok "emoji" (Format.render ~theme:"ascii" Format.Emoji "hello :heart:")
   in
   let plain value = Charamel_ansi.Text.strip value in
-  Alcotest.(check bool) "markdown output" true (contains_sub (plain markdown) "# Title");
-  Alcotest.(check bool) "code output" true (contains_sub (plain code) "let x = 1");
-  Alcotest.(check bool) "emoji output" true (contains_sub (plain emoji) "hello ❤️")
+  Alcotest.(check bool)
+    "markdown output" true
+    (Test_support.contains ~needle:"# Title" ~haystack:(plain markdown));
+  Alcotest.(check bool)
+    "code output" true
+    (Test_support.contains ~needle:"let x = 1" ~haystack:(plain code));
+  Alcotest.(check bool)
+    "emoji output" true
+    (Test_support.contains ~needle:"hello ❤️" ~haystack:(plain emoji))
 
 let invalid_template () =
   match Format.render Format.Template "{{ Missing \"x\" }}" with

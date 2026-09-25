@@ -1,13 +1,5 @@
 open Pop_core
 
-let contains haystack needle =
-  let rec loop index =
-    if index + String.length needle > String.length haystack then false
-    else if String.sub haystack index (String.length needle) = needle then true
-    else loop (index + 1)
-  in
-  needle = "" || loop 0
-
 let header_block rendered =
   let lines = String.split_on_char '\n' rendered in
   let rec take acc = function
@@ -40,11 +32,16 @@ let make_message ?(cc = []) ?(bcc = []) ?body_html ?(attachments = []) subject b
 let plain_message () =
   let message = make_message "hello" "line one\nline two" in
   let rendered = Mime.serialise message in
-  Alcotest.(check bool) "CRLF line endings" true (contains rendered "\r\n");
+  Alcotest.(check bool)
+    "CRLF line endings" true
+    (Test_support.contains ~needle:"\r\n" ~haystack:rendered);
   Alcotest.(check bool)
     "quoted-printable" true
-    (contains rendered "Content-Transfer-Encoding: quoted-printable\r\n");
-  Alcotest.(check bool) "no Bcc header" false (contains rendered "Bcc:");
+    (Test_support.contains ~needle:"Content-Transfer-Encoding: quoted-printable\r\n"
+       ~haystack:rendered);
+  Alcotest.(check bool)
+    "no Bcc header" false
+    (Test_support.contains ~needle:"Bcc:" ~haystack:rendered);
   Alcotest.(check bool)
     "stable rendering" true
     (String.equal rendered (Mime.serialise message))
@@ -54,12 +51,18 @@ let alternative_message () =
   let rendered = Mime.serialise message in
   Alcotest.(check bool)
     "alternative content type" true
-    (contains rendered "multipart/alternative; boundary=\"pop-alt-");
-  Alcotest.(check bool) "text part" true (contains rendered "text/plain; charset=UTF-8");
-  Alcotest.(check bool) "html part" true (contains rendered "text/html; charset=UTF-8");
+    (Test_support.contains ~needle:"multipart/alternative; boundary=\"pop-alt-"
+       ~haystack:rendered);
+  Alcotest.(check bool)
+    "text part" true
+    (Test_support.contains ~needle:"text/plain; charset=UTF-8" ~haystack:rendered);
+  Alcotest.(check bool)
+    "html part" true
+    (Test_support.contains ~needle:"text/html; charset=UTF-8" ~haystack:rendered);
   Alcotest.(check bool)
     "alternative top-level composite has no transfer header" false
-    (contains (header_block rendered) "Content-Transfer-Encoding:")
+    (Test_support.contains ~needle:"Content-Transfer-Encoding:"
+       ~haystack:(header_block rendered))
 
 let attachment_message () =
   let attachment =
@@ -72,24 +75,35 @@ let attachment_message () =
   let rendered = Mime.serialise message in
   Alcotest.(check bool)
     "mixed content type" true
-    (contains rendered "multipart/mixed; boundary=\"pop-mixed-");
+    (Test_support.contains ~needle:"multipart/mixed; boundary=\"pop-mixed-"
+       ~haystack:rendered);
   Alcotest.(check bool)
     "base64 transfer" true
-    (contains rendered "Content-Transfer-Encoding: base64\r\n");
-  Alcotest.(check bool) "base64 payload" true (contains rendered "aGVsbG8=\r\n");
+    (Test_support.contains ~needle:"Content-Transfer-Encoding: base64\r\n"
+       ~haystack:rendered);
+  Alcotest.(check bool)
+    "base64 payload" true
+    (Test_support.contains ~needle:"aGVsbG8=\r\n" ~haystack:rendered);
   Alcotest.(check bool)
     "attachment filename" true
-    (contains rendered "filename=\"hello.txt\"");
+    (Test_support.contains ~needle:"filename=\"hello.txt\"" ~haystack:rendered);
   Alcotest.(check bool)
     "mixed top-level composite has no transfer header" false
-    (contains (header_block rendered) "Content-Transfer-Encoding:");
-  Alcotest.(check bool) "no Bcc header" false (contains rendered "Bcc:")
+    (Test_support.contains ~needle:"Content-Transfer-Encoding:"
+       ~haystack:(header_block rendered));
+  Alcotest.(check bool)
+    "no Bcc header" false
+    (Test_support.contains ~needle:"Bcc:" ~haystack:rendered)
 
 let encoded_subject () =
   let message = make_message "héllo" "body" in
   let subject = Mime.encoded_subject message in
-  Alcotest.(check bool) "encoded-word prefix" true (contains subject "=?UTF-8?B?");
-  Alcotest.(check bool) "encoded-word terminator" true (contains subject "?=")
+  Alcotest.(check bool)
+    "encoded-word prefix" true
+    (Test_support.contains ~needle:"=?UTF-8?B?" ~haystack:subject);
+  Alcotest.(check bool)
+    "encoded-word terminator" true
+    (Test_support.contains ~needle:"?=" ~haystack:subject)
 
 let envelope () =
   let blind = address "blind@example.test" in

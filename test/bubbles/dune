@@ -8,10 +8,9 @@
   charamel.lipgloss
   alcotest
   eio
-  eio.unix
-  eio_main
   fmt
-  optint)
+  optint
+  test_support)
  (modules
   test_bubbles
   test_key_binding

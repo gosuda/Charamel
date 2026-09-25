@@ -2,7 +2,7 @@
  (name test_sequin)
  (package sequin)
  (modules test_sequin test_explain)
- (libraries sequin_core alcotest eio eio.unix eio_main unix)
+ (libraries sequin_core alcotest eio test_support unix)
  (deps %{exe:../../bin/sequin/main.exe})
  (flags
   (:standard -open Sequin_core)))

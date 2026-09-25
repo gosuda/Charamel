@@ -20,15 +20,6 @@ let fetch_value ?format ?timeout_s url =
   |> optional "timeout_s" (Option.map Jsont.Json.int timeout_s)
   |> Jsont.Json.object'
 
-let contains text part =
-  let text_length = String.length text and part_length = String.length part in
-  let rec at index =
-    if index + part_length > text_length then false
-    else if String.sub text index part_length = part then true
-    else at (index + 1)
-  in
-  part_length = 0 || at 0
-
 let make_ctx env sw =
   let cwd = "/tmp" in
   let config = Config.default in
@@ -131,26 +122,28 @@ let test_markdown_and_text () =
       in
       Alcotest.(check bool)
         "heading is converted" true
-        (contains markdown.Tool.content "# Hello");
+        (Test_support.contains ~needle:"# Hello" ~haystack:markdown.Tool.content);
       Alcotest.(check bool)
         "entities are decoded" true
-        (contains markdown.Tool.content "A & B");
+        (Test_support.contains ~needle:"A & B" ~haystack:markdown.Tool.content);
       Alcotest.(check bool)
         "list item is converted" true
-        (contains markdown.Tool.content "- One");
+        (Test_support.contains ~needle:"- One" ~haystack:markdown.Tool.content);
       Alcotest.(check bool)
         "link is converted" true
-        (contains markdown.Tool.content "[next](/next)");
+        (Test_support.contains ~needle:"[next](/next)" ~haystack:markdown.Tool.content);
       Alcotest.(check bool)
         "script is omitted" false
-        (contains markdown.Tool.content "bad-script");
+        (Test_support.contains ~needle:"bad-script" ~haystack:markdown.Tool.content);
       let text =
         output_or_fail (Tools_net.fetch.Tool.run ctx (fetch_value ~format:"text" url))
       in
-      Alcotest.(check bool) "text keeps body" true (contains text.Tool.content "Hello");
+      Alcotest.(check bool)
+        "text keeps body" true
+        (Test_support.contains ~needle:"Hello" ~haystack:text.Tool.content);
       Alcotest.(check bool)
         "text omits style" false
-        (contains text.Tool.content "bad-style"))
+        (Test_support.contains ~needle:"bad-style" ~haystack:text.Tool.content))
 
 let test_status_error () =
   with_ctx @@ fun _env ctx ->
@@ -162,7 +155,9 @@ let test_status_error () =
   with_server ctx ~response ~requests:1 (fun url ->
       match Tools_net.fetch.Tool.run ctx (fetch_value ~timeout_s:5 url) with
       | Error (`Unavailable message) ->
-          Alcotest.(check bool) "status is reported" true (contains message "HTTP 404")
+          Alcotest.(check bool)
+            "status is reported" true
+            (Test_support.contains ~needle:"HTTP 404" ~haystack:message)
       | Error error -> Alcotest.failf "unexpected error: %a" Tool.pp_error error
       | Ok _ -> Alcotest.fail "404 response was accepted")
 

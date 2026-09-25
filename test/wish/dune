@@ -15,4 +15,5 @@
   cstruct
   fmt
   mtime
+  test_support
   unix))

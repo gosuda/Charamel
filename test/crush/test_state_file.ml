@@ -1,20 +1,12 @@
 module State_file = Crush_core.State_file
 
-let with_root f =
-  Eio_main.run (fun env ->
-      let root = Fmt.str "/tmp/crush-state-%d-%d" (Unix.getpid ()) (Random.bits ()) in
-      Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 Eio.Path.(env#fs / root);
-      Fun.protect
-        ~finally:(fun () -> Eio.Path.rmtree ~missing_ok:true Eio.Path.(env#fs / root))
-        (fun () -> f env Eio.Path.(env#fs / root)))
-
 let temp_entries root =
   Eio.Path.read_dir root
   |> List.filter (fun name ->
       String.starts_with ~prefix:"." name && String.contains name 'c')
 
 let check_replace_and_mode () =
-  with_root (fun _env root ->
+  Test_support.with_temp_dir (fun root ->
       let target = Eio.Path.(root / "state.json") in
       (match State_file.replace target "first\n" with
       | Error error -> Alcotest.failf "replace failed: %a" State_file.pp_error error
@@ -31,7 +23,7 @@ let check_replace_and_mode () =
       Alcotest.(check (list string)) "second replacement cleans up" [] (temp_entries root))
 
 let check_symlink_destination_is_replaced_not_followed () =
-  with_root (fun _env root ->
+  Test_support.with_temp_dir (fun root ->
       let original = Eio.Path.(root / "original") in
       let alias = Eio.Path.(root / "alias") in
       Eio.Path.save ~create:(`Exclusive 0o600) original "keep\n";
@@ -49,7 +41,7 @@ let check_symlink_destination_is_replaced_not_followed () =
         (Eio.Path.kind ~follow:false alias = `Regular_file))
 
 let check_missing_parent_is_error () =
-  with_root (fun _env root ->
+  Test_support.with_temp_dir (fun root ->
       let target = Eio.Path.(root / "missing" / "state.json") in
       match State_file.replace target "value" with
       | Ok () -> Alcotest.fail "replace unexpectedly created a missing parent"

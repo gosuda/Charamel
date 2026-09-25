@@ -6,15 +6,6 @@ let plain s =
       Buffer.add_string out (String.trim line));
   Buffer.contents out
 
-let contains haystack needle =
-  let h = String.length haystack and n = String.length needle in
-  let rec loop i =
-    if i + n > h then false
-    else if String.sub haystack i n = needle then true
-    else loop (i + 1)
-  in
-  if n = 0 then true else loop 0
-
 let test_empty () =
   Alcotest.(check string) "empty markdown" "" (Charamel_glamour.render "")
 
@@ -22,11 +13,21 @@ let test_heading_and_inline_nodes () =
   let output =
     Charamel_glamour.render "# Hello *world* **again** ~~old~~ `code`" |> plain
   in
-  Alcotest.(check bool) "heading text" true (contains output "Hello");
-  Alcotest.(check bool) "emphasis text" true (contains output "world");
-  Alcotest.(check bool) "strong text" true (contains output "again");
-  Alcotest.(check bool) "strike text" true (contains output "old");
-  Alcotest.(check bool) "code text" true (contains output "code")
+  Alcotest.(check bool)
+    "heading text" true
+    (Test_support.contains ~needle:"Hello" ~haystack:output);
+  Alcotest.(check bool)
+    "emphasis text" true
+    (Test_support.contains ~needle:"world" ~haystack:output);
+  Alcotest.(check bool)
+    "strong text" true
+    (Test_support.contains ~needle:"again" ~haystack:output);
+  Alcotest.(check bool)
+    "strike text" true
+    (Test_support.contains ~needle:"old" ~haystack:output);
+  Alcotest.(check bool)
+    "code text" true
+    (Test_support.contains ~needle:"code" ~haystack:output)
 
 let test_width_and_no_wrap () =
   let source = "one two three four five six seven" in
@@ -34,36 +35,52 @@ let test_width_and_no_wrap () =
   let lines = String.split_on_char '\n' wrapped in
   Alcotest.(check bool) "wrap produces multiple lines" true (List.length lines > 1);
   let unwrapped = Charamel_glamour.render ~width:0 source |> plain in
-  Alcotest.(check bool) "zero disables wrapping" true (contains unwrapped source)
+  Alcotest.(check bool)
+    "zero disables wrapping" true
+    (Test_support.contains ~needle:source ~haystack:unwrapped)
 
 let test_preserve_newlines () =
   let source = "first\nsecond" in
   let folded = Charamel_glamour.render source |> plain in
   let preserved = Charamel_glamour.render ~preserve_newlines:true source |> plain in
-  Alcotest.(check bool) "default folds a soft break" true (contains folded "first second");
+  Alcotest.(check bool)
+    "default folds a soft break" true
+    (Test_support.contains ~needle:"first second" ~haystack:folded);
   Alcotest.(check bool)
     "preserve keeps a soft break" true
-    (contains preserved "first\nsecond")
+    (Test_support.contains ~needle:"first\nsecond" ~haystack:preserved)
 
 let test_emoji () =
   let output = Charamel_glamour.render ~emoji:true ":smile: :heart:" |> plain in
-  Alcotest.(check bool) "github shortcode smile" true (contains output "😄");
-  Alcotest.(check bool) "github shortcode heart" true (contains output "❤")
+  Alcotest.(check bool)
+    "github shortcode smile" true
+    (Test_support.contains ~needle:"😄" ~haystack:output);
+  Alcotest.(check bool)
+    "github shortcode heart" true
+    (Test_support.contains ~needle:"❤" ~haystack:output)
 
 let test_lists_and_tasks () =
   let markdown = "- one\n  - nested\n- [x] done\n- [ ] todo" in
   let output = Charamel_glamour.render markdown |> plain in
-  Alcotest.(check bool) "nested item" true (contains output "nested");
-  Alcotest.(check bool) "checked task" true (contains output "[✓]");
-  Alcotest.(check bool) "unchecked task" true (contains output "[ ]")
+  Alcotest.(check bool)
+    "nested item" true
+    (Test_support.contains ~needle:"nested" ~haystack:output);
+  Alcotest.(check bool)
+    "checked task" true
+    (Test_support.contains ~needle:"[✓]" ~haystack:output);
+  Alcotest.(check bool)
+    "unchecked task" true
+    (Test_support.contains ~needle:"[ ]" ~haystack:output)
 
 let test_links_and_table_footer () =
   let markdown = "| Name | Link |\n| --- | --- |\n| Charm | [site](https://charm.sh) |" in
   let output = Charamel_glamour.render markdown |> plain in
-  Alcotest.(check bool) "table content" true (contains output "Charm");
+  Alcotest.(check bool)
+    "table content" true
+    (Test_support.contains ~needle:"Charm" ~haystack:output);
   Alcotest.(check bool)
     "table link footer" true
-    (contains output "[1]: site https://charm.sh")
+    (Test_support.contains ~needle:"[1]: site https://charm.sh" ~haystack:output)
 
 let test_table_alignment_and_truncation () =
   let markdown =
@@ -72,8 +89,12 @@ let test_table_alignment_and_truncation () =
      | a very long value | middle | another very long value |"
   in
   let output = Charamel_glamour.render ~width:36 ~table_wrap:false markdown |> plain in
-  Alcotest.(check bool) "table truncates with ellipsis" true (contains output "…");
-  Alcotest.(check bool) "table keeps all columns" true (contains output "Centre")
+  Alcotest.(check bool)
+    "table truncates with ellipsis" true
+    (Test_support.contains ~needle:"…" ~haystack:output);
+  Alcotest.(check bool)
+    "table keeps all columns" true
+    (Test_support.contains ~needle:"Centre" ~haystack:output)
 
 let test_relative_url () =
   let output =
@@ -81,26 +102,40 @@ let test_relative_url () =
   in
   Alcotest.(check bool)
     "resolved href" true
-    (contains output "https://example.com/docs/guide.md")
+    (Test_support.contains ~needle:"https://example.com/docs/guide.md" ~haystack:output)
 
 let test_code_block_highlighting () =
   let output = Charamel_glamour.render "```ocaml\nlet x = 1\n```" in
-  Alcotest.(check bool) "code text survives" true (contains (plain output) "let x = 1");
-  Alcotest.(check bool) "known lexer styles" true (contains output "\027[")
+  Alcotest.(check bool)
+    "code text survives" true
+    (Test_support.contains ~needle:"let x = 1" ~haystack:(plain output));
+  Alcotest.(check bool)
+    "known lexer styles" true
+    (Test_support.contains ~needle:"\027[" ~haystack:output)
 
 let test_footnotes_and_html () =
   let markdown = "See note[^1].\n\n[^1]: Footnote text\n\n<div>raw</div>" in
   let output = Charamel_glamour.render markdown |> plain in
-  Alcotest.(check bool) "footnote reference" true (contains output "[1]");
-  Alcotest.(check bool) "footnote body" true (contains output "Footnote text");
-  Alcotest.(check bool) "html block" true (contains output "<div>raw</div>")
+  Alcotest.(check bool)
+    "footnote reference" true
+    (Test_support.contains ~needle:"[1]" ~haystack:output);
+  Alcotest.(check bool)
+    "footnote body" true
+    (Test_support.contains ~needle:"Footnote text" ~haystack:output);
+  Alcotest.(check bool)
+    "html block" true
+    (Test_support.contains ~needle:"<div>raw</div>" ~haystack:output)
 
 let test_example_golden_scenarios () =
   let source = In_channel.with_open_bin "data/example.md" In_channel.input_all in
   let output_80 = Charamel_glamour.render ~width:80 source |> plain in
   let output_120 = Charamel_glamour.render ~width:120 source |> plain in
-  Alcotest.(check bool) "80-column example" true (contains output_80 "Glamour");
-  Alcotest.(check bool) "120-column example" true (contains output_120 "artichoke");
+  Alcotest.(check bool)
+    "80-column example" true
+    (Test_support.contains ~needle:"Glamour" ~haystack:output_80);
+  Alcotest.(check bool)
+    "120-column example" true
+    (Test_support.contains ~needle:"artichoke" ~haystack:output_120);
   Alcotest.(check bool) "width changes layout" true (output_80 <> output_120)
 
 let fixture_files directory =

@@ -10,4 +10,5 @@
   eio.unix
   eio_main
   alcotest
-  fmt))
+  fmt
+  test_support))

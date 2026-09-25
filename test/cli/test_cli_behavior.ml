@@ -12,20 +12,13 @@ let runtime_probe mode =
     []
 
 let child_status mode =
-  Eio_main.run (fun env ->
-      Eio.Switch.run (fun sw ->
-          let argv =
-            if mode = "usage" then [ Sys.executable_name; "--unknown-option" ]
-            else [ Sys.executable_name ]
-          in
-          match
-            Eio.Process.await
-              (Eio.Process.spawn ~sw env#process_mgr
-                 ~env:[| "CHARAMEL_CLI_RUNTIME_PROBE=" ^ mode |]
-                 argv)
-          with
-          | `Exited code -> code
-          | `Signaled _ -> -1))
+  let args = if mode = "usage" then [ "--unknown-option" ] else [] in
+  let status, _stdout, _stderr =
+    Test_support.run_cli ~exe:Sys.executable_name
+      ~env:[| "CHARAMEL_CLI_RUNTIME_PROBE=" ^ mode |]
+      args
+  in
+  status
 
 let status_case mode expected =
   Alcotest.test_case mode `Quick (fun () ->

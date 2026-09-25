@@ -77,15 +77,27 @@ let check_read_ranges () =
     run_tool Tools_fs.read context (json_object [ ("path", Jsont.Json.string path) ])
   in
   let from_two = (run (file ^ ":2")).Tool.content in
-  Alcotest.(check bool) "N starts at the requested line" true (contains "2:two" from_two);
-  Alcotest.(check bool) "N includes the final line" true (contains "5:five" from_two);
+  Alcotest.(check bool)
+    "N starts at the requested line" true
+    (Test_support.contains ~needle:"2:two" ~haystack:from_two);
+  Alcotest.(check bool)
+    "N includes the final line" true
+    (Test_support.contains ~needle:"5:five" ~haystack:from_two);
   let span = (run (file ^ ":2-3")).Tool.content in
-  Alcotest.(check bool) "N-M includes both bounds" true (contains "2:two\n3:three" span);
+  Alcotest.(check bool)
+    "N-M includes both bounds" true
+    (Test_support.contains ~needle:"2:two\n3:three" ~haystack:span);
   let count = (run (file ^ ":2+2")).Tool.content in
-  Alcotest.(check bool) "N+K has K lines" true (contains "2:two\n3:three" count);
-  Alcotest.(check bool) "N+K stops at its count" false (contains "4:four" count);
+  Alcotest.(check bool)
+    "N+K has K lines" true
+    (Test_support.contains ~needle:"2:two\n3:three" ~haystack:count);
+  Alcotest.(check bool)
+    "N+K stops at its count" false
+    (Test_support.contains ~needle:"4:four" ~haystack:count);
   let last = (run (file ^ ":-2")).Tool.content in
-  Alcotest.(check bool) "-K selects the tail" true (contains "4:four\n5:five" last);
+  Alcotest.(check bool)
+    "-K selects the tail" true
+    (Test_support.contains ~needle:"4:four\n5:five" ~haystack:last);
   begin match
     Tools_fs.read.Tool.run context
       (json_object [ ("path", Jsont.Json.string (file ^ ":0")) ])
@@ -130,7 +142,9 @@ let check_stale_tag_and_atomicity () =
   Alcotest.(check bool) "stale tag is an error output" true stale.Tool.is_error;
   Alcotest.(check bool)
     "stale output reports current tag" true
-    (contains (Crush_core.Hashline.tag (load_file env file)) stale.Tool.content);
+    (Test_support.contains
+       ~needle:(Crush_core.Hashline.tag (load_file env file))
+       ~haystack:stale.Tool.content);
   Alcotest.(check string)
     "stale edit leaves file unchanged" "changed\ntwo\nthree\n" (load_file env file);
   let current = load_file env file in
@@ -164,7 +178,7 @@ let check_symlink_plan_confinement () =
   | Error (`Denied message) ->
       Alcotest.(check bool)
         "symlink escape is denied by plan mode" true
-        (contains "plan mode" message)
+        (Test_support.contains ~needle:"plan mode" ~haystack:message)
   | Error error -> Alcotest.failf "wrong symlink error: %a" Tool.pp_error error
   | Ok _ -> Alcotest.fail "symlink escape was accepted"
   end;

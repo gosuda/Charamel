@@ -2,5 +2,5 @@
  (name test_store)
  (package skate)
  (modules test_store)
- (libraries skate_core alcotest fmt eio eio_main unix)
+ (libraries skate_core alcotest fmt eio test_support unix)
  (deps %{exe:../../bin/skate/main.exe}))

@@ -10,4 +10,5 @@
   eio.unix
   eio_main
   fmt
-  mirage-crypto-rng.unix))
+  mirage-crypto-rng.unix
+  test_support))

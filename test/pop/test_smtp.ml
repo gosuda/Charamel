@@ -1,13 +1,5 @@
 open Pop_core
 
-let contains haystack needle =
-  let rec loop index =
-    if index + String.length needle > String.length haystack then false
-    else if String.sub haystack index (String.length needle) = needle then true
-    else loop (index + 1)
-  in
-  needle = "" || loop 0
-
 let run_mock ?(timeout = 30.) replies f =
   Eio_mock.Backend.run_full (fun env ->
       let net = Eio_mock.Net.make "smtp-net" in
@@ -48,15 +40,21 @@ let plain_dialogue () =
               let sent = Buffer.contents writes in
               Alcotest.(check bool)
                 "MAIL FROM" true
-                (contains sent "MAIL FROM:<sender@example.test>\r\n");
+                (Test_support.contains ~needle:"MAIL FROM:<sender@example.test>\r\n"
+                   ~haystack:sent);
               Alcotest.(check bool)
                 "RCPT TO" true
-                (contains sent "RCPT TO:<recipient@example.test>\r\n");
+                (Test_support.contains ~needle:"RCPT TO:<recipient@example.test>\r\n"
+                   ~haystack:sent);
               Alcotest.(check bool)
                 "dot stuffing" true
-                (contains sent "..second line\r\n");
-              Alcotest.(check bool) "DATA terminator" true (contains sent "\r\n.\r\n");
-              Alcotest.(check bool) "QUIT" true (contains sent "QUIT\r\n")))
+                (Test_support.contains ~needle:"..second line\r\n" ~haystack:sent);
+              Alcotest.(check bool)
+                "DATA terminator" true
+                (Test_support.contains ~needle:"\r\n.\r\n" ~haystack:sent);
+              Alcotest.(check bool)
+                "QUIT" true
+                (Test_support.contains ~needle:"QUIT\r\n" ~haystack:sent)))
 
 let login_fallback () =
   let replies =
@@ -78,12 +76,18 @@ let login_fallback () =
           | Error error -> Alcotest.failf "login fallback failed: %a" Smtp.pp_error error
           | Ok () ->
               let sent = Buffer.contents writes in
-              Alcotest.(check bool) "AUTH PLAIN first" true (contains sent "AUTH PLAIN ");
+              Alcotest.(check bool)
+                "AUTH PLAIN first" true
+                (Test_support.contains ~needle:"AUTH PLAIN " ~haystack:sent);
               Alcotest.(check bool)
                 "AUTH LOGIN fallback" true
-                (contains sent "AUTH LOGIN\r\n");
-              Alcotest.(check bool) "username" true (contains sent "dXNlcg==\r\n");
-              Alcotest.(check bool) "password" true (contains sent "cGFzcw==\r\n")))
+                (Test_support.contains ~needle:"AUTH LOGIN\r\n" ~haystack:sent);
+              Alcotest.(check bool)
+                "username" true
+                (Test_support.contains ~needle:"dXNlcg==\r\n" ~haystack:sent);
+              Alcotest.(check bool)
+                "password" true
+                (Test_support.contains ~needle:"cGFzcw==\r\n" ~haystack:sent)))
 
 let malformed_reply () =
   run_mock "220 ready\r\nnot an SMTP reply\r\n" (fun _env _sw session _writes ->
@@ -104,7 +108,9 @@ let no_recipients () =
               Alcotest.(check string)
                 "no command after local rejection" ""
                 ( Buffer.contents writes |> fun value ->
-                  if contains value "MAIL FROM" then "MAIL FROM" else "" )
+                  if Test_support.contains ~needle:"MAIL FROM" ~haystack:value then
+                    "MAIL FROM"
+                  else "" )
           | Error error -> Alcotest.failf "wrong error: %a" Smtp.pp_error error
           | Ok () -> Alcotest.fail "empty recipient list accepted"))
 
@@ -120,7 +126,8 @@ let envelope_injection () =
           | Error (`Invalid_address _) ->
               Alcotest.(check bool)
                 "no injected command" false
-                (contains (Buffer.contents writes) "MAIL FROM")
+                (Test_support.contains ~needle:"MAIL FROM"
+                   ~haystack:(Buffer.contents writes))
           | Error error -> Alcotest.failf "wrong error: %a" Smtp.pp_error error
           | Ok () -> Alcotest.fail "envelope injection accepted"))
 

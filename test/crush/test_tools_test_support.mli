@@ -1,8 +1,5 @@
 (** Shared filesystem and tool execution helpers for Crush tests. *)
 
-val contains : string -> string -> bool
-(** [contains needle haystack] is [true] if [haystack] contains [needle]. *)
-
 val temp_root : string -> string
 (** [temp_root prefix] is a unique temporary path using [prefix]. *)
 

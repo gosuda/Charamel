@@ -27,6 +27,7 @@
   uri
   cohttp
   cohttp-eio
-  http)
+  http
+  test_support)
  (deps
   (glob_files data/*)))

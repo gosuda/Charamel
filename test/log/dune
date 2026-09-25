@@ -11,4 +11,5 @@
   fmt
   jsont
   jsont.bytesrw
-  alcotest))
+  alcotest
+  test_support))

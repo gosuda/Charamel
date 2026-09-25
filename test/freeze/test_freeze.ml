@@ -1,20 +1,6 @@
 open Freeze_core
 
-let rec source_root dir =
-  if Sys.file_exists (Filename.concat dir "dune-project") then dir
-  else
-    let parent = Filename.dirname dir in
-    if String.equal parent dir then
-      failwith "test_freeze: dune-project not found above the working directory"
-    else source_root parent
-
 let path_env = "/usr/bin:/bin"
-
-let fixture_parent env =
-  let root =
-    Filename.concat (Filename.concat (source_root (Sys.getcwd ())) ".outline") "worktree"
-  in
-  Eio.Path.(env#fs / root)
 
 let minimal_environment ~root =
   let path name = Filename.concat root name in
@@ -29,23 +15,6 @@ let minimal_environment ~root =
     "XDG_CACHE_HOME=" ^ path "xdg-cache";
     "TMPDIR=" ^ path "tmp";
   |]
-
-let with_fixture env f =
-  let parent = fixture_parent env in
-  Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 parent;
-  let path =
-    Filename.temp_file ~temp_dir:(Eio.Path.native_exn parent) "charamel-freeze-cli-"
-      ".dir"
-  in
-  Sys.remove path;
-  let root = Eio.Path.(env#fs / path) in
-  Eio.Path.mkdir ~perm:0o700 root;
-  List.iter
-    (fun name -> Eio.Path.mkdir ~perm:0o700 Eio.Path.(root / name))
-    [ "home"; "xdg-config"; "xdg-data"; "xdg-state"; "xdg-cache"; "tmp" ];
-  Fun.protect
-    ~finally:(fun () -> Eio.Path.rmtree ~missing_ok:true root)
-    (fun () -> f path)
 
 let expect_ok = function Ok value -> value | Error message -> Alcotest.fail message
 
@@ -81,8 +50,13 @@ let test_ansi_background env =
     "background rectangle" true
     (String.contains rendered.Svg.svg 'r' && String.contains rendered.Svg.svg '#')
 
-let test_pty_capture env =
-  with_fixture env (fun root ->
+let test_pty_capture () =
+  Test_support.with_temp_dir (fun dir ->
+      List.iter
+        (fun name -> Eio.Path.mkdir ~perm:0o700 Eio.Path.(dir / name))
+        [ "home"; "xdg-config"; "xdg-data"; "xdg-state"; "xdg-cache"; "tmp" ];
+      let root = Eio.Path.native_exn dir in
+      Eio_main.run @@ fun env ->
       Eio.Switch.run @@ fun sw ->
       match
         Pty.execute ~sw ~clock:env#clock ~process_mgr:env#process_mgr
@@ -102,7 +76,7 @@ let suites =
         Eio_main.run test_svg_escapes_and_styles);
     Alcotest.test_case "ANSI background" `Quick (fun () ->
         Eio_main.run test_ansi_background);
-    Alcotest.test_case "PTY capture" `Quick (fun () -> Eio_main.run test_pty_capture);
+    Alcotest.test_case "PTY capture" `Quick test_pty_capture;
   ]
 
 let () = Alcotest.run "freeze" [ ("freeze", suites) ]

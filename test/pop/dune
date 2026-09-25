@@ -15,4 +15,5 @@
   ptime
   alcotest
   eio.mock
-  mirage-crypto-rng.unix))
+  mirage-crypto-rng.unix
+  test_support))

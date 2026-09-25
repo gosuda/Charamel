@@ -4,14 +4,6 @@ let executable () =
   let build_dir = Filename.dirname (Filename.dirname test_dir) in
   Filename.concat build_dir "bin/glow/main.exe"
 
-let with_root f =
-  let path = Filename.temp_file "glow-cli" ".dir" in
-  Sys.remove path;
-  Unix.mkdir path 0o700;
-  Fun.protect
-    ~finally:(fun () -> ignore (Sys.command ("rm -rf " ^ Filename.quote path)))
-    (fun () -> f path)
-
 let env_for root =
   let path name = Filename.concat root name in
   [|
@@ -27,22 +19,6 @@ let env_for root =
     "XDG_CACHE_HOME=" ^ path "xdg-cache";
   |]
 
-let run_cli root args =
-  Eio_main.run (fun env ->
-      let status = ref None in
-      let errors = Buffer.create 256 in
-      let output =
-        Eio.Time.with_timeout_exn env#clock 10. (fun () ->
-            Eio.Process.parse_out env#process_mgr Eio.Buf_read.take_all
-              ~env:(env_for root) ~stdin:(Eio.Flow.string_source "")
-              ~stderr:(Eio.Flow.buffer_sink errors)
-              ~is_success:(fun code ->
-                status := Some code;
-                true)
-              (executable () :: args))
-      in
-      (Option.value !status ~default:127, output, Buffer.contents errors))
-
 let write_markdown root =
   let path = Filename.concat root "README.md" in
   let channel = open_out path in
@@ -51,29 +27,45 @@ let write_markdown root =
   path
 
 let stdout_render () =
-  with_root (fun root ->
+  Test_support.with_temp_dir (fun dir ->
+      let root = Eio.Path.native_exn dir in
       let path = write_markdown root in
-      let status, output, _ = run_cli root [ path ] in
+      let status, output, _ =
+        Test_support.run_cli ~exe:(executable ()) ~env:(env_for root) ~cwd:root
+          ~timeout:10. [ path ]
+      in
       Alcotest.(check int) "status" 0 status;
       Alcotest.(check bool) "heading" true (String.contains output 'H'))
 
 let pager_pipe () =
-  with_root (fun root ->
+  Test_support.with_temp_dir (fun dir ->
+      let root = Eio.Path.native_exn dir in
       let path = write_markdown root in
-      let status, output, _ = run_cli root [ "--pager"; path ] in
+      let status, output, _ =
+        Test_support.run_cli ~exe:(executable ()) ~env:(env_for root) ~cwd:root
+          ~timeout:10. [ "--pager"; path ]
+      in
       Alcotest.(check int) "status" 0 status;
       Alcotest.(check bool) "pager output" true (String.contains output 'H'))
 
 let tui_requires_terminal () =
-  with_root (fun root ->
+  Test_support.with_temp_dir (fun dir ->
+      let root = Eio.Path.native_exn dir in
       let path = write_markdown root in
-      let status, _, errors = run_cli root [ "--tui"; path ] in
+      let status, _, errors =
+        Test_support.run_cli ~exe:(executable ()) ~env:(env_for root) ~cwd:root
+          ~timeout:10. [ "--tui"; path ]
+      in
       Alcotest.(check bool) "non-tty failure" true (status <> 0);
       Alcotest.(check bool) "diagnostic" true (String.length errors > 0))
 
 let config_command () =
-  with_root (fun root ->
-      let status, _, _ = run_cli root [ "config" ] in
+  Test_support.with_temp_dir (fun dir ->
+      let root = Eio.Path.native_exn dir in
+      let status, _, _ =
+        Test_support.run_cli ~exe:(executable ()) ~env:(env_for root) ~cwd:root
+          ~timeout:10. [ "config" ]
+      in
       let path = Filename.concat root "xdg-config/glow/config.json" in
       Alcotest.(check int) "status" 0 status;
       Alcotest.(check bool) "created" true (Sys.file_exists path))

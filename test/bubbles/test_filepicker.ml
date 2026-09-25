@@ -52,16 +52,7 @@ let read_real_entries fs path =
   with Eio.Io (Eio.Fs.E _, _) -> Error (Fmt.str "cannot read %s" path)
 
 let with_directory f =
-  Eio_main.run @@ fun env ->
-  let fs = Eio.Stdenv.fs env in
-  let name = "/tmp/charamel-filepicker-test" in
-  let root = path_append fs name in
-  (try Eio.Path.rmtree ~missing_ok:true root with Eio.Io (Eio.Fs.E _, _) -> ());
-  Eio.Path.mkdirs ~perm:0o700 root;
-  Fun.protect
-    (fun () -> f env fs name root)
-    ~finally:(fun () ->
-      try Eio.Path.rmtree ~missing_ok:true root with Eio.Io (Eio.Fs.E _, _) -> ())
+  Test_support.with_temp_dir (fun fs -> f fs (Eio.Path.native_exn fs))
 
 let read_model fs path picker =
   let picker, command = Filepicker.init picker in
@@ -73,12 +64,12 @@ let names entries =
   Stdlib.List.map (fun (entry : Filepicker.entry) -> entry.Filepicker.name) entries
 
 let navigation_and_real_io () =
-  with_directory @@ fun _env fs name root ->
-  let sub = path_append root "subdir" in
+  with_directory @@ fun fs name ->
+  let sub = path_append fs "subdir" in
   Eio.Path.mkdir ~perm:0o700 sub;
-  Eio.Path.save ~create:(`Exclusive 0o600) (path_append root "root.txt") "root";
+  Eio.Path.save ~create:(`Exclusive 0o600) (path_append fs "root.txt") "root";
   Eio.Path.save ~create:(`Exclusive 0o600) (path_append sub "file.go") "package main\n";
-  Eio.Path.save ~create:(`Exclusive 0o600) (path_append root ".hidden") "hidden";
+  Eio.Path.save ~create:(`Exclusive 0o600) (path_append fs ".hidden") "hidden";
   let picker = Filepicker.v ~fs ~current_directory:name ~allowed_types:[ ".go" ] () in
   let picker, _ = read_model fs name picker in
   check_string "root directory" name (Filepicker.current_directory picker);
@@ -99,9 +90,9 @@ let navigation_and_real_io () =
   check_int "cursor starts at first child" 0 (Filepicker.cursor picker)
 
 let filtering_and_disabled_selection () =
-  with_directory @@ fun _env fs name root ->
-  Eio.Path.save ~create:(`Exclusive 0o600) (path_append root "good.go") "go";
-  Eio.Path.save ~create:(`Exclusive 0o600) (path_append root "bad.txt") "txt";
+  with_directory @@ fun fs name ->
+  Eio.Path.save ~create:(`Exclusive 0o600) (path_append fs "good.go") "go";
+  Eio.Path.save ~create:(`Exclusive 0o600) (path_append fs "bad.txt") "txt";
   let picker = Filepicker.v ~fs ~current_directory:name ~allowed_types:[ ".go" ] () in
   let picker, _ = read_model fs name picker in
   let picker, _ = Filepicker.update Filepicker.Go_to_top picker in
@@ -114,7 +105,7 @@ let filtering_and_disabled_selection () =
     (Option.is_some (Filepicker.did_select_file Filepicker.Open picker))
 
 let directory_error_is_visible () =
-  with_directory @@ fun _env fs name _root ->
+  with_directory @@ fun fs name ->
   let picker = Filepicker.v ~fs ~current_directory:name () in
   let picker, _ = read_model fs name picker in
   let missing = name ^ "/missing" in
@@ -127,7 +118,7 @@ let directory_error_is_visible () =
     (Stdlib.List.length (Filepicker.entries picker))
 
 let auto_height_and_resize () =
-  with_directory @@ fun _env fs name _root ->
+  with_directory @@ fun fs name ->
   let picker = Filepicker.v ~fs ~current_directory:name ~height:10 () in
   let picker, _ = Filepicker.update (Filepicker.Resize 8) picker in
   check_int "auto height leaves bottom margin" 3 (Filepicker.height picker);

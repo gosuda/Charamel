@@ -89,16 +89,6 @@ and step client socket output established status =
   if disconnected then (client, output, Option.value status ~default:1)
   else client_loop client socket output established status
 
-let contains ~needle haystack =
-  let needle_length = String.length needle in
-  let haystack_length = String.length haystack in
-  let rec at offset =
-    if offset + needle_length > haystack_length then false
-    else if String.sub haystack offset needle_length = needle then true
-    else at (offset + 1)
-  in
-  if needle_length = 0 then true else at 0
-
 let run_connection_case ~env ~name ~authorized ~client_key ~expect_code ~expect_text =
   let server_key = K.generate K.Ed25519 in
   let server_awa = key_from_seed (Option.get (K.ed25519_seed server_key)) in
@@ -139,7 +129,9 @@ let run_connection_case ~env ~name ~authorized ~client_key ~expect_code ~expect_
             let _client, output, status = client_loop client socket output false None in
             let output = Buffer.contents output in
             Alcotest.(check int) "exit status" expect_code status;
-            Alcotest.(check bool) "response" true (contains ~needle:expect_text output);
+            Alcotest.(check bool)
+              "response" true
+              (Test_support.contains ~needle:expect_text ~haystack:output);
             Eio.Resource.close socket;
             Eio.Fiber.yield ();
             Eio.Switch.fail sw Test_done)

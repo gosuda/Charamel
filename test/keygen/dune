@@ -2,4 +2,9 @@
  (name test_keygen)
  (package charamel-ssh)
  (modules test_keygen)
- (libraries alcotest charamel-ssh.keygen eio eio_main mirage-crypto-rng.unix))
+ (libraries
+  alcotest
+  charamel-ssh.keygen
+  eio
+  mirage-crypto-rng.unix
+  test_support))

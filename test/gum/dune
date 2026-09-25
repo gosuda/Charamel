@@ -35,4 +35,5 @@
   logs
   re
   ptime
+  test_support
   unix))

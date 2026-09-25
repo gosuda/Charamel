@@ -30,15 +30,6 @@ let user s = Message.text Message.User s
 let usage ~input ~output ~cache_read ~cache_write ~reasoning =
   Stream_part.Usage { Usage.input; output; cache_read; cache_write; reasoning }
 
-let contains needle haystack =
-  let needle_length = String.length needle in
-  let haystack_length = String.length haystack in
-  let rec search i =
-    i + needle_length <= haystack_length
-    && (String.sub haystack i needle_length = needle || search (i + 1))
-  in
-  search 0
-
 let chunk ?(index = 0) ?finish delta =
   let finish =
     match finish with
@@ -229,7 +220,10 @@ let test_unknown_tool_type_errors () =
   in
   let ps, _, _ = provider_call ~body () in
   match single_finish ps with
-  | `Error m -> Alcotest.(check bool) "reports the type" true (contains "not function" m)
+  | `Error m ->
+      Alcotest.(check bool)
+        "reports the type" true
+        (Test_support.contains ~needle:"not function" ~haystack:m)
   | other -> Alcotest.failf "expected error finish, got %s" (finish_name other)
 
 let test_malformed_event () =
