@@ -1,12 +1,4 @@
 (library
  (name charamel_lipgloss)
  (public_name charamel.lipgloss)
- (libraries charamel.ansi fmt uucp)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+ (libraries charamel.ansi fmt uucp))

@@ -2,26 +2,10 @@
  (name test_cli)
  (package charamel)
  (modules test_cli test_xdg)
- (libraries charamel.cli alcotest eio eio_main)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+ (libraries charamel.cli alcotest eio eio_main))
 
 (test
  (name test_cli_behavior)
  (package charamel)
  (modules test_cli_behavior test_cli_nearest)
- (libraries charamel.cli alcotest eio eio_main cmdliner)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+ (libraries charamel.cli alcotest eio eio_main cmdliner))
