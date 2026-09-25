@@ -1,0 +1,23 @@
+(library
+ (name charamel_net)
+ (public_name charamel.net)
+ (libraries
+  lwt
+  lwt.unix
+  unix
+  cohttp
+  cohttp-lwt
+  cohttp-lwt-unix
+  conduit-lwt-unix
+  tls-lwt
+  x509
+  ca-certs
+  http
+  uri
+  ptime
+  fmt
+  logs
+  cstruct
+  mirage-flow
+  awa
+  awa-mirage))

@@ -41,6 +41,14 @@
   domain-name
   cstruct
   optint
+  (lwt (>= 6.1.2))
+  lwt_direct
+  cohttp-lwt
+  cohttp-lwt-unix
+  (tls-lwt (>= 2.1.3))
+  (awa-mirage (>= 0.6.1))
+  (ctypes (and (>= 0.24.0) (= :os "win32")))
+  (ctypes-foreign (and (>= 0.24.0) (= :os "win32")))
   (alcotest :with-test)))
 
 (package

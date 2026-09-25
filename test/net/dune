@@ -1,0 +1,16 @@
+(tests
+ (names test_net)
+ (package charamel)
+ (modules test_net test_net_http test_net_smtp test_net_ssh)
+ (libraries
+  alcotest
+  alcotest-lwt
+  charamel.net
+  cstruct
+  fmt
+  lwt
+  lwt.unix
+  net_test_support
+  unix
+  uri
+  awa))

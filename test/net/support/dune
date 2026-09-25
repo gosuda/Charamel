@@ -1,0 +1,14 @@
+(library
+ (name net_test_support)
+ (wrapped false)
+ (modules fixture_http fixture_smtp net_test_support)
+ (libraries
+  alcotest
+  alcotest-lwt
+  charamel.net
+  cohttp
+  fmt
+  lwt
+  lwt.unix
+  unix
+  uri))
