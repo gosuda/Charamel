@@ -46,7 +46,9 @@
   (ctypes (and (>= 0.24.0) (= :os "win32")))
   (ctypes-foreign (and (>= 0.24.0) (= :os "win32")))
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)
+  (qcheck-alcotest (and (>= 0.91) :with-test))))
 
 (package
  (name charamel-ssh)
@@ -69,7 +71,8 @@
   cstruct
   mtime
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)))
 
 (package
  (name gum)
@@ -85,7 +88,8 @@
   ptime
   cstruct
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)))
 
 (package
  (name glow)
@@ -103,7 +107,8 @@
   domain-name
   re
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)))
 
 (package
  (name freeze)
@@ -118,7 +123,8 @@
   base64
   fmt
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)))
 
 (package
  (name sequin)
@@ -130,7 +136,8 @@
   fmt
   cmdliner
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)))
 
 (package
  (name pop)
@@ -154,7 +161,8 @@
   cmdliner
   mirage-crypto-rng
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)))
 
 (package
  (name skate)
@@ -168,7 +176,8 @@
   base64
   cmdliner
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)))
 
 (package
  (name melt)
@@ -183,7 +192,8 @@
   mirage-crypto-rng
   fmt
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)))
 
 (package
  (name keygen)
@@ -197,7 +207,8 @@
   cmdliner
   mirage-crypto-rng
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)))
 
 (package
  (name hotdiva2000)
@@ -210,7 +221,8 @@
   cmdliner
   mirage-crypto-rng
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)))
 
 (package
  (name crush)
@@ -239,4 +251,5 @@
   optint
   ipaddr
   (alcotest :with-test)
-  (alcotest-lwt (and (>= 1.9.1) :with-test))))
+  (alcotest-lwt (and (>= 1.9.1) :with-test))
+  (qcheck-core :with-test)))
