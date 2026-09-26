@@ -742,7 +742,6 @@ let run_tui (env : Env.t) options =
                 match await (Crush_ui.run backend) with
                 | Ok _ -> Ok ()
                 | Error `Interrupted -> Error "interrupted"
-                | Error `Killed -> Error "TUI killed"
                 | Error (`Exn (exn, _)) -> Error (Printexc.to_string exn)))
       with
       | Ok () -> ()
