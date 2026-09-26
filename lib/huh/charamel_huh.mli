@@ -24,7 +24,8 @@ type error = Run.error
 (** Errors returned by {!run}. *)
 
 val pp_error : error Fmt.t
-(** [pp_error] prints [aborted] or [timed out]. *)
+(** [pp_error] prints [aborted], [timed out], or [timeout unsupported in accessible mode].
+*)
 
 val run :
   ?timeout:float ->

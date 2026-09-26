@@ -88,14 +88,7 @@ let run ?(title = "Loading...") ?style ?(accessible = false) ?theme ~clock actio
           then (model, Charamel_tea.Cmd.interrupt)
           else (model, Charamel_tea.Cmd.none)
       | Terminal (Charamel_tea.Event.Background_color background) ->
-          let is_dark =
-            match Charamel_ansi.Color.to_rgb background with
-            | None -> true
-            | Some (red, green, blue) ->
-                ((0.299 *. float red) +. (0.587 *. float green) +. (0.114 *. float blue))
-                /. 255.
-                < 0.5
-          in
+          let is_dark = Charamel_ansi.Color.is_dark background in
           let spinner_style, _ = theme ~is_dark in
           ( {
               model with
@@ -131,7 +124,7 @@ let run ?(title = "Loading...") ?style ?(accessible = false) ?theme ~clock actio
           | Some (Ok value) -> Ok value
           | Some (Error error) -> Error (`Failed error)
           | None -> Error `Interrupted)
-      | Error `Interrupted | Error `Killed -> Error `Interrupted
+      | Error `Interrupted -> Error `Interrupted
       | Error (`Exn (exception_, backtrace)) ->
           Printexc.raise_with_backtrace exception_ backtrace)
   end

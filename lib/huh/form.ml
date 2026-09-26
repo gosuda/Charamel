@@ -8,11 +8,14 @@ module Style = Charamel_lipgloss.Style
 type state = Normal | Completed of Results.t | Aborted
 
 type msg =
+  | Nop
   | Key_press of Key.t
   | Paste of string
   | Field_msg of { group : int; field : int; msg : Field_msg.t }
   | Terminal of Event.t
   | Resize of { rows : int; cols : int }
+
+let nop = Nop
 
 type t = {
   groups : Group.t array;
@@ -30,6 +33,9 @@ type t = {
   show_help : bool option;
   show_errors : bool option;
   env : Env.t option;
+  view_hook : (Charamel_tea.View.t -> Charamel_tea.View.t) option;
+  submit_cmd : msg Charamel_tea.Cmd.t option;
+  cancel_cmd : msg Charamel_tea.Cmd.t option;
 }
 
 module Env = Env
@@ -38,7 +44,7 @@ let normal_state = function Normal -> true | Completed _ | Aborted -> false
 let cmd_none = Cmd.none
 
 let v ?(theme = Theme.charm) ?(keymap = Keymap.default) ?(layout = `Default) ?width
-    ?height ?show_help ?show_errors groups =
+    ?height ?show_help ?show_errors ?view_hook ?submit_cmd ?cancel_cmd groups =
   let initial_width = Option.value ~default:80 width in
   let initial_height = Option.value ~default:0 height in
   let group_width = Layout.group_width layout ~width:initial_width in
@@ -62,6 +68,9 @@ let v ?(theme = Theme.charm) ?(keymap = Keymap.default) ?(layout = `Default) ?wi
     show_help;
     show_errors;
     env = None;
+    view_hook;
+    submit_cmd;
+    cancel_cmd;
   }
 
 let selected_group t =
@@ -111,21 +120,30 @@ let set_group t index group =
 
 let reevaluate_all t =
   match t.env with
-  | None -> t
+  | None -> (t, cmd_none)
   | Some env ->
+      let commands = Dynarray.create () in
       let groups =
         Array.mapi
           (fun group_index (group : Group.t) ->
             let fields =
               Array.mapi
                 (fun field_index field ->
-                  Field_impl.reevaluate field (context t ~env group_index field_index))
+                  let field, command =
+                    Field_impl.reevaluate field (context t ~env group_index field_index)
+                  in
+                  Dynarray.add_last commands
+                    (Cmd.map
+                       (fun msg ->
+                         Field_msg { group = group_index; field = field_index; msg })
+                       command);
+                  field)
                 group.Group.fields
             in
             { group with fields })
           t.groups
       in
-      { t with groups }
+      ({ t with groups }, Cmd.batch (Dynarray.to_list commands))
 
 let commit_field t group_index field_index =
   if group_index < 0 || group_index >= Array.length t.groups then t
@@ -218,8 +236,8 @@ let init_group t group_index =
           (t, Cmd.batch (focus_cmd :: Array.to_list commands)))
 
 let init env t =
-  let t =
-    { t with env = Some env; results = Results.empty; state = Normal } |> reevaluate_all
+  let t, reevaluated =
+    reevaluate_all { t with env = Some env; results = Results.empty; state = Normal }
   in
   let rec find index =
     if index = Array.length t.groups then None
@@ -232,10 +250,9 @@ let init env t =
           Some (index, init_group t index)
   in
   match find 0 with
-  | None ->
-      let t = { t with state = Completed t.results } in
-      (t, Cmd.none)
-  | Some (_index, (t, command)) -> (t, Cmd.batch [ command; Cmd.query `Background ])
+  | None -> ({ t with state = Completed t.results }, reevaluated)
+  | Some (_index, (t, command)) ->
+      (t, Cmd.batch [ command; reevaluated; Cmd.query `Background ])
 
 let errors t = match selected_group t with None -> [] | Some group -> Group.errors group
 let field_error_free t group_index = Group.errors t.groups.(group_index) = []
@@ -349,7 +366,8 @@ let handle_outcome t group_index field_index outcome command =
   match outcome with
   | Field_impl.Stay -> (t, command)
   | Field_impl.Next -> (
-      let t = commit_field t group_index field_index |> reevaluate_all in
+      let t, reevaluated = reevaluate_all (commit_field t group_index field_index) in
+      let command = Cmd.batch [ command; reevaluated ] in
       if not (field_error_free t group_index) then (t, command)
       else if Group.is_hidden ~results:t.results t.groups.(group_index) then
         let t, next = next_group t in
@@ -369,7 +387,8 @@ let handle_outcome t group_index field_index outcome command =
             let t, previous = previous_group t in
             (t, Cmd.batch [ command; previous ]))
   | Field_impl.Submit ->
-      let t = commit_field t group_index field_index |> reevaluate_all in
+      let t, reevaluated = reevaluate_all (commit_field t group_index field_index) in
+      let command = Cmd.batch [ command; reevaluated ] in
       if not (field_error_free t group_index) then (t, command)
       else
         let t, next = next_group t in
@@ -418,17 +437,12 @@ let dispatch_field_message t ~group_index ~field_index field_message =
               (context t ~env group_index field_index)
               field_message
           in
-          let t =
-            set_group t group_index (Group.set_field field_index field group)
-            |> reevaluate_all
+          let t, reevaluated =
+            reevaluate_all
+              (set_group t group_index (Group.set_field field_index field group))
           in
-          (adjust_offset t group_index, wrap_field_cmd group_index field_index command)
-
-let is_dark_color color =
-  match Charamel_ansi.Color.to_rgb color with
-  | None -> true
-  | Some (red, green, blue) ->
-      (0.299 *. float red) +. (0.587 *. float green) +. (0.114 *. float blue) < 127.5
+          ( adjust_offset t group_index,
+            Cmd.batch [ wrap_field_cmd group_index field_index command; reevaluated ] )
 
 let raw_group_height t group_index =
   match t.env with
@@ -489,7 +503,7 @@ let raw_group_height t group_index =
         in
         lines header + lines content + 1 + footer_lines
 
-let set_size ~rows ~cols t =
+let set_size_full ~rows ~cols t =
   let width = max 1 (Option.value ~default:cols t.explicit_width) in
   let requested_height = Option.value ~default:(max 0 rows) t.explicit_height |> max 0 in
   let group_width = Layout.group_width t.layout ~width in
@@ -527,6 +541,7 @@ let update message t =
   else if not (normal_state t.state) then (t, cmd_none)
   else
     match message with
+    | Nop -> (t, cmd_none)
     | Key_press key when Charamel_bubbles.Key_binding.matches key t.keymap.Keymap.quit ->
         ({ t with state = Aborted }, cmd_none)
     | Key_press key -> dispatch_key t key
@@ -534,9 +549,9 @@ let update message t =
     | Field_msg { group; field; msg } ->
         dispatch_field_message t ~group_index:group ~field_index:field msg
     | Terminal (Event.Background_color color) ->
-        (set_dark (is_dark_color color) t, cmd_none)
+        (set_dark (Charamel_ansi.Color.is_dark color) t, cmd_none)
     | Terminal _ -> (t, cmd_none)
-    | Resize { rows; cols } -> (set_size ~rows ~cols t, cmd_none)
+    | Resize { rows; cols } -> set_size_full ~rows ~cols t
 
 let split_lines text = String.split_on_char '\n' text
 
@@ -695,6 +710,38 @@ let state t =
   | Aborted -> `Aborted
 
 let results t = complete_results t t.results 0
+let set_size ~rows ~cols t = fst (set_size_full ~rows ~cols t)
+
+let key_binds t =
+  match (t.env, selected_group t) with
+  | Some env, Some group when Group.field_count group > 0 ->
+      let field_index = Group.selected group in
+      Field_impl.key_binds
+        (Group.field field_index group)
+        (context t ~env t.selected field_index)
+  | _ -> []
+
+let focused_field t = Option.bind (selected_group t) Group.focused_field
+
+let help t =
+  let width =
+    match selected_group t with Some group -> Group.width group | None -> t.width
+  in
+  Charamel_bubbles.Help.v ~width ~styles:t.styles.Styles.help ()
+
+let next_field t =
+  match move_within_group t t.selected `Next with
+  | Some result -> result
+  | None -> (t, cmd_none)
+
+let previous_field t =
+  match move_within_group t t.selected `Prev with
+  | Some result -> result
+  | None -> (t, cmd_none)
+
+let view_hook t = t.view_hook
+let submit_cmd t = t.submit_cmd
+let cancel_cmd t = t.cancel_cmd
 
 let run_accessible env ~out reader t =
   let rec field_loop group field_index results =
@@ -712,7 +759,7 @@ let run_accessible env ~out reader t =
           env;
         }
       in
-      let field = Field_impl.reevaluate field context in
+      let field, _ = Field_impl.reevaluate field context in
       let* field = Field_impl.run_accessible field context ~out reader in
       let results = Field_impl.commit field results in
       field_loop (Group.set_field field_index field group) (field_index + 1) results

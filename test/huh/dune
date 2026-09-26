@@ -16,3 +16,9 @@
   alcotest-lwt
   fmt
   test_support))
+
+(test
+ (name test_merge_battery)
+ (package charamel)
+ (modules test_merge_battery)
+ (libraries charamel.huh charamel.tea charamel.ansi charamel.os alcotest fmt))
