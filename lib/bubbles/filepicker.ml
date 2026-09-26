@@ -5,7 +5,6 @@ module Color = Charamel_ansi.Color
 module Position = Charamel_lipgloss.Position
 module Sides = Charamel_lipgloss.Sides
 
-let clamp n lo hi = max lo (min hi n)
 let key_binding ?help names = Key_binding.v ?help names
 
 type keymap = {
@@ -240,9 +239,9 @@ let normalize_indices m =
   let length = Stdlib.List.length m.entries in
   if length = 0 then { m with selected = 0; min_idx = 0; max_idx = 0 }
   else
-    let selected = clamp m.selected 0 (length - 1) in
+    let selected = Range.clamp 0 (length - 1) m.selected in
     let visible_height = max 1 m.height in
-    let min_idx = clamp m.min_idx 0 (max 0 (length - visible_height)) in
+    let min_idx = Range.clamp 0 (max 0 (length - visible_height)) m.min_idx in
     let max_idx = min (length - 1) (max (bottom_idx m min_idx) selected) in
     let min_idx = if selected < min_idx then selected else min_idx in
     let max_idx = if selected > max_idx then selected else max_idx in
@@ -286,7 +285,7 @@ let move_down m amount =
   let length = Stdlib.List.length m.entries in
   if length = 0 then m
   else
-    let selected = clamp (m.selected + amount) 0 (length - 1) in
+    let selected = Range.clamp 0 (length - 1) (m.selected + amount) in
     let min_idx, max_idx =
       if selected > m.max_idx then
         let min_idx = min selected (max 0 (length - max 1 m.height)) in
@@ -299,7 +298,7 @@ let move_up m amount =
   let length = Stdlib.List.length m.entries in
   if length = 0 then m
   else
-    let selected = clamp (m.selected - amount) 0 (length - 1) in
+    let selected = Range.clamp 0 (length - 1) (m.selected - amount) in
     let min_idx, max_idx =
       if selected < m.min_idx then (selected, min (length - 1) (bottom_idx m selected))
       else (m.min_idx, m.max_idx)
@@ -504,6 +503,16 @@ let highlighted_path m =
 let height m = m.height
 let entries m = m.entries
 let cursor m = m.selected
+
+let selection_cursor m =
+  let first = max 0 m.min_idx in
+  let last = min (Stdlib.List.length m.entries - 1) m.max_idx in
+  if first > last || m.selected < first || m.selected > last then None
+  else
+    Some
+      (Charamel_tea.Cursor.v ~blink:false (m.selected - first)
+         (Charamel_ansi.Text.width m.cursor_character))
+
 let set_allowed_types allowed_types m = { m with allowed_types }
 let set_show_hidden show_hidden m = { m with show_hidden }
 let set_styles styles m = { m with styles }

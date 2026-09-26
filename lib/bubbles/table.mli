@@ -60,6 +60,13 @@ val columns : t -> column list
 val set_columns : column list -> t -> t
 val selected_row : t -> row option
 val cursor : t -> int
+
+val view_cursor : t -> Charamel_tea.Cursor.t option
+(** [view_cursor t] is the cursor request for the selected row, with coordinates relative
+    to {!view}: the row counts the header line and the viewport scroll, and the column is
+    zero. [None] when [t] is not focused or holds no rows. The caller adds the table's
+    absolute origin. *)
+
 val set_cursor : int -> t -> t
 val move_up : int -> t -> t
 val move_down : int -> t -> t

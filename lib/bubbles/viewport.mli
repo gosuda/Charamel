@@ -90,9 +90,23 @@ val ensure_visible : line:int -> colstart:int -> colend:int -> t -> t
 val total_line_count : t -> int
 val visible_line_count : t -> int
 val visible_lines : t -> string list
+
 val set_highlights : (int * int) list -> t -> t
+(** [set_highlights ranges viewport] marks [ranges], half-open grapheme-cluster index
+    pairs over the whole content in [Charamel_ansi.Width.graphemes] order (newlines count
+    as one cluster). The first range at or below the scroll position is selected and
+    scrolled into view. Empty input clears the marks. *)
+
 val clear_highlights : t -> t
 val highlight_next : t -> t
 val highlight_previous : t -> t
 val set_highlight_style : Charamel_lipgloss.Style.t -> t -> t
 val set_selected_highlight_style : Charamel_lipgloss.Style.t -> t -> t
+
+val grapheme_ranges_of_byte_ranges : t -> (int * int) list -> (int * int) list
+(** [grapheme_ranges_of_byte_ranges viewport ranges] converts half-open byte-offset
+    ranges, as produced by substring searches over [content viewport], into the
+    grapheme-index ranges expected by [set_highlights]. The offsets are interpreted
+    against the viewport's CRLF-normalized content, the same coordinate space
+    [set_highlights] uses. A byte range touching any part of a cluster marks the whole
+    cluster. *)

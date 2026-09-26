@@ -12,6 +12,7 @@
   fmt
   lwt
   lwt.unix
+  qcheck-core
   unix
   test_support)
  (modules

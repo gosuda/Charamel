@@ -61,7 +61,10 @@ type keymap = {
   select_all : Key_binding.t;
   copy_selection : Key_binding.t;
 }
-(** Key bindings for movement, editing, and selection. *)
+(** Key bindings for movement, editing, and selection. A word is a maximal run of
+    non-whitespace grapheme clusters that does not cross between the CJK scripts (Han,
+    Hangul, Hiragana, Katakana) and other text, so word motions, word deletions, and word
+    case transforms stop at that boundary. *)
 
 val default_keymap : keymap
 (** [default_keymap] contains every standard textarea key binding. *)
@@ -150,7 +153,8 @@ val v :
      ?keymap ?is_dark ?styles ?virtual_cursor ?value ()] constructs an unfocused textarea.
     Defaults are prompt ["┃ "], line numbers, end-of-buffer character [" "], no character
     limit, maximum height [99], maximum width [500], width [40], height [6], fixed height,
-    minimum height [1], no visual content limit, dark styles, and a virtual cursor. *)
+    minimum height [1], no visual content limit, dark styles, and a virtual cursor.
+    [char_limit] counts grapheme clusters, so a wide cluster costs one, not its cells. *)
 
 val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 (** [update message t] applies a complete editing or cursor transition. A blurred textarea
@@ -237,7 +241,8 @@ val reset : t -> t
 (** [reset t] clears the buffer and selection. *)
 
 val word : t -> string
-(** [word t] returns the whitespace-delimited word at the cursor. *)
+(** [word t] returns the word at the cursor: the maximal run of non-whitespace clusters of
+    one script class that contains it. *)
 
 val width : t -> int
 (** [width t] is the outer width. *)
@@ -267,7 +272,8 @@ val set_end_of_buffer_character : string -> t -> t
 (** [set_end_of_buffer_character char t] sets the filler character. *)
 
 val set_char_limit : int -> t -> t
-(** [set_char_limit limit t] sets the grapheme limit; [0] means unlimited. *)
+(** [set_char_limit limit t] sets the grapheme-cluster limit; [0] means unlimited. Cells
+    of a wide cluster do not count against it. *)
 
 val set_max_height : int -> t -> t
 (** [set_max_height height t] sets the logical height ceiling. *)
@@ -297,11 +303,13 @@ val set_styles : styles -> t -> t
 (** [set_styles styles t] replaces styles and updates cursor behavior. *)
 
 val set_virtual_cursor : bool -> t -> t
-(** [set_virtual_cursor enabled t] selects embedded or real cursor output. *)
+(** [set_virtual_cursor enabled t] selects whether the embedded cursor is drawn in
+    [view t]. *)
 
 val cursor : t -> Charamel_tea.Cursor.t option
-(** [cursor t] returns a real cursor request when focused and virtual output is disabled.
-*)
+(** [cursor t] returns the real terminal cursor request whenever [t] is focused and [None]
+    otherwise. The position is the viewport cell under the cursor, so it covers the whole
+    width of a wide cluster. *)
 
 val scroll_y_offset : t -> int
 (** [scroll_y_offset t] is the viewport's first visual row. *)

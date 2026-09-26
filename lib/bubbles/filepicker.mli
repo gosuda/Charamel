@@ -119,3 +119,9 @@ val set_styles : styles -> t -> t
 val set_keymap : keymap -> t -> t
 val entries : t -> entry list
 val cursor : t -> int
+
+val selection_cursor : t -> Charamel_tea.Cursor.t option
+(** [selection_cursor t] is the cursor request for the selected entry, with coordinates
+    relative to {!view}: the row is the entry's place in the visible window and the column
+    is one past the cursor marker. [None] when the window holds no entries or the
+    selection sits outside it. The caller adds the picker's absolute origin. *)

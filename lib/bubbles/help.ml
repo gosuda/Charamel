@@ -2,11 +2,6 @@ module Style = Charamel_lipgloss.Style
 module Layout = Charamel_lipgloss.Layout
 module Text = Charamel_ansi.Text
 
-let color_hex value =
-  match Charamel_ansi.Color.of_hex value with
-  | Some color -> color
-  | None -> Charamel_ansi.Color.Default
-
 type styles = {
   ellipsis : Style.t;
   short_key : Style.t;
@@ -19,7 +14,9 @@ type styles = {
 
 let default_styles ~is_dark =
   let light_dark ~light ~dark =
-    Charamel_lipgloss.light_dark ~is_dark ~light:(color_hex light) ~dark:(color_hex dark)
+    Charamel_lipgloss.light_dark ~is_dark
+      ~light:(Charamel_ansi.Color.of_hex_or light)
+      ~dark:(Charamel_ansi.Color.of_hex_or dark)
   in
   let key = Style.foreground (light_dark ~light:"#909090" ~dark:"#626262") Style.empty in
   let description =

@@ -1,4 +1,3 @@
-let clamp n lo hi = max lo (min hi n)
 let cluster_width = Charamel_ansi.Width.grapheme_width
 
 let take n xs =
@@ -70,3 +69,16 @@ let whitespace_cluster s =
   else
     let d = String.get_utf_8_uchar s 0 in
     Uchar.utf_decode_is_valid d && Uucp.White.is_white_space (Uchar.utf_decode_uchar d)
+
+let is_cjk_cluster s =
+  if s = "" then false
+  else
+    let d = String.get_utf_8_uchar s 0 in
+    Uchar.utf_decode_is_valid d
+    &&
+    match Uchar.utf_decode_uchar d |> Uucp.Script.script with
+    | `Hani | `Hang | `Hira | `Kana -> true
+    | _ -> false
+
+let word_class s =
+  if whitespace_cluster s then `Space else if is_cjk_cluster s then `Cjk else `Other

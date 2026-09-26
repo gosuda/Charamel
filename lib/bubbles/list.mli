@@ -57,10 +57,16 @@ type 'a item_context = {
   width : int;
 }
 
-type 'a delegate = {
+type ('a, 'msg) delegate = {
   height : int;
   spacing : int;
   render : 'a item_context -> 'a -> string;
+  update : 'a item_context -> Charamel_tea.Key.t -> 'a -> ('a * 'msg) option;
+      (** [update ctx key item] runs before the builtin keymap. A key pressed while the
+          list is not filtering and an item is selected is offered here first.
+          [Some (item', msg)] consumes the key: the list replaces the selected item with
+          [item'] and dispatches [msg], surfaced by [key] as [Delegate_msg]. [None] falls
+          through to the builtin bindings. *)
   short_help : Key_binding.t list;
   full_help : Key_binding.t list list;
 }
@@ -86,7 +92,7 @@ val default_delegate :
   title:('a -> string) ->
   ?description:('a -> string) ->
   unit ->
-  'a delegate
+  ('a, 'msg) delegate
 
 type 'a msg =
   | Cursor_up
@@ -104,6 +110,11 @@ type 'a msg =
   | Status_timeout of int
   | Spinner of Spinner.msg
   | Set_items of 'a list
+  | Delegate_msg of 'a * 'a msg
+      (** [Delegate_msg (item, msg)] replaces the selected item with [item] and then
+          applies [msg]. Produced by [key] when the delegate's [update] consumes a key;
+          delegate authors return plain list messages from [update], never this
+          constructor. *)
 
 type 'a t
 
@@ -124,14 +135,20 @@ val v :
   ?infinite_scrolling:bool ->
   ?status_message_lifetime:float ->
   ?item_name:string * string ->
-  delegate:'a delegate ->
+  delegate:('a, 'a msg) delegate ->
   filter_value:('a -> string) ->
   'a list ->
   'a t
 
 val update : 'a msg -> 'a t -> 'a t * 'a msg Charamel_tea.Cmd.t
 val view : 'a t -> string
+
 val key : 'a t -> Charamel_tea.Key.t -> 'a msg option
+(** [key m k] resolves key [k] to a message. When [m] is filtering, the filter input and
+    the cancel/accept bindings apply. Otherwise the delegate's [update] is offered the key
+    first for the selected item; a consumed key yields [Delegate_msg], and an unconsumed
+    key falls through to the builtin keymap bindings. *)
+
 val subscriptions : 'a t -> 'a msg Charamel_tea.Sub.t
 val items : 'a t -> 'a list
 val set_items : 'a list -> 'a t -> 'a t
@@ -153,6 +170,16 @@ val go_to_end : 'a t -> 'a t
 val filter_state : 'a t -> filter_state
 val set_filter_state : filter_state -> 'a t -> 'a t
 val filter_value : 'a t -> string
+
+val view_cursor : 'a t -> Charamel_tea.Cursor.t option
+(** [view_cursor m] is the cursor request of the filter input, with coordinates relative
+    to {!view}: the filter line is the first line the view renders. [None] unless the list
+    is filtering and shows its filter line. The caller adds the list's absolute origin. *)
+
+val filter_input : 'a t -> Textinput.t
+(** [filter_input m] is the embedded filter text input, carrying the palette derived from
+    [is_dark m] after [set_filter_state], [set_filter_text], and [set_styles]. *)
+
 val set_filter_text : string -> 'a t -> 'a t
 val reset_filter : 'a t -> 'a t
 val setting_filter : 'a t -> bool
@@ -182,7 +209,7 @@ val start_spinner : 'a t -> 'a t
 val stop_spinner : 'a t -> 'a t
 val toggle_spinner : 'a t -> 'a t
 val set_spinner : Spinner.kind -> 'a t -> 'a t
-val set_delegate : 'a delegate -> 'a t -> 'a t
+val set_delegate : ('a, 'a msg) delegate -> 'a t -> 'a t
 val disable_quit_keybindings : 'a t -> 'a t
 val set_additional_short_help_keys : Key_binding.t list -> 'a t -> 'a t
 val set_additional_full_help_keys : Key_binding.t list -> 'a t -> 'a t
@@ -191,6 +218,7 @@ val full_help : 'a t -> Key_binding.t list list
 val paginator : 'a t -> Paginator.t
 val keymap : 'a t -> keymap
 val styles : 'a t -> styles
+val is_dark : 'a t -> bool
 val set_styles : styles -> 'a t -> 'a t
 val infinite_scrolling : 'a t -> bool
 val set_infinite_scrolling : bool -> 'a t -> 'a t

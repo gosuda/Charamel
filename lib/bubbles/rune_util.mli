@@ -2,9 +2,6 @@
 
     The functions preserve grapheme-aware editing semantics. *)
 
-val clamp : int -> int -> int -> int
-(** [clamp n lo hi] is [n] limited to the inclusive interval [[lo], [hi]]. *)
-
 val cluster_width : string -> int
 (** [cluster_width cluster] is the terminal width of the grapheme [cluster]. *)
 
@@ -35,3 +32,12 @@ val sanitize :
 val whitespace_cluster : string -> bool
 (** [whitespace_cluster cluster] is [true] if [cluster] starts with a Unicode whitespace
     character. *)
+
+val is_cjk_cluster : string -> bool
+(** [is_cjk_cluster cluster] is [true] when the first scalar of [cluster] is written in
+    the Han, Hangul, Hiragana, or Katakana script. *)
+
+val word_class : string -> [ `Space | `Cjk | `Other ]
+(** [word_class cluster] is the editing word class of [cluster]: [`Space] for whitespace,
+    [`Cjk] for a CJK cluster, and [`Other] otherwise. A word is a maximal run of clusters
+    of one class, so word motion stops between [`Cjk] and [`Other]. *)

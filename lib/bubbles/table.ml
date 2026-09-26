@@ -4,10 +4,6 @@ module Style = Charamel_lipgloss.Style
 module Text = Charamel_ansi.Text
 module Layout = Charamel_lipgloss.Layout
 
-let clamp n lo hi =
-  let lo, hi = if lo <= hi then (lo, hi) else (hi, lo) in
-  max lo (min hi n)
-
 type column = { title : string; width : int }
 type row = string list
 
@@ -112,8 +108,8 @@ let render_row m row_index row =
 let update_viewport m =
   let length = Stdlib.List.length m.rows in
   let viewport_height = Viewport.height m.viewport in
-  let start = clamp (m.cursor - viewport_height) 0 m.cursor in
-  let stop = clamp (m.cursor + viewport_height) m.cursor length in
+  let start = Range.clamp 0 m.cursor (m.cursor - viewport_height) in
+  let stop = Range.clamp m.cursor length (m.cursor + viewport_height) in
   let visible =
     Stdlib.List.filteri (fun i _ -> i >= start && i < stop) m.rows
     |> Stdlib.List.mapi (fun i row -> render_row m (start + i) row)
@@ -122,8 +118,9 @@ let update_viewport m =
   let viewport = Viewport.set_content content m.viewport in
   let viewport =
     Viewport.set_y_offset
-      (clamp (m.cursor - start) 0
-         (max 0 (Viewport.total_line_count viewport - viewport_height)))
+      (Range.clamp 0
+         (max 0 (Viewport.total_line_count viewport - viewport_height))
+         (m.cursor - start))
       viewport
   in
   { m with viewport; start; stop }
@@ -156,13 +153,26 @@ let rows m = m.rows
 let columns m = m.columns
 let selected_row m = Stdlib.List.nth_opt m.rows m.cursor
 let cursor m = m.cursor
+
+let view_cursor m =
+  if not m.focused then None
+  else
+    match Stdlib.List.nth_opt m.rows m.cursor with
+    | None -> None
+    | Some _ ->
+        let header_lines = if m.columns = [] then 0 else 1 in
+        Some
+          (Charamel_tea.Cursor.v ~blink:false
+             (header_lines + (m.cursor - m.start) - Viewport.y_offset m.viewport)
+             0)
+
 let focused m = m.focused
 let width m = m.width
 let height m = Viewport.height m.viewport
 let styles m = m.styles
 
 let set_rows rows m =
-  let cursor = clamp m.cursor 0 (max 0 (Stdlib.List.length rows - 1)) in
+  let cursor = Range.clamp 0 (max 0 (Stdlib.List.length rows - 1)) m.cursor in
   update_viewport { m with rows; cursor }
 
 let set_columns columns m =
@@ -187,20 +197,21 @@ let set_height height m =
   update_viewport { m with outer_height; viewport }
 
 let set_cursor n m =
-  update_viewport { m with cursor = clamp n 0 (max 0 (Stdlib.List.length m.rows - 1)) }
+  update_viewport
+    { m with cursor = Range.clamp 0 (max 0 (Stdlib.List.length m.rows - 1)) n }
 
 let move_up n m =
   let n = max 0 n in
   let old_offset = Viewport.y_offset m.viewport in
   let old_start = m.start in
   let viewport_height = Viewport.height m.viewport in
-  let cursor = clamp (m.cursor - n) 0 (max 0 (Stdlib.List.length m.rows - 1)) in
+  let cursor = Range.clamp 0 (max 0 (Stdlib.List.length m.rows - 1)) (m.cursor - n) in
   let m = update_viewport { m with cursor } in
   let offset =
-    if old_start = 0 then clamp old_offset 0 cursor
+    if old_start = 0 then Range.clamp 0 cursor old_offset
     else if old_start < viewport_height then
-      clamp (clamp (old_offset + n) 0 cursor) 0 viewport_height
-    else if old_offset >= 1 then clamp (old_offset + n) 1 viewport_height
+      Range.clamp 0 viewport_height (Range.clamp 0 cursor (old_offset + n))
+    else if old_offset >= 1 then Range.clamp 1 viewport_height (old_offset + n)
     else old_offset
   in
   { m with viewport = Viewport.set_y_offset offset m.viewport }
@@ -212,15 +223,15 @@ let move_down n m =
   let old_stop = m.stop in
   let viewport_height = Viewport.height m.viewport in
   let rows_length = Stdlib.List.length m.rows in
-  let cursor = clamp (m.cursor + n) 0 (max 0 (rows_length - 1)) in
+  let cursor = Range.clamp 0 (max 0 (rows_length - 1)) (m.cursor + n) in
   let m = update_viewport { m with cursor } in
   let offset =
     if old_stop = rows_length && old_offset > 0 then
-      clamp (old_offset - n) 1 viewport_height
+      Range.clamp 1 viewport_height (old_offset - n)
     else if cursor > (old_stop - old_start) / 2 && old_offset > 0 then
-      clamp (old_offset - n) 1 cursor
+      Range.clamp 1 cursor (old_offset - n)
     else if old_offset > 1 then old_offset
-    else if cursor > old_offset + viewport_height - 1 then clamp (old_offset + 1) 0 1
+    else if cursor > old_offset + viewport_height - 1 then Range.clamp 0 1 (old_offset + 1)
     else old_offset
   in
   { m with viewport = Viewport.set_y_offset offset m.viewport }

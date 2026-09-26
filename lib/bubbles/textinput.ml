@@ -187,8 +187,8 @@ let handle_overflow m =
   if m.width <= 0 || displayed_width m m.value <= m.width then
     { m with offset = 0; offset_right = n }
   else
-    let pos = clamp m.position 0 n in
-    let start0 = clamp m.offset 0 n in
+    let pos = Range.clamp 0 n m.position in
+    let start0 = Range.clamp 0 n m.offset in
     let start0 =
       if pos < start0 then pos else if pos > m.offset_right then pos else start0
     in
@@ -212,6 +212,17 @@ let validation_error m clusters =
   Option.bind m.validate (fun f ->
       match f (string_of_clusters clusters) with Ok () -> None | Error e -> Some e)
 
+let one_grapheme s = match Width.graphemes s with [] -> "" | first :: _ -> first
+
+let suggestion_matches value suggestions =
+  let folded = lower value in
+  Stdlib.List.filter
+    (fun candidate ->
+      let candidate_folded = lower candidate in
+      String.length candidate_folded >= String.length folded
+      && String.sub candidate_folded 0 (String.length folded) = folded)
+    suggestions
+
 let v ?(prompt = "> ") ?(placeholder = "") ?(echo = Normal) ?(echo_character = "*")
     ?(char_limit = 0) ?(width = 0) ?validate ?(show_suggestions = false)
     ?(suggestions = []) ?(keymap = default_keymap) ?(is_dark = true) ?styles
@@ -222,7 +233,7 @@ let v ?(prompt = "> ") ?(placeholder = "") ?(echo = Normal) ?(echo_character = "
       prompt;
       placeholder;
       echo;
-      echo_character;
+      echo_character = one_grapheme echo_character;
       char_limit = max 0 char_limit;
       width = max 0 width;
       validate;
@@ -250,16 +261,7 @@ let v ?(prompt = "> ") ?(placeholder = "") ?(echo = Normal) ?(echo_character = "
   in
   let error = validation_error m value in
   let m = { m with value; position = Stdlib.List.length value; error } in
-  let matches value =
-    if value = "" then []
-    else
-      let folded = lower value in
-      Stdlib.List.filter
-        (fun candidate ->
-          String.length candidate >= String.length value
-          && String.sub (lower candidate) 0 (String.length folded) = folded)
-        m.suggestions
-  in
+  let matches value = if value = "" then [] else suggestion_matches value m.suggestions in
   sync_cursor
     (handle_overflow { m with matched_suggestions = matches (string_of_clusters value) })
 
@@ -287,16 +289,9 @@ let current_suggestion m =
 
 let update_matches m =
   let current = value m in
-  let folded = lower current in
   let matched =
     if (not m.show_suggestions) || current = "" then []
-    else
-      Stdlib.List.filter
-        (fun candidate ->
-          let candidate_folded = lower candidate in
-          String.length candidate_folded >= String.length folded
-          && String.sub candidate_folded 0 (String.length folded) = folded)
-        m.suggestions
+    else suggestion_matches current m.suggestions
   in
   let index =
     if matched = m.matched_suggestions then
@@ -319,7 +314,7 @@ let set_value s m =
        { m with value = clusters; position; error = validation_error m clusters })
 
 let set_cursor pos m =
-  handle_overflow { m with position = clamp pos 0 (Stdlib.List.length m.value) }
+  handle_overflow { m with position = Range.clamp 0 (Stdlib.List.length m.value) pos }
 
 let cursor_start m = set_cursor 0 m
 let cursor_end m = set_cursor (Stdlib.List.length m.value) m
@@ -327,7 +322,9 @@ let set_width width m = handle_overflow { m with width = max 0 width }
 let set_prompt prompt m = sync_cursor { m with prompt }
 let set_placeholder placeholder m = sync_cursor { m with placeholder }
 let set_echo echo m = sync_cursor (handle_overflow { m with echo })
-let set_echo_character echo_character m = { m with echo_character } |> handle_overflow
+
+let set_echo_character echo_character m =
+  { m with echo_character = one_grapheme echo_character } |> handle_overflow
 
 let set_char_limit limit m =
   let char_limit = max 0 limit in
@@ -379,11 +376,13 @@ let delete_range start stop m =
 let word_backward m =
   if m.echo <> Normal then cursor_start m
   else
+    let before i = word_class (Stdlib.List.nth m.value (i - 1)) in
     let i = ref m.position in
-    while !i > 0 && whitespace_cluster (Stdlib.List.nth m.value (!i - 1)) do
+    while !i > 0 && before !i = `Space do
       decr i
     done;
-    while !i > 0 && not (whitespace_cluster (Stdlib.List.nth m.value (!i - 1))) do
+    let word = if !i > 0 then before !i else `Space in
+    while !i > 0 && before !i = word do
       decr i
     done;
     set_cursor !i m
@@ -391,16 +390,14 @@ let word_backward m =
 let word_forward m =
   if m.echo <> Normal then cursor_end m
   else
+    let n = Stdlib.List.length m.value in
+    let at i = word_class (Stdlib.List.nth m.value i) in
     let i = ref m.position in
-    while
-      !i < Stdlib.List.length m.value && whitespace_cluster (Stdlib.List.nth m.value !i)
-    do
+    while !i < n && at !i = `Space do
       incr i
     done;
-    while
-      !i < Stdlib.List.length m.value
-      && not (whitespace_cluster (Stdlib.List.nth m.value !i))
-    do
+    let word = if !i < n then at !i else `Space in
+    while !i < n && at !i = word do
       incr i
     done;
     set_cursor !i m
@@ -510,9 +507,7 @@ let echo_transform m s =
   match m.echo with
   | Normal -> s
   | No_echo -> ""
-  | Password ->
-      let n = max 1 (Text.width m.echo_character) in
-      repeat_string m.echo_character (Width.string_width s * n)
+  | Password -> repeat_string m.echo_character (Width.string_width s)
 
 let render_virtual_cursor (m : t) ~char ~text_style =
   let c = Cursor.set_text_style text_style (Cursor.set_char char m.cursor) in
@@ -525,7 +520,9 @@ let view (m : t) =
   let render_suggestion s = plain_text active.suggestion (echo_transform m s) in
   let render_window () =
     let visible = sub_clusters m.value m.offset (m.offset_right - m.offset) in
-    let before_count = clamp (m.position - m.offset) 0 (Stdlib.List.length visible) in
+    let before_count =
+      Range.clamp 0 (Stdlib.List.length visible) (m.position - m.offset)
+    in
     let before = string_of_clusters (take before_count visible) in
     let after = string_of_clusters (drop before_count visible) in
     let value_view = ref (render_text before) in
@@ -627,11 +624,11 @@ let subscriptions (m : t) =
   else Sub.none
 
 let cursor (m : t) =
-  if m.virtual_cursor || not m.focused then None
+  if not m.focused then None
   else
     let col = Text.width m.prompt + segment_width m m.offset (m.position - m.offset) in
     let cs = m.styles.cursor in
-    Some { Charamel_tea.Cursor.row = 0; col; shape = cs.shape; blink = cs.blink }
+    Some (Charamel_tea.Cursor.v ~shape:cs.shape ~blink:cs.blink 0 col)
 
 let set_validate validator m =
   let m = { m with validate = validator } in

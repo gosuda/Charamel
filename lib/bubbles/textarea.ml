@@ -304,7 +304,7 @@ let lines_of_atoms atoms =
   in
   match loop [] [] atoms with [] -> [ [] ] | rows -> rows
 
-let atom_unit = function Cluster x -> Width.grapheme_width x | Newline -> 1
+let atom_unit = function Cluster _ -> 1 | Newline -> 1
 let atoms_units atoms = Stdlib.List.fold_left (fun n atom -> n + atom_unit atom) 0 atoms
 
 let rec take_atoms_units budget used acc = function
@@ -334,9 +334,9 @@ let index_position lines index =
   loop 0 (max 0 index) lines
 
 let normalize_position m (p : position) =
-  let row = clamp p.row 0 (line_count m - 1) in
+  let row = Range.clamp 0 (line_count m - 1) p.row in
   let line = match Stdlib.List.nth_opt m.lines row with Some x -> x | None -> [] in
-  { row; col = clamp p.col 0 (Stdlib.List.length line) }
+  { row; col = Range.clamp 0 (Stdlib.List.length line) p.col }
 
 let pos_compare (a : position) (b : position) =
   if a.row <> b.row then compare a.row b.row else compare a.col b.col
@@ -435,7 +435,7 @@ let wrap_line clusters width =
         current := [];
         current_width := 0)
     in
-    let rec consume pending = function
+    let rec consume pending_start pending = function
       | [] ->
           if pending <> [] then
             if !current_width + clusters_width pending <= width then
@@ -443,10 +443,12 @@ let wrap_line clusters width =
             else (
               flush ();
               current := pending;
-              current_start := 0;
+              current_start := pending_start;
               current_width := clusters_width pending);
           flush ()
-      | (_, token, true) :: rest -> consume (pending @ token) rest
+      | (start, token, true) :: rest ->
+          let pending_start = if pending = [] then start else pending_start in
+          consume pending_start (pending @ token) rest
       | (start, token, false) :: rest ->
           let token_width = clusters_width token in
           if !current = [] then (
@@ -461,9 +463,9 @@ let wrap_line clusters width =
             current := pending @ token;
             current_start := start - Stdlib.List.length pending;
             current_width := clusters_width !current);
-          consume [] rest
+          consume 0 [] rest
     in
-    consume [] tokens;
+    consume 0 [] tokens;
     let rows = Stdlib.List.rev !rows in
     let rec split_row row start xs =
       match xs with
@@ -505,14 +507,19 @@ let visual_lines m =
 
 let total_visual_lines m = Stdlib.List.length (visual_lines m)
 
+let ends_logical_line row = function
+  | [] -> true
+  | next :: _ -> next.logical <> row.logical
+
 let visual_location m =
   let rows = visual_lines m in
   let rec loop index = function
     | [] -> (0, 0, 0, 0)
     | v :: rest
       when v.logical = m.row && m.col >= v.start
-           && (v.actual = [] || m.col < v.start + Stdlib.List.length v.actual || rest = [])
-      ->
+           && (v.actual = []
+              || m.col < v.start + Stdlib.List.length v.actual
+              || ends_logical_line v rest) ->
         let before = take (max 0 (m.col - v.start)) v.actual in
         (index, clusters_width before, v.start, Stdlib.List.length v.actual)
     | _ :: rest -> loop (index + 1) rest
@@ -520,6 +527,15 @@ let visual_location m =
   loop 0 rows
 
 let visual_at rows index = Stdlib.List.nth_opt rows index
+
+let cursor_cluster_width rows m visual_row =
+  match visual_at rows visual_row with
+  | None -> 1
+  | Some v ->
+      let i = m.col - v.start in
+      if i >= 0 && i < Stdlib.List.length v.actual then
+        cluster_width (Stdlib.List.nth v.actual i)
+      else 1
 
 let line_info m =
   let rows = visual_lines m in
@@ -565,16 +581,14 @@ let rebuild_viewport m =
   in
   let vp = Viewport.set_y_offset old_y vp in
   let visual_row, col_offset, _, _ = visual_location m in
-  let vp =
-    Viewport.ensure_visible ~line:visual_row ~colstart:col_offset ~colend:(col_offset + 1)
-      vp
-  in
+  let colend = col_offset + cursor_cluster_width rows m visual_row in
+  let vp = Viewport.ensure_visible ~line:visual_row ~colstart:col_offset ~colend vp in
   { m with viewport = vp }
 
 let recalc_height m =
   if not m.dynamic_height then m
   else
-    let wanted = clamp (total_visual_lines m) m.min_height m.max_height in
+    let wanted = Range.clamp m.min_height m.max_height (total_visual_lines m) in
     { m with height = wanted }
 
 let rebuild m = m |> recalc_height |> sync_cursor |> rebuild_viewport
@@ -586,8 +600,8 @@ let v ?(prompt = "┃ ") ?(placeholder = "") ?(show_line_numbers = true)
     ?(is_dark = true) ?styles ?(virtual_cursor = true) ?(value = "") () =
   let styles = match styles with Some s -> s | None -> default_styles ~is_dark in
   let max_height = max 1 (min max_lines max_height) in
-  let min_height = clamp min_height 1 max_height in
-  let height = clamp height min_height max_height in
+  let min_height = Range.clamp 1 max_height min_height in
+  let height = Range.clamp min_height max_height height in
   let lines = line_split (sanitize value) in
   let lines = take max_lines lines in
   let base =
@@ -613,7 +627,7 @@ let v ?(prompt = "┃ ") ?(placeholder = "") ?(show_line_numbers = true)
       row = 0;
       col = 0;
       sticky_column = None;
-      viewport = Viewport.v ~width:0 ~height ();
+      viewport = Viewport.v ~width:0 ~height ~soft_wrap:true ();
       selection_anchor = None;
       selection_head = None;
       selecting = false;
@@ -771,28 +785,30 @@ let word_backward m =
   if m.col = 0 then character_backward m
   else
     let line = current_line m in
+    let before i = word_class (Stdlib.List.nth line (i - 1)) in
     let i = ref m.col in
-    while !i > 0 && whitespace_cluster (Stdlib.List.nth line (!i - 1)) do
+    while !i > 0 && before !i = `Space do
       decr i
     done;
-    while !i > 0 && not (whitespace_cluster (Stdlib.List.nth line (!i - 1))) do
+    let word = if !i > 0 then before !i else `Space in
+    while !i > 0 && before !i = word do
       decr i
     done;
     set_position { row = m.row; col = !i } m
 
 let word_forward m =
   let line = current_line m in
+  let n = Stdlib.List.length line in
+  let at i = word_class (Stdlib.List.nth line i) in
   let i = ref m.col in
-  while !i < Stdlib.List.length line && whitespace_cluster (Stdlib.List.nth line !i) do
+  while !i < n && at !i = `Space do
     incr i
   done;
-  while
-    !i < Stdlib.List.length line && not (whitespace_cluster (Stdlib.List.nth line !i))
-  do
+  let word = if !i < n then at !i else `Space in
+  while !i < n && at !i = word do
     incr i
   done;
-  if !i = Stdlib.List.length line && m.row + 1 < line_count m then
-    set_position { row = m.row + 1; col = 0 } m
+  if !i = n && m.row + 1 < line_count m then set_position { row = m.row + 1; col = 0 } m
   else set_position { row = m.row; col = !i } m
 
 let delete_character_backward m =
@@ -879,7 +895,7 @@ let position_for_visual m target desired =
 
 let move_visual delta m =
   let current, _, _, _ = visual_location m in
-  let target = clamp (current + delta) 0 (max 0 (total_visual_lines m - 1)) in
+  let target = Range.clamp 0 (max 0 (total_visual_lines m - 1)) (current + delta) in
   let desired = match m.sticky_column with Some x -> x | None -> visual_col m in
   let p = position_for_visual m target desired in
   set_position
@@ -897,32 +913,32 @@ let page_down m = rebuild (move_visual (max 1 m.height) m)
 
 let word_bounds m =
   let line = current_line m in
+  let n = Stdlib.List.length line in
+  let at i = word_class (Stdlib.List.nth line i) in
   let i = ref m.col in
-  while !i < Stdlib.List.length line && whitespace_cluster (Stdlib.List.nth line !i) do
+  while !i < n && at !i = `Space do
     incr i
   done;
   let start = !i in
-  while
-    !i < Stdlib.List.length line && not (whitespace_cluster (Stdlib.List.nth line !i))
-  do
+  let word = if !i < n then at !i else `Space in
+  while !i < n && at !i = word do
     incr i
   done;
   (start, !i)
 
 let word m =
   let line = current_line m in
-  if m.col >= Stdlib.List.length line || whitespace_cluster (Stdlib.List.nth line m.col)
-  then ""
+  let n = Stdlib.List.length line in
+  if m.col >= n || word_class (Stdlib.List.nth line m.col) = `Space then ""
   else
+    let at i = word_class (Stdlib.List.nth line i) in
+    let word = at m.col in
     let start = ref m.col in
     let stop = ref m.col in
-    while !start > 0 && not (whitespace_cluster (Stdlib.List.nth line (!start - 1))) do
+    while !start > 0 && at (!start - 1) = word do
       decr start
     done;
-    while
-      !stop < Stdlib.List.length line
-      && not (whitespace_cluster (Stdlib.List.nth line !stop))
-    do
+    while !stop < n && at !stop = word do
       incr stop
     done;
     string_of_clusters (sub line !start (!stop - !start))
@@ -1292,18 +1308,15 @@ let focus m =
 let blur m = rebuild { m with focused = false }
 
 let cursor m =
-  if m.virtual_cursor || not m.focused then None
+  if not m.focused then None
   else
     let info = line_info m in
     let visual_row, _, _, _ = visual_location m in
     let st = m.styles.cursor in
     Some
-      {
-        Charamel_tea.Cursor.row = max 0 (visual_row - Viewport.y_offset m.viewport);
-        col = gutter_width m + info.char_offset;
-        shape = st.shape;
-        blink = st.blink;
-      }
+      (Charamel_tea.Cursor.v ~shape:st.shape ~blink:st.blink
+         (max 0 (visual_row - Viewport.y_offset m.viewport))
+         (max 0 (gutter_width m + info.char_offset - Viewport.x_offset m.viewport)))
 
 let set_prompt prompt m = rebuild { m with prompt; prompt_func = None }
 let set_prompt_func ~width fn m = rebuild { m with prompt_func = Some (max 0 width, fn) }
@@ -1323,7 +1336,7 @@ let set_char_limit limit m =
   rebuild { m with char_limit; lines; row = p.row; col = p.col }
 
 let set_max_height max_height m =
-  let max_height = clamp max_height 1 max_lines in
+  let max_height = Range.clamp 1 max_lines max_height in
   rebuild
     {
       m with
@@ -1336,7 +1349,7 @@ let set_max_width max_width m = rebuild { m with max_width = max 1 max_width }
 let set_dynamic_height dynamic_height m = rebuild { m with dynamic_height }
 
 let set_min_height min_height m =
-  let min_height = clamp min_height 1 m.max_height in
+  let min_height = Range.clamp 1 m.max_height min_height in
   rebuild { m with min_height; height = max min_height m.height }
 
 let set_max_content_height max_content_height m =
@@ -1348,7 +1361,7 @@ let set_virtual_cursor virtual_cursor m = rebuild { m with virtual_cursor }
 let set_width width m = rebuild { m with width = max 0 width }
 
 let set_height height m =
-  rebuild { m with height = clamp height m.min_height m.max_height }
+  rebuild { m with height = Range.clamp m.min_height m.max_height height }
 
 let scroll_y_offset m = Viewport.y_offset m.viewport
 let scroll_percent m = Viewport.scroll_percent m.viewport
@@ -1356,7 +1369,7 @@ let scroll_percent m = Viewport.scroll_percent m.viewport
 let position_at ~x ~y m =
   let rows = visual_lines m in
   let visual =
-    clamp (Viewport.y_offset m.viewport + y) 0 (max 0 (Stdlib.List.length rows - 1))
+    Range.clamp 0 (max 0 (Stdlib.List.length rows - 1)) (Viewport.y_offset m.viewport + y)
   in
   match visual_at rows visual with
   | None -> { row = 0; col = 0 }

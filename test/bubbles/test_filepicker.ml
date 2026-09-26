@@ -138,8 +138,38 @@ let auto_height_and_resize () =
   check_int "manual height unchanged" 4 (Filepicker.height picker);
   Lwt.return_unit
 
+let cursor_row cursor =
+  match cursor with None -> -1 | Some (cursor : Charamel_tea.Cursor.t) -> cursor.row
+
+let selection_cursor () =
+  Test_support.with_temp_dir @@ fun root ->
+  let* () = write_file (path_join root "a.txt") "a" in
+  let* () = write_file (path_join root "b.txt") "b" in
+  let picker =
+    Filepicker.v ~root ~current_directory:root ~auto_height:false ~height:2
+      ~show_permissions:false ~show_size:false ()
+  in
+  let picker, _ = read_model root root picker in
+  check_bool "a populated picker asks for a cursor" true
+    (Filepicker.selection_cursor picker <> None);
+  check_int "the selected entry is the first line" 0
+    (cursor_row (Filepicker.selection_cursor picker));
+  check_bool "the column clears the cursor marker" true
+    (match Filepicker.selection_cursor picker with
+    | Some (cursor : Charamel_tea.Cursor.t) -> cursor.col > 0
+    | None -> false);
+  let picker, _ = Filepicker.update Filepicker.Down picker in
+  check_int "the cursor follows the selection" 1
+    (cursor_row (Filepicker.selection_cursor picker));
+  let empty = Filepicker.v ~root:"/proc/self/non-directory" () in
+  check_bool "an empty picker asks for no cursor" true
+    (Filepicker.selection_cursor empty = None);
+  Lwt.return_unit
+
 let cases =
   [
+    Alcotest_lwt.test_case "selection cursor" `Quick (fun _switch () ->
+        selection_cursor ());
     Alcotest_lwt.test_case "navigation and real filesystem" `Quick (fun _switch () ->
         navigation_and_real_io ());
     Alcotest_lwt.test_case "filtering and disabled selection" `Quick (fun _switch () ->

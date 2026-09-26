@@ -1,8 +1,6 @@
 module Cmd = Charamel_tea.Cmd
 module Sub = Charamel_tea.Sub
 
-let clamp value low high = max low (min high value)
-
 type kind = Arabic | Dots
 type keymap = { prev_page : Key_binding.t; next_page : Key_binding.t }
 
@@ -40,7 +38,7 @@ let v ?(kind = Arabic) ?(per_page = 1) ?(total_pages = 1) ?(active_dot = "•")
   }
 
 let page t = t.page
-let set_page page t = { t with page = clamp page 0 (max 0 (t.total_pages - 1)) }
+let set_page page t = { t with page = Range.clamp 0 (max 0 (t.total_pages - 1)) page }
 let per_page t = t.per_page
 let set_per_page per_page t = { t with per_page = max 1 per_page }
 let total_pages t = t.total_pages
@@ -49,7 +47,7 @@ let set_total_pages ~items t =
   if items < 1 then t
   else
     let total_pages = max 1 ((items + t.per_page - 1) / t.per_page) in
-    { t with total_pages; page = clamp t.page 0 (total_pages - 1) }
+    { t with total_pages; page = Range.clamp 0 (total_pages - 1) t.page }
 
 let items_on_page ~total t =
   if total < 1 then 0
