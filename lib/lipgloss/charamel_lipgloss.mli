@@ -30,6 +30,9 @@ val light_dark : is_dark:bool -> light:Color.t -> dark:Color.t -> Color.t
 
 module Style = Style
 module Layout = Layout
+module Canvas = Canvas
+module Layer = Layer
+module Compositor = Compositor
 module Table = Table
 module Tree = Tree
 module List = List

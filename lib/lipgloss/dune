@@ -1,4 +1,19 @@
 (library
  (name charamel_lipgloss)
  (public_name charamel.lipgloss)
+ (modules :standard \ charamel_lipgloss_terminal)
  (libraries charamel.ansi charamel.colorprofile fmt lwt lwt.unix uucp))
+
+(library
+ (name charamel_lipgloss_terminal)
+ (public_name charamel.lipgloss.terminal)
+ (modules charamel_lipgloss_terminal)
+ (libraries
+  charamel.ansi
+  charamel.colorprofile
+  charamel.lipgloss
+  charamel.os
+  fmt
+  lwt
+  lwt.unix
+  unix))

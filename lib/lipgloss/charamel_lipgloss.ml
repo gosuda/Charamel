@@ -21,6 +21,9 @@ let light_dark ~is_dark ~light ~dark = if is_dark then dark else light
 
 module Style = Style
 module Layout = Layout
+module Canvas = Canvas
+module Layer = Layer
+module Compositor = Compositor
 module Table = Table
 module Tree = Tree
 module List = List

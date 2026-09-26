@@ -9,4 +9,5 @@
   test_color
   test_style
   test_seq
-  test_text))
+  test_text
+  test_raster))

@@ -63,8 +63,9 @@ let test_table () =
     (Table.render table)
 
 let test_tree_and_list () =
-  check_string "list" "• one\n• two" (List.render (List.v [ "one"; "two" ]));
-  let tree = Tree.node ~value:"root" [ Tree.leaf "leaf" ] in
+  check_string "list" "• one\n• two"
+    (List.render (List.v [ List.Text "one"; List.Text "two" ]));
+  let tree = Tree.node ~value:"root" ~children:[ Tree.leaf "leaf" ] () in
   check_string "tree" "root\n└── leaf" (Tree.render tree)
 
 let () =
@@ -87,4 +88,7 @@ let () =
       ("surface-contract", Test_surface_contract.cases);
       ("layout-contract", Test_layout_contract.cases);
       ("structures-contract", Test_structures_contract.cases);
+      ("table-contract", Test_table_contract.cases);
+      ("compositor-contract", Test_compositor_contract.cases);
+      ("terminal-contract", Test_terminal_contract.cases);
     ]

@@ -3,6 +3,7 @@
  (package charamel)
  (libraries
   charamel.lipgloss
+  charamel.lipgloss.terminal
   charamel.ansi
   charamel.colorprofile
   alcotest
