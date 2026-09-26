@@ -18,8 +18,6 @@ end
 
 type error = Error.t
 
-let pp_error = Error.pp
-
 module Anthropic = struct
   let client_id = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
   let authorize_url = "https://claude.ai/oauth/authorize"

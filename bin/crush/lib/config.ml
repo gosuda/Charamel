@@ -110,55 +110,6 @@ let string_map_codec =
       List.fold_left (fun map (key, value) -> M.add key value map) M.empty values)
     map_codec
 
-let model_codec : Charamel_fantasy.Model.t Jsont.t =
-  let open Jsont in
-  Object.map
-    (fun
-      id
-      name
-      cost_in
-      cost_out
-      cost_cache_write
-      cost_cache_read
-      context_window
-      default_max_tokens
-      can_reason
-      supports_attachments
-    ->
-      ({
-         Charamel_fantasy.Model.id;
-         name;
-         provider = "";
-         context_window;
-         default_max_tokens;
-         can_reason;
-         supports_attachments;
-         cost_in;
-         cost_out;
-         cost_cache_read;
-         cost_cache_write;
-       }
-        : Charamel_fantasy.Model.t))
-  |> Object.mem "id" string ~enc:(fun model -> model.Charamel_fantasy.Model.id)
-  |> Object.mem "name" string ~enc:(fun model -> model.Charamel_fantasy.Model.name)
-  |> Object.mem "cost_per_1m_in" number ~enc:(fun model ->
-      model.Charamel_fantasy.Model.cost_in)
-  |> Object.mem "cost_per_1m_out" number ~enc:(fun model ->
-      model.Charamel_fantasy.Model.cost_out)
-  |> Object.mem "cost_per_1m_in_cached" number ~dec_absent:0. ~enc:(fun model ->
-      model.Charamel_fantasy.Model.cost_cache_write)
-  |> Object.mem "cost_per_1m_out_cached" number ~dec_absent:0. ~enc:(fun model ->
-      model.Charamel_fantasy.Model.cost_cache_read)
-  |> Object.mem "context_window" int ~enc:(fun model ->
-      model.Charamel_fantasy.Model.context_window)
-  |> Object.mem "default_max_tokens" int ~enc:(fun model ->
-      model.Charamel_fantasy.Model.default_max_tokens)
-  |> Object.mem "can_reason" bool ~dec_absent:false ~enc:(fun model ->
-      model.Charamel_fantasy.Model.can_reason)
-  |> Object.mem "supports_attachments" bool ~dec_absent:false ~enc:(fun model ->
-      model.Charamel_fantasy.Model.supports_attachments)
-  |> Object.error_unknown |> Object.finish
-
 let provider_kind_codec =
   Jsont.enum
     [
@@ -203,7 +154,9 @@ let provider_codec : provider Jsont.t =
        ~enc_omit:Option.is_none
   |> Object.mem "headers" string_map_codec ~dec_absent:[]
        ~enc:(fun (provider : provider) -> provider.headers)
-  |> Object.mem "models" (list model_codec) ~dec_absent:[]
+  |> Object.mem "models"
+       (list (Charamel_fantasy.Model.jsont ~unknown:`Error))
+       ~dec_absent:[]
        ~enc:(fun (provider : provider) -> provider.models)
   |> Object.error_unknown |> Object.finish
 

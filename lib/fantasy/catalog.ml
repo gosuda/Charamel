@@ -2,10 +2,6 @@ open Lwt.Infix
 
 type error = [ Error.t | `Not_modified ]
 
-let pp_error ppf = function
-  | `Not_modified -> Fmt.string ppf "catalog not modified"
-  | #Error.t as e -> Error.pp ppf e
-
 let embedded = Catalog_data.providers
 let default_base_url = "https://catwalk.charm.sh/v2/providers"
 

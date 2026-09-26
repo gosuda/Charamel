@@ -10,6 +10,3 @@ type t = { name : string; description : string; schema : Jsont.json }
 
 val v : name:string -> description:string -> schema:Jsont.json -> t
 (** [v ~name ~description ~schema] is a tool with those fields. *)
-
-val pp : t Fmt.t
-(** [pp] formats the tool's name and description; the schema body is elided. *)

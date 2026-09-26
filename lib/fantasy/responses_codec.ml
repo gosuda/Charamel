@@ -149,18 +149,7 @@ let tool_items parts =
     parts
 
 let system_items (r : Request.t) =
-  let message_blocks =
-    List.concat_map
-      (fun (m : Message.t) ->
-        match m.Message.role with
-        | Message.System ->
-            List.filter_map
-              (function Message.Text s -> Some s | _ -> None)
-              m.Message.parts
-        | Message.User | Message.Assistant | Message.Tool -> [])
-      r.Request.messages
-  in
-  let blocks = r.Request.system @ message_blocks in
+  let blocks = Request.system_blocks r in
   match blocks with
   | [] -> []
   | blocks -> (
@@ -184,22 +173,13 @@ let input_items (r : Request.t) =
 
 (* Request: reasoning and knobs. *)
 
-let effort = function
-  | Request.Off -> None
-  | Request.Low -> Some "low"
-  | Request.Medium -> Some "medium"
-  | Request.High -> Some "high"
-
 let encode (r : Request.t) =
-  let cap =
-    if r.Request.max_tokens > 0 then r.Request.max_tokens
-    else r.Request.model.Model.default_max_tokens
-  in
+  let cap = Request.effective_max_tokens r in
   let is_reasoning = classify_model r.Request.model.Model.id = `Reasoning in
   (* Summaries are never requested: the provider only sets [summary] from
      explicit caller options, and without it no reasoning text streams. *)
   let reasoning_member =
-    match (is_reasoning, effort r.Request.reasoning) with
+    match (is_reasoning, Openai_wire.effort r.Request.reasoning) with
     | true, Some e -> [ (n "reasoning", obj [ (n "effort", str e) ]) ]
     | _ -> []
   in
@@ -243,22 +223,14 @@ type tool_state = { call_id : string; mutable arguments : string; mutable closed
 
 type state = {
   tools : (int, tool_state) Hashtbl.t;
-  mutable pending_finish : Stream_part.t option;
-  mutable usage : Usage.t option;
-  mutable finished : bool;
+  term : Codec_state.t;
   mutable saw_tool_call : bool;
 }
 
 type t = state
 
 let create () =
-  {
-    tools = Hashtbl.create 8;
-    pending_finish = None;
-    usage = None;
-    finished = false;
-    saw_tool_call = false;
-  }
+  { tools = Hashtbl.create 8; term = Codec_state.create (); saw_tool_call = false }
 
 (* responsesUsage (responses_language_model.go:409-424): input_tokens
    includes both cached and cache-write tokens, so both are subtracted
@@ -295,26 +267,6 @@ let finish_of_string saw_tool_call = function
         | "content_filter" -> `Content_filter
         | other -> `Error (Fmt.str "provider ended with incomplete reason %s" other))
 
-let usage_events (st : state) =
-  match st.usage with Some u -> [ Stream_part.Usage u ] | None -> []
-
-let terminal (st : state) msg =
-  st.finished <- true;
-  st.pending_finish <- None;
-  let usage = usage_events st in
-  st.usage <- None;
-  usage @ [ Stream_part.Finish (`Error msg) ]
-
-let release (st : state) =
-  match st.pending_finish with
-  | None -> []
-  | Some f ->
-      st.finished <- true;
-      st.pending_finish <- None;
-      let usage = usage_events st in
-      st.usage <- None;
-      usage @ [ f ]
-
 let append_done_arguments (st : state) (call : tool_state) (item : Jsont.json) =
   match string_mem item "arguments" with
   | None -> []
@@ -329,7 +281,8 @@ let append_done_arguments (st : state) (call : tool_state) (item : Jsont.json) =
       call.arguments <- full;
       if suffix = "" then []
       else [ Stream_part.Tool_input_delta { id = call.call_id; delta = suffix } ]
-  | Some _ -> terminal st "tool call arguments changed between delta and done"
+  | Some _ ->
+      Codec_state.terminal st.term "tool call arguments changed between delta and done"
 
 (* response.output_item.added: a function_call item opens the call keyed by
    output_index (responses_language_model.go:1022-1036); message and
@@ -347,7 +300,7 @@ let output_item_added (st : state) (item : Jsont.json) (output_index : int) =
             else [ Stream_part.Tool_input_delta { id = call_id; delta = arguments } ]
           in
           Stream_part.Tool_call_start { id = call_id; name } :: initial
-      | _ -> terminal st "function call is missing call_id or name")
+      | _ -> Codec_state.terminal st.term "function call is missing call_id or name")
   | _ -> []
 
 (* response.output_item.done closes the call opened at the same output index
@@ -356,12 +309,13 @@ let output_item_done (st : state) (item : Jsont.json) (output_index : int) =
   match string_mem item "type" with
   | Some "function_call" -> (
       match Hashtbl.find_opt st.tools output_index with
-      | None -> terminal st "function call completed before it was opened"
+      | None ->
+          Codec_state.terminal st.term "function call completed before it was opened"
       | Some call ->
           if call.closed then []
           else
             let arguments = append_done_arguments st call item in
-            if st.finished then arguments
+            if st.term.finished then arguments
             else begin
               call.closed <- true;
               st.saw_tool_call <- true;
@@ -371,23 +325,28 @@ let output_item_done (st : state) (item : Jsont.json) (output_index : int) =
 
 let function_call_arguments_delta (st : state) (j : Jsont.json) =
   match int_option_mem j "output_index" with
-  | None -> terminal st "function call argument delta is missing output_index"
+  | None ->
+      Codec_state.terminal st.term "function call argument delta is missing output_index"
   | Some output_index -> (
       match (Hashtbl.find_opt st.tools output_index, string_mem j "delta") with
       | Some call, Some delta when not call.closed ->
           call.arguments <- call.arguments ^ delta;
           if delta = "" then []
           else [ Stream_part.Tool_input_delta { id = call.call_id; delta } ]
-      | Some _, Some _ -> terminal st "function call argument delta follows completion"
+      | Some _, Some _ ->
+          Codec_state.terminal st.term "function call argument delta follows completion"
       | Some _, None -> []
-      | None, _ -> terminal st "function call argument delta has no open call")
+      | None, _ ->
+          Codec_state.terminal st.term "function call argument delta has no open call")
 
 let function_call_arguments_done (st : state) (j : Jsont.json) =
   match int_option_mem j "output_index" with
-  | None -> terminal st "function call arguments done is missing output_index"
+  | None ->
+      Codec_state.terminal st.term "function call arguments done is missing output_index"
   | Some output_index -> (
       match Hashtbl.find_opt st.tools output_index with
-      | None -> terminal st "function call arguments done has no open call"
+      | None ->
+          Codec_state.terminal st.term "function call arguments done has no open call"
       | Some call -> append_done_arguments st call j)
 
 let delta_part make j =
@@ -409,12 +368,13 @@ let decode_terminal (st : state) (j : Jsont.json) =
         | Some _ | None -> ""
       in
       (match oopt resp "usage" with
-      | Some u when is_object u -> st.usage <- Some (usage_of u)
+      | Some u when is_object u -> st.term.usage <- Some (usage_of u)
       | Some _ | None -> ());
-      st.pending_finish <-
+      st.term.pending_finish <-
         Some (Stream_part.Finish (finish_of_string st.saw_tool_call reason));
-      release st
-  | Some _ | None -> terminal st "terminal event carries no response object"
+      Codec_state.release st.term
+  | Some _ | None ->
+      Codec_state.terminal st.term "terminal event carries no response object"
 
 let decode_failed (st : state) (j : Jsont.json) =
   let fallback = "response failed" in
@@ -426,27 +386,27 @@ let decode_failed (st : state) (j : Jsont.json) =
         | None -> fallback)
     | Some _ | None -> fallback
   in
-  terminal st msg
+  Codec_state.terminal st.term msg
 
 let output_item_added_event (st : state) (j : Jsont.json) =
   match (oopt j "item", int_option_mem j "output_index") with
   | Some item, Some output_index when is_object item ->
       output_item_added st item output_index
-  | Some _, Some _ -> terminal st "output item is not an object"
-  | _ -> terminal st "output item event is missing item or output_index"
+  | Some _, Some _ -> Codec_state.terminal st.term "output item is not an object"
+  | _ -> Codec_state.terminal st.term "output item event is missing item or output_index"
 
 let output_item_done_event (st : state) (j : Jsont.json) =
   match (oopt j "item", int_option_mem j "output_index") with
   | Some item, Some output_index when is_object item ->
       output_item_done st item output_index
-  | Some _, Some _ -> terminal st "output item is not an object"
-  | _ -> terminal st "output item event is missing item or output_index"
+  | Some _, Some _ -> Codec_state.terminal st.term "output item is not an object"
+  | _ -> Codec_state.terminal st.term "output item event is missing item or output_index"
 
 let decode_event (st : state) (j : Jsont.json) : Stream_part.t list =
-  if not (is_object j) then terminal st "event is not a JSON object"
+  if not (is_object j) then Codec_state.terminal st.term "event is not a JSON object"
   else
     match string_mem j "type" with
-    | None -> terminal st "event has no type member"
+    | None -> Codec_state.terminal st.term "event has no type member"
     | Some "response.output_item.added" -> output_item_added_event st j
     | Some "response.output_item.done" -> output_item_done_event st j
     | Some "response.function_call_arguments.delta" -> function_call_arguments_delta st j
@@ -458,23 +418,27 @@ let decode_event (st : state) (j : Jsont.json) : Stream_part.t list =
         delta_part (fun d -> Stream_part.Reasoning_delta d) j
     | Some ("response.completed" | "response.incomplete") -> decode_terminal st j
     | Some "response.failed" -> decode_failed st j
-    | Some "error" -> terminal st (error_message ~fallback:"provider reported an error" j)
+    | Some "error" ->
+        Codec_state.terminal st.term
+          (error_message ~fallback:"provider reported an error" j)
     | _ -> []
 
 let feed (st : t) ~event ~(data : string) =
-  if st.finished then []
+  if st.term.finished then []
   else
     match json_of_string data with
     | Error e ->
         Log.err (fun m -> m "malformed responses event: %s" e);
-        terminal st (Fmt.str "malformed event: %s" e)
+        Codec_state.terminal st.term (Fmt.str "malformed event: %s" e)
     | Ok j ->
         (* The [type] member is authoritative; it is present in every
            recorded stream and the SSE event name repeats it. *)
         ignore event;
         let parts = decode_event st j in
-        if st.finished then parts @ release st else parts
+        if st.term.finished then parts @ Codec_state.release st.term else parts
 
 let finish (st : t) =
-  if st.finished then []
-  else terminal st "stream ended before the provider reported a terminal event"
+  if st.term.finished then []
+  else
+    Codec_state.terminal st.term
+      "stream ended before the provider reported a terminal event"

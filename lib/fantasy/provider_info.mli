@@ -25,6 +25,3 @@ val jsont : t Jsont.t
     cache costs to [false] and [0.0]. The wire model carries no provider member, so
     [Model.provider] is stamped from the enclosing entry's [id] and dropped again on
     encode: a decoded entry re-encodes unchanged. *)
-
-val pp : t Fmt.t
-(** [pp] formats id, endpoint, and model count. *)

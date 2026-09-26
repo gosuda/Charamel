@@ -25,10 +25,6 @@ end
 type error = Error.t
 (** The type for OAuth, HTTP, and transport failures. *)
 
-val pp_error : error Fmt.t
-(** [pp_error] formats an OAuth, HTTP, or transport failure without revealing credentials.
-*)
-
 module Anthropic : sig
   val client_id : string
   (** [client_id] is the public Claude CLI OAuth client identifier. *)

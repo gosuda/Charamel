@@ -12,9 +12,6 @@ type error = [ Error.t | `Not_modified ]
     response has no body and supplies no replacement catalog. The caller retains its
     cached copy. *)
 
-val pp_error : error Fmt.t
-(** [pp_error] formats a catalog failure. *)
-
 val embedded : Provider_info.t list
 (** [embedded] is the catalog pinned at build time, in upstream registry order. *)
 

@@ -68,11 +68,9 @@ let test_extract_code_forms () =
   Alcotest.(check bool) "state mismatch rejected" true mismatch
 
 let test_expiry_skew () =
-  let module A = Charamel_fantasy__Oauth.Anthropic in
+  let module A = Oauth.Anthropic in
   (* now + expires_in*1000 - 300_000 *)
-  Alcotest.(check int)
-    "five minute shave" 1_000_000
-    (A.compute_expires_at_ms 500_000 800 |> fun ms -> ms);
+  Alcotest.(check int) "five minute shave" 1_000_000 (A.compute_expires_at_ms 500_000 800);
   Alcotest.(check int) "expires 3600 from 0" 3_300_000 (A.compute_expires_at_ms 0 3600)
 
 let cases =

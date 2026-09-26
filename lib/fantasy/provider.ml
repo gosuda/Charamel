@@ -222,13 +222,10 @@ let stream t ?stop ~clock ~model ?(system = []) ?(tools = []) ?max_tokens ?tempe
     let codec = Codec.create () in
     let body = Json.string_of_json (Codec.encode request) in
     let url, headers = url_and_headers t auth model in
-    let transport = Transport.make () in
-    let consume =
-      Transport.Sse
-        (fun ~event ~data -> emit (caller_parts (Codec.feed codec ~event ~data)))
-    in
-    Transport.call transport ~url ~meth:`POST ~headers ~body ~consume () >>= function
-    | Ok _ ->
+    Transport.call ~url ~headers ~body ~on_event:(fun ~event ~data ->
+        emit (caller_parts (Codec.feed codec ~event ~data)))
+    >>= function
+    | Ok () ->
         emit (caller_parts (Codec.finish codec));
         emit [ Stream_part.Finish (`Error "stream ended without a terminal event") ];
         Lwt.return_unit

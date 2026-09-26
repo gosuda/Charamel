@@ -45,7 +45,3 @@ val tool_results :
   t
 (** [tool_results results] is a [Tool]-role message holding one [Tool_result] part per
     triple [(id, name, output)]. *)
-
-val pp : t Fmt.t
-(** [pp] formats a message compactly for diagnostics; reasoning text is elided to its
-    length. *)

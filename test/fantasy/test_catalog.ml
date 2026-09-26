@@ -144,6 +144,10 @@ let test_fetch_modified =
                (Fixture_http.last_headers server));
           Lwt.return_unit))
 
+let pp_error ppf = function
+  | `Not_modified -> Fmt.string ppf "catalog not modified"
+  | #Charamel_fantasy.Error.t as e -> Charamel_fantasy.Error.pp ppf e
+
 let test_fetch_not_modified =
   Alcotest_lwt.test_case "fetch not modified" `Quick (fun _switch () ->
       Fixture_http.with_server (fun server ->
@@ -155,9 +159,7 @@ let test_fetch_not_modified =
           >>= fun result ->
           (match result with
           | Error `Not_modified -> ()
-          | Error e ->
-              Alcotest.failf "expected Not_modified, got %a"
-                Charamel_fantasy.Catalog.pp_error e
+          | Error e -> Alcotest.failf "expected Not_modified, got %a" pp_error e
           | Ok (_, etag) ->
               Alcotest.failf "expected Not_modified, got a catalog with etag %s" etag);
           Alcotest.(check bool)
@@ -186,9 +188,7 @@ let test_fetch_http_error =
                 "the message names the endpoint"
                 "unexpected status 500 from the catalog endpoint" message;
               Alcotest.(check bool) "a 5xx is retryable" true retryable
-          | Error e ->
-              Alcotest.failf "expected an HTTP failure, got %a"
-                Charamel_fantasy.Catalog.pp_error e
+          | Error e -> Alcotest.failf "expected an HTTP failure, got %a" pp_error e
           | Ok _ -> Alcotest.fail "expected an HTTP failure");
           Lwt.return_unit))
 
@@ -209,9 +209,7 @@ let test_fetch_unreadable_body =
               Alcotest.(check bool)
                 "the message carries the decoder report" true
                 (String.starts_with ~prefix:"catalog body did not decode" message)
-          | Error e ->
-              Alcotest.failf "expected an HTTP failure, got %a"
-                Charamel_fantasy.Catalog.pp_error e
+          | Error e -> Alcotest.failf "expected an HTTP failure, got %a" pp_error e
           | Ok _ -> Alcotest.fail "expected an HTTP failure");
           Lwt.return_unit))
 

@@ -36,9 +36,6 @@ module Oauth : sig
   type error = Error.t
   (** The type for OAuth, HTTP, and transport failures. *)
 
-  val pp_error : error Fmt.t
-  (** [pp_error] formats an OAuth failure without revealing credentials. *)
-
   module Anthropic : sig
     val client_id : string
     (** [client_id] is the public Claude CLI OAuth client identifier. *)
@@ -65,6 +62,14 @@ module Oauth : sig
     val extract_code : url_or_code:string -> state:string -> (string, error) result
     (** [extract_code ~url_or_code ~state] is the authorization code from a bare code, a
         [code#state] pair, or a redirect URL with matching state. *)
+
+    val compute_expires_at_ms : int -> int -> int
+    (** [compute_expires_at_ms now_ms expires_in] is the expiry timestamp after
+        subtracting the five-minute safety shave from [expires_in] seconds.
+
+        @raise Invalid_argument
+          if [now_ms] is negative, [expires_in] is not positive, or the timestamp would
+          overflow an integer. *)
 
     val exchange :
       ?now_ms:int ->

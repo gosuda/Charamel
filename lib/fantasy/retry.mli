@@ -18,11 +18,6 @@ type t = private {
     seconds, [factor] the multiplier per attempt, [max_delay] the delay ceiling in
     seconds, and [jitter] the fraction of randomisation applied to each computed delay. *)
 
-val policy : max:int -> base:float -> factor:float -> max_delay:float -> jitter:float -> t
-(** [policy ~max ~base ~factor ~max_delay ~jitter] validates and returns a policy. [max]
-    must be non-negative, [factor] at least [1.], and [jitter] within \[0., 1.\];
-    otherwise [Invalid_argument]. *)
-
 val default : t
 (** [default] is the approved plan policy: 8 retries, 0.5 s base, factor 2, 60 s ceiling,
     jitter 0.25. *)

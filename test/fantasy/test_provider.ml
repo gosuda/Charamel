@@ -120,6 +120,37 @@ let test_headers =
             "API key header" true
             (carries "x-api-key" "fixture-key" headers)))
 
+let oauth_credential =
+  {
+    Oauth.Credential.access = "oauth-access";
+    refresh = "";
+    expires_at_ms = 4_000_000_000_000;
+    account = None;
+  }
+
+let oauth_bearer_case name make_provider =
+  Alcotest_lwt.test_case name `Quick (fun _switch () ->
+      Stream_test_support.with_fixture (fun server ->
+          Fixture_http.respond server complete_body;
+          let provider = make_provider server in
+          Provider.stream provider ~clock ~model [ user_message ]
+          |> Stream_test_support.drain
+          >|= fun _parts ->
+          Alcotest.(check bool)
+            "bearer authorization header" true
+            (carries "authorization" "Bearer oauth-access"
+               (Fixture_http.last_headers server))))
+
+let test_openai_oauth_header =
+  oauth_bearer_case "openai oauth bearer header" (fun server ->
+      Provider.openai_compatible ~base_url:(base_url server)
+        ~auth:(Provider.Oauth oauth_credential) ())
+
+let test_google_oauth_header =
+  oauth_bearer_case "google oauth bearer header" (fun server ->
+      Provider.google ~base_url:(base_url server) ~auth:(Provider.Oauth oauth_credential)
+        ())
+
 let test_retry_after =
   Alcotest_lwt.test_case "Retry-After" `Quick (fun _switch () ->
       Stream_test_support.with_fixture (fun server ->
@@ -195,6 +226,8 @@ let cases =
   [
     test_split_sse;
     test_headers;
+    test_openai_oauth_header;
+    test_google_oauth_header;
     test_retry_after;
     test_no_retry_after_emission;
     test_malformed_body;
