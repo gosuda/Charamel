@@ -3,4 +3,4 @@
 (library
  (name charamel_highlight)
  (public_name charamel.highlight)
- (libraries charamel.ansi charamel.lipgloss re))
+ (libraries charamel.ansi re))

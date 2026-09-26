@@ -13,77 +13,18 @@ let check_code code =
 let error ?(code = 1) message = raise (Controlled_exit (check_code code, Some message))
 let exit code = raise (Controlled_exit (check_code code, None))
 
-let ansi_index_is_dark index =
-  match Charamel_ansi.Color.indexed index with
-  | None -> true
-  | Some color -> (
-      match Charamel_ansi.Color.to_rgb color with
-      | None -> true
-      | Some (red, green, blue) ->
-          (* The ITU-R BT.601 integer luma approximation agrees with the
-             conventional xterm palette boundary: index 8 (dark gray) remains
-             dark while index 7 (light gray) is light. *)
-          (299 * red) + (587 * green) + (114 * blue) <= 128_000)
-
-let colorfgbg_index value =
+let colorfgbg_color value =
   match List.rev (String.split_on_char ';' value) with
   | field :: _ -> (
       match int_of_string_opt (String.trim field) with
-      | Some index when index >= 0 && index <= 255 -> Some index
-      | Some _ | None -> None)
+      | Some index -> Charamel_ansi.Color.indexed index
+      | None -> None)
   | [] -> None
 
 let is_dark ~env =
-  match env "COLORFGBG" with
-  | Some value -> (
-      match colorfgbg_index value with
-      | Some index -> ansi_index_is_dark index
-      | None -> true)
+  match Option.bind (env "COLORFGBG") colorfgbg_color with
+  | Some color -> Charamel_ansi.Color.is_dark color
   | None -> true
-
-let distance_bounded ~limit left right =
-  let left_length = String.length left in
-  let right_length = String.length right in
-  if abs (left_length - right_length) > limit then None
-  else
-    let previous = Array.init (right_length + 1) Fun.id in
-    let current = Array.make (right_length + 1) 0 in
-    let rec rows row =
-      if row > left_length then Some previous.(right_length)
-      else begin
-        current.(0) <- row;
-        let row_min = ref current.(0) in
-        for column = 1 to right_length do
-          let substitution =
-            previous.(column - 1) + if left.[row - 1] = right.[column - 1] then 0 else 1
-          in
-          let insertion = current.(column - 1) + 1 in
-          let deletion = previous.(column) + 1 in
-          let value = min substitution (min insertion deletion) in
-          current.(column) <- value;
-          if value < !row_min then row_min := value
-        done;
-        if !row_min > limit then None
-        else begin
-          Array.blit current 0 previous 0 (right_length + 1);
-          rows (row + 1)
-        end
-      end
-    in
-    rows 1
-
-let nearest_candidate ~candidates query =
-  let rec choose best best_distance = function
-    | [] -> best
-    | candidate :: rest ->
-        let next_best, next_distance =
-          match distance_bounded ~limit:3 query candidate with
-          | Some distance when distance < best_distance -> (Some candidate, distance)
-          | Some _ | None -> (best, best_distance)
-        in
-        choose next_best next_distance rest
-  in
-  choose None 4 candidates
 
 let verbosity_args argv =
   let rec loop index kept verbose quiet passthrough =
@@ -125,6 +66,9 @@ let is_tty channel =
   match Unix.isatty channel with
   | flag -> flag
   | exception Unix.Unix_error (_, _, _) -> false
+
+let path_for ~cwd path =
+  if Filename.is_relative path then Filename.concat cwd path else path
 
 let diagnostic ppf ~profile message =
   let styled =

@@ -143,5 +143,13 @@ let spec =
         "@";
       ]
     ~attribute:
-      (Some (seq [ str "#"; opt (str "!"); str "["; rep (not_chars "]\n"); str "]" ]))
+      (Some
+         (Re.seq
+            [
+              Re.str "#";
+              Re.opt (Re.str "!");
+              Re.str "[";
+              Re.rep (not_chars "]\n");
+              Re.str "]";
+            ]))
     ()

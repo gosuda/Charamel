@@ -90,12 +90,12 @@ let spec =
     ~strings:[ ("\"", "\"", true); ("'", "'", true) ]
     ~raw_strings:[ ("`", "`") ]
     ~number:
-      (alt
+      (Re.alt
          [
-           seq [ str "0x"; rep1 (set "0123456789abcdefABCDEF"); opt (str "n") ];
-           seq [ str "0b"; rep1 (set "01"); opt (str "n") ];
-           seq [ str "0o"; rep1 (set "01234567"); opt (str "n") ];
-           seq [ decimal; opt (str "n") ];
+           hex_literal ~suffix:(Re.str "n") ();
+           Re.seq [ Re.str "0b"; Re.rep1 (Re.set "01"); Re.opt (Re.str "n") ];
+           Re.seq [ Re.str "0o"; Re.rep1 (Re.set "01234567"); Re.opt (Re.str "n") ];
+           Re.seq [ decimal; Re.opt (Re.str "n") ];
          ])
     ~ident:identifier_dollar
     ~operators:

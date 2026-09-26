@@ -43,11 +43,11 @@ let spec =
     ~number:integer_number ~ident:identifier
     ~attribute:
       (Some
-         (alt
+         (Re.alt
             [
-              seq [ str "$("; rep (not_chars ")"); str ")" ];
-              seq [ str "${"; rep (not_chars "}"); str "}" ];
-              seq [ str "$"; set "@<^?*+%$" ];
+              Re.seq [ Re.str "$("; Re.rep (not_chars ")"); Re.str ")" ];
+              Re.seq [ Re.str "${"; Re.rep (not_chars "}"); Re.str "}" ];
+              Re.seq [ Re.str "$"; Re.set "@<^?*+%$" ];
             ]))
     ~operators:[ "::="; ":="; "?="; "+="; "!="; "="; ":"; ";" ]
     ()

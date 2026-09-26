@@ -29,6 +29,17 @@ val of_hex : string -> t option
 (** [of_hex s] is the color written in [s] as ["#rgb"] or ["#rrggbb"], case insensitive,
     or [None] when [s] has another shape. *)
 
+val of_hex_or : ?default:t -> string -> t
+(** [of_hex_or ?default s] is [of_hex s] when it is [Some color], and [default] otherwise.
+    [default] defaults to [Default]. *)
+
+val of_string : string -> t option
+(** [of_string s] is the color written as a hex triplet or a decimal index: [s] starting
+    with ["#"] is parsed by {!val:of_hex}; otherwise [s] must be a decimal integer with an
+    optional sign, whose magnitude below [16] is [Basic], below [256] is [Indexed], and is
+    otherwise packed as [Rgb] from its low 24 bits. Anything else, including a magnitude
+    that does not fit an [int], is [None]. *)
+
 val to_ansi256 : t -> t
 (** [to_ansi256 t] is the entry of the xterm 256-color palette that shows [t] closest.
     [Indexed] colors are returned unchanged and [Default] stays [Default]. *)
@@ -47,6 +58,14 @@ val to_rgb : t -> (int * int * int) option
     steps run from 8 to 238. [Default] has no components, so [to_rgb] is [None]. An index
     or a component built outside its range is resolved as if clamped into range, the
     policy of the conversion functions and of the SGR emitters of {!module:Style}. *)
+
+val is_dark : t -> bool
+(** [is_dark t] is [true] when [t] is a dark color. The decision is the ITU-R BT.601
+    integer luma of the components resolved by {!to_rgb}: [t] is dark when
+    [(299 * red) + (587 * green) + (114 * blue)] is at most [128_000]. This is the xterm
+    palette convention, so index 8 (grey 128) is dark and index 7 (grey 192) is light.
+    [Default] has no components and is dark. Indices and components built outside their
+    ranges are resolved as if clamped into range, the policy of {!to_rgb}. *)
 
 val equal : t -> t -> bool
 (** [equal a b] is [true] when [a] and [b] are the same color. *)

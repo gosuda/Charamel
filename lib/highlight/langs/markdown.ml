@@ -4,5 +4,6 @@ let spec =
   make_spec ~names:[ "markdown"; "md"; "mkd" ]
     ~raw_strings:[ ("```", "```") ]
     ~number:Re.empty ~ident:Re.empty
-    ~attribute:(Some (seq [ Re.bol; rep1 (set "#"); str " "; rep (not_chars "\n") ]))
+    ~attribute:
+      (Some (Re.seq [ Re.bol; Re.rep1 (Re.set "#"); Re.str " "; Re.rep (not_chars "\n") ]))
     ()

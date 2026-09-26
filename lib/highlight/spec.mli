@@ -56,29 +56,13 @@ val make_spec :
     default to empty, [attribute] defaults to [None], and [case_sensitive] defaults to
     [true]. *)
 
-val seq : Re.t list -> Re.t
-(** [seq rs] concatenates regular expressions in [rs]. *)
-
-val alt : Re.t list -> Re.t
-(** [alt rs] accepts any regular expression in [rs]. *)
-
-val str : string -> Re.t
-(** [str s] matches the bytes in [s]. *)
-
-val set : string -> Re.t
-(** [set chars] matches one byte from [chars]. *)
-
-val rep : Re.t -> Re.t
-(** [rep r] matches zero or more occurrences of [r]. *)
-
-val rep1 : Re.t -> Re.t
-(** [rep1 r] matches one or more occurrences of [r]. *)
-
-val opt : Re.t -> Re.t
-(** [opt r] matches zero or one occurrence of [r]. *)
-
 val not_chars : string -> Re.t
 (** [not_chars chars] matches one byte not present in [chars]. *)
+
+val hex_literal : ?suffix:Re.t -> unit -> Re.t
+(** [hex_literal ~suffix ()] matches a hexadecimal integer literal: the [0x] prefix and at
+    least one hex digit, optionally followed by the text that [suffix] matches. Without
+    [suffix] the literal ends after its digits. *)
 
 val decimal : Re.t
 (** [decimal] matches a decimal integer or floating-point literal with separators. *)

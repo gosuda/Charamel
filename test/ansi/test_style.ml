@@ -214,6 +214,138 @@ let attribute_transitions =
            ~bold:true ~faint:true ~italic:true ~underline:Charamel_ansi.Style.Curly
            ~blink:true ~reverse:true ~conceal:true ~strike:true ()))
 
+let style_is =
+  Alcotest.testable
+    (fun ppf s -> Fmt.string ppf (Charamel_ansi.Style.to_sgr s))
+    Charamel_ansi.Style.equal
+
+let folds name expected ~params start =
+  Alcotest.check style_is name expected (Charamel_ansi.Style.of_sgr ~params start)
+
+let d = Charamel_ansi.Style.default
+let single = Charamel_ansi.Style.Single
+let curly = Charamel_ansi.Style.Curly
+
+let sgr_folding =
+  Alcotest.test_case "sgr folding" `Quick (fun () ->
+      folds "attributes"
+        (st ~bold:true ~faint:true ~italic:true ~blink:true ~reverse:true ~conceal:true
+           ~strike:true ())
+        ~params:
+          [
+            [ Some 1 ];
+            [ Some 2 ];
+            [ Some 3 ];
+            [ Some 5 ];
+            [ Some 7 ];
+            [ Some 8 ];
+            [ Some 9 ];
+          ]
+        d;
+      folds "blink six is blink" (st ~blink:true ()) ~params:[ [ Some 6 ] ] d;
+      folds "empty parameter resets" (st ~italic:true ())
+        ~params:[ [ Some 1 ]; []; [ Some 3 ] ]
+        d;
+      folds "none parameter resets" (st ~strike:true ())
+        ~params:[ [ Some 7 ]; [ None ]; [ Some 9 ] ]
+        d;
+      folds "zero parameter resets" (st ~reverse:true ())
+        ~params:[ [ Some 5 ]; [ Some 0 ]; [ Some 7 ] ]
+        d;
+      folds "intensity reset clears bold and faint" (st ~italic:true ())
+        ~params:[ [ Some 1 ]; [ Some 2 ]; [ Some 3 ]; [ Some 22 ] ]
+        d;
+      folds "attribute resets" (st ())
+        ~params:
+          [ [ Some 23 ]; [ Some 24 ]; [ Some 25 ]; [ Some 27 ]; [ Some 28 ]; [ Some 29 ] ]
+        (st ~italic:true ~underline:curly ~blink:true ~reverse:true ~conceal:true
+           ~strike:true ());
+      folds "bare underline is single" (st ~underline:single ()) ~params:[ [ Some 4 ] ] d;
+      folds "underline colon double"
+        (st ~underline:Charamel_ansi.Style.Double ())
+        ~params:[ [ Some 4; Some 2 ] ]
+        d;
+      folds "underline colon curly" (st ~underline:curly ())
+        ~params:[ [ Some 4; Some 3 ] ]
+        d;
+      folds "underline colon dotted"
+        (st ~underline:Charamel_ansi.Style.Dotted ())
+        ~params:[ [ Some 4; Some 4 ] ]
+        d;
+      folds "underline colon dashed"
+        (st ~underline:Charamel_ansi.Style.Dashed ())
+        ~params:[ [ Some 4; Some 5 ] ]
+        d;
+      folds "underline colon one is single" (st ~underline:single ())
+        ~params:[ [ Some 4; Some 1 ] ]
+        d;
+      folds "underline colon omitted subparameter is single" (st ~underline:single ())
+        ~params:[ [ Some 4; None ] ]
+        d;
+      folds "underline colon zero" (st ())
+        ~params:[ [ Some 4; Some 0 ] ]
+        (st ~underline:curly ());
+      folds "underline colon unknown is single" (st ~underline:single ())
+        ~params:[ [ Some 4; Some 9 ] ]
+        d;
+      folds "basic foreground" (st ~fg:(Color.Basic 1) ()) ~params:[ [ Some 31 ] ] d;
+      folds "basic background" (st ~bg:(Color.Basic 4) ()) ~params:[ [ Some 44 ] ] d;
+      folds "bright foreground" (st ~fg:(Color.Basic 10) ()) ~params:[ [ Some 92 ] ] d;
+      folds "bright background" (st ~bg:(Color.Basic 11) ()) ~params:[ [ Some 103 ] ] d;
+      folds "slot resets" (st ~bold:true ())
+        ~params:[ [ Some 39 ]; [ Some 49 ]; [ Some 59 ] ]
+        (st
+           ~fg:(Color.Rgb (1, 2, 3))
+           ~bg:(Color.Indexed 9) ~uc:(Color.Basic 2) ~bold:true ());
+      folds "semicolon indexed foreground"
+        (st ~fg:(Color.Indexed 209) ())
+        ~params:[ [ Some 38 ]; [ Some 5 ]; [ Some 209 ] ]
+        d;
+      folds "semicolon indexed leaves later parameters"
+        (st ~fg:(Color.Indexed 209) ~bold:true ())
+        ~params:[ [ Some 38 ]; [ Some 5 ]; [ Some 209 ]; [ Some 1 ] ]
+        d;
+      folds "semicolon indexed background"
+        (st ~bg:(Color.Indexed 42) ())
+        ~params:[ [ Some 48 ]; [ Some 5 ]; [ Some 42 ] ]
+        d;
+      folds "semicolon indexed underline color"
+        (st ~uc:(Color.Indexed 100) ())
+        ~params:[ [ Some 58 ]; [ Some 5 ]; [ Some 100 ] ]
+        d;
+      folds "colon indexed foreground"
+        (st ~fg:(Color.Indexed 196) ())
+        ~params:[ [ Some 38; Some 5; Some 196 ] ]
+        d;
+      folds "colon rgb background"
+        (st ~bg:(Color.Rgb (1, 2, 3)) ())
+        ~params:[ [ Some 48; Some 2; Some 1; Some 2; Some 3 ] ]
+        d;
+      folds "colon rgb with colorspace"
+        (st ~fg:(Color.Rgb (10, 20, 30)) ())
+        ~params:[ [ Some 38; Some 2; Some 1; Some 10; Some 20; Some 30 ] ]
+        d;
+      folds "colon rgb omitted subparameters are zero"
+        (st ~fg:(Color.Rgb (0, 0, 0)) ())
+        ~params:[ [ Some 38; Some 2; None; None; None ] ]
+        d;
+      folds "semicolon rgb foreground"
+        (st ~fg:(Color.Rgb (255, 0, 128)) ())
+        ~params:[ [ Some 38 ]; [ Some 2 ]; [ Some 255 ]; [ Some 0 ]; [ Some 128 ] ]
+        d;
+      folds "index outside the palette selects default" (st ())
+        ~params:[ [ Some 38 ]; [ Some 5 ]; [ Some 300 ] ]
+        d;
+      folds "component outside the palette selects default" (st ())
+        ~params:[ [ Some 38 ]; [ Some 2 ]; [ Some 300 ]; [ Some 0 ]; [ Some 0 ] ]
+        d;
+      folds "dangling mode five continues as a parameter" (st ~blink:true ())
+        ~params:[ [ Some 38 ]; [ Some 5 ] ] d;
+      folds "unknown parameter is ignored" (st ~bold:true ()) ~params:[ [ Some 99 ] ]
+        (st ~bold:true ());
+      folds "empty parameter list keeps the style" (st ~bold:true ()) ~params:[]
+        (st ~bold:true ()))
+
 let cases =
   [
     default_resets;
@@ -223,4 +355,5 @@ let cases =
     intensity_transitions;
     underline_transitions;
     attribute_transitions;
+    sgr_folding;
   ]

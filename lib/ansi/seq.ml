@@ -1,18 +1,3 @@
-let check_text ~what s =
-  let len = String.length s in
-  let rec loop i =
-    if i >= len then ()
-    else
-      let d = String.get_utf_8_uchar s i in
-      if not (Uchar.utf_decode_is_valid d) then invalid_arg (what ^ " must be valid UTF-8")
-      else
-        let c = Uchar.to_int (Uchar.utf_decode_uchar d) in
-        if c = 0x07 || c = 0x1b || (c >= 0x80 && c <= 0x9f) then
-          invalid_arg (what ^ " contains a terminal control")
-        else loop (i + Uchar.utf_decode_length d)
-  in
-  loop 0
-
 let default_digits n = if n > 1 then string_of_int n else ""
 
 let cup ~row ~col =
@@ -62,7 +47,7 @@ let mouse_on ~mode =
 let mouse_off = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1016l\x1b[?1006l"
 
 let title s =
-  check_text ~what:"title" s;
+  Payload.check ~what:"title" s;
   "\x1b]2;" ^ s ^ "\x07"
 
 let clipboard_osc52 data =
@@ -70,7 +55,7 @@ let clipboard_osc52 data =
   "\x1b]52;c;" ^ encoded ^ "\x07"
 
 let notify_osc9 message =
-  check_text ~what:"notification" message;
+  Payload.check ~what:"notification" message;
   "\x1b]9;" ^ message ^ "\x07"
 
 let bg_query = "\x1b]11;?\x07"

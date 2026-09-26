@@ -100,11 +100,11 @@ let spec =
     ~strings:[ ("\"", "\"", true); ("'", "'", true) ]
     ~raw_strings:[ ("\"\"\"", "\"\"\"") ]
     ~number:
-      (alt
+      (Re.alt
          [
-           seq [ str "0x"; rep1 (set "0123456789abcdefABCDEF"); opt (set "lLfFdD") ];
-           seq [ str "0b"; rep1 (set "01"); opt (set "lLfFdD") ];
-           seq [ decimal; opt (set "lLfFdD") ];
+           hex_literal ~suffix:(Re.set "lLfFdD") ();
+           Re.seq [ Re.str "0b"; Re.rep1 (Re.set "01"); Re.opt (Re.set "lLfFdD") ];
+           Re.seq [ decimal; Re.opt (Re.set "lLfFdD") ];
          ])
     ~ident:identifier
     ~operators:
@@ -148,5 +148,7 @@ let spec =
         "?";
         ":";
       ]
-    ~attribute:(Some (seq [ str "@"; identifier; rep (seq [ str "."; identifier ]) ]))
+    ~attribute:
+      (Some
+         (Re.seq [ Re.str "@"; identifier; Re.rep (Re.seq [ Re.str "."; identifier ]) ]))
     ()

@@ -29,9 +29,9 @@ let spec =
     ~number:integer_number ~ident:identifier_dash ~operators:[ "="; ":" ]
     ~attribute:
       (Some
-         (alt
+         (Re.alt
             [
-              seq [ str "${"; rep (not_chars "}\n"); str "}" ];
-              seq [ str "$"; identifier ];
+              Re.seq [ Re.str "${"; Re.rep (not_chars "}\n"); Re.str "}" ];
+              Re.seq [ Re.str "$"; identifier ];
             ]))
     ~case_sensitive:false ()

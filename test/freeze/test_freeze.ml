@@ -51,6 +51,46 @@ let test_ansi_background () =
     "background rectangle" true
     (String.contains rendered.Svg.svg 'r' && String.contains rendered.Svg.svg '#')
 
+let render_ansi text =
+  let config = { Config.default with output = "capture.svg" } in
+  let rendered =
+    Svg.render ~fs_root:"." ~config ~language:None ~text ~is_ansi:true |> expect_ok
+  in
+  rendered.Svg.svg
+
+let test_ansi_underline_color () =
+  let svg = render_ansi "\027[4;58;2;0;128;255mblue\027[58;2;255;0;0mred\027[0m" in
+  Alcotest.(check bool)
+    "underline colour attribute" true
+    (Test_support.contains ~needle:"undercolor=\"#0080FF\"" ~haystack:svg);
+  Alcotest.(check bool)
+    "underline colour splits runs" true
+    (Test_support.contains ~needle:"undercolor=\"#FF0000\"" ~haystack:svg);
+  let cleared = render_ansi "\027[4;58;2;0;128;255m\027[59mgrey\027[0m" in
+  Alcotest.(check bool)
+    "underlined run survives the colour reset" true
+    (Test_support.contains ~needle:"text-decoration=\"underline\"" ~haystack:cleared);
+  Alcotest.(check bool)
+    "SGR 59 clears the underline colour" false
+    (Test_support.contains ~needle:"undercolor" ~haystack:cleared)
+
+let count_occurrences ~needle ~haystack =
+  let n = String.length needle in
+  let rec loop at acc =
+    if at + n > String.length haystack then acc
+    else if String.sub haystack at n = needle then loop (at + n) (acc + 1)
+    else loop (at + 1) acc
+  in
+  loop 0 0
+
+let test_reset_closes_link () =
+  let svg =
+    render_ansi "\027]8;;http://example.com\027\\\027[4munderlined\027[0m plain"
+  in
+  Alcotest.(check int)
+    "SGR 0 closes the hyperlink" 1
+    (count_occurrences ~needle:"href=\"http://example.com\"" ~haystack:svg)
+
 let test_pty_capture () =
   if Sys.win32 then Alcotest.skip ()
   else
@@ -78,6 +118,8 @@ let suites =
     Alcotest_lwt.test_case_sync "SVG escapes" `Quick test_svg_escapes_and_styles;
     Alcotest_lwt.test_case_sync "ANSI background" `Quick test_ansi_background;
     Alcotest_lwt.test_case "PTY capture" `Quick (fun _switch () -> test_pty_capture ());
+    Alcotest_lwt.test_case_sync "ANSI underline colour" `Quick test_ansi_underline_color;
+    Alcotest_lwt.test_case_sync "SGR 0 closes the hyperlink" `Quick test_reset_closes_link;
   ]
 
 let () = Test_support.run_lwt "freeze" [ ("freeze", suites) ]

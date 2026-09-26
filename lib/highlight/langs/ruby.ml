@@ -97,11 +97,11 @@ let spec =
         ("%Q{", "}");
       ]
     ~number:
-      (alt
+      (Re.alt
          [
-           seq [ str "0x"; rep1 (set "0123456789abcdefABCDEF") ];
-           seq [ str "0b"; rep1 (set "01") ];
-           seq [ str "0o"; rep1 (set "01234567") ];
+           hex_literal ();
+           Re.seq [ Re.str "0b"; Re.rep1 (Re.set "01") ];
+           Re.seq [ Re.str "0o"; Re.rep1 (Re.set "01234567") ];
            decimal;
          ])
     ~ident:identifier
@@ -148,11 +148,11 @@ let spec =
       ]
     ~attribute:
       (Some
-         (alt
+         (Re.alt
             [
-              seq [ str "@@"; identifier ];
-              seq [ str "@"; identifier ];
-              seq [ str "$"; identifier ];
-              seq [ str "$"; set "0123456789@*_?!" ];
+              Re.seq [ Re.str "@@"; identifier ];
+              Re.seq [ Re.str "@"; identifier ];
+              Re.seq [ Re.str "$"; identifier ];
+              Re.seq [ Re.str "$"; Re.set "0123456789@*_?!" ];
             ]))
     ()

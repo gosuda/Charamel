@@ -112,5 +112,5 @@ let spec =
     ~raw_strings:[ ("R\"(", ")\"") ]
     ~number:C.spec.number ~ident:C.spec.ident
     ~operators:([ "->*"; ".*"; "::" ] @ C.spec.operators)
-    ~attribute:(Some (seq [ str "[["; rep (not_chars "]\n"); str "]]" ]))
+    ~attribute:(Some (Re.seq [ Re.str "[["; Re.rep (not_chars "]\n"); Re.str "]]" ]))
     ()

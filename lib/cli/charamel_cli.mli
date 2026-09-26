@@ -17,10 +17,15 @@ val is_dark : env:(string -> string option) -> bool
     luminance. Missing, malformed, or out-of-range hints select dark. This function never
     queries the terminal, so it is safe for startup code and remote sessions. *)
 
-val nearest_candidate : candidates:string list -> string -> string option
-(** [nearest_candidate ~candidates query] returns the closest candidate under Levenshtein
-    distance, when that distance is at most [3]. Ties keep the input order. The empty
-    candidate list and queries with no candidate within the bound return [None]. *)
+val is_tty : Unix.file_descr -> bool
+(** [is_tty fd] is [true] when [fd] is a terminal. A pipe, a socket or a file is not one,
+    and a descriptor the system refuses to answer for — a closed one, for instance —
+    reports [false] rather than raising. *)
+
+val path_for : cwd:string -> string -> string
+(** [path_for ~cwd path] is the location of [path]. A relative [path] resolves under
+    [cwd]; an absolute [path] is returned unchanged. No filesystem access happens, so a
+    path that does not exist is returned as it is. *)
 
 val error : ?code:int -> string -> 'a
 (** [error ?code message] aborts the current command with a diagnostic. [code] defaults to

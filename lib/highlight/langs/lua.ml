@@ -69,13 +69,13 @@ let spec =
         ("[[", "]]");
       ]
     ~number:
-      (alt
+      (Re.alt
          [
-           seq
+           Re.seq
              [
-               str "0x";
-               rep1 (set "0123456789abcdefABCDEF");
-               opt (seq [ str "."; rep1 (set "0123456789abcdefABCDEF") ]);
+               Re.str "0x";
+               Re.rep1 (Re.set "0123456789abcdefABCDEF");
+               Re.opt (Re.seq [ Re.str "."; Re.rep1 (Re.set "0123456789abcdefABCDEF") ]);
              ];
            float_number;
          ])

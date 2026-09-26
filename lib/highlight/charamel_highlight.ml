@@ -82,11 +82,40 @@ let find query =
   in
   List.find_opt matches languages
 
+let tab_columns = 4
+
+let to_cells text =
+  let out = Buffer.create (String.length text) in
+  let i = ref 0 in
+  let finish character =
+    Buffer.add_char out character;
+    incr i
+  in
+  while !i < String.length text do
+    let next = !i + 1 < String.length text && text.[!i] = '\r' && text.[!i + 1] = '\n' in
+    if next then begin
+      Buffer.add_char out '\n';
+      i := !i + 2
+    end
+    else if text.[!i] = '\t' then begin
+      Buffer.add_string out (String.make tab_columns ' ');
+      incr i
+    end
+    else finish text.[!i]
+  done;
+  Buffer.contents out
+
+let paint_line style line =
+  if Charamel_ansi.Style.equal style Charamel_ansi.Style.default then line
+  else Charamel_ansi.Style.to_sgr style ^ line ^ "\x1b[m"
+
+let paint style text =
+  String.concat "\n"
+    (List.map (paint_line style) (String.split_on_char '\n' (to_cells text)))
+
 let render ?(theme = Theme.charm ~is_dark:true) spec source =
-  let tokens = tokenize spec source in
   let buffer = Buffer.create (String.length source + 32) in
   List.iter
-    (fun (kind, text) ->
-      Buffer.add_string buffer (Charamel_lipgloss.Style.render (theme kind) text))
-    tokens;
+    (fun (kind, text) -> Buffer.add_string buffer (paint (theme kind) text))
+    (tokenize spec source);
   Buffer.contents buffer

@@ -1,5 +1,7 @@
 (test
  (name test_highlight)
  (package charamel)
- (libraries charamel.highlight charamel.lipgloss alcotest)
- (modules test_highlight))
+ (modules test_highlight)
+ (libraries charamel.highlight charamel.ansi alcotest)
+ (deps
+  (source_tree data)))

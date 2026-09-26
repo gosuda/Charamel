@@ -593,9 +593,147 @@ let render_case =
       | None -> Alcotest.fail "OCaml specification missing"
       | Some spec ->
           let source = "let x = 1" in
-          let empty_theme _ = Charamel_lipgloss.Style.empty in
+          let empty_theme _ = Charamel_ansi.Style.default in
           let rendered = H.render ~theme:empty_theme spec source in
           Alcotest.check Alcotest.string "empty theme is byte identity" source rendered)
+
+let strip_sgr text =
+  let out = Buffer.create (String.length text) in
+  let i = ref 0 in
+  while !i < String.length text do
+    if !i + 1 < String.length text && text.[!i] = '\027' && text.[!i + 1] = '[' then (
+      let j = ref (!i + 2) in
+      while !j < String.length text && text.[!j] <> 'm' do
+        incr j
+      done;
+      i := !j + 1)
+    else begin
+      Buffer.add_char out text.[!i];
+      incr i
+    end
+  done;
+  Buffer.contents out
+
+let identity_case =
+  Alcotest.test_case "rendering rewrites only tabs and line endings" `Quick (fun () ->
+      match H.find "ml" with
+      | None -> Alcotest.fail "OCaml specification missing"
+      | Some spec ->
+          let source = "(* a\nbbbb *)\nlet\tanswer = 42\r\nlet v = \"x\ty\" in\n" in
+          let cells = "(* a\nbbbb *)\nlet    answer = 42\nlet v = \"x    y\" in\n" in
+          let rendered = H.render ~theme:(H.Theme.charm ~is_dark:true) spec source in
+          Alcotest.check Alcotest.string "cells survive" cells (strip_sgr rendered))
+
+let hex lang literal =
+  Alcotest.test_case
+    ("hex " ^ lang ^ " " ^ literal)
+    `Quick
+    (fun () ->
+      match H.find lang with
+      | None -> Alcotest.failf "missing language %s" lang
+      | Some spec -> (
+          match H.tokenize spec literal with
+          | [ (kind, text) ] ->
+              Alcotest.check Alcotest.string (lang ^ " literal text") literal text;
+              Alcotest.check Alcotest.bool (lang ^ " number kind") true (kind = H.Number)
+          | tokens ->
+              Alcotest.failf "%s: %S split into %d tokens" lang literal
+                (List.length tokens)))
+
+let not_hex lang literal =
+  Alcotest.test_case
+    ("not hex " ^ lang ^ " " ^ literal)
+    `Quick
+    (fun () ->
+      match H.find lang with
+      | None -> Alcotest.failf "missing language %s" lang
+      | Some spec -> (
+          match H.tokenize spec literal with
+          | [ (kind, text) ] when kind = H.Number && text = literal ->
+              Alcotest.failf "%s: %S lexed as one hexadecimal literal" lang literal
+          | _ -> ()))
+
+let number_tests =
+  List.map
+    (fun (lang, literal) -> hex lang literal)
+    [
+      ("java", "0xdeadBeefL");
+      ("java", "0xF");
+      ("javascript", "0xA0n");
+      ("kotlin", "0xFFu");
+      ("kotlin", "0xdead");
+      ("php", "0xABC");
+      ("ruby", "0xdef");
+      ("swift", "0x10");
+      ("toml", "0x00FF");
+      ("zig", "0xdead");
+      ("bash", "0x2a");
+    ]
+  @ [
+      not_hex "java" "0x";
+      not_hex "php" "0xGG";
+      not_hex "swift" "0xz";
+      not_hex "kotlin" "0xU";
+    ]
+
+let theme_corpus =
+  "(* c *)\n\
+   let answer = 42\n\
+   type t = { name : string option }\n\
+   let f x = x ^ \"s\" ^ true\n\
+   [@@@warning \"-27\"]\n\
+   print_endline None\n"
+
+let theme_styles =
+  [
+    ("charm-dark", H.Theme.charm ~is_dark:true);
+    ("charm-light", H.Theme.charm ~is_dark:false);
+    ("dracula", H.Theme.dracula);
+    ("github-dark", H.Theme.github ~is_dark:true);
+    ("github-light", H.Theme.github ~is_dark:false);
+    ("monokai", H.Theme.monokai);
+    ("nord", H.Theme.nord);
+    ("solarized-dark", H.Theme.solarized ~is_dark:true);
+    ("solarized-light", H.Theme.solarized ~is_dark:false);
+  ]
+
+let corpus_kinds =
+  [
+    ("keyword", H.Keyword);
+    ("type", H.Type);
+    ("builtin", H.Builtin);
+    ("constant", H.Constant);
+    ("string", H.String);
+    ("number", H.Number);
+    ("comment", H.Comment);
+    ("operator", H.Operator);
+    ("punct", H.Punct);
+    ("ident", H.Ident);
+    ("attribute", H.Attribute);
+    ("text", H.Text);
+  ]
+
+let check_corpus_kinds kinds =
+  List.iter
+    (fun (label, kind) ->
+      if not (List.mem kind kinds) then
+        Alcotest.failf "corpus does not produce a %s token" label)
+    corpus_kinds
+
+let read_golden name =
+  In_channel.with_open_bin ("data/" ^ name ^ ".golden") In_channel.input_all
+
+let theme_case name theme =
+  Alcotest.test_case ("theme bytes " ^ name) `Quick (fun () ->
+      match H.find "ml" with
+      | None -> Alcotest.fail "OCaml specification missing"
+      | Some spec ->
+          let kinds = List.map fst (H.tokenize spec theme_corpus) in
+          check_corpus_kinds kinds;
+          let rendered = H.render ~theme spec theme_corpus in
+          Alcotest.check Alcotest.string (name ^ " bytes") (read_golden name) rendered)
+
+let theme_tests = List.map (fun (name, theme) -> theme_case name theme) theme_styles
 
 let () =
   Alcotest.run "highlight"
@@ -603,5 +741,7 @@ let () =
       ("languages", language_count :: List.map token_case samples);
       ("aliases", alias_tests);
       ("adversarial", adversarial_tests);
-      ("themes", [ render_case ]);
+      ("themes", [ render_case; identity_case ]);
+      ("number literals", number_tests);
+      ("theme goldens", theme_tests);
     ]

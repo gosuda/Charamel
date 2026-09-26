@@ -5,31 +5,31 @@ let spec =
     ~operators:[ "+++"; "---"; "@@"; "+"; "-" ]
     ~attribute:
       (Some
-         (seq
+         (Re.seq
             [
               Re.bol;
-              alt
+              Re.alt
                 [
-                  seq [ str "diff --git"; rep (not_chars "\n") ];
-                  seq
+                  Re.seq [ Re.str "diff --git"; Re.rep (not_chars "\n") ];
+                  Re.seq
                     [
-                      str "index ";
-                      rep1 (set "0123456789abcdef");
-                      str "..";
-                      rep1 (set "0123456789abcdef");
+                      Re.str "index ";
+                      Re.rep1 (Re.set "0123456789abcdef");
+                      Re.str "..";
+                      Re.rep1 (Re.set "0123456789abcdef");
                     ];
-                  seq [ str "+++ "; rep (not_chars "\n") ];
-                  seq [ str "--- "; rep (not_chars "\n") ];
-                  seq
+                  Re.seq [ Re.str "+++ "; Re.rep (not_chars "\n") ];
+                  Re.seq [ Re.str "--- "; Re.rep (not_chars "\n") ];
+                  Re.seq
                     [
-                      str "@@ -";
-                      rep1 (set "0123456789,");
-                      str " +";
-                      rep1 (set "0123456789,");
-                      str " @@";
+                      Re.str "@@ -";
+                      Re.rep1 (Re.set "0123456789,");
+                      Re.str " +";
+                      Re.rep1 (Re.set "0123456789,");
+                      Re.str " @@";
                     ];
-                  seq [ str "Binary files "; rep (not_chars "\n") ];
-                  seq [ str "\\ No newline at end of file" ];
+                  Re.seq [ Re.str "Binary files "; Re.rep (not_chars "\n") ];
+                  Re.seq [ Re.str "\\ No newline at end of file" ];
                 ];
             ]))
     ()

@@ -3,7 +3,7 @@
     Palette values are grounded in the MIT-licensed Glamour Chroma tables under
     [.references/glamour/styles/] and the corresponding standard Chroma palettes. *)
 
-type t = Spec.kind -> Charamel_lipgloss.Style.t
+type t = Spec.kind -> Charamel_ansi.Style.t
 (** A token-kind to terminal-style mapping. *)
 
 val charm : is_dark:bool -> t

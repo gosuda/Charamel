@@ -148,14 +148,16 @@ let spec =
     ~strings:[ ("\"", "\"", true); ("'", "'", true) ]
     ~raw_strings:[ ("\\\\", "\n") ]
     ~number:
-      (alt
+      (Re.alt
          [
-           seq [ str "0x"; rep1 (set "0123456789abcdefABCDEF") ];
-           seq [ str "0o"; rep1 (set "01234567") ];
-           seq [ str "0b"; rep1 (set "01") ];
+           hex_literal ();
+           Re.seq [ Re.str "0o"; Re.rep1 (Re.set "01234567") ];
+           Re.seq [ Re.str "0b"; Re.rep1 (Re.set "01") ];
            decimal;
          ])
-    ~ident:(alt [ seq [ str "@\""; rep (not_chars "\"\n"); str "\"" ]; identifier ])
+    ~ident:
+      (Re.alt
+         [ Re.seq [ Re.str "@\""; Re.rep (not_chars "\"\n"); Re.str "\"" ]; identifier ])
     ~operators:
       [
         "++";
