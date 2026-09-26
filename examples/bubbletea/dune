@@ -1,0 +1,25 @@
+;; One module per upstream bubbletea example directory, each a scripted smoke
+;; and an interactive entry point. The dispatcher lives in examples/.
+
+(library
+ (name bubbletea)
+ (libraries
+  charamel.tea
+  charamel.bubbles
+  charamel.lipgloss
+  charamel.ansi
+  charamel.colorprofile
+  charamel.glamour
+  charamel.harmonica
+  charamel.net
+  charamel.os
+  cohttp
+  jsont
+  jsont.bytesrw
+  lwt
+  lwt.unix
+  mtime
+  fmt
+  unix
+  uri
+  uucp))
