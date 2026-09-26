@@ -376,6 +376,95 @@ let scripted_counter () =
   in
   Alcotest.(check int) "scripted model update" 1 model
 
+let chat_lines count =
+  String.concat "\n" (List.init count (fun index -> Fmt.str "alpha-%02d" (index + 1)))
+
+let scripted_wheel_scroll () =
+  let wheel_up = "\027[<64;40;5M" in
+  let wheel_down = "\027[<65;40;5M" in
+  let ctrl_c = ui_key "ctrl+c" in
+  let quit = [ `Wait 0.; `Key ctrl_c; `Key ctrl_c ] in
+  let downs = List.init 20 (fun _ -> `Text wheel_down) in
+  let ups = List.init 40 (fun _ -> `Text wheel_up) in
+  with_ui_backend (fun backend bridge ->
+      await (Ui.Bridge.push bridge (Agent.Text_delta (chat_lines 60)));
+      let _model, frame = Ui.run_with backend ~events:(downs @ quit) ~size:(24, 80) in
+      Alcotest.(check bool)
+        "wheel down reveals the chat tail" true
+        (Test_support.contains ~needle:"alpha-60" ~haystack:frame);
+      Alcotest.(check bool)
+        "wheel down hides the chat head" false
+        (Test_support.contains ~needle:"alpha-01" ~haystack:frame));
+  with_ui_backend (fun backend bridge ->
+      await (Ui.Bridge.push bridge (Agent.Text_delta (chat_lines 60)));
+      let _model, frame =
+        Ui.run_with backend ~events:(downs @ ups @ quit) ~size:(24, 80)
+      in
+      Alcotest.(check bool)
+        "wheel up returns to the chat head" true
+        (Test_support.contains ~needle:"alpha-01" ~haystack:frame);
+      Alcotest.(check bool)
+        "wheel up hides the chat tail" false
+        (Test_support.contains ~needle:"alpha-60" ~haystack:frame))
+
+(* The application cursor is the last cursor-position request of a paint, so the final
+   CSI row ; col H sequence in the captured bytes is where the terminal parks. *)
+let last_cursor_position bytes =
+  let length = String.length bytes in
+  let digit value = Char.code value >= 48 && Char.code value <= 57 in
+  let rec number index value =
+    if index < length && digit bytes.[index] then
+      number (index + 1) ((value * 10) + (Char.code bytes.[index] - 48))
+    else (index, value)
+  in
+  let rec csi index result =
+    match String.index_from_opt bytes index '\027' with
+    | None -> result
+    | Some start ->
+        let next = start + 1 in
+        let found =
+          if next + 1 < length && bytes.[next] = '[' && digit bytes.[next + 1] then begin
+            let after_row, row = number (next + 1) 0 in
+            if after_row < length && bytes.[after_row] = ';' then begin
+              let after_col, col = number (after_row + 1) 0 in
+              if after_col < length && bytes.[after_col] = 'H' then Some (row, col)
+              else None
+            end
+            else None
+          end
+          else None
+        in
+        csi next (if Option.is_some found then found else result)
+  in
+  csi 0 None
+
+let editor_cursor_reaches_the_terminal () =
+  with_ui_backend (fun backend _bridge ->
+      let buffer = Buffer.create 4096 in
+      let channel =
+        Lwt_io.make ~mode:Lwt_io.output (fun source offset length ->
+            Buffer.add_subbytes buffer (Lwt_bytes.to_bytes source) offset length;
+            Lwt.return length)
+      in
+      let _model, frame =
+        Charamel_tea.Test.run (Ui.app backend) ~output:channel
+          ~events:[ `Wait 0.; `Key (ui_key "ctrl+c"); `Key (ui_key "ctrl+c") ]
+          ~size:(24, 80)
+      in
+      (match Lwt.poll (Lwt_io.flush channel) with
+      | Some () -> ()
+      | None -> Alcotest.fail "the captured output did not flush synchronously");
+      let editor_line =
+        List.length
+          (List.take_while
+             (fun line -> not (String.starts_with ~prefix:"\xe2\x80\xba " line))
+             (String.split_on_char '\n' frame))
+      in
+      Alcotest.(check (option int))
+        "the cursor sits on the editor line"
+        (Some (editor_line + 1))
+        (Option.map fst (last_cursor_position (Buffer.contents buffer))))
+
 let cases =
   [
     Test_tools_test_support.case "bounded bridge preserves order" `Quick fifo_is_lossless;
@@ -386,5 +475,9 @@ let cases =
       serialized_dialogs;
     Test_tools_test_support.case "scripted UI stream" `Quick scripted_ui_stream;
     Test_tools_test_support.case "scripted runtime event" `Quick scripted_runtime_event;
+    Test_tools_test_support.case "scripted wheel scroll reaches the viewport" `Quick
+      scripted_wheel_scroll;
+    Test_tools_test_support.case "editor cursor reaches the terminal" `Quick
+      editor_cursor_reaches_the_terminal;
     Test_tools_test_support.case "scripted Tea model update" `Quick scripted_counter;
   ]

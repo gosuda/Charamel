@@ -288,6 +288,7 @@ type dialog_request =
 
 type ui_model = {
   backend : backend;
+  feeds : ui_msg Lwt_stream.t list;
   mutable viewport : Viewport.t;
   mutable editor : Textarea.t;
   mutable session_rows : session list;
@@ -301,21 +302,16 @@ type ui_model = {
   mutable rows : int;
   mutable cols : int;
   mutable dark : bool;
-  mutable closed_events : bool;
-  mutable closed_questions : bool;
-  mutable closed_permissions : bool;
   mutable pending_prompt : string option;
   mutable last_ctrl_c : bool;
 }
 
-type ui_msg =
+and ui_msg =
   | Agent_event of Agent.event
-  | Agent_stream_closed
   | Question_request of Bridge.ask_request
-  | Question_stream_closed
   | Permission_request of Bridge.permission_request
-  | Permission_stream_closed
   | Editor_msg of Textarea.msg
+  | Viewport_msg of Viewport.msg
   | Dialog_msg of Huh.Form.msg
   | Submit_prompt
   | Prompt_result of (Agent.finish, Agent.error) result
@@ -428,6 +424,15 @@ let sidebar m =
       "ctrl+g plan  ctrl+c quit";
     ]
 
+let editor_cursor (m : ui_model) ~origin_row =
+  match m.dialog with
+  | Some _ -> None
+  | None ->
+      Option.map
+        (fun (cursor : Charamel_tea.Cursor.t) ->
+          { cursor with row = cursor.row + origin_row })
+        (Textarea.cursor m.editor)
+
 let view (m : ui_model) =
   let body = Layout.join_horizontal [ sidebar m; Viewport.view m.viewport ] in
   let dialog =
@@ -445,7 +450,9 @@ let view (m : ui_model) =
         ^ Style.render (Style.bold true Style.empty) (Huh.Form.view value.form)
   in
   let footer = status_text m ^ if m.status = "" then "" else " | " ^ m.status in
+  let body_rows = List.length (String.split_on_char '\n' body) in
   View.v ~alt_screen:true ~mouse:View.Mouse_click ~title:m.title
+    ?cursor:(editor_cursor m ~origin_row:(body_rows + 1))
     (body ^ "\n\n" ^ Textarea.view m.editor ^ "\n" ^ footer ^ dialog)
 
 let make_field (question : Tool.question) =
@@ -770,36 +777,19 @@ let append_agent_event (m : ui_model) = function
           expanded = true;
         }
 
-(* The pollers await the bridge queues directly. Wrapping the take in
-   Lwt_direct.spawn would park the message on a queue drained only by
-   Lwt_main's iteration hooks, which never run under the synchronous
-   Charamel_tea.Test pump; Cmd.await runs the promise on the dispatching
-   task, so an already-queued item delivers immediately and a later push
-   wakes the parked take through the queue's condition. At most one take
-   is armed per queue at a time: each re-arm happens inside update after
-   the previous take delivered. *)
-let next_event backend =
-  Bridge.take_event backend.events >|= function
-  | Some event -> Agent_event event
-  | None -> Agent_stream_closed
+(* One stream per bridge queue, built once per run in [init]. [Charamel_tea] reads each
+   distinct stream with a single task, so the queues are drained continuously while the
+   program runs, and a queue that closes ends its stream without stopping the run. *)
 
-let next_question backend =
-  Bridge.take_question backend.events >|= function
-  | Some request -> Question_request request
-  | None -> Question_stream_closed
+let feed take wrap backend =
+  Lwt_stream.from (fun () -> take backend.events >|= Option.map wrap)
 
-let next_permission backend =
-  Bridge.take_permission backend.events >|= function
-  | Some request -> Permission_request request
-  | None -> Permission_stream_closed
-
-let poll_events m = if m.closed_events then Cmd.none else Cmd.await (next_event m.backend)
-
-let poll_questions m =
-  if m.closed_questions then Cmd.none else Cmd.await (next_question m.backend)
-
-let poll_permissions m =
-  if m.closed_permissions then Cmd.none else Cmd.await (next_permission m.backend)
+let feeds backend =
+  [
+    feed Bridge.take_event (fun event -> Agent_event event) backend;
+    feed Bridge.take_question (fun request -> Question_request request) backend;
+    feed Bridge.take_permission (fun request -> Permission_request request) backend;
+  ]
 
 let prompt_attachments backend text =
   let tokens = String.split_on_char ' ' text in
@@ -992,7 +982,7 @@ let complete_dialog (m : ui_model) (dialog : dialog) =
       finish_dialog m command
   | Questions_dialog request ->
       Bridge.answer m.backend.events request (Ok values);
-      finish_dialog m (poll_questions m)
+      finish_dialog m Cmd.none
   | Permission_dialog request ->
       let decision =
         match selected_value values "decision" with
@@ -1001,7 +991,7 @@ let complete_dialog (m : ui_model) (dialog : dialog) =
         | _ -> Permission.Deny
       in
       Bridge.answer_permission m.backend.events request decision;
-      finish_dialog m (poll_permissions m)
+      finish_dialog m Cmd.none
 
 let update_dialog (m : ui_model) (dialog : dialog) message =
   let form, command = Huh.Form.update message dialog.form in
@@ -1014,10 +1004,10 @@ let update_dialog (m : ui_model) (dialog : dialog) message =
         match dialog.kind with
         | Questions_dialog request ->
             Bridge.answer m.backend.events request (Error `Aborted);
-            finish_dialog m (poll_questions m)
+            finish_dialog m Cmd.none
         | Permission_dialog request ->
             Bridge.answer_permission m.backend.events request Permission.Deny;
-            finish_dialog m (poll_permissions m)
+            finish_dialog m Cmd.none
         | _ -> finish_dialog m Cmd.none
       in
       Cmd.batch [ command; continuation ]
@@ -1028,18 +1018,13 @@ let update_dialog (m : ui_model) (dialog : dialog) message =
 let rec update (m : ui_model) = function
   | Agent_event event ->
       append_agent_event m event;
-      poll_events m
-  | Agent_stream_closed ->
-      m.closed_events <- true;
       Cmd.none
   | Question_request request -> enqueue_dialog m (Question_dialog_request request)
-  | Question_stream_closed ->
-      m.closed_questions <- true;
-      Cmd.none
-  | Permission_stream_closed ->
-      m.closed_permissions <- true;
-      Cmd.none
   | Permission_request request -> enqueue_dialog m (Permission_dialog_request request)
+  | Viewport_msg message ->
+      let viewport, command = Viewport.update message m.viewport in
+      m.viewport <- viewport;
+      Cmd.map (fun _ -> Tick) command
   | Editor_msg message ->
       let editor, command = Textarea.update message m.editor in
       m.editor <- editor;
@@ -1101,9 +1086,9 @@ let rec update (m : ui_model) = function
         m.editor <- Textarea.set_styles (Textarea.default_styles ~is_dark:dark) m.editor
       end;
       refresh_viewport m;
-      (* Same substitution as the pollers: the refresh functions are pure and
-         synchronous, so delivering their results as an already-resolved promise
-         keeps the command shape while removing the Lwt_main-only spawn queue. *)
+      (* The refresh functions are pure and synchronous, so delivering their results as
+         an already-resolved promise keeps the command shape while avoiding the
+         [Lwt_main]-only spawn queue. *)
       Cmd.batch
         [
           Cmd.await (Lwt.return (Sessions_refreshed (m.backend.sessions ())));
@@ -1123,10 +1108,10 @@ let rec update (m : ui_model) = function
           match dialog.kind with
           | Questions_dialog request ->
               Bridge.answer m.backend.events request (Error `Aborted);
-              finish_dialog m (poll_questions m)
+              finish_dialog m Cmd.none
           | Permission_dialog request ->
               Bridge.answer_permission m.backend.events request Permission.Deny;
-              finish_dialog m (poll_permissions m)
+              finish_dialog m Cmd.none
           | _ -> finish_dialog m Cmd.none)
       | Some _ -> (
           match dialog_key key with None -> Cmd.none | Some msg -> update m msg)
@@ -1171,10 +1156,7 @@ let rec update (m : ui_model) = function
           | Some message -> update m (Editor_msg message)
           | None -> (
               match Viewport.key m.viewport key with
-              | Some message ->
-                  let viewport, command = Viewport.update message m.viewport in
-                  m.viewport <- viewport;
-                  Cmd.map (fun _ -> Tick) command
+              | Some message -> update m (Viewport_msg message)
               | None -> Cmd.none)))
 
 let init (backend : backend) =
@@ -1187,6 +1169,7 @@ let init (backend : backend) =
   let model =
     {
       backend;
+      feeds = feeds backend;
       viewport = Viewport.v ~width:(cols - 28) ~height:(rows - 7) ~soft_wrap:true ();
       editor;
       session_rows = [];
@@ -1200,9 +1183,6 @@ let init (backend : backend) =
       rows;
       cols;
       dark = backend.dark ();
-      closed_events = false;
-      closed_questions = false;
-      closed_permissions = false;
       pending_prompt = None;
       last_ctrl_c = false;
     }
@@ -1211,23 +1191,28 @@ let init (backend : backend) =
   ( model,
     Cmd.batch
       [
-        poll_events model;
-        poll_questions model;
-        poll_permissions model;
         Cmd.map (fun value -> Editor_msg value) editor_cmd;
         Cmd.await (Lwt.return (Sessions_refreshed (backend.sessions ())));
         Cmd.await (Lwt.return (Models_refreshed (backend.models ())));
         Cmd.msg Tick;
       ] )
 
+let mouse_msg (m : ui_model) mouse =
+  match Viewport.mouse m.viewport mouse with
+  | Some message -> Viewport_msg message
+  | None -> Noop
+
 let subscriptions m =
   Sub.batch
-    [
-      Sub.key (fun key -> Key key);
-      Sub.resize (fun ~rows ~cols -> Resize (rows, cols));
-      Sub.map (fun value -> Editor_msg value) (Textarea.subscriptions m.editor);
-      Sub.map (fun _ -> Tick) (Bubble_list.subscriptions m.sessions);
-    ]
+    (List.append
+       [
+         Sub.key (fun key -> Key key);
+         Sub.resize (fun ~rows ~cols -> Resize (rows, cols));
+         Sub.mouse (mouse_msg m);
+         Sub.map (fun value -> Editor_msg value) (Textarea.subscriptions m.editor);
+         Sub.map (fun _ -> Tick) (Bubble_list.subscriptions m.sessions);
+       ]
+       (List.map Sub.stream m.feeds))
 
 let app backend : (ui_model, ui_msg) Charamel_tea.app =
   {
