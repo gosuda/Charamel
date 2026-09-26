@@ -8,7 +8,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         ocaml-compiler: [5.4.0, 5.5.1]
     runs-on: ${{ matrix.os }}
     steps:
@@ -16,6 +16,7 @@ jobs:
       - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3
         with:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
+          windows-compiler: mingw
       - run: opam install . --deps-only --with-test
       - run: opam install ocamlformat.0.29.0
       - run: opam exec -- dune build --profile release
