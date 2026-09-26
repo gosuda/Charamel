@@ -29,9 +29,9 @@ let test_message () =
   | Ok value -> value
   | Error error -> Alcotest.failf "could not build test message: %a" Mime.pp_error error
 
-let test_mime_and_preview () =
+let test_wire_and_envelope () =
   let message = test_message () in
-  let wire = Preview.render message in
+  let wire = Mime.serialise message in
   Alcotest.(check bool)
     "Bcc header omitted" false
     (Test_support.contains ~needle:"Bcc:" ~haystack:wire);
@@ -41,7 +41,6 @@ let test_mime_and_preview () =
   Alcotest.(check bool)
     "attachment present" true
     (Test_support.contains ~needle:"YXR0YWNobWVudA==" ~haystack:wire);
-  Alcotest.(check string) "preview is serialised message" (Mime.serialise message) wire;
   match Mime.envelope message with
   | Error error -> Alcotest.failf "envelope failed: %a" Mime.pp_error error
   | Ok (from, recipients) ->
@@ -55,11 +54,15 @@ let prepare_with_body ~unsafe_html body =
   let stdin = Lwt_io.of_bytes ~mode:Lwt_io.Input (Lwt_bytes.of_string "") in
   Pop_lib.prepare ~cwd:(Sys.getcwd ()) ~stdin ~date:(fixed_date ())
     {
-      Pop_lib.empty_options with
-      to_ = [ "to@example.com" ];
+      Pop_lib.to_ = [ "to@example.com" ];
+      cc = [];
+      bcc = [];
       from = Some "from@example.com";
       subject = Some "Subject";
       body = Some body;
+      body_file = None;
+      attachments = [];
+      signature = None;
       unsafe_html;
     }
   >>= function
@@ -70,8 +73,8 @@ let test_markdown_safety () =
   let body = "# Hello\n\n<script>alert(1)</script>" in
   prepare_with_body ~unsafe_html:false body >>= fun safe ->
   prepare_with_body ~unsafe_html:true body >>= fun unsafe ->
-  let safe_html = Option.get safe.Pop_lib.message.Mime.body_html in
-  let unsafe_html = Option.get unsafe.Pop_lib.message.Mime.body_html in
+  let safe_html = Option.get safe.Mime.body_html in
+  let unsafe_html = Option.get unsafe.Mime.body_html in
   Alcotest.(check bool)
     "safe HTML removes raw script" false
     (Test_support.contains ~needle:"<script>" ~haystack:safe_html);
@@ -80,7 +83,7 @@ let test_markdown_safety () =
     (Test_support.contains ~needle:"<script>" ~haystack:unsafe_html);
   Alcotest.(check bool)
     "plain rendering has heading" true
-    (Test_support.contains ~needle:"Hello" ~haystack:safe.Pop_lib.message.Mime.body_text);
+    (Test_support.contains ~needle:"Hello" ~haystack:safe.Mime.body_text);
   Lwt.return_unit
 
 let test_config_env () =
@@ -104,18 +107,23 @@ let test_config_env () =
         (match config.Send.security with Smtp.Tls -> true | _ -> false)
 
 let test_config_rejects_bad_port () =
-  let env name =
-    if name = "POP_SMTP_HOST" then Some "smtp"
-    else if name = "POP_SMTP_PORT" then Some "bad"
-    else None
-  in
-  match Pop_lib.config_of_env ~env with
-  | Error (`Input message) ->
-      Alcotest.(check bool)
-        "mentions port" true
-        (Test_support.contains ~needle:"POP_SMTP_PORT" ~haystack:message)
-  | Error error -> Alcotest.failf "wrong configuration error: %a" Pop_lib.pp_error error
-  | Ok _ -> Alcotest.fail "bad port was accepted"
+  List.iter
+    (fun value ->
+      let env name =
+        if name = "POP_SMTP_HOST" then Some "smtp"
+        else if name = "POP_SMTP_PORT" then Some value
+        else None
+      in
+      match Pop_lib.config_of_env ~env with
+      | Error (`Input message) ->
+          Alcotest.(check bool)
+            (Printf.sprintf "%s rejected" value)
+            true
+            (Test_support.contains ~needle:"POP_SMTP_PORT" ~haystack:message)
+      | Error error ->
+          Alcotest.failf "wrong configuration error: %a" Pop_lib.pp_error error
+      | Ok _ -> Alcotest.failf "%s accepted as a port" value)
+    [ "bad"; "0x1d1"; "1_000"; "+465"; "-1" ]
 
 let test_resend_payload () =
   let payload = Send.resend_payload (test_message ()) in
@@ -162,7 +170,7 @@ let suite =
     ("CLI", Test_cli.cases);
     ( "composition",
       [
-        Alcotest_lwt.test_case_sync "MIME and preview" `Quick test_mime_and_preview;
+        Alcotest_lwt.test_case_sync "MIME wire and envelope" `Quick test_wire_and_envelope;
         Alcotest_lwt.test_case_sync "Resend payload" `Quick test_resend_payload;
         Alcotest_lwt.test_case_sync "configuration" `Quick test_config_env;
         Alcotest_lwt.test_case_sync "configuration validation" `Quick

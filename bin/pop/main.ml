@@ -59,22 +59,16 @@ let preview_arg =
     value & flag
     & info [ "preview" ] ~doc:"Print the composed MIME message without delivering it.")
 
-let env_truthy = function
-  | Some value -> (
-      match String.lowercase_ascii (String.trim value) with
-      | "1" | "true" | "yes" | "on" -> true
-      | _ -> false)
-  | None -> false
-
 let unsafe_html_arg =
-  let flag =
-    Cmdliner.Arg.(
-      value & flag
-      & info [ "unsafe-html" ] ~doc:"Allow raw HTML and unsafe links in the HTML part.")
-  in
-  Cmdliner.Term.(
-    const (fun selected env -> selected || env_truthy (env "POP_UNSAFE_HTML"))
-    $ flag $ env)
+  Cmdliner.Arg.(
+    value & flag
+    & info [ "unsafe-html" ]
+        ~env:(Cmdliner.Cmd.Env.info "POP_UNSAFE_HTML")
+        ~doc:
+          "Allow raw HTML and unsafe links in the HTML part. When the option is absent, \
+           the POP_UNSAFE_HTML environment variable decides, taken exactly and not \
+           trimmed: true, yes, y or 1 enable it and false, no, n, 0 or an empty value \
+           disable it; any other value is a usage error.")
 
 type cli = {
   to_ : string list;
@@ -161,7 +155,7 @@ let options_of_form (options : Pop_lib.options) (values : Forms.values) : Pop_li
 
 let prepare_with_form (env : Charamel_cli.Env.t) options =
   Lwt.bind (Pop_lib.prepare ~cwd:env.Env.cwd ~stdin:env.Env.stdin options) (function
-    | Ok prepared -> Lwt.return (Ok prepared)
+    | Ok message -> Lwt.return (Ok message)
     | Error (`Missing _) ->
         Lwt.bind (form_values_of_options ~cwd:env.Env.cwd options) (fun initial ->
             Lwt.bind
@@ -172,7 +166,7 @@ let prepare_with_form (env : Charamel_cli.Env.t) options =
                   let options = options_of_form options values in
                   Lwt.bind (Pop_lib.prepare ~cwd:env.Env.cwd ~stdin:env.Env.stdin options)
                     (function
-                    | Ok prepared -> Lwt.return (Ok prepared)
+                    | Ok message -> Lwt.return (Ok message)
                     | Error error -> Lwt.return (Error (`Compose error)))))
     | Error error -> Lwt.return (Error (`Compose error)))
 
@@ -188,8 +182,8 @@ let run (env : Charamel_cli.Env.t) cli =
           ~code:(match error with `Timeout -> 124 | `Aborted -> 130)
           (error_message Forms.pp_error error)
     | Error (`Compose error) -> Charamel_cli.error (error_message Pop_lib.pp_error error)
-    | Ok prepared ->
-        if cli.preview then Preview.write env.Env.stdout prepared.Pop_lib.message
+    | Ok message ->
+        if cli.preview then Lwt_io.write env.Env.stdout (Mime.serialise message)
         else
           let resend_key =
             match Sys.getenv_opt "RESEND_API_KEY" with
@@ -205,8 +199,8 @@ let run (env : Charamel_cli.Env.t) cli =
                 | Error error -> Charamel_cli.error (error_message Pop_lib.pp_error error)
                 )
           in
-          Lwt.bind (Send.deliver ~resend_key ~smtp prepared.Pop_lib.message) (function
-            | Ok () -> Lwt_io.write env.Env.stdout (summary prepared.Pop_lib.message)
+          Lwt.bind (Send.deliver ~resend_key ~smtp message) (function
+            | Ok () -> Lwt_io.write env.Env.stdout (summary message)
             | Error error -> Charamel_cli.error (error_message Send.pp_error error)))
 
 let default env =

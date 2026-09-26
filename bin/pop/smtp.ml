@@ -15,8 +15,7 @@ type error =
   | `Tls of Tls.Engine.failure
   | `Net of string
   | `No_recipients
-  | `Invalid_address of string
-  | `Header_injection of string ]
+  | `Invalid_address of string ]
 
 type security = Plain | Starttls | Tls
 
@@ -57,7 +56,6 @@ let pp_error ppf = function
   | `Net message -> Format.fprintf ppf "SMTP network connection failed: %s" message
   | `No_recipients -> Format.pp_print_string ppf "SMTP message has no recipients"
   | `Invalid_address value -> Format.fprintf ppf "invalid SMTP address: %s" value
-  | `Header_injection field -> Format.fprintf ppf "SMTP header injection in %s" field
 
 let close t =
   if t.closed then Lwt.return_unit
@@ -111,8 +109,10 @@ let read_line_bounded ic =
     Lwt.bind (Lwt_io.read_char_opt ic) (fun character ->
         match character with
         | None ->
-            Lwt.return
-              (if Buffer.length buffer = 0 then None else Some (Buffer.contents buffer))
+            let pending =
+              if Buffer.length buffer = 0 then None else Some (Buffer.contents buffer)
+            in
+            Lwt.return (Ok pending)
         | Some '\n' ->
             let text = Buffer.contents buffer in
             let text =
@@ -120,11 +120,11 @@ let read_line_bounded ic =
                 String.sub text 0 (String.length text - 1)
               else text
             in
-            Lwt.return (Some text)
+            Lwt.return (Ok (Some text))
         | Some character ->
             Buffer.add_char buffer character;
             if Buffer.length buffer > max_reply_line then
-              Lwt.fail (Failure "SMTP reply line exceeds 64 KiB")
+              Lwt.return (Error (`Bad_reply "SMTP reply line exceeds 64 KiB"))
             else loop ())
   in
   loop ()
@@ -132,17 +132,17 @@ let read_line_bounded ic =
 let read_reply t =
   with_deadline t (fun () ->
       let rec loop expected lines =
-        Lwt.bind (read_line_bounded t.ic) (fun line_opt ->
-            match line_opt with
-            | None -> Lwt.return (Error `Closed)
-            | Some line -> (
-                match parse_reply_line line with
-                | Error error -> Lwt.return (Error error)
-                | Ok (code, separator, text) ->
-                    let expected = Option.value expected ~default:code in
-                    if code <> expected then Lwt.return (Error (`Bad_reply line))
-                    else if separator = '-' then loop (Some expected) (text :: lines)
-                    else Lwt.return (Ok { code; lines = List.rev (text :: lines) })))
+        Lwt.bind (read_line_bounded t.ic) (function
+          | Error error -> Lwt.return (Error error)
+          | Ok None -> Lwt.return (Error `Closed)
+          | Ok (Some line) -> (
+              match parse_reply_line line with
+              | Error error -> Lwt.return (Error error)
+              | Ok (code, separator, text) ->
+                  let expected = Option.value expected ~default:code in
+                  if code <> expected then Lwt.return (Error (`Bad_reply line))
+                  else if separator = '-' then loop (Some expected) (text :: lines)
+                  else Lwt.return (Ok { code; lines = List.rev (text :: lines) })))
       in
       loop None [])
 
@@ -163,32 +163,11 @@ let require_code expected reply =
   else if reply.code = 530 || reply.code = 538 then Error `Auth_required
   else Error (`Unexpected reply)
 
-let normalize_crlf text =
-  let b = Buffer.create (String.length text + 16) in
-  let rec loop index =
-    if index = String.length text then ()
-    else
-      match text.[index] with
-      | '\r' ->
-          Buffer.add_string b "\r\n";
-          if index + 1 < String.length text && text.[index + 1] = '\n' then
-            loop (index + 2)
-          else loop (index + 1)
-      | '\n' ->
-          Buffer.add_string b "\r\n";
-          loop (index + 1)
-      | c ->
-          Buffer.add_char b c;
-          loop (index + 1)
-  in
-  loop 0;
-  Buffer.contents b
-
 let drop_last_empty list =
   match List.rev list with "" :: tail -> List.rev tail | _ -> list
 
 let dot_stuffed body =
-  let normalized = normalize_crlf body in
+  let normalized = Mime.normalize_crlf body in
   let lines =
     String.split_on_char '\n' normalized
     |> List.map (fun line ->

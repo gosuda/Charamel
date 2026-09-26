@@ -67,4 +67,6 @@ val delete_db : root:string -> db:string -> (unit, error) result Lwt.t
 
 val dbs : root:string -> (string list, error) result Lwt.t
 (** [dbs ~root] is the name of every database file directly under [root], sorted with
-    [String.compare]. [root] not existing yet is [Ok []], not an error. *)
+    [String.compare]. Each name is the one that was stored, so it is accepted again by
+    [get], [list] and [delete_db]. A file whose name this module could not have written is
+    skipped. [root] not existing yet is [Ok []], not an error. *)

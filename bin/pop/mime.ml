@@ -36,9 +36,6 @@ module Address = struct
   let addr t = t.addr
   let display t = t.display
 
-  let equal a b =
-    String.equal a.addr b.addr && Option.equal String.equal a.display b.display
-
   let quote_display name =
     let atom_char = function
       | 'a' .. 'z'
@@ -77,8 +74,6 @@ module Address = struct
           else loop next out rest
     in
     String.concat "\r\n" (loop "" [] list)
-
-  let pp ppf t = Format.pp_print_string ppf (one t)
 end
 
 type attachment = { name : string; content_type : string; data : string }

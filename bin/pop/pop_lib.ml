@@ -13,8 +13,6 @@ type options = {
   unsafe_html : bool;
 }
 
-type prepared = { message : Mime.message; wire : string }
-
 type error =
   [ `Missing of string
   | `Input of string
@@ -28,20 +26,6 @@ let pp_error ppf = function
   | `Address error -> Fmt.pf ppf "invalid address: %a" Mime.pp_error error
   | `Message error -> Fmt.pf ppf "could not compose message: %a" Mime.pp_error error
   | `Markdown message -> Fmt.pf ppf "could not render Markdown: %s" message
-
-let empty_options =
-  {
-    to_ = [];
-    cc = [];
-    bcc = [];
-    from = None;
-    subject = None;
-    body = None;
-    body_file = None;
-    attachments = [];
-    signature = None;
-    unsafe_html = false;
-  }
 
 let split_addresses values =
   let split value =
@@ -73,7 +57,6 @@ let split_addresses values =
   in
   List.concat_map split values
 
-let stdin_is_tty (_ : Lwt_io.input_channel) = Charamel_os.Tty.is_tty_stdin
 let input_limit = (10 * 1024 * 1024) + 1
 
 let read_flow ~label channel =
@@ -121,7 +104,7 @@ let read_body ~cwd ~stdin options =
   | Some body, None -> Lwt.return (Ok body)
   | None, Some path -> read_file ~cwd path
   | None, None ->
-      if stdin_is_tty stdin then Lwt.return (Error (`Missing "body"))
+      if Charamel_cli.is_tty Unix.stdin then Lwt.return (Error (`Missing "body"))
       else
         Lwt.bind (read_flow ~label:"stdin" stdin) (function
           | Error error -> Lwt.return (Error error)
@@ -233,12 +216,7 @@ let prepare ~cwd ~stdin ?date options =
                                                ~body_html ~attachments ~to_ ~cc ~bcc ()
                                            with
                                             | Error error -> Error (`Message error)
-                                            | Ok message ->
-                                                Ok
-                                                  {
-                                                    message;
-                                                    wire = Mime.serialise message;
-                                                  })
+                                            | Ok message -> Ok message)
                                           |> Lwt.return)))))))
 
 let env_raw env name =
@@ -250,9 +228,15 @@ let int_env env name ~default =
   match env_value env name with
   | None -> Ok default
   | Some value -> (
-      match int_of_string_opt value with
-      | Some port when port > 0 && port <= 65535 -> Ok port
-      | _ -> Error (`Input (Fmt.str "%s must be an integer between 1 and 65535" name)))
+      let decimal =
+        value <> ""
+        && String.for_all (fun character -> character >= '0' && character <= '9') value
+      in
+      match (decimal, int_of_string_opt value) with
+      | true, Some port when port > 0 && port <= 65535 -> Ok port
+      | _ ->
+          Error (`Input (Fmt.str "%s must be a decimal integer between 1 and 65535" name))
+      )
 
 let security_env env =
   match env_value env "POP_SMTP_ENCRYPTION" with

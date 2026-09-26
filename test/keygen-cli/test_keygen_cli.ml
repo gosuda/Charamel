@@ -93,6 +93,21 @@ let force_replaces_pair () =
         (Unix.lstat public_path).Unix.st_perm;
       Lwt.return_unit)
 
+let force_rejects_directory_target () =
+  Test_support.with_temp_dir (fun root ->
+      let path = Filename.concat root "key" in
+      Unix.mkdir path 0o700;
+      let* result =
+        Command.generate ~fs_root:root ~path ~algorithm:Key.Ed25519 ~force:true ()
+      in
+      (match expect_error "force existing directory target" result with
+      | `Io _ -> ()
+      | error ->
+          Alcotest.failf "force existing directory target: expected `Io, got %a"
+            Command.pp_error error);
+      Alcotest.check Alcotest.bool "directory is untouched" true (Sys.is_directory path);
+      Lwt.return_unit)
+
 let missing_parent_is_created () =
   Test_support.with_temp_dir (fun root ->
       let nested = Filename.concat root "nested" in
@@ -121,9 +136,8 @@ let missing_parent_is_created () =
       Lwt.return_unit)
 
 let default_paths () =
-  match Command.home_dir () with
+  match Charamel_os.Dirs.home () with
   | Error `No_home -> Alcotest.skip ()
-  | Error error -> Alcotest.failf "home lookup: %a" Command.pp_error error
   | Ok home ->
       let algorithms = [ Key.Ed25519; Key.Ecdsa_p256; Key.Ecdsa_p384; Key.Ecdsa_p521 ] in
       List.iter
@@ -208,6 +222,8 @@ let suites =
             force_replaces_pair ());
         Alcotest_lwt.test_case "creates missing parent" `Quick (fun _switch () ->
             missing_parent_is_created ());
+        Alcotest_lwt.test_case "rejects directory target" `Quick (fun _switch () ->
+            force_rejects_directory_target ());
       ] );
     ( "interop",
       [

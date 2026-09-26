@@ -7,13 +7,7 @@ let max_value_size = 64 * 1024 * 1024
 type target = { key : string; db : string option }
 
 let root () = Charamel_cli.Xdg.data_dir ~app:"skate"
-
-let store_error = function
-  | `No_such_db _ -> "skate: no such database"
-  | `No_such_key _ -> "skate: no such key"
-  | `Corrupt message -> Fmt.str "skate: %s" message
-  | `Io message -> Fmt.str "skate: %s" message
-  | `Invalid_db _ -> "skate: invalid database name"
+let store_error error = Fmt.str "skate: %a" Store.pp_error error
 
 let unwrap = function
   | Ok value -> value
@@ -22,27 +16,27 @@ let unwrap = function
 let parse_key target =
   if target = "" then Error "skate: key must not be empty"
   else
-    match (String.index_opt target '@', String.rindex_opt target '@') with
-    | None, None -> Ok { key = target; db = None }
-    | Some first, Some last when first <> last ->
-        Error "skate: a key may contain at most one @DB suffix"
-    | Some at, Some _ ->
-        let key = String.sub target 0 at in
-        let db = String.sub target (at + 1) (String.length target - at - 1) in
-        if key = "" then Error "skate: key must not be empty"
-        else if db = "" then Ok { key; db = None }
-        else Ok { key; db = Some db }
-    | _ -> Error "skate: invalid key"
+    match String.index_opt target '@' with
+    | None -> Ok { key = target; db = None }
+    | Some at ->
+        if String.rindex_opt target '@' <> Some at then
+          Error "skate: a key may contain at most one @DB suffix"
+        else
+          let key = String.sub target 0 at in
+          let db = String.sub target (at + 1) (String.length target - at - 1) in
+          if key = "" then Error "skate: key must not be empty"
+          else if db = "" then Ok { key; db = None }
+          else Ok { key; db = Some db }
 
-let parse_database argument default =
-  let name =
-    match argument with
-    | None -> default
-    | Some name when String.length name > 0 && Char.equal name.[0] '@' ->
-        String.sub name 1 (String.length name - 1)
-    | Some name -> name
-  in
-  if name = "" then Ok default else Ok name
+(* [database_name argument] is the database a positional argument names: an optional
+   [@] prefix is a separator, not part of the name, and an absent or empty argument
+   names nothing. Each caller decides what an unnamed database means. *)
+let database_name argument =
+  match argument with
+  | Some name when String.length name > 0 && Char.equal name.[0] '@' ->
+      String.sub name 1 (String.length name - 1)
+  | Some name -> name
+  | None -> ""
 
 let read_stdin env =
   Lwt.catch
@@ -109,27 +103,26 @@ let run_list env ~database ~keys_only ~values_only ~show_binary =
   if keys_only && values_only then
     Charamel_cli.error "skate: --keys-only and --values-only cannot be combined"
   else
-    match parse_database database "default" with
-    | Error message -> Charamel_cli.error message
-    | Ok db ->
-        Store.list ~root:(root ()) ~db >>= fun entries ->
-        let entries = unwrap entries in
-        let rec emit = function
-          | [] -> Lwt.return_unit
-          | (key, value) :: rest ->
-              let line =
-                if keys_only then key
-                else if values_only then render_value ~show_binary value
-                else key ^ "\t" ^ render_value ~show_binary value
-              in
-              write_line env line >>= fun () -> emit rest
-        in
-        emit entries
+    let named = database_name database in
+    let db = if named = "" then "default" else named in
+    Store.list ~root:(root ()) ~db >>= fun entries ->
+    let entries = unwrap entries in
+    let rec emit = function
+      | [] -> Lwt.return_unit
+      | (key, value) :: rest ->
+          let line =
+            if keys_only then key
+            else if values_only then render_value ~show_binary value
+            else key ^ "\t" ^ render_value ~show_binary value
+          in
+          write_line env line >>= fun () -> emit rest
+    in
+    emit entries
 
 let run_delete_db _env database =
-  match parse_database (Some database) database with
-  | Error message -> Charamel_cli.error message
-  | Ok db ->
+  match database_name (Some database) with
+  | "" -> Charamel_cli.error "skate: database name must not be empty"
+  | db ->
       Store.delete_db ~root:(root ()) ~db >>= fun deleted -> Lwt.return (unwrap deleted)
 
 let run_dbs env =

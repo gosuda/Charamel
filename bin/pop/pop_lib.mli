@@ -17,9 +17,6 @@ type options = {
 }
 (** Raw command values before missing fields are filled by the form. *)
 
-type prepared = { message : Mime.message; wire : string }
-(** A validated message and its deterministic RFC 5322 representation. *)
-
 type error =
   [ `Missing of string
   | `Input of string
@@ -35,30 +32,24 @@ val read_file : cwd:string -> string -> (string, error) result Lwt.t
 val pp_error : Format.formatter -> error -> unit
 (** [pp_error ppf error] renders [error] without exposing credentials. *)
 
-val empty_options : options
-(** [empty_options] contains no recipients, fields or attachments and does not permit
-    unsafe HTML. *)
-
 val split_addresses : string list -> string list
 (** [split_addresses values] splits comma-separated mailbox values, preserving order and
     quoted commas, and removes surrounding whitespace and empty entries. *)
 
-val stdin_is_tty : Lwt_io.input_channel -> bool
-(** [stdin_is_tty source] is [true] when the process's own standard input is a terminal.
-    [source] is accepted for call-site symmetry with {!read_file}'s channel-shaped
-    arguments; the check is always against the real process, since the runtime no longer
-    threads a substitutable environment. *)
-
 val config_of_env : env:(string -> string option) -> (Send.smtp_config, error) result
 (** [config_of_env ~env] reads the SMTP settings from [env]. The default port is [587] and
-    the default security is [Starttls]. *)
+    the default security is [Starttls]. [POP_SMTP_PORT] is a plain decimal integer in
+    [1..65535]: a sign, a base prefix or a digit separator is an [Input] error, so a shell
+    that expands [0x1d1] or writes [1_000] fails instead of silently selecting a different
+    port. *)
 
 val prepare :
   cwd:string ->
   stdin:Lwt_io.input_channel ->
   ?date:Ptime.t ->
   options ->
-  (prepared, error) result Lwt.t
+  (Mime.message, error) result Lwt.t
 (** [prepare ~cwd ~stdin ?date options] reads the body and attachments, renders Markdown
     to plain text and safe HTML, and validates all addresses. [date] defaults to the
-    current wall-clock time. Files and stdin are bounded to ten mebibytes. *)
+    current wall-clock time. Files and stdin are bounded to ten mebibytes. The result is
+    the composed message; {!Mime.serialise} renders its wire form on demand. *)

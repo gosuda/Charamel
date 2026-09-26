@@ -241,6 +241,30 @@ let dbs_absent_root =
             (match result with Ok names -> names | Error error -> fail_error error);
           Lwt.return_unit))
 
+let dbs_roundtrip =
+  Alcotest_lwt.test_case "database names round-trip" `Quick (fun _switch () ->
+      Test_support.with_temp_dir (fun root ->
+          let* () =
+            Lwt_list.iter_s
+              (fun db ->
+                let* result = Store.set ~root ~db "key" db in
+                unit_ok result;
+                Lwt.return_unit)
+              [ "Foo_Bar"; "a_b"; "Z" ]
+          in
+          write_corrupt root "_a_" "{ not json";
+          write_corrupt root "Foo" "{ not json";
+          let* result = Store.dbs ~root in
+          Alcotest.(check (list string))
+            "names" [ "Foo_Bar"; "Z"; "a_b" ]
+            (match result with Ok names -> names | Error error -> fail_error error);
+          let* result = Store.get ~root ~db:"Foo_Bar" "key" in
+          (match get_ok result with
+          | Store.Text value ->
+              Alcotest.(check string) "listed name is usable" "Foo_Bar" value
+          | Store.Binary _ -> Alcotest.fail "listed name returned binary");
+          Lwt.return_unit))
+
 let atomic_0600 =
   Alcotest_lwt.test_case "database mode is 0600" `Quick (fun _switch () ->
       Test_support.with_temp_dir (fun root ->
@@ -449,6 +473,39 @@ let cli_unknown_command =
           Alcotest.(check string) "output" "" output;
           Lwt.return_unit))
 
+let cli_error_details =
+  Alcotest_lwt.test_case "CLI errors name the offender" `Quick (fun _switch () ->
+      Test_support.with_temp_dir (fun root ->
+          let exe = executable () in
+          let env = minimal_environment ~data_home:root in
+          let* status, _, error =
+            Test_support.run_cli ~exe ~env [ "get"; "missing@notes" ]
+          in
+          Alcotest.(check int) "absent database status" 1 status;
+          Alcotest.(check bool)
+            "absent database names it" true
+            (Test_support.contains ~needle:"no such database: notes" ~haystack:error);
+          let* status, _, error = Test_support.run_cli ~exe ~env [ "delete-db"; "" ] in
+          Alcotest.(check int) "empty database status" 1 status;
+          Alcotest.(check bool)
+            "empty database rejected" true
+            (Test_support.contains ~needle:"database name must not be empty"
+               ~haystack:error);
+          let* status, _, error = Test_support.run_cli ~exe ~env [ "delete-db"; "@" ] in
+          Alcotest.(check int) "at-only database status" 1 status;
+          Alcotest.(check bool)
+            "at-only database rejected after the prefix strip" true
+            (Test_support.contains ~needle:"database name must not be empty"
+               ~haystack:error);
+          let* status, _, _ = Test_support.run_cli ~exe ~env [ "set"; "present"; "v" ] in
+          Alcotest.(check int) "set status" 0 status;
+          let* status, _, error = Test_support.run_cli ~exe ~env [ "get"; "absent" ] in
+          Alcotest.(check int) "absent key status" 1 status;
+          Alcotest.(check bool)
+            "absent key names it" true
+            (Test_support.contains ~needle:"no such key: absent" ~haystack:error);
+          Lwt.return_unit))
+
 let cases =
   ( "store",
     [
@@ -469,12 +526,14 @@ let cases =
       delete_db;
       dbs_sorted;
       dbs_absent_root;
+      dbs_roundtrip;
       atomic_0600;
       binary_not_utf8;
       show_binary_flag;
       cli_roundtrip;
       cli_absent_paths;
       cli_unknown_command;
+      cli_error_details;
     ] )
 
 let () = Test_support.run_lwt "skate" [ cases ]

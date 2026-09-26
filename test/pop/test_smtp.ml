@@ -195,6 +195,14 @@ let timeout () =
       | Error error -> Alcotest.failf "wrong timeout error: %a" Smtp.pp_error error
       | Ok _ -> Alcotest.fail "blocked greeting did not time out")
 
+let oversized_reply () =
+  let replies = "220 ready\r\n250 " ^ String.make ((64 * 1024) + 64) 'x' ^ "\r\n" in
+  run_mock replies (fun session _writes ->
+      match session with
+      | Error (`Bad_reply _) -> Lwt.return_unit
+      | Error error -> Alcotest.failf "wrong error: %a" Smtp.pp_error error
+      | Ok _ -> Alcotest.fail "oversized reply line accepted")
+
 let cases =
   [
     Alcotest_lwt.test_case "multiline EHLO and dot stuffing" `Quick (fun _switch () ->
@@ -206,4 +214,6 @@ let cases =
     Alcotest_lwt.test_case "envelope injection" `Quick (fun _switch () ->
         envelope_injection ());
     Alcotest_lwt.test_case "finite deadline" `Quick (fun _switch () -> timeout ());
+    Alcotest_lwt.test_case "oversized reply line" `Quick (fun _switch () ->
+        oversized_reply ());
   ]

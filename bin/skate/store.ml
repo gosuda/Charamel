@@ -52,6 +52,34 @@ let encode_db db =
     db;
   Buffer.contents buf
 
+(* The inverse of [encode_db] on the names it produces: every '_' in an encoded
+   component starts an escape, so [__] is a literal underscore and [_a] is [A]. An
+   encoded component never holds an uppercase letter. A component no name encodes
+   to is [None]; the caller drops it rather than list a name the store would
+   refuse. *)
+let decode_db name =
+  let buf = Buffer.create (String.length name) in
+  let rec loop i =
+    if i = String.length name then Some (Buffer.contents buf)
+    else
+      match name.[i] with
+      | '_' when i + 1 = String.length name -> None
+      | '_' -> (
+          match name.[i + 1] with
+          | '_' ->
+              Buffer.add_char buf '_';
+              loop (i + 2)
+          | 'a' .. 'z' as c ->
+              Buffer.add_char buf (Char.uppercase_ascii c);
+              loop (i + 2)
+          | _ -> None)
+      | 'A' .. 'Z' -> None
+      | c ->
+          Buffer.add_char buf c;
+          loop (i + 1)
+  in
+  loop 0
+
 let db_path root db = Filename.concat root (encode_db db ^ ".json")
 
 (* Generic JSON value helpers, matching the [Jsont.Json] convention already
@@ -327,26 +355,17 @@ let delete_db ~root ~db =
               | Lwt.Canceled -> Lwt.fail Lwt.Canceled
               | exn -> Lwt.return (Error (`Io (io_message exn)))))
 
+let database_of_file name =
+  match Filename.chop_suffix_opt ~suffix:".json" name with
+  | None -> None
+  | Some stem -> (
+      match decode_db stem with Some db when is_valid_db db -> Some db | _ -> None)
+
 let dbs ~root =
-  let suffix = ".json" in
-  let slen = String.length suffix in
-  let strip_suffix name =
-    let nlen = String.length name in
-    if nlen > slen && String.equal (String.sub name (nlen - slen) slen) suffix then
-      Some (String.sub name 0 (nlen - slen))
-    else None
-  in
   Lwt.catch
     (fun () ->
       Lwt_stream.to_list (Lwt_unix.files_of_directory root) >|= fun names ->
-      let rec collect acc = function
-        | [] -> acc
-        | name :: rest -> (
-            match strip_suffix name with
-            | None -> collect acc rest
-            | Some db -> collect (db :: acc) rest)
-      in
-      Ok (List.sort String.compare (collect [] names)))
+      Ok (List.sort String.compare (List.filter_map database_of_file names)))
     (function
       | Unix.Unix_error (Unix.ENOENT, _, _) -> Lwt.return (Ok [])
       | Lwt.Canceled -> Lwt.fail Lwt.Canceled

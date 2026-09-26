@@ -17,13 +17,11 @@ type reply = { code : int; lines : string list }
     [250-smtp.example.com] then [250 8BITMIME] gives
     [250; ["smtp.example.com"; "8BITMIME"]]. *)
 
-val pp_reply : Format.formatter -> reply -> unit
-(** [pp_reply ppf r] renders [r] as its wire form. *)
-
 type response_error =
   [ `Unexpected of reply
     (** A reply arrived whose code was not in the range the step required. *)
-  | `Bad_reply of string  (** A line could not be parsed as an SMTP reply. *)
+  | `Bad_reply of string
+    (** A line could not be parsed as an SMTP reply, or exceeded the 64 KiB line bound. *)
   | `Data_refused of reply  (** The [DATA] command was not accepted with [354]. *)
   | `Tls_refused of reply  (** The server declined [STARTTLS] after advertising it. *)
   | `Auth_refused of reply  (** The server rejected the credentials. *)
@@ -37,11 +35,11 @@ type error =
   | `Tls of Tls.Engine.failure
   | `Net of string
   | `No_recipients
-  | `Invalid_address of string
-  | `Header_injection of string ]
-(** Every failure {!connect}, {!send} and {!quit} can produce. [`Timeout] is the session
-    deadline. [`Closed] is the peer closing the connection. [`Tls f] is a handshake
-    failure with reason [f]. [`Net message] is a connection-level failure. *)
+  | `Invalid_address of string ]
+(** Every failure {!connect}, {!send} and {!deliver} can produce. [`Timeout] is the
+    session deadline. [`Closed] is the peer closing the connection. [`Tls f] is a
+    handshake failure with reason [f]. [`Net message] is a connection-level failure.
+    [`Invalid_address] is an envelope address rejected before any command is sent. *)
 
 val pp_error : Format.formatter -> error -> unit
 (** [pp_error ppf e] renders [e] for CLI and log output. *)
@@ -103,8 +101,7 @@ val deliver :
     CLI that sends one message and does not need to reuse a session. The connection is
     closed even when [send] returns an error. *)
 
-val quit : t -> (unit, error) result Lwt.t
-(** [quit t] sends [QUIT] and waits for [221], then closes the connection. *)
-
 val close : t -> unit Lwt.t
-(** [close t] closes the connection without sending [QUIT]. Idempotent. *)
+(** [close t] closes the connection without sending [QUIT]. Idempotent. A session taken
+    from {!connect} that is not handed to {!send} is released this way; {!send} and
+    {!deliver} close the session themselves. *)

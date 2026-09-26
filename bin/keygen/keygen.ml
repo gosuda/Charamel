@@ -3,76 +3,30 @@ open Result.Syntax
 open Lwt.Infix
 
 type error =
-  [ `No_home
-  | `Invalid_path of string
-  | `Already_exists of string
-  | `Target_is_directory of string
-  | `Io of string ]
+  [ `No_home | `Invalid_path of string | `Already_exists of string | `Io of string ]
 
 let pp_error ppf = function
   | `No_home -> Format.pp_print_string ppf "keygen: HOME is not set to an absolute path"
   | `Invalid_path path -> Fmt.pf ppf "keygen: invalid path %S" path
   | `Already_exists path -> Fmt.pf ppf "keygen: %s already exists" path
-  | `Target_is_directory path -> Fmt.pf ppf "keygen: %s is a directory" path
   | `Io message -> Fmt.pf ppf "keygen: %s" message
 
-let home_dir () =
-  match Sys.getenv_opt "HOME" with
-  | Some home when home <> "" && not (Filename.is_relative home) -> Ok home
-  | _ -> Error `No_home
-
+(* A leading [~] names the user's home and a bare relative name is the current
+   directory's: the two spellings a shell hands to [-f]. An empty name is refused,
+   because it would otherwise resolve to the working directory itself. *)
 let resolve_path path =
-  let length = String.length path in
   if String.equal path "" then Error (`Invalid_path path)
-  else if String.equal path "~" then home_dir ()
-  else if length >= 2 && Char.equal path.[0] '~' && Char.equal path.[1] '/' then
-    let* home = home_dir () in
-    Ok (Filename.concat home (String.sub path 2 (length - 2)))
-  else if Filename.is_relative path then Ok (Filename.concat (Sys.getcwd ()) path)
-  else Ok path
+  else
+    Result.map
+      (fun expanded ->
+        if Filename.is_relative expanded then Filename.concat (Sys.getcwd ()) expanded
+        else expanded)
+      (Charamel_os.Dirs.expand_tilde path)
 
 let default_path algorithm =
-  let* home = home_dir () in
+  let* home = Charamel_os.Dirs.home () in
   Ok
     (Filename.concat home (Filename.concat ".ssh" ("id_" ^ Key.algorithm_name algorithm)))
-
-let fs_text = function
-  | `Already_exists -> "already exists"
-  | `Is_directory -> "is a directory"
-  | `Not_found -> "no such file or directory"
-  | `Permission_denied -> "permission denied"
-
-let io_text exn =
-  match exn with
-  | Unix.Unix_error (kind, _, _) -> Unix.error_message kind
-  | Charamel_os.Fs.E (error, path) -> Fmt.str "%s: %s" path (fs_text error)
-  | exn -> Printexc.to_string exn
-
-type target_state = Missing | Existing | Directory
-
-let target_state path =
-  Lwt.catch
-    (fun () ->
-      Lwt_unix.lstat path >|= fun stats ->
-      Ok (if stats.Unix.st_kind = Unix.S_DIR then Directory else Existing))
-    (function
-      | Unix.Unix_error (Unix.ENOENT, _, _) -> Lwt.return (Ok Missing)
-      | Lwt.Canceled as exn -> Lwt.fail exn
-      | exn -> Lwt.return (Error (`Io (io_text exn))))
-
-let check_target ~force ~name path =
-  target_state path >|= function
-  | Error _ as e -> e
-  | Ok Missing -> Ok ()
-  | Ok Existing -> if force then Ok () else Error (`Already_exists name)
-  | Ok Directory ->
-      if force then Error (`Target_is_directory name) else Error (`Already_exists name)
-
-let check_targets ~path ~force =
-  let public_name = path ^ ".pub" in
-  check_target ~force ~name:path path >>= function
-  | Error _ as e -> Lwt.return e
-  | Ok () -> check_target ~force ~name:public_name public_name
 
 let mkdir_exists perm path =
   Lwt.catch
@@ -117,69 +71,15 @@ let generated_error = function
   | `Unsupported_type -> Error (`Io "generated key type is unsupported")
   | `Encrypted_key -> Error (`Io "generated key is encrypted")
 
-let write_nonforce ~fs_root ~path ~comment key =
-  Key.write ~fs_root ~path ~comment key >|= function
+let write_key ~fs_root ~path ~comment ~force key =
+  Key.write ~fs_root ~path ~comment ~overwrite:force key >|= function
   | Ok () -> Ok (Key.fingerprint_sha256 key)
   | Error error -> generated_error error
-
-let is_ascii_alphanumeric = function
-  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' -> true
-  | _ -> false
-
-let temporary_suffix fingerprint =
-  String.map
-    (fun character -> if is_ascii_alphanumeric character then character else '_')
-    fingerprint
-
-let force_write ~path ~comment key =
-  let private_name = path in
-  let public_name = path ^ ".pub" in
-  let fingerprint = Key.fingerprint_sha256 key in
-  let suffix = temporary_suffix fingerprint in
-  let private_tmp = private_name ^ ".charamel-keygen-" ^ suffix in
-  let public_tmp = public_name ^ ".charamel-keygen-" ^ suffix in
-  let private_body = Key.to_openssh_private ~comment key in
-  let public_body = Key.authorized_key ~comment key in
-  let created = ref [] in
-  let cleanup () =
-    Lwt_list.iter_s
-      (fun path ->
-        Lwt.catch (fun () -> Lwt_unix.unlink path) (fun _exn -> Lwt.return_unit))
-      !created
-  in
-  let save path perm body =
-    Lwt_unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] perm >>= fun fd ->
-    created := path :: !created;
-    let channel = Lwt_io.of_fd ~mode:Lwt_io.output fd in
-    Lwt.finalize
-      (fun () -> Lwt_io.write channel body >>= fun () -> Lwt_unix.fchmod fd perm)
-      (fun () -> Lwt_io.close channel)
-  in
-  Lwt.catch
-    (fun () ->
-      save private_tmp 0o600 private_body >>= fun () ->
-      save public_tmp 0o644 public_body >>= fun () ->
-      Lwt_unix.rename private_tmp private_name >>= fun () ->
-      Lwt_unix.rename public_tmp public_name >>= fun () ->
-      created := [];
-      Lwt.return (Ok fingerprint))
-    (function
-      | Lwt.Canceled as exn -> Lwt.fail exn
-      | exn -> Lwt.return (Error (`Io (io_text exn))))
-  >>= function
-  | Ok _ as ok -> Lwt.return ok
-  | Error _ as e -> cleanup () >>= fun () -> Lwt.return e
 
 let generate ~fs_root ~path ~algorithm ?(comment = "") ~force () =
   match resolve_path path with
   | Error _ as e -> Lwt.return e
   | Ok path -> (
-      check_targets ~path ~force >>= function
+      ensure_parent path >>= function
       | Error _ as e -> Lwt.return e
-      | Ok () -> (
-          ensure_parent path >>= function
-          | Error _ as e -> Lwt.return e
-          | Ok () ->
-              let key = Key.generate algorithm in
-              if force then force_write ~path ~comment key
-              else write_nonforce ~fs_root ~path ~comment key))
+      | Ok () -> write_key ~fs_root ~path ~comment ~force (Key.generate algorithm))

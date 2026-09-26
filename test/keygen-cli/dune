@@ -5,6 +5,7 @@
  (libraries
   keygen_core
   charamel-ssh.keygen
+  charamel.os
   alcotest
   alcotest-lwt
   fmt

@@ -11,20 +11,16 @@ type error =
   | `Mnemonic of Mnemonic.error
   | `Write_key of Key.error ]
 
-let home_dir () =
-  match Sys.getenv_opt "HOME" with
-  | Some home when home <> "" && not (Filename.is_relative home) -> Ok home
-  | _ -> Error `No_home
-
 let resolve_path path =
-  let length = String.length path in
-  if String.equal path "~" then Result.map (fun home -> home) (home_dir ())
-  else if length >= 2 && Char.equal path.[0] '~' && Char.equal path.[1] '/' then
-    Result.map
-      (fun home -> Filename.concat home (String.sub path 2 (length - 2)))
-      (home_dir ())
-  else if Filename.is_relative path then Ok (Filename.concat (Sys.getcwd ()) path)
-  else Ok path
+  Result.map
+    (fun expanded ->
+      if Filename.is_relative expanded then Filename.concat (Sys.getcwd ()) expanded
+      else expanded)
+    (Charamel_os.Dirs.expand_tilde path)
+
+(* The key both subcommands act on when the user names none: the conventional OpenSSH
+   Ed25519 location in the user's home. *)
+let default_key_path = "~/.ssh/id_ed25519"
 
 (* Mnemonic phrases are separated by any ASCII whitespace — a backup printed one word per
    line must restore from a file pasted with its newlines intact. Shell word splitting is
@@ -127,13 +123,16 @@ let backup_path_arg () =
   let open Cmdliner in
   Arg.(
     value
-      (pos 0 (some string) (Some "~/.ssh/id_ed25519")
-         (info [] ~docv:"KEY_PATH" ~doc:"OpenSSH Ed25519 private key to back up.")))
+      (pos 0 string default_key_path
+         (info [] ~docv:"KEY_PATH"
+            ~doc:
+              (Fmt.str "OpenSSH Ed25519 private key to back up (default: %s)."
+                 default_key_path))))
 
 let backup_term (env : Charamel_cli.Env.t) =
   let open Cmdliner.Term.Syntax in
   let+ path = backup_path_arg () in
-  run_backup env (Option.value path ~default:"~/.ssh/id_ed25519")
+  run_backup env path
 
 let restore_words_arg () =
   let open Cmdliner in
@@ -146,9 +145,9 @@ let restore_output_arg () =
   let open Cmdliner in
   Arg.(
     value
-      (opt string "~/.ssh/id_ed25519"
+      (opt string default_key_path
          (info [ "output" ] ~docv:"PATH"
-            ~doc:"Private-key output path (default: ~/.ssh/id_ed25519).")))
+            ~doc:(Fmt.str "Private-key output path (default: %s)." default_key_path))))
 
 let restore_term (env : Charamel_cli.Env.t) =
   let open Cmdliner.Term.Syntax in

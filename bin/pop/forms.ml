@@ -50,7 +50,9 @@ let run ~clock ~fs_root ~temp_dir ~initial =
   in
   let form_env = Charamel_huh.Form.Env.v ~fs_root ~temp_dir ~editor:None ~clock in
   Lwt.bind (Charamel_huh.run ~env:form_env ~clock form) (function
-    | Error ((`Aborted | `Timeout) as error) -> Lwt.return (Error error)
+    | Error `Aborted -> Lwt.return (Error `Aborted)
+    | Error `Timeout -> Lwt.return (Error `Timeout)
+    | Error `Timeout_unsupported -> Lwt.return (Error `Aborted)
     | Ok results ->
         let send =
           match Charamel_huh.Results.get send_key results with

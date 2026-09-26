@@ -41,12 +41,6 @@ module Address : sig
   val display : t -> string option
   (** [display t] is the display name, when one was given. *)
 
-  val equal : t -> t -> bool
-  (** [equal a b] compares both components. *)
-
-  val pp : Format.formatter -> t -> unit
-  (** [pp ppf t] formats [t] as [Display <addr>] or [addr]. *)
-
   val to_header : t list -> string
   (** [to_header l] is the comma-separated mailbox list for a [To], [Cc] or [Reply-To]
       header, folded with CRLF continuations so no line exceeds 78 characters. An empty
@@ -109,10 +103,10 @@ val message :
     [`Header_injection] when the subject or any attachment name carries CR, LF or NUL, and
     [`Invalid_address] when a display or address component is malformed. *)
 
-val format_date : ?tz_offset_s:int -> Ptime.t -> string
-(** [format_date ?tz_offset_s d] is the RFC 5322 date-time for the instant [d] at UTC
-    offset [tz_offset_s] seconds (default [0], i.e. [+0000]), for example
-    [Tue, 16 Sep 2026 12:34:56 +0000]. *)
+val normalize_crlf : string -> string
+(** [normalize_crlf text] is [text] with every line ending ([CR LF], a lone [CR] or a lone
+    [LF]) rewritten as [CR LF]. The MIME body encoder and the SMTP [DATA] writer both
+    depend on this one rule. *)
 
 val encoded_subject : message -> string
 (** [encoded_subject m] is the [Subject] header value: the subject unchanged when it is

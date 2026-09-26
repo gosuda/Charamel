@@ -1,7 +1,7 @@
 (library
  (name pop_core)
  (wrapped true)
- (modules mime smtp pop_lib send preview forms)
+ (modules mime smtp pop_lib send forms)
  (libraries
   charamel.cli
   charamel.huh

@@ -2050,9 +2050,16 @@ let words =
     "zoo";
   |]
 
-let index_table =
-  let tbl = Hashtbl.create 2048 in
-  Array.iteri (fun i w -> Hashtbl.replace tbl w i) words;
-  tbl
-
-let find_index w = Hashtbl.find_opt index_table w
+(* The list is sorted with no duplicates, a BIP-39 requirement the test suite pins, so
+   the index of a word is found by searching the array itself. *)
+let find_index word =
+  let rec loop low high =
+    if low > high then None
+    else
+      let middle = low + ((high - low) / 2) in
+      match String.compare word words.(middle) with
+      | 0 -> Some middle
+      | c when c < 0 -> loop low (middle - 1)
+      | _ -> loop (middle + 1) high
+  in
+  loop 0 (Array.length words - 1)
