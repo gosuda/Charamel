@@ -59,9 +59,6 @@ type model = {
   viewport : Viewport.t;
   search : Textinput.t;
   search_active : bool;
-  query : string;
-  match_lines : int list;
-  match_index : int;
   quitting : bool;
 }
 
@@ -97,90 +94,52 @@ let sanitize text =
     text;
   Buffer.contents output
 
-let split_lines text = String.split_on_char '\n' text
+let search_regexp pattern =
+  try Some (Re.Perl.compile_pat ~opts:[ `Caseless ] pattern)
+  with Re.Perl.Parse_error | Re.Perl.Not_supported | Invalid_argument _ -> None
 
-let search_lines ~pattern content =
-  if pattern = "" then []
-  else
-    let regexp =
-      try Some (Re.Perl.compile_pat ~opts:[ `Caseless ] pattern)
-      with Re.Perl.Parse_error | Re.Perl.Not_supported | Invalid_argument _ -> None
-    in
-    match regexp with
-    | None -> []
-    | Some regexp ->
-        split_lines content
-        |> List.mapi (fun index line -> if Re.execp regexp line then Some index else None)
-        |> List.filter_map Fun.id
-
-let style_literal_matches ~style ~pattern line =
-  if pattern = "" then line
-  else
-    let regexp =
-      try Some (Re.Perl.compile_pat ~opts:[ `Caseless ] pattern)
-      with Re.Perl.Parse_error | Re.Perl.Not_supported | Invalid_argument _ -> None
-    in
-    match regexp with
-    | None -> line
-    | Some regexp ->
-        let rec collect position acc =
-          match Re.exec_opt ~pos:position regexp line with
-          | None -> List.rev acc
-          | Some groups ->
-              let start, stop = Re.Group.offset groups 0 in
-              let next = if stop <= start then start + 1 else stop in
-              collect next ((start, stop) :: acc)
-        in
-        let positions = collect 0 [] in
-        let rec render_from position = function
-          | [] -> String.sub line position (String.length line - position)
-          | (start, stop) :: rest ->
-              let prefix = String.sub line position (start - position) in
-              let match_text = String.sub line start (stop - start) in
-              prefix ^ Style.render style match_text ^ render_from stop rest
-        in
-        render_from 0 positions
+let match_ranges ~pattern content =
+  match search_regexp pattern with
+  | None -> []
+  | Some regexp ->
+      let rec collect position acc =
+        match Re.exec_opt ~pos:position regexp content with
+        | None -> List.rev acc
+        | Some groups ->
+            let start, stop = Re.Group.offset groups 0 in
+            let next = if stop <= start then start + 1 else stop in
+            collect next ((start, stop) :: acc)
+      in
+      if pattern = "" then [] else collect 0 []
 
 let configured_size style =
   let width = Option.value ~default:0 (Style.get_width style) in
   let height = Option.value ~default:0 (Style.get_height style) in
   (width, height)
 
-let decorated_content model =
-  let line_number_style = Gum_style.to_style model.options.line_number_style in
-  let match_style = Gum_style.to_style model.options.match_style in
-  let highlight_style = Gum_style.to_style model.options.match_highlight_style in
-  split_lines model.content
-  |> List.mapi (fun index line ->
-      let line =
-        if model.query = "" then line
-        else
-          let style =
-            if
-              List.mem index model.match_lines
-              &&
-              match List.nth_opt model.match_lines model.match_index with
-              | Some current -> current = index
-              | None -> false
-            then highlight_style
-            else match_style
-          in
-          style_literal_matches ~style ~pattern:model.query line
-      in
-      if model.options.show_line_numbers then
-        Style.render line_number_style (Fmt.str "%4d " (index + 1)) ^ line
-      else line)
-  |> String.concat "\n"
+let line_gutter model =
+  let style = Gum_style.to_style model.options.line_number_style in
+  Some
+    (fun ({ Viewport.index; _ } : Viewport.gutter_context) ->
+      Style.render style (Fmt.str "%4d " (index + 1)))
 
-let refresh_viewport model = Viewport.set_content (decorated_content model) model.viewport
-
-let compute_matches model =
-  let match_lines = search_lines ~pattern:model.query model.content in
-  let match_index =
-    if match_lines = [] then 0 else min model.match_index (List.length match_lines - 1)
+let refresh_viewport model =
+  let viewport =
+    model.viewport
+    |> Viewport.set_left_gutter
+         (if model.options.show_line_numbers then line_gutter model else None)
+    |> Viewport.set_highlight_style (Gum_style.to_style model.options.match_style)
+    |> Viewport.set_selected_highlight_style
+         (Gum_style.to_style model.options.match_highlight_style)
+    |> Viewport.set_content model.content
   in
-  let model = { model with match_lines; match_index } in
-  { model with viewport = refresh_viewport model }
+  let ranges =
+    Viewport.grapheme_ranges_of_byte_ranges viewport
+      (match_ranges ~pattern:(Textinput.value model.search) model.content)
+  in
+  { model with viewport = Viewport.set_highlights ranges viewport }
+
+let compute_matches model = refresh_viewport model
 
 let new_search width =
   let search =
@@ -205,9 +164,6 @@ let make (options : options) =
       viewport;
       search;
       search_active = false;
-      query = "";
-      match_lines = [];
-      match_index = 0;
       quitting = false;
     }
   in
@@ -217,27 +173,18 @@ let cancel_search model =
   let search = Textinput.blur model.search in
   { model with search; search_active = false }
 
-let apply_search model =
-  let query = Textinput.value model.search in
-  compute_matches { model with query; search_active = false }
+let apply_search model = compute_matches { model with search_active = false }
 
 let update_input model message =
   let search, command = Textinput.update message model.search in
   ({ model with search }, Cmd.map (fun message -> Input message) command)
 
 let jump_match model delta =
-  match model.match_lines with
-  | [] -> model
-  | _ ->
-      let length = List.length model.match_lines in
-      let index = (model.match_index + delta) mod length in
-      let index = if index < 0 then index + length else index in
-      let line = List.nth model.match_lines index in
-      {
-        model with
-        match_index = index;
-        viewport = Viewport.set_y_offset line model.viewport;
-      }
+  let viewport =
+    if delta > 0 then Viewport.highlight_next model.viewport
+    else Viewport.highlight_previous model.viewport
+  in
+  { model with viewport }
 
 let update_viewport model message =
   let viewport, command = Viewport.update message model.viewport in
@@ -291,20 +238,24 @@ let handle_key model key =
         else (model, Cmd.none)
     | Some message -> update_viewport model message
 
+let frame model body =
+  let content =
+    if model.search_active then body ^ "\n" ^ Viewport.view model.viewport
+    else Viewport.view model.viewport
+  in
+  let content =
+    if model.options.show_line_numbers || model.options.soft_wrap then
+      content ^ "\n\n↑↓ scroll • / search • n/N next/prev • q quit"
+    else content
+  in
+  Style.render (Gum_style.to_style model.options.style) content
+
 let render model =
-  if model.quitting then ""
-  else
-    let content =
-      if model.search_active then
-        Textinput.view model.search ^ "\n" ^ Viewport.view model.viewport
-      else Viewport.view model.viewport
-    in
-    let content =
-      if model.options.show_line_numbers || model.options.soft_wrap then
-        content ^ "\n\n↑↓ scroll • / search • n/N next/prev • q quit"
-      else content
-    in
-    Style.render (Gum_style.to_style model.options.style) content
+  if model.quitting then "" else frame model (Textinput.view model.search)
+
+let cursor model =
+  if model.quitting || not model.search_active then None
+  else Gum_io.place_cursor ~frame:(frame model) (Textinput.cursor model.search)
 
 let update message model =
   match message with
@@ -337,7 +288,10 @@ let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
-    view = (fun model -> View.v ~alt_screen:true (render model));
+    view =
+      (fun model ->
+        let frame = View.v ~alt_screen:true (render model) in
+        { frame with cursor = cursor model });
     subscriptions =
       (fun model ->
         Sub.batch
@@ -369,14 +323,9 @@ let run env (options : options) =
       let content = sanitize content in
       if content = "" then Charamel_cli.error "provide some content to display";
       let options = { options with content } in
-      Lwt.catch
-        (fun () ->
-          Lwt.map ignore
-            (Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun _ ->
-                 Gum_run.Submitted)))
-        (function
-          | Gum_io.No_tty -> Charamel_cli.error "pager: requires a terminal"
-          | exn -> Lwt.fail exn))
+      Lwt.map ignore
+        (Gum_run.run_tui ~name:"pager" ?timeout:options.timeout env (app options)
+           ~finished:(fun _ -> Gum_run.Submitted)))
 
 let cmd env =
   let open Cmdliner in

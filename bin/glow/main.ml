@@ -13,9 +13,6 @@ type options = {
   mouse : bool option;
 }
 
-let path_for ~cwd path =
-  if Filename.is_relative path then Filename.concat cwd path else path
-
 let read_file_sync path =
   let fd = Unix.openfile path [ Unix.O_RDONLY ] 0 in
   Fun.protect
@@ -154,31 +151,19 @@ let render_document ~is_tty:stdout_is_tty (config : Config.t) document =
   in
   let is_dark = Charamel_cli.is_dark ~env:Sys.getenv_opt in
   let theme =
-    match String.lowercase_ascii config.Config.style with
-    | "dark" -> Charamel_glamour.Theme.dark
-    | "light" -> Charamel_glamour.Theme.light
-    | "dracula" -> Charamel_glamour.Theme.dracula
-    | "tokyo-night" | "tokyo_night" -> Charamel_glamour.Theme.tokyo_night
-    | "pink" -> Charamel_glamour.Theme.pink
-    | "ascii" -> Charamel_glamour.Theme.ascii
-    | "notty" -> Charamel_glamour.Theme.notty
-    | "auto" -> Charamel_glamour.Theme.auto ~is_dark
-    | value -> Fmt.failwith "glow: unknown style %S" value
+    match Charamel_glamour.Theme.of_name ~is_dark config.Config.style with
+    | Ok theme -> theme
+    | Error value -> Fmt.failwith "glow: unknown style %S" value
   in
   Charamel_glamour.render ~width ~theme ?base_url:document.Source.base_url
     ~preserve_newlines:config.Config.preserve_new_lines body
-
-let pager_words () =
-  match Sys.getenv_opt "PAGER" with
-  | Some value when String.trim value <> "" -> Charamel_os.Shell.split_words value
-  | _ -> [ "less"; "-r" ]
 
 let exit_message ~label code =
   if code > 128 then Fmt.str "glow: %s terminated by signal %d" label (code - 128)
   else Fmt.str "glow: %s exited with status %d" label code
 
 let run_pager text =
-  match pager_words () with
+  match Charamel_os.Editor.pager () with
   | [] -> Lwt.return (Error "glow: PAGER is empty")
   | argv ->
       Lwt.catch
@@ -199,11 +184,7 @@ let run_pager text =
           | exn -> Lwt.fail exn)
 
 let run_editor path =
-  let command =
-    match Sys.getenv_opt "EDITOR" with
-    | Some value when String.trim value <> "" -> Charamel_os.Shell.split_words value
-    | _ -> [ "vi" ]
-  in
+  let command = Charamel_os.Editor.editor () in
   match command with
   | [] -> Lwt.return (Error "glow: EDITOR is empty")
   | command ->

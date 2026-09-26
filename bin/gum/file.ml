@@ -23,9 +23,6 @@ type options = {
   header_style : Gum_style.t;
 }
 
-let style ?foreground ?bold ?width ?align () =
-  Gum_style.defaults ?foreground ?bold ?width ?align ()
-
 let default_options =
   {
     path = ".";
@@ -40,19 +37,15 @@ let default_options =
     header = "";
     height = 10;
     padding = "0 0";
-    cursor_style = style ~foreground:"212" ();
-    symlink_style = style ~foreground:"36" ();
-    directory_style = style ~foreground:"99" ();
-    file_style = style ();
-    permissions_style = style ~foreground:"244" ();
-    selected_style = style ~foreground:"212" ~bold:true ();
-    file_size_style = style ~foreground:"240" ~width:8 ~align:"right" ();
-    header_style = style ~foreground:"99" ();
+    cursor_style = Gum_style.defaults ~foreground:"212" ();
+    symlink_style = Gum_style.defaults ~foreground:"36" ();
+    directory_style = Gum_style.defaults ~foreground:"99" ();
+    file_style = Gum_style.defaults ();
+    permissions_style = Gum_style.defaults ~foreground:"244" ();
+    selected_style = Gum_style.defaults ~foreground:"212" ~bold:true ();
+    file_size_style = Gum_style.defaults ~foreground:"240" ~width:8 ~align:"right" ();
+    header_style = Gum_style.defaults ~foreground:"99" ();
   }
-
-let key_name key = Charamel_tea.Key.to_string key
-let is_quit key = match key_name key with "q" | "esc" -> true | _ -> false
-let is_abort key = String.equal (key_name key) "ctrl+c"
 
 type status = Running | Selected of string | Quit | Aborted
 type model = { picker : Charamel_bubbles.Filepicker.t; status : status }
@@ -94,9 +87,10 @@ let app ~(env : Charamel_cli.Env.t) (options : options) ~padding ~directory =
   let init_cmd = Charamel_tea.Cmd.map (fun message -> Picker message) init_cmd in
   let update message model =
     match message with
-    | Key key when is_abort key ->
+    | Key key when Gum_flag.is_abort key ->
         ({ model with status = Aborted }, Charamel_tea.Cmd.interrupt)
-    | Key key when is_quit key -> ({ model with status = Quit }, Charamel_tea.Cmd.quit)
+    | Key key when Gum_flag.is_quit key ->
+        ({ model with status = Quit }, Charamel_tea.Cmd.quit)
     | Key key -> (
         match Charamel_bubbles.Filepicker.key model.picker key with
         | None -> (model, Charamel_tea.Cmd.none)
@@ -126,8 +120,7 @@ let app ~(env : Charamel_cli.Env.t) (options : options) ~padding ~directory =
             ( { model with picker },
               Charamel_tea.Cmd.map (fun message -> Picker message) command ))
   in
-  let view model =
-    let picker_view = Charamel_bubbles.Filepicker.view model.picker in
+  let frame body =
     let parts =
       (if options.header = "" then []
        else
@@ -135,14 +128,23 @@ let app ~(env : Charamel_cli.Env.t) (options : options) ~padding ~directory =
            ( Gum_style.to_style options.header_style |> fun style ->
              Charamel_lipgloss.Style.render style options.header );
          ])
-      @ [ picker_view ]
+      @ [ body ]
     in
     let parts = if options.show_help then parts @ [ help_line ] else parts in
     let content = String.concat "\n" parts in
-    Charamel_tea.View.v ~alt_screen:false
-      (Charamel_lipgloss.Style.render
-         (Charamel_lipgloss.Style.padding padding Charamel_lipgloss.Style.empty)
-         content)
+    Charamel_lipgloss.Style.render
+      (Charamel_lipgloss.Style.padding padding Charamel_lipgloss.Style.empty)
+      content
+  in
+  let cursor model =
+    Gum_io.place_cursor ~frame (Charamel_bubbles.Filepicker.selection_cursor model.picker)
+  in
+  let view model =
+    let view =
+      Charamel_tea.View.v ~alt_screen:false
+        (frame (Charamel_bubbles.Filepicker.view model.picker))
+    in
+    { view with cursor = cursor model }
   in
   let subscriptions _ =
     Charamel_tea.Sub.batch
@@ -190,26 +192,18 @@ let run env (options : options) =
               in
               let app, () = app ~env options ~padding ~directory in
               Lwt.bind
-                (Lwt.catch
-                   (fun () ->
-                     Lwt.map
-                       (fun model -> Ok model)
-                       (Gum_run.run ?timeout:options.timeout env app
-                          ~finished:(fun model ->
-                            match model.status with
-                            | Selected _ -> Gum_run.Submitted
-                            | Quit -> Gum_run.Quit
-                            | Aborted -> Gum_run.Aborted
-                            | Running -> Gum_run.Quit)))
-                   (function
-                     | Gum_io.No_tty -> Lwt.return (Error ()) | exn -> Lwt.fail exn))
-                (function
-                  | Error () -> Charamel_cli.error "file: requires a terminal"
-                  | Ok model -> (
-                      match model.status with
-                      | Selected path -> Gum_io.print_raw env path
-                      | Quit | Running -> Charamel_cli.error "no file selected"
-                      | Aborted -> Charamel_cli.exit 130))))
+                (Gum_run.run_tui ~name:"file" ?timeout:options.timeout env app
+                   ~finished:(fun model ->
+                     match model.status with
+                     | Selected _ -> Gum_run.Submitted
+                     | Quit -> Gum_run.Quit
+                     | Aborted -> Gum_run.Aborted
+                     | Running -> Gum_run.Quit))
+                (fun model ->
+                  match model.status with
+                  | Selected path -> Gum_io.print_raw env path
+                  | Quit | Running -> Charamel_cli.error "no file selected"
+                  | Aborted -> Charamel_cli.exit 130)))
 
 let options path cursor all permissions size file directory show_help timeout header
     height padding cursor_style symlink_style directory_style file_style permissions_style

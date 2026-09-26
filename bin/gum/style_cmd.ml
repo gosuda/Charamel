@@ -5,8 +5,6 @@ let render style ~trim text =
   let text = if trim then trim_lines text else text in
   Charamel_lipgloss.Style.render (Gum_style.to_style style) text
 
-let command_info name doc = Cmdliner.Cmd.info name ~doc
-
 let read_input env ~strip_ansi texts =
   match texts with
   | _ :: _ -> Lwt.return (Ok (String.concat "\n" texts))
@@ -40,4 +38,4 @@ let cmd env =
           Charamel_cli.error "no input provided, see `gum style --help`"
       | Ok text -> Gum_io.println env (render style ~trim text))
   in
-  Cmd.v (command_info "style" "Apply terminal styles to text.") term
+  Cmd.v (Cmd.info "style" ~doc:"Apply terminal styles to text.") term

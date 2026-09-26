@@ -19,7 +19,6 @@ let run ?timeout env app ~finished =
         | Submitted | Quit -> Lwt.return model
         | Aborted -> Charamel_cli.exit 130)
     | Error `Interrupted -> Charamel_cli.exit 130
-    | Error `Killed -> Charamel_cli.exit 124
     | Error (`Exn (exception_value, backtrace)) ->
         Printexc.raise_with_backtrace exception_value backtrace)
 

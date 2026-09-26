@@ -30,8 +30,6 @@ type options = {
   selected_style : Gum_style.t;
 }
 
-let style ?foreground ?bold () = Gum_style.defaults ?foreground ?bold ()
-
 let default_options =
   {
     separator = ",";
@@ -48,10 +46,10 @@ let default_options =
     return_column = 0;
     timeout = None;
     padding = "0 0";
-    border_style = style ();
-    cell_style = style ();
-    header_style = style ~bold:true ();
-    selected_style = style ~foreground:"212" ~bold:true ();
+    border_style = Gum_style.defaults ();
+    cell_style = Gum_style.defaults ();
+    header_style = Gum_style.defaults ~bold:true ();
+    selected_style = Gum_style.defaults ~foreground:"212" ~bold:true ();
   }
 
 let error_message = function
@@ -183,11 +181,6 @@ type model = {
 
 type msg = Table of Charamel_bubbles.Table.msg | Key of Charamel_tea.Key.t
 
-let key_name key = Charamel_tea.Key.to_string key
-let is_abort key = String.equal (key_name key) "ctrl+c"
-let is_submit key = match key_name key with "enter" | "ctrl+q" -> true | _ -> false
-let is_quit key = match key_name key with "q" | "esc" -> true | _ -> false
-
 let make_model (options : options) ~headers ~rows ~padding =
   let widths = resolve_widths options headers rows in
   let columns =
@@ -221,11 +214,7 @@ let make_model (options : options) ~headers ~rows ~padding =
     border_style = Gum_style.to_style options.border_style;
   }
 
-let table_view model =
-  let base = Charamel_bubbles.Table.view model.table in
-  let help =
-    if model.show_help then "\n" ^ Charamel_bubbles.Table.help_view model.table else ""
-  in
+let table_frame model body =
   let count =
     if model.hide_count then ""
     else
@@ -233,22 +222,31 @@ let table_view model =
       if total = 0 then ""
       else Fmt.str "\n%d/%d" (Charamel_bubbles.Table.cursor model.table + 1) total
   in
-  let content = base ^ count ^ help in
-  let content = Charamel_lipgloss.Style.render model.border_style content in
+  let help =
+    if model.show_help then "\n" ^ Charamel_bubbles.Table.help_view model.table else ""
+  in
+  let content = Charamel_lipgloss.Style.render model.border_style (body ^ count ^ help) in
   Charamel_lipgloss.Style.render
     (Charamel_lipgloss.Style.padding model.padding Charamel_lipgloss.Style.empty)
     content
 
+let table_view model = table_frame model (Charamel_bubbles.Table.view model.table)
+
+let table_cursor model =
+  Gum_io.place_cursor ~frame:(table_frame model)
+    (Charamel_bubbles.Table.view_cursor model.table)
+
 let make_app model =
   let update message model =
     match message with
-    | Key key when is_abort key ->
+    | Key key when Gum_flag.is_abort key ->
         ({ model with status = Aborted }, Charamel_tea.Cmd.interrupt)
-    | Key key when is_submit key -> (
+    | Key key when Gum_flag.is_submit key -> (
         match Charamel_bubbles.Table.selected_row model.table with
         | Some row -> ({ model with status = Selected row }, Charamel_tea.Cmd.quit)
         | None -> ({ model with status = Quit }, Charamel_tea.Cmd.quit))
-    | Key key when is_quit key -> ({ model with status = Quit }, Charamel_tea.Cmd.quit)
+    | Key key when Gum_flag.is_quit key ->
+        ({ model with status = Quit }, Charamel_tea.Cmd.quit)
     | Key key -> (
         match Charamel_bubbles.Table.key model.table key with
         | None -> (model, Charamel_tea.Cmd.none)
@@ -259,7 +257,10 @@ let make_app model =
         let table, command = Charamel_bubbles.Table.update message model.table in
         ({ model with table }, Charamel_tea.Cmd.map (fun msg -> Table msg) command)
   in
-  let view model = Charamel_tea.View.v ~alt_screen:false (table_view model) in
+  let view model =
+    let view = Charamel_tea.View.v ~alt_screen:false (table_view model) in
+    { view with cursor = table_cursor model }
+  in
   let subscriptions _ = Charamel_tea.Sub.key (fun key -> Key key) in
   {
     Charamel_tea.init = (fun () -> (model, Charamel_tea.Cmd.none));
@@ -319,18 +320,13 @@ let run env (options : options) =
         in
         let model = make_model options ~headers ~rows ~padding in
         Lwt.bind
-          (Lwt.catch
-             (fun () ->
-               Gum_run.run ?timeout:options.timeout env (make_app model)
-                 ~finished:(fun model ->
-                   match model.status with
-                   | Selected _ -> Gum_run.Submitted
-                   | Quit -> Gum_run.Quit
-                   | Aborted -> Gum_run.Aborted
-                   | Running -> Gum_run.Quit))
-             (function
-               | Gum_io.No_tty -> Charamel_cli.error "table: requires a terminal"
-               | exn -> Lwt.fail exn))
+          (Gum_run.run_tui ~name:"table" ?timeout:options.timeout env (make_app model)
+             ~finished:(fun model ->
+               match model.status with
+               | Selected _ -> Gum_run.Submitted
+               | Quit -> Gum_run.Quit
+               | Aborted -> Gum_run.Aborted
+               | Running -> Gum_run.Quit))
           (fun model ->
             match model.status with
             | Selected row ->

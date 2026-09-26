@@ -418,8 +418,6 @@ let style_terms () =
   in
   (level, time, prefix, message, key, value, separator)
 
-let command_info name doc = Cmdliner.Cmd.info name ~doc
-
 let cmd env =
   let open Cmdliner in
   let file =
@@ -476,4 +474,4 @@ let cmd env =
     emit ~file ~formatter ~level ~min_level ~prefix ~time ~format:printf ~structured
       ~styles env texts
   in
-  Cmd.v (command_info "log" "Write a structured or styled log message.") term
+  Cmd.v (Cmd.info "log" ~doc:"Write a structured or styled log message.") term

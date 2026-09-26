@@ -47,3 +47,11 @@ val ui_terminal : Charamel_cli.Env.t -> Charamel_tea.Terminal.t
 (** [ui_terminal env] routes interactive rendering to stderr. With piped stdin, it opens
     the process's controlling terminal for keyboard input when stderr is a terminal. It
     raises [No_tty] when no usable terminal exists. *)
+
+val place_cursor :
+  frame:(string -> string) -> Charamel_tea.Cursor.t option -> Charamel_tea.Cursor.t option
+(** [place_cursor ~frame cursor] moves a component's cursor request to where the frame
+    shows that component. [frame] is the function that turns the component's own text into
+    the command's full view text; the origin is measured by wrapping a one-cell marker, so
+    headers, borders, margins and padding all count. Shape, blink and color pass through
+    unchanged. [None] stays [None], which hides the hardware cursor. *)

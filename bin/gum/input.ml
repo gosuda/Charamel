@@ -120,21 +120,27 @@ let handle_key model key =
     | None -> (model, Cmd.none)
     | Some component_message -> update_component model component_message
 
-let render model =
-  if model.quitting then ""
+let frame model body =
+  let header =
+    if model.options.header = "" then ""
+    else
+      Style.render (Gum_style.to_style model.options.header_style) model.options.header
+      ^ "\n"
+  in
+  let content =
+    if model.options.show_help then body ^ "\n\nenter submit • esc cancel" else body
+  in
+  Style.render (Style.padding model.padding Style.empty) (header ^ content)
+
+let render model = if model.quitting then "" else frame model (Textinput.view model.input)
+
+let cursor model =
+  if model.quitting then None
   else
-    let header =
-      if model.options.header = "" then ""
-      else
-        Style.render (Gum_style.to_style model.options.header_style) model.options.header
-        ^ "\n"
+    let requested =
+      if model.options.cursor_mode = Hide then None else Textinput.cursor model.input
     in
-    let content = header ^ Textinput.view model.input in
-    let content =
-      if model.options.show_help then content ^ "\n\nenter submit • esc cancel"
-      else content
-    in
-    Style.render (Style.padding model.padding Style.empty) content
+    Gum_io.place_cursor ~frame:(frame model) requested
 
 let update message model =
   match message with
@@ -148,7 +154,10 @@ let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
-    view = (fun model -> View.v (render model));
+    view =
+      (fun model ->
+        let frame = View.v (render model) in
+        { frame with cursor = cursor model });
     subscriptions =
       (fun model ->
         Sub.batch

@@ -152,7 +152,7 @@ let test_child_timeout () =
 
 (* The two-PTY capture path [run_child] gates on the real standard output, which a
    piped [dune runtest] never is, so the ported cases drive [Spin.run_pty_pair]
-   directly — the same assertions the Eio-era cases made: a 17x53 child terminal
+   directly — the same assertions the earlier PTY cases made: a 17x53 child terminal
    reported on both captured streams, and a real stdin pipe reaching the child's
    [read]. Each [stty] queries its own stream's pty. *)
 let test_pty_geometry () =

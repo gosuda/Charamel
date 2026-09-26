@@ -312,56 +312,71 @@ let handle_key model key =
   else if any_key key [ k_a; k_shift_a; k_ctrl_a ] then (toggle_all model, Cmd.none)
   else (model, Cmd.none)
 
-let render model =
-  if model.quitting then ""
+let page_start model =
+  Charamel_bubbles.Paginator.page model.paginator * max 1 model.options.height
+
+let frame model body =
+  let header_style = Gum_style.to_style model.options.header_style in
+  let body =
+    if model.paginator |> Charamel_bubbles.Paginator.total_pages > 1 then
+      body ^ "\n  " ^ Charamel_bubbles.Paginator.view model.paginator
+    else body
+  in
+  let body =
+    if model.options.header = "" then body
+    else Style.render header_style model.options.header ^ "\n" ^ body
+  in
+  let body =
+    if model.options.show_help then
+      body ^ "\n\nenter submit • esc quit • ↑↓ navigate • space toggle"
+    else body
+  in
+  Style.render (Style.padding model.padding Style.empty) body
+
+let items_view model =
+  let start =
+    Charamel_bubbles.Paginator.page model.paginator * max 1 model.options.height
+  in
+  let visible =
+    model.items
+    |> List.mapi (fun index item -> (index, item))
+    |> List.filter (fun (index, _) ->
+        index >= start && index < start + max 1 model.options.height)
+  in
+  let cursor_style = Gum_style.to_style model.options.cursor_style in
+  let item_style = Gum_style.to_style model.options.item_style in
+  let selected_style = Gum_style.to_style model.options.selected_style in
+  let lines =
+    List.map
+      (fun (index, (item : item)) ->
+        let cursor =
+          if index = model.index then model.options.cursor
+          else String.make (Text.width model.options.cursor) ' '
+        in
+        let cursor =
+          if index = model.index then Style.render cursor_style cursor else cursor
+        in
+        let marker, body_style =
+          if item.selected then (model.options.selected_prefix, selected_style)
+          else if index = model.index then (model.options.cursor_prefix, cursor_style)
+          else (model.options.unselected_prefix, item_style)
+        in
+        cursor ^ Style.render body_style (marker ^ item.label))
+      visible
+  in
+  String.concat "\n" lines
+
+let render model = if model.quitting then "" else frame model (items_view model)
+
+let cursor model =
+  if model.quitting then None
   else
-    let start =
-      Charamel_bubbles.Paginator.page model.paginator * max 1 model.options.height
+    let row = model.index - page_start model in
+    let requested =
+      if row < 0 || row >= max 1 model.options.height then None
+      else Some (Charamel_tea.Cursor.v ~blink:false row (Text.width model.options.cursor))
     in
-    let visible =
-      model.items
-      |> List.mapi (fun index item -> (index, item))
-      |> List.filter (fun (index, _) ->
-          index >= start && index < start + max 1 model.options.height)
-    in
-    let cursor_style = Gum_style.to_style model.options.cursor_style in
-    let header_style = Gum_style.to_style model.options.header_style in
-    let item_style = Gum_style.to_style model.options.item_style in
-    let selected_style = Gum_style.to_style model.options.selected_style in
-    let lines =
-      List.map
-        (fun (index, (item : item)) ->
-          let cursor =
-            if index = model.index then model.options.cursor
-            else String.make (Text.width model.options.cursor) ' '
-          in
-          let cursor =
-            if index = model.index then Style.render cursor_style cursor else cursor
-          in
-          let marker, body_style =
-            if item.selected then (model.options.selected_prefix, selected_style)
-            else if index = model.index then (model.options.cursor_prefix, cursor_style)
-            else (model.options.unselected_prefix, item_style)
-          in
-          cursor ^ Style.render body_style (marker ^ item.label))
-        visible
-    in
-    let lines = String.concat "\n" lines in
-    let lines =
-      if model.paginator |> Charamel_bubbles.Paginator.total_pages > 1 then
-        lines ^ "\n  " ^ Charamel_bubbles.Paginator.view model.paginator
-      else lines
-    in
-    let lines =
-      if model.options.header = "" then lines
-      else Style.render header_style model.options.header ^ "\n" ^ lines
-    in
-    let lines =
-      if model.options.show_help then
-        lines ^ "\n\nenter submit • esc quit • ↑↓ navigate • space toggle"
-      else lines
-    in
-    Style.render (Style.padding model.padding Style.empty) lines
+    Gum_io.place_cursor ~frame:(frame model) requested
 
 let update message model =
   match message with
@@ -388,7 +403,10 @@ let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
-    view = (fun model -> View.v (render model));
+    view =
+      (fun model ->
+        let frame = View.v (render model) in
+        { frame with cursor = cursor model });
     subscriptions =
       (fun _ ->
         Sub.batch

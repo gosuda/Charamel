@@ -97,35 +97,44 @@ let handle_key model key =
     ({ model with quitting = true; submitted = true }, Cmd.quit)
   else (model, Cmd.none)
 
-let render model =
-  if model.quitting then ""
+let buttons_line model =
+  let affirmative_style, negative_style =
+    if model.confirmation then
+      ( Gum_style.to_style model.options.selected_style,
+        Gum_style.to_style model.options.unselected_style )
+    else
+      ( Gum_style.to_style model.options.unselected_style,
+        Gum_style.to_style model.options.selected_style )
+  in
+  let affirmative = Style.render affirmative_style model.options.affirmative in
+  let negative =
+    if model.options.negative = "" then ""
+    else Style.render negative_style model.options.negative
+  in
+  if negative = "" then affirmative else Layout.join_horizontal [ affirmative; negative ]
+
+let frame model body =
+  let prompt =
+    Style.render (Gum_style.to_style model.options.prompt_style) model.options.prompt
+  in
+  let body = prompt ^ "\n" ^ body in
+  let body =
+    if model.options.show_help then body ^ "\n\n←→ toggle • enter submit • esc quit"
+    else body
+  in
+  Style.render (Style.padding model.padding Style.empty) body
+
+let render model = if model.quitting then "" else frame model (buttons_line model)
+
+let cursor model =
+  if model.quitting then None
   else
-    let prompt =
-      Style.render (Gum_style.to_style model.options.prompt_style) model.options.prompt
+    let col =
+      if model.confirmation || model.options.negative = "" then 0
+      else Charamel_ansi.Text.width model.options.affirmative
     in
-    let affirmative_style, negative_style =
-      if model.confirmation then
-        ( Gum_style.to_style model.options.selected_style,
-          Gum_style.to_style model.options.unselected_style )
-      else
-        ( Gum_style.to_style model.options.unselected_style,
-          Gum_style.to_style model.options.selected_style )
-    in
-    let affirmative = Style.render affirmative_style model.options.affirmative in
-    let negative =
-      if model.options.negative = "" then ""
-      else Style.render negative_style model.options.negative
-    in
-    let buttons =
-      if negative = "" then affirmative
-      else Layout.join_horizontal [ affirmative; negative ]
-    in
-    let body = prompt ^ "\n" ^ buttons in
-    let body =
-      if model.options.show_help then body ^ "\n\n←→ toggle • enter submit • esc quit"
-      else body
-    in
-    Style.render (Style.padding model.padding Style.empty) body
+    Gum_io.place_cursor ~frame:(frame model)
+      (Some (Charamel_tea.Cursor.v ~blink:false 0 col))
 
 let update message model = match message with Key key -> handle_key model key
 
@@ -133,7 +142,10 @@ let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
-    view = (fun model -> View.v (render model));
+    view =
+      (fun model ->
+        let frame = View.v (render model) in
+        { frame with cursor = cursor model });
     subscriptions = (fun _ -> Sub.key (fun key -> Key key));
   }
 

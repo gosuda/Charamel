@@ -17,6 +17,10 @@ let key ~cmd name =
 
 let is_key actual expected = Key.matches actual expected
 let any_key actual expected = List.exists (is_key actual) expected
+let key_name key = Key.to_string key
+let is_quit key = match key_name key with "q" | "esc" -> true | _ -> false
+let is_abort key = String.equal (key_name key) "ctrl+c"
+let is_submit key = match key_name key with "enter" | "ctrl+q" -> true | _ -> false
 
 let string_arg ~cmd name ~default ~doc =
   Cmdliner.Arg.(value (opt string default (info [ name ] ~doc ~env:(env ~cmd name))))

@@ -43,9 +43,7 @@ let classify ~argument ~cwd ~stdin_is_tty =
   | Some value when has_uri_scheme value ->
       Error (`Invalid (Fmt.str "unsupported URL scheme in %s" value))
   | Some value -> (
-      let path =
-        if Filename.is_relative value then Filename.concat cwd value else value
-      in
+      let path = Charamel_cli.path_for ~cwd value in
       match Unix.stat path with
       | { Unix.st_kind = Unix.S_DIR; _ } -> Ok (Directory path)
       | { Unix.st_kind = Unix.S_REG; _ } -> Ok (File path)
@@ -105,11 +103,8 @@ let readme_candidates ~host ~owner ~repo =
     ]
   else [ base ^ "/" ^ encoded_owner ^ "/" ^ encoded_repo ^ "/-/raw/HEAD/README.md" ]
 
-let path_for ~cwd path =
-  if Filename.is_relative path then Filename.concat cwd path else path
-
 let read_local ~cwd path =
-  let resolved = path_for ~cwd path in
+  let resolved = Charamel_cli.path_for ~cwd path in
   Lwt.catch
     (fun () ->
       Lwt.bind (Lwt_io.with_file ~mode:Lwt_io.Input resolved Lwt_io.read) (fun text ->

@@ -23,8 +23,6 @@ type child_result = {
   timed_out : bool;
 }
 
-let style ?foreground () = Gum_style.defaults ?foreground ()
-
 let default_options =
   {
     command = [];
@@ -37,8 +35,8 @@ let default_options =
     align = "left";
     timeout = None;
     padding = "0 0";
-    spinner_style = style ~foreground:"212" ();
-    title_style = style ();
+    spinner_style = Gum_style.defaults ~foreground:"212" ();
+    title_style = Gum_style.defaults ();
   }
 
 let child_abort : (unit -> unit) ref = ref (fun () -> ())
@@ -216,6 +214,8 @@ let with_child_abort action =
       child_abort := previous_abort;
       Lwt.return_unit)
 
+let with_child_guard action = with_child_abort (fun () -> run_protected action)
+
 let with_pty ~rows ~cols f =
   Lwt.bind (Charamel_os.Pty.create ~rows ~cols ()) (function
     | Error (`Error message) ->
@@ -230,21 +230,20 @@ let with_pty ~rows ~cols f =
             Lwt.return_unit))
 
 let run_direct_child ~command ~timeout =
-  with_child_abort (fun () ->
-      run_protected (fun () ->
-          let process = Charamel_os.Process.spawn ~stdin:`Inherit command in
-          (child_abort := fun () -> Charamel_os.Process.terminate process);
-          Lwt.map
-            (fun (status, timed_out) ->
-              Ok
-                {
-                  status = (if timed_out then 124 else status);
-                  stdout = "";
-                  stderr = "";
-                  output = "";
-                  timed_out;
-                })
-            (wait_status ~timeout process)))
+  with_child_guard (fun () ->
+      let process = Charamel_os.Process.spawn ~stdin:`Inherit command in
+      (child_abort := fun () -> Charamel_os.Process.terminate process);
+      Lwt.map
+        (fun (status, timed_out) ->
+          Ok
+            {
+              status = (if timed_out then 124 else status);
+              stdout = "";
+              stderr = "";
+              output = "";
+              timed_out;
+            })
+        (wait_status ~timeout process))
 
 let run_with_channels captures ~timeout process =
   let mutex = Lwt_mutex.create () in
@@ -264,19 +263,20 @@ let run_with_channels captures ~timeout process =
       let status, timed_out = Option.value !status ~default:(1, false) in
       finish_captured captures ~status ~timed_out)
 
-let run_pipe_child ~command ~timeout =
+let with_captured_child action =
   with_child_abort (fun () ->
       Lwt.bind (create_captures ()) (fun captures ->
           Lwt.finalize
-            (fun () ->
-              run_protected (fun () ->
-                  let process =
-                    Charamel_os.Process.spawn ~stdin:`Inherit ~stdout:`Pipe ~stderr:`Pipe
-                      command
-                  in
-                  (child_abort := fun () -> Charamel_os.Process.terminate process);
-                  run_with_channels captures ~timeout process))
+            (fun () -> run_protected (fun () -> action captures))
             (fun () -> remove_captures captures)))
+
+let run_pipe_child ~command ~timeout =
+  with_captured_child (fun captures ->
+      let process =
+        Charamel_os.Process.spawn ~stdin:`Inherit ~stdout:`Pipe ~stderr:`Pipe command
+      in
+      (child_abort := fun () -> Charamel_os.Process.terminate process);
+      run_with_channels captures ~timeout process)
 
 let run_with_ptys ?stdin_text captures ~command ~timeout stdout_pty stderr_pty =
   let wrapped_command =
@@ -333,24 +333,14 @@ let spawn_pty_pair ?rows ?cols ?stdin_text captures ~command ~timeout =
           run_with_ptys ?stdin_text captures ~command ~timeout stdout_pty stderr_pty))
 
 let run_pty_child ~command ~timeout =
-  with_child_abort (fun () ->
-      Lwt.bind (create_captures ()) (fun captures ->
-          Lwt.finalize
-            (fun () ->
-              run_protected (fun () -> spawn_pty_pair captures ~command ~timeout))
-            (fun () -> remove_captures captures)))
+  with_captured_child (fun captures -> spawn_pty_pair captures ~command ~timeout)
 
 (* [run_child] takes the two-PTY path only when the real standard output is a terminal,
    which a piped [dune runtest] never is. This entry point drives that path directly,
    with the geometry and the stdin text a caller controls. *)
 let run_pty_pair ?rows ?cols ?stdin_text ~command ~timeout () =
-  with_child_abort (fun () ->
-      Lwt.bind (create_captures ()) (fun captures ->
-          Lwt.finalize
-            (fun () ->
-              run_protected (fun () ->
-                  spawn_pty_pair ?rows ?cols ?stdin_text captures ~command ~timeout))
-            (fun () -> remove_captures captures)))
+  with_captured_child (fun captures ->
+      spawn_pty_pair ?rows ?cols ?stdin_text captures ~command ~timeout)
 
 let run_child ?(capture = true) env ~command ~timeout =
   match command with
@@ -394,8 +384,6 @@ type model = {
   align : string;
 }
 
-let key_name key = Charamel_tea.Key.to_string key
-
 let spinner_kind value =
   Option.value
     (Charamel_bubbles.Spinner.kind_of_string value)
@@ -422,7 +410,7 @@ let make_app (env : Charamel_cli.Env.t) (options : options) padding ~capture =
   let update message model =
     match message with
     | Finished result -> ({ model with result = Some result }, Charamel_tea.Cmd.quit)
-    | Key key when String.equal (key_name key) "ctrl+c" ->
+    | Key key when Gum_flag.is_abort key ->
         !child_abort ();
         (model, Charamel_tea.Cmd.interrupt)
     | Key _ -> (model, Charamel_tea.Cmd.none)

@@ -2,16 +2,8 @@ type kind = Markdown | Template | Code | Emoji
 type error = [ `Msg of string ]
 
 let theme_value ~env name =
-  match String.lowercase_ascii name with
-  | "dark" -> Ok Charamel_glamour.Theme.dark
-  | "light" -> Ok Charamel_glamour.Theme.light
-  | "dracula" -> Ok Charamel_glamour.Theme.dracula
-  | "tokyo-night" -> Ok Charamel_glamour.Theme.tokyo_night
-  | "pink" -> Ok Charamel_glamour.Theme.pink
-  | "ascii" -> Ok Charamel_glamour.Theme.ascii
-  | "notty" -> Ok Charamel_glamour.Theme.notty
-  | "auto" -> Ok (Charamel_glamour.Theme.auto ~is_dark:(Charamel_cli.is_dark ~env))
-  | value -> Error (`Msg (Fmt.str "unknown theme: %s" value))
+  Charamel_glamour.Theme.of_name ~is_dark:(Charamel_cli.is_dark ~env) name
+  |> Result.map_error (fun value -> `Msg (Fmt.str "unknown theme: %s" value))
 
 let render ?(theme = "pink") ?(language = "") ?(strip_ansi = false) kind input =
   let input = if strip_ansi then Charamel_ansi.Text.strip input else input in
@@ -56,8 +48,6 @@ let theme_conv =
       ("notty", "notty");
       ("auto", "auto");
     ]
-
-let command_info name doc = Cmdliner.Cmd.info name ~doc
 
 let cmd env =
   let open Cmdliner in
@@ -105,5 +95,5 @@ let cmd env =
             Charamel_cli.error message)
   in
   Cmd.v
-    (command_info "format" "Format text as markdown, code, emoji, or a template.")
+    (Cmd.info "format" ~doc:"Format text as markdown, code, emoji, or a template.")
     term

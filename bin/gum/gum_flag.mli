@@ -17,6 +17,21 @@ val is_key : Charamel_tea.Key.t -> Charamel_tea.Key.t -> bool
 val any_key : Charamel_tea.Key.t -> Charamel_tea.Key.t list -> bool
 (** [any_key actual expected] is [true] when [actual] matches one of [expected]. *)
 
+val key_name : Charamel_tea.Key.t -> string
+(** [key_name key] is the name of [key], spelled as a [GUM_<CMD>_*] key value spells it.
+*)
+
+val is_quit : Charamel_tea.Key.t -> bool
+(** [is_quit key] is [true] for [q] or [esc], the keys every interactive command leaves
+    with an empty result. *)
+
+val is_abort : Charamel_tea.Key.t -> bool
+(** [is_abort key] is [true] for [ctrl+c], which ends the command as an interrupt. *)
+
+val is_submit : Charamel_tea.Key.t -> bool
+(** [is_submit key] is [true] for [enter] or [ctrl+q], the keys that accept the current
+    selection. *)
+
 val string_arg :
   cmd:string -> string -> default:string -> doc:string -> string Cmdliner.Term.t
 (** [string_arg ~cmd name ~default ~doc] parses a string option with command-scoped

@@ -145,3 +145,20 @@ let ui_terminal (env : Charamel_cli.Env.t) =
     Charamel_tea.Terminal.custom ~input ~output:env.Env.stderr
       ~size:(fun () -> terminal_size env)
       ~on_resize:None ~env:Sys.getenv_opt ~is_tty:true
+
+let frame_origin frame =
+  let rec search row = function
+    | [] -> (0, 0)
+    | line :: rest -> (
+        let plain = Charamel_ansi.Text.strip line in
+        match String.index_opt plain '\001' with
+        | None -> search (row + 1) rest
+        | Some byte -> (row, Charamel_ansi.Text.width (String.sub plain 0 byte)))
+  in
+  search 0 (String.split_on_char '\n' (frame "\001"))
+
+let place_cursor ~frame = function
+  | None -> None
+  | Some (cursor : Charamel_tea.Cursor.t) ->
+      let row, col = frame_origin frame in
+      Some { cursor with row = cursor.row + row; col = cursor.col + col }

@@ -447,33 +447,37 @@ let render_match model index (match_ : match_) =
   in
   indicator ^ Style.render prefix_style prefix ^ body
 
-let render model =
-  if model.quitting then ""
-  else
-    let lines =
-      model.matches
-      |> List.mapi (fun index match_ -> (index, render_match model index match_))
-      |> (fun lines -> if model.options.reverse then List.rev lines else lines)
-      |> List.mapi (fun display_index (_, line) -> (display_index, line))
-      |> List.filter (fun (index, _) ->
-          let start = Viewport.y_offset model.viewport in
-          let stop = start + max 1 (Viewport.height model.viewport) in
-          index >= start && index < stop)
-      |> List.map snd |> String.concat "\n"
-    in
-    let header =
-      if model.options.header = "" then ""
-      else
-        Style.render (Gum_style.to_style model.options.header_style) model.options.header
-        ^ "\n"
-    in
-    let view = header ^ Textinput.view model.input ^ "\n" ^ lines in
-    let view =
-      if model.options.show_help then
-        view ^ "\n\nenter submit • / search • tab toggle • esc quit"
-      else view
-    in
-    Style.render (Style.padding model.padding Style.empty) view
+let frame model body =
+  let lines =
+    model.matches
+    |> List.mapi (fun index match_ -> (index, render_match model index match_))
+    |> (fun lines -> if model.options.reverse then List.rev lines else lines)
+    |> List.mapi (fun display_index (_, line) -> (display_index, line))
+    |> List.filter (fun (index, _) ->
+        let start = Viewport.y_offset model.viewport in
+        let stop = start + max 1 (Viewport.height model.viewport) in
+        index >= start && index < stop)
+    |> List.map snd |> String.concat "\n"
+  in
+  let header =
+    if model.options.header = "" then ""
+    else
+      Style.render (Gum_style.to_style model.options.header_style) model.options.header
+      ^ "\n"
+  in
+  let view = header ^ body ^ "\n" ^ lines in
+  let view =
+    if model.options.show_help then
+      view ^ "\n\nenter submit • / search • tab toggle • esc quit"
+    else view
+  in
+  Style.render (Style.padding model.padding Style.empty) view
+
+let render model = if model.quitting then "" else frame model (Textinput.view model.input)
+
+let cursor model =
+  if model.quitting then None
+  else Gum_io.place_cursor ~frame:(frame model) (Textinput.cursor model.input)
 
 let update message model =
   match message with
@@ -495,7 +499,10 @@ let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
-    view = (fun model -> View.v (render model));
+    view =
+      (fun model ->
+        let frame = View.v (render model) in
+        { frame with cursor = cursor model });
     subscriptions =
       (fun _ ->
         Sub.batch
