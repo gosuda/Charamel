@@ -424,36 +424,44 @@ let sidebar m =
       "ctrl+g plan  ctrl+c quit";
     ]
 
-let editor_cursor (m : ui_model) ~origin_row =
+let line_count text = List.length (String.split_on_char '\n' text)
+
+let dialog_heading (value : dialog) =
+  match value.kind with
+  | Permission_dialog request ->
+      Fmt.str "\n\nPermission: %a" Permission.pp_request (Bridge.permission request)
+  | _ -> "\n\nDialog"
+
+let frame_cursor m ~body_rows ~editor_rows heading =
+  let place origin_row (cursor : Charamel_tea.Cursor.t) =
+    { cursor with row = cursor.row + origin_row }
+  in
   match m.dialog with
-  | Some _ -> None
-  | None ->
+  | Some value ->
       Option.map
-        (fun (cursor : Charamel_tea.Cursor.t) ->
-          { cursor with row = cursor.row + origin_row })
-        (Textarea.cursor m.editor)
+        (place (body_rows + editor_rows + line_count heading + 2))
+        (Huh.Form.cursor value.form)
+  | None -> Option.map (place (body_rows + 1)) (Textarea.cursor m.editor)
 
 let view (m : ui_model) =
   let body = Layout.join_horizontal [ sidebar m; Viewport.view m.viewport ] in
-  let dialog =
+  let editor = Textarea.view m.editor in
+  let heading, dialog =
     match m.dialog with
-    | None -> ""
+    | None -> ("", "")
     | Some value ->
-        let heading =
-          match value.kind with
-          | Permission_dialog request ->
-              Fmt.str "\n\nPermission: %a" Permission.pp_request
-                (Bridge.permission request)
-          | _ -> "\n\nDialog"
+        let heading = dialog_heading value in
+        let form =
+          Style.render (Style.bold true Style.empty) (Huh.Form.view value.form)
         in
-        heading ^ "\n"
-        ^ Style.render (Style.bold true Style.empty) (Huh.Form.view value.form)
+        (heading, heading ^ "\n" ^ form)
   in
   let footer = status_text m ^ if m.status = "" then "" else " | " ^ m.status in
-  let body_rows = List.length (String.split_on_char '\n' body) in
   View.v ~alt_screen:true ~mouse:View.Mouse_click ~title:m.title
-    ?cursor:(editor_cursor m ~origin_row:(body_rows + 1))
-    (body ^ "\n\n" ^ Textarea.view m.editor ^ "\n" ^ footer ^ dialog)
+    ?cursor:
+      (frame_cursor m ~body_rows:(line_count body) ~editor_rows:(line_count editor)
+         heading)
+    (body ^ "\n\n" ^ editor ^ "\n" ^ footer ^ dialog)
 
 let make_field (question : Tool.question) =
   let title =

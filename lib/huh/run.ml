@@ -66,7 +66,8 @@ let app env ?timeout form =
   in
   let view model =
     let frame =
-      Charamel_tea.View.v ~alt_screen:false ~report_focus:true (Form.view model.form)
+      Charamel_tea.View.v ?cursor:(Form.cursor model.form) ~alt_screen:false
+        ~report_focus:true (Form.view model.form)
     in
     match Form.view_hook model.form with Some hook -> hook frame | None -> frame
   in

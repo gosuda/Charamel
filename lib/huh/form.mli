@@ -38,6 +38,14 @@ val update : msg -> t -> t * msg Charamel_tea.Cmd.t
     not attached an explicit [Env.t]. *)
 
 val view : t -> string
+
+val cursor : t -> Charamel_tea.Cursor.t option
+(** [cursor t] is the hardware cursor request of the focused field, with coordinates
+    relative to {!val:view}: the row counts the rendered lines above the field and the
+    column is its left offset within them. [None] when no field is active, the focused
+    field has no text entry under focus, or scrolling hides the field. The caller adds the
+    component origin. *)
+
 val key : Charamel_tea.Key.t -> msg option
 val paste : string -> msg
 val subscriptions : t -> msg Charamel_tea.Sub.t

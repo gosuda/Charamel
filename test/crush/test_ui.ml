@@ -465,6 +465,77 @@ let editor_cursor_reaches_the_terminal () =
         (Some (editor_line + 1))
         (Option.map fst (last_cursor_position (Buffer.contents buffer))))
 
+let index_after bytes ~needle from =
+  let length = String.length needle in
+  let limit = String.length bytes - length in
+  let rec search index =
+    if index > limit then None
+    else if String.sub bytes index length = needle then Some index
+    else search (index + 1)
+  in
+  search from
+
+let paint_cursors bytes =
+  let marker = "\027[?2026l" in
+  let rec chunk start acc =
+    match index_after bytes ~needle:marker start with
+    | None -> List.rev acc
+    | Some stop ->
+        let paint = String.sub bytes start (stop - start) in
+        chunk (stop + String.length marker) (last_cursor_position paint :: acc)
+  in
+  chunk 0 []
+
+let dialog_cursor_replaces_the_editor_cursor () =
+  let question =
+    {
+      Crush_core.Tool.header = "question";
+      text = "continue?";
+      options = [];
+      multi = false;
+      free_text = true;
+    }
+  in
+  let quit = [ `Key (ui_key "ctrl+c"); `Wait 0.1; `Key (ui_key "ctrl+c") ] in
+  let capture dialog events paints =
+    with_ui_backend (fun backend bridge ->
+        let buffer = Buffer.create 8192 in
+        let channel =
+          Lwt_io.make ~mode:Lwt_io.output (fun source offset length ->
+              Buffer.add_subbytes buffer (Lwt_bytes.to_bytes source) offset length;
+              Lwt.return length)
+        in
+        if dialog then ignore (Ui.Bridge.ask bridge [ question ]);
+        Lwt_direct.yield ();
+        ignore
+          (Charamel_tea.Test.run (Ui.app backend) ~output:channel ~events ~size:(24, 80));
+        await (Lwt_io.flush channel);
+        paints := List.filter_map Fun.id (paint_cursors (Buffer.contents buffer)))
+  in
+  let editor_line = 19 and editor_caret = 7 and field_prompt = 2 in
+  let plain = ref [] in
+  capture false (`Wait 0. :: `Wait 0.1 :: quit) plain;
+  Alcotest.(check bool)
+    "every paint parks the caret on the editor line" true
+    (List.for_all
+       (fun (row, column) -> row = editor_line && column = editor_caret)
+       !plain);
+  let dialog = ref [] in
+  capture true
+    (`Wait 0. :: `Wait 0.1 :: `Text "qx" :: `Wait 0.1 :: `Key (ui_key "escape") :: quit)
+    dialog;
+  Alcotest.(check bool)
+    "the dialog field takes the caret below the editor line" true
+    (List.exists
+       (fun (row, column) ->
+         row > editor_line && column = field_prompt + String.length "qx" + 1)
+       !dialog);
+  Alcotest.(check bool)
+    "the editor caret returns when the dialog closes" true
+    (List.exists
+       (fun (row, column) -> row = editor_line && column = editor_caret)
+       !dialog)
+
 let cases =
   [
     Test_tools_test_support.case "bounded bridge preserves order" `Quick fifo_is_lossless;
@@ -474,6 +545,8 @@ let cases =
     Test_tools_test_support.case "serialized question and permission dialogs" `Quick
       serialized_dialogs;
     Test_tools_test_support.case "scripted UI stream" `Quick scripted_ui_stream;
+    Test_tools_test_support.case "dialog cursor replaces the editor cursor" `Quick
+      dialog_cursor_replaces_the_editor_cursor;
     Test_tools_test_support.case "scripted runtime event" `Quick scripted_runtime_event;
     Test_tools_test_support.case "scripted wheel scroll reaches the viewport" `Quick
       scripted_wheel_scroll;

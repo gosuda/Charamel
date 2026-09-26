@@ -594,26 +594,51 @@ let render_header t group =
   if text = "" then ""
   else Charamel_ansi.Text.wrap ~width:(max 1 (Group.width group)) text
 
-let render_group t group_index =
+let cursor_marker = "\001"
+
+let mark_line text line =
+  text |> split_lines
+  |> List.mapi (fun index first -> if index = line then cursor_marker ^ first else first)
+  |> String.concat "\n"
+
+let frame_top style =
+  Option.value ~default:0 (Style.get_margin_side `Top style)
+  + Style.get_border_top_size style
+  + Option.value ~default:0 (Style.get_padding_side `Top style)
+
+let frame_left style =
+  Option.value ~default:0 (Style.get_margin_side `Left style)
+  + Style.get_border_left_size style
+  + Option.value ~default:0 (Style.get_padding_side `Left style)
+
+let render_group ?marker_for t group_index =
   let group = t.groups.(group_index) in
   match t.env with
   | None -> { Layout.index = group_index; header = ""; content = ""; footer = "" }
   | Some env ->
       let indices = visible_fields t ~env group_index in
+      let render field_index field ~focused =
+        let view =
+          Field_impl.view field (context t ~env group_index field_index) ~focused
+        in
+        match marker_for with
+        | Some (marker_group, marker_field, marker_line)
+          when marker_group = group_index && marker_field = field_index ->
+            mark_line view marker_line
+        | _ -> view
+      in
       let views =
         List.map
           (fun field_index ->
             let field = Group.field field_index group in
             let focused = group.Group.active && field_index = Group.selected group in
-            ( field_index,
-              Field_impl.view field (context t ~env group_index field_index) ~focused ))
+            (field_index, render field_index field ~focused))
           indices
       in
       let content =
         match Group.focused_field group with
         | Some field when Field_impl.zoom field && group.Group.active ->
-            let field_index = Group.selected group in
-            Field_impl.view field (context t ~env group_index field_index) ~focused:true
+            render (Group.selected group) field ~focused:true
         | _ -> Group.content_lines ~separator:t.styles.Styles.field_separator views
       in
       let header = render_header t group in
@@ -665,12 +690,12 @@ let render_group t group_index =
         footer = group_style footer;
       }
 
-let view t =
+let render_form ?marker_for t =
   let items =
     Array.to_list (Array.mapi (fun index group -> (index, group)) t.groups)
     |> List.filter_map (fun (index, group) ->
         if Group.is_hidden ~results:t.results group then None
-        else Some (render_group t index))
+        else Some (render_group ?marker_for t index))
   in
   let rendered = Layout.view t.layout ~width:t.width ~selected:t.selected items in
   let rendered =
@@ -679,6 +704,8 @@ let view t =
     else rendered
   in
   Style.render t.styles.Styles.form_base rendered
+
+let view t = render_form t
 
 let subscriptions t =
   if not (normal_state t.state) then Sub.none
@@ -722,6 +749,38 @@ let key_binds t =
   | _ -> []
 
 let focused_field t = Option.bind (selected_group t) Group.focused_field
+
+let field_origin t group_index field_index line =
+  let rec search row = function
+    | [] -> None
+    | first :: rest -> (
+        let plain = Charamel_ansi.Text.strip first in
+        match String.index_opt plain '\001' with
+        | None -> search (row + 1) rest
+        | Some byte -> Some (row, Charamel_ansi.Text.width (String.sub plain 0 byte)))
+  in
+  search 0 (split_lines (render_form ~marker_for:(group_index, field_index, line) t))
+
+let focused_slot t =
+  match selected_group t with
+  | Some group when group.Group.active ->
+      Option.map (fun field -> (Group.selected group, field)) (Group.focused_field group)
+  | _ -> None
+
+let cursor_request t env field_index field =
+  let base = t.styles.Styles.focused.Styles.base in
+  match Field_impl.cursor field (context t ~env t.selected field_index) ~focused:true with
+  | None -> None
+  | Some (cursor : Charamel_tea.Cursor.t) -> (
+      match field_origin t t.selected field_index (frame_top base + cursor.row) with
+      | None -> None
+      | Some (row, col) ->
+          Some { cursor with row; col = col + frame_left base + cursor.col })
+
+let cursor t =
+  match (t.env, focused_slot t) with
+  | Some env, Some (field_index, field) -> cursor_request t env field_index field
+  | _ -> None
 
 let help t =
   let width =

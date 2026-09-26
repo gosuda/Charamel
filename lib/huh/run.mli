@@ -11,7 +11,8 @@ type msg = Form_msg of Form.msg | Timed_out  (** Messages accepted by {!app}. *)
 
 val app : Form.Env.t -> ?timeout:float -> Form.t -> (model, msg) Charamel_tea.app
 (** [app env ?timeout form] builds the terminal application. A positive [timeout] adds a
-    deadline message; a non-positive timeout has no effect. *)
+    deadline message; a non-positive timeout has no effect. The frame requests the
+    hardware cursor of the focused field, so a text entry shows the terminal caret. *)
 
 type error = [ `Aborted | `Timeout | `Timeout_unsupported ]
 (** Errors returned by {!run}. [Timeout_unsupported] is returned without prompting when

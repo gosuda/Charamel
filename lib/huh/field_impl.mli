@@ -41,6 +41,12 @@ val subscriptions : t -> ctx -> Field_msg.t Charamel_tea.Sub.t
 val view : t -> ctx -> focused:bool -> string
 (** [view field ctx ~focused] renders the field. *)
 
+val cursor : t -> ctx -> focused:bool -> Charamel_tea.Cursor.t option
+(** [cursor field ctx ~focused] is the hardware cursor request of the text entry the field
+    holds, with coordinates relative to the field's own {!val:view} output. It is [None]
+    when the field has no entry under focus: a blurred editor, a select outside filter
+    mode, a confirm, or a note. *)
+
 val focus : t -> ctx -> t * Field_msg.t Charamel_tea.Cmd.t
 (** [focus field ctx] focuses the child editor, when the field has one. *)
 

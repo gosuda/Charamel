@@ -97,15 +97,25 @@ let handle_key model key =
     ({ model with quitting = true; submitted = true }, Cmd.quit)
   else (model, Cmd.none)
 
+let button_styles model =
+  if model.confirmation then
+    ( Gum_style.to_style model.options.selected_style,
+      Gum_style.to_style model.options.unselected_style )
+  else
+    ( Gum_style.to_style model.options.unselected_style,
+      Gum_style.to_style model.options.selected_style )
+
+let label_offset style =
+  Option.value ~default:0 (Style.get_margin_side `Left style)
+  + Option.value ~default:0 (Style.get_padding_side `Left style)
+
+let block_width text =
+  text |> String.split_on_char '\n'
+  |> List.map Charamel_ansi.Text.width
+  |> List.fold_left max 0
+
 let buttons_line model =
-  let affirmative_style, negative_style =
-    if model.confirmation then
-      ( Gum_style.to_style model.options.selected_style,
-        Gum_style.to_style model.options.unselected_style )
-    else
-      ( Gum_style.to_style model.options.unselected_style,
-        Gum_style.to_style model.options.selected_style )
-  in
+  let affirmative_style, negative_style = button_styles model in
   let affirmative = Style.render affirmative_style model.options.affirmative in
   let negative =
     if model.options.negative = "" then ""
@@ -129,9 +139,12 @@ let render model = if model.quitting then "" else frame model (buttons_line mode
 let cursor model =
   if model.quitting then None
   else
+    let affirmative_style, negative_style = button_styles model in
+    let affirmative = Style.render affirmative_style model.options.affirmative in
     let col =
-      if model.confirmation || model.options.negative = "" then 0
-      else Charamel_ansi.Text.width model.options.affirmative
+      if model.confirmation || model.options.negative = "" then
+        label_offset affirmative_style
+      else block_width affirmative + label_offset negative_style
     in
     Gum_io.place_cursor ~frame:(frame model)
       (Some (Charamel_tea.Cursor.v ~blink:false 0 col))

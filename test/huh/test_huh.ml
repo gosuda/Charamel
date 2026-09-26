@@ -455,6 +455,81 @@ let test_run_field_completes_on_eof () =
   | Error error -> Alcotest.failf "run_field: %a" Charamel_huh.Run.pp_error error);
   Lwt.return_unit
 
+let label_cell frame label =
+  let label_length = String.length label in
+  let rec search row = function
+    | [] -> Alcotest.failf "the rendered form shows no %S" label
+    | line :: rest ->
+        let plain = Charamel_ansi.Text.strip line in
+        let rec scan column =
+          if column + label_length > String.length plain then search (row + 1) rest
+          else if String.sub plain column label_length = label then
+            (row, Charamel_ansi.Text.width (String.sub plain 0 column))
+          else scan (column + 1)
+        in
+        scan 0
+  in
+  search 0 (String.split_on_char '\n' frame)
+
+let test_form_cursor_lands_after_the_typed_text () =
+  with_env (fun form_env ->
+      let name = Charamel_huh.Key.v "name" in
+      let form =
+        Charamel_huh.Form.v ~show_help:false
+          [
+            Charamel_huh.Group.v ~title:"Identity"
+              [ Charamel_huh.Field.input ~title:(Charamel_huh.Dyn.const "Name") name ];
+          ]
+      in
+      let form, _ = Charamel_huh.Form.init form_env form in
+      let form, _ = Charamel_huh.Form.update (Charamel_huh.Form.paste "你好") form in
+      match Charamel_huh.Form.cursor form with
+      | None -> Alcotest.fail "the focused input asks for the hardware cursor"
+      | Some (cursor : Charamel_tea.Cursor.t) ->
+          let row, column = label_cell (Charamel_huh.Form.view form) "你好" in
+          Alcotest.(check (pair int int))
+            "the caret sits after the typed clusters"
+            (row, column + Charamel_ansi.Text.width "你好")
+            (cursor.Charamel_tea.Cursor.row, cursor.Charamel_tea.Cursor.col);
+          let frame =
+            (Charamel_huh.Run.app form_env form).Charamel_tea.view
+              { Charamel_huh.Run.form; timed_out = false }
+          in
+          let frame_cell =
+            match frame.Charamel_tea.View.cursor with
+            | None -> None
+            | Some (placed : Charamel_tea.Cursor.t) -> Some (placed.row, placed.col)
+          in
+          Alcotest.(check (option (pair int int)))
+            "the run frame carries the form cursor"
+            (Some (cursor.Charamel_tea.Cursor.row, cursor.Charamel_tea.Cursor.col))
+            frame_cell)
+
+let test_form_cursor_needs_a_focused_entry () =
+  with_env (fun form_env ->
+      let language = Charamel_huh.Key.v "language" in
+      let form =
+        Charamel_huh.Form.v ~show_help:false
+          [
+            Charamel_huh.Group.v
+              [
+                Charamel_huh.Field.select
+                  ~title:(Charamel_huh.Dyn.const "Language")
+                  ~options:
+                    (Charamel_huh.Dyn.const
+                       (Charamel_huh.Field.options_of_strings [ "ocaml"; "go" ]))
+                  language;
+              ];
+          ]
+      in
+      Alcotest.(check bool)
+        "an uninitialized form asks for no caret" true
+        (Option.is_none (Charamel_huh.Form.cursor form));
+      let form, _ = Charamel_huh.Form.init form_env form in
+      Alcotest.(check bool)
+        "a select field outside filter mode asks for no caret" true
+        (Option.is_none (Charamel_huh.Form.cursor form)))
+
 let tests =
   [
     Alcotest_lwt.test_case_sync "two-group completion" `Quick test_two_group_completion;
@@ -482,6 +557,10 @@ let tests =
     Alcotest_lwt.test_case_sync "view hook and commands" `Quick
       test_view_hook_and_commands;
     Alcotest_lwt.test_case_sync "async options deliver" `Quick test_async_options_deliver;
+    Alcotest_lwt.test_case_sync "form cursor lands after the typed text" `Quick
+      test_form_cursor_lands_after_the_typed_text;
+    Alcotest_lwt.test_case_sync "form cursor needs a focused entry" `Quick
+      test_form_cursor_needs_a_focused_entry;
     Alcotest_lwt.test_case "accessible unicode trim" `Quick (fun _switch ->
         test_accessible_trim_is_unicode);
     Alcotest_lwt.test_case "timeout unsupported in accessible" `Quick (fun _switch ->

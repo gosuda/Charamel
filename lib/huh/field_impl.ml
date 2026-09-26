@@ -26,6 +26,7 @@ type ('value, 'state, 'message) impl = {
   update : ctx -> 'message -> 'state -> 'state * 'message Charamel_tea.Cmd.t;
   subscriptions : ctx -> 'state -> 'message Charamel_tea.Sub.t;
   view : ctx -> focused:bool -> 'state -> string;
+  cursor : ctx -> focused:bool -> 'state -> Charamel_tea.Cursor.t option;
   focus : ctx -> 'state -> 'state * 'message Charamel_tea.Cmd.t;
   blur : ctx -> 'state -> 'state;
   value : 'state -> 'value;
@@ -57,6 +58,9 @@ let concat_nonempty parts =
   parts |> Stdlib.List.filter (fun s -> s <> "") |> String.concat "\n"
 
 let field_label name = String.capitalize_ascii name ^ ":"
+
+let content_lines text =
+  if text = "" then 0 else List.length (String.split_on_char '\n' text)
 
 let field_style ctx focused =
   if focused then ctx.styles.Styles.focused else ctx.styles.Styles.blurred
@@ -275,6 +279,19 @@ let input_view ctx ~focused state =
   in
   Charamel_lipgloss.Style.render (field_style ctx focused).Styles.base content
 
+let input_cursor ctx ~focused state =
+  match Charamel_bubbles.Textinput.cursor state.textinput with
+  | None -> None
+  | Some (cursor : Charamel_tea.Cursor.t) ->
+      let title = Dyn.eval state.title ctx.results in
+      let description = Dyn.eval state.description ctx.results in
+      let text =
+        render_title_description ctx ~focused ~title ~description ~error:state.err
+      in
+      if state.inline && title <> "" then
+        Some { cursor with col = cursor.col + Charamel_ansi.Text.width text + 1 }
+      else Some { cursor with row = cursor.row + content_lines text }
+
 let input_key_binds ctx _state =
   let km = ctx.keymap.Keymap.input in
   navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
@@ -336,6 +353,7 @@ let input_impl key title description placeholder prompt char_limit suggestions e
             (fun message -> Input_edit message)
             (Charamel_bubbles.Textinput.subscriptions state.textinput));
       view = input_view;
+      cursor = input_cursor;
       focus = input_focus;
       blur = input_blur;
       value = (fun state -> Charamel_bubbles.Textinput.value state.textinput);
@@ -559,6 +577,17 @@ let text_view ctx ~focused state =
   in
   Charamel_lipgloss.Style.render style.Styles.base body
 
+let text_cursor ctx ~focused state =
+  match Charamel_bubbles.Textarea.cursor state.textarea with
+  | None -> None
+  | Some (cursor : Charamel_tea.Cursor.t) ->
+      let title = Dyn.eval state.title ctx.results in
+      let description = Dyn.eval state.description ctx.results in
+      let heading =
+        render_title_description ctx ~focused ~title ~description ~error:state.err
+      in
+      Some { cursor with row = cursor.row + content_lines heading }
+
 let text_key_binds ctx _state =
   let km = ctx.keymap.Keymap.text in
   navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
@@ -621,6 +650,7 @@ let text_impl key title description placeholder lines char_limit show_line_numbe
             (fun message -> Text_edit message)
             (Charamel_bubbles.Textarea.subscriptions state.textarea));
       view = text_view;
+      cursor = text_cursor;
       focus = text_focus;
       blur = text_blur;
       value = (fun state -> Charamel_bubbles.Textarea.value state.textarea);
@@ -1186,6 +1216,30 @@ let picker_view arity (ctx : ctx) ~focused (state : _ picker_state) =
   in
   Charamel_lipgloss.Style.render style.Styles.base (concat_nonempty [ heading; content ])
 
+let picker_cursor arity ctx ~focused (state : _ picker_state) =
+  match Charamel_bubbles.Textinput.cursor state.filter_input with
+  | None -> None
+  | Some (cursor : Charamel_tea.Cursor.t) ->
+      let title = Dyn.eval state.title ctx.results in
+      let description = Dyn.eval state.description ctx.results in
+      let heading =
+        render_title_description ctx ~focused ~title ~description ~error:state.err
+      in
+      let style = field_style ctx focused in
+      let prefix =
+        if arity = One && state.inline then
+          Charamel_ansi.Text.width
+            (Charamel_lipgloss.Style.render style.Styles.prev_indicator
+               style.Styles.indicators.Styles.prev_indicator)
+        else 0
+      in
+      Some
+        {
+          cursor with
+          row = cursor.row + content_lines heading;
+          col = cursor.col + prefix;
+        }
+
 let picker_key_binds arity (ctx : ctx) (state : _ picker_state) =
   match arity with
   | One ->
@@ -1393,6 +1447,7 @@ let picker_impl arity ~name ~key ~value title description height inline limit fi
             (fun message -> Filter message)
             (Charamel_bubbles.Textinput.subscriptions state.filter_input));
       view = picker_view arity;
+      cursor = picker_cursor arity;
       focus = (fun _ state -> (state, Charamel_tea.Cmd.none));
       blur =
         (fun _ state ->
@@ -1523,6 +1578,8 @@ let confirm_view ctx ~focused state =
   in
   Charamel_lipgloss.Style.render style.Styles.base content
 
+let confirm_cursor _ctx ~focused:_ _state = None
+
 let confirm_key_binds ctx state =
   let km = ctx.keymap.Keymap.confirm in
   navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
@@ -1578,6 +1635,7 @@ let confirm_impl key title description affirmative negative inline button_alignm
       update = confirm_update;
       subscriptions = (fun _ _ -> Charamel_tea.Sub.none);
       view = confirm_view;
+      cursor = confirm_cursor;
       focus = confirm_focus;
       blur = confirm_blur;
       value = (fun state -> state.value);
@@ -1681,6 +1739,8 @@ let note_view ctx ~focused state =
   in
   Charamel_lipgloss.Style.render style.Styles.card (String.concat "\n" padded)
 
+let note_cursor _ctx ~focused:_ _state = None
+
 let note_key_binds ctx _state =
   let km = ctx.keymap.Keymap.note in
   navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
@@ -1706,6 +1766,7 @@ let note_impl title description height next =
       update = note_update;
       subscriptions = (fun _ _ -> Charamel_tea.Sub.none);
       view = note_view;
+      cursor = note_cursor;
       focus = note_focus;
       blur = note_blur;
       value = (fun _ -> ());
@@ -1913,6 +1974,20 @@ let file_view ctx ~focused state =
   in
   Charamel_lipgloss.Style.render style.Styles.base (concat_nonempty [ heading; body ])
 
+let file_cursor ctx ~focused state =
+  match state.picker with
+  | Some picker when state.picking -> (
+      match Charamel_bubbles.Filepicker.selection_cursor picker with
+      | None -> None
+      | Some (cursor : Charamel_tea.Cursor.t) ->
+          let title = Dyn.eval state.title ctx.results in
+          let description = Dyn.eval state.description ctx.results in
+          let heading =
+            render_title_description ctx ~focused ~title ~description ~error:state.err
+          in
+          Some { cursor with row = cursor.row + content_lines heading })
+  | _ -> None
+
 let file_key_binds ctx state =
   let km = ctx.keymap.Keymap.file in
   if state.picking then
@@ -1981,6 +2056,7 @@ let file_impl key title description dir show_hidden show_size show_permissions a
       update = file_update;
       subscriptions = (fun _ _ -> Charamel_tea.Sub.none);
       view = file_view;
+      cursor = file_cursor;
       focus = (fun _ state -> (state, Charamel_tea.Cmd.none));
       blur = file_blur;
       value = (fun state -> state.selected);
@@ -2021,6 +2097,7 @@ let subscriptions (Field (impl, state)) ctx =
   map_sub impl.msg_id (impl.subscriptions ctx state)
 
 let view (Field (impl, state)) ctx ~focused = impl.view ctx ~focused state
+let cursor (Field (impl, state)) ctx ~focused = impl.cursor ctx ~focused state
 
 let focus (Field (impl, state)) ctx =
   let state, command = impl.focus ctx state in
