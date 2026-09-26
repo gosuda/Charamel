@@ -55,15 +55,6 @@ val matches : entry:string -> request -> bool
     tool and exactly [request.action]. A tool-only entry matches every action for that
     tool. *)
 
-val canonical : string -> string
-(** [canonical path] resolves dot and dot-dot components lexically. A leading slash is
-    preserved and dot-dot above the root is dropped. The empty path stays empty. *)
-
-val within : root:string -> string -> bool
-(** [within ~root path] is [true] when [path] and [root] are both absolute and every
-    component of [root] is a leading component of [path]. Component boundaries are
-    respected. *)
-
 val plan_mode : t -> bool
 (** [plan_mode t] is [true] when [t] applies its plan ceiling. *)
 

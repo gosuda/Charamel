@@ -3,6 +3,8 @@
     Each module owns one runtime boundary of the coding harness. *)
 
 module Hashline = Hashline
+module Path = Path
+module Io = Io
 module Config = Config
 module Auth = Auth
 module Models = Models

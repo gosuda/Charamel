@@ -129,15 +129,6 @@ let json_object fields =
   Jsont.Json.object'
     (List.map (fun (name, value) -> Jsont.Json.mem (Jsont.Json.name name) value) fields)
 
-let object_value value =
-  match value with Jsont.Object (members, _) -> Some members | _ -> None
-
-let array_value value =
-  match value with Jsont.Array (values, _) -> Some values | _ -> None
-
-let trim_ascii text = String.trim text
-let lowercase text = String.lowercase_ascii text
-
 let percent_hex value =
   let digits = "0123456789ABCDEF" in
   String.init 2 (fun index -> digits.[(value lsr ((1 - index) * 4)) land 0xF])
@@ -197,33 +188,6 @@ let path_of_uri uri =
 
 let uri_of_path path = "file://" ^ uri_escape path
 
-let normalize_path ~cwd path =
-  let absolute =
-    if String.starts_with ~prefix:"/" path then path else Filename.concat cwd path
-  in
-  let pieces = String.split_on_char '/' absolute in
-  let result =
-    List.fold_left
-      (fun stack piece ->
-        match piece with
-        | "" | "." -> stack
-        | ".." -> ( match stack with [] -> [] | _ :: tail -> tail)
-        | _ -> piece :: stack)
-      [] pieces
-    |> List.rev
-  in
-  "/" ^ String.concat "/" result
-
-let inside ~cwd root path =
-  let root = normalize_path ~cwd root and path = normalize_path ~cwd path in
-  path = root || root = "/" || String.starts_with ~prefix:(root ^ "/") path
-
-let parent_path ~cwd path =
-  let path = normalize_path ~cwd path in
-  match String.rindex_opt path '/' with
-  | None | Some 0 -> "/"
-  | Some index -> String.sub path 0 index
-
 let extension path =
   let base =
     match String.rindex_opt path '/' with
@@ -253,27 +217,25 @@ let has_root_marker t server =
   | markers ->
       let rec check directory =
         if List.exists (marker_matches t.fs_root directory) markers then true
-        else if directory = "/" then false
-        else check (parent_path ~cwd:t.cwd directory)
+        else
+          match Path.parent directory with None -> false | Some parent -> check parent
       in
       check t.cwd
 
 let extension_supported server ext =
-  List.exists (fun value -> lowercase value = ext) server.config.Config.filetypes
+  List.exists
+    (fun value -> String.lowercase_ascii value = ext)
+    server.config.Config.filetypes
 
 let server_for_path t path =
-  let path = normalize_path ~cwd:t.cwd path in
-  if not (inside ~cwd:t.cwd t.cwd path) then None
+  let path = Path.normalize ~cwd:t.cwd path in
+  if not (Path.within ~root:t.cwd path) then None
   else
     let ext = extension path in
     List.find_opt (fun server -> extension_supported server ext) t.servers_table
 
 let find_server_by_name t name =
   List.find_opt (fun server -> server.name = name) t.servers_table
-
-let signal_process process signal =
-  try Unix.kill (Charamel_os.Process.pid process) signal
-  with Unix.Unix_error ((Unix.ESRCH | Unix.EPERM), _, _) -> ()
 
 let set_state t server state =
   Lwt_mutex.with_lock t.lock (fun () ->
@@ -304,16 +266,17 @@ let fail_server t server failure_message =
   | None -> Lwt.return_unit
   | Some process ->
       Log.debug (fun m -> m "server %s failed: %s" server.name failure_message);
-      signal_process process Sys.sigterm;
+      (try Charamel_os.Process.terminate process
+       with Unix.Unix_error (Unix.EPERM, _, _) -> ());
       Lwt.return_unit
 
 let parse_content_length line =
   match String.index_opt line ':' with
   | None -> Error "header has no colon"
   | Some index -> (
-      let key = lowercase (trim_ascii (String.sub line 0 index)) in
+      let key = String.lowercase_ascii (String.trim (String.sub line 0 index)) in
       let value =
-        trim_ascii (String.sub line (index + 1) (String.length line - index - 1))
+        String.trim (String.sub line (index + 1) (String.length line - index - 1))
       in
       if key <> "content-length" then Ok None
       else
@@ -362,9 +325,6 @@ let read_frame channel =
         (function
           | End_of_file -> Lwt.return_error "truncated JSON frame" | exn -> Lwt.fail exn)
 
-let io_failure function_name argument error =
-  Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument
-
 let send_json server value =
   let payload = Jsonx.string_of_json value in
   let frame = Fmt.str "Content-Length: %d\r\n\r\n%s" (String.length payload) payload in
@@ -380,8 +340,7 @@ let send_json server value =
               | End_of_file -> Lwt.return_error "server input reached EOF"
               | Lwt_io.Channel_closed where ->
                   Lwt.return_error (Fmt.str "server input is closed: %s" where)
-              | Unix.Unix_error (error, function_name, argument) ->
-                  Lwt.return_error (io_failure function_name argument error)
+              | Unix.Unix_error _ as exn -> Lwt.return_error (Io.message exn)
               | exn -> Lwt.fail exn))
 
 let notification server ~method_ ~params =
@@ -500,7 +459,7 @@ let location_of_json ~cwd ~server value =
       | Ok (line, col, end_line, end_col) ->
           Ok
             {
-              path = normalize_path ~cwd (path_of_uri uri);
+              path = Path.normalize ~cwd (path_of_uri uri);
               line = line + 1;
               col = col + 1;
               end_line = end_line + 1;
@@ -571,7 +530,7 @@ let rec symbol_of_json ~cwd ~server ~path ~depth value =
           | Ok (line, col, end_line, end_col) ->
               let range_path =
                 match Jsonx.string_member "uri" location_value with
-                | Some uri -> normalize_path ~cwd (path_of_uri uri)
+                | Some uri -> Path.normalize ~cwd (path_of_uri uri)
                 | None -> path
               in
               Ok
@@ -641,7 +600,7 @@ let update_diagnostics t value =
       match Jsonx.string_member "uri" params with
       | None -> Lwt.return_unit
       | Some uri ->
-          let path = normalize_path ~cwd:t.cwd (path_of_uri uri) in
+          let path = Path.normalize ~cwd:t.cwd (path_of_uri uri) in
           let values =
             match Jsonx.member "diagnostics" params with
             | Some (Jsont.Array (diagnostics, _)) ->
@@ -715,7 +674,7 @@ let handle_server_request server ~id ~method_ =
   else send_error_response server ~id (-32601) (Fmt.str "method not found: %s" method_)
 
 let handle_message t server value =
-  match object_value value with
+  match Jsonx.object_members value with
   | None -> fail_server t server "JSON-RPC message is not an object"
   | Some _ -> (
       match Jsonx.string_member "method" value with
@@ -742,8 +701,7 @@ let reader_loop t server generation source =
   Lwt.catch loop (function
     | End_of_file -> fail "server EOF"
     | Lwt_io.Channel_closed _ -> fail "server stream closed"
-    | Unix.Unix_error (error, function_name, argument) ->
-        fail (io_failure function_name argument error)
+    | Unix.Unix_error _ as exn -> fail (Io.message exn)
     | Failure message -> fail message
     | Lwt.Canceled -> fail "server reader cancelled"
     | exn -> Lwt.fail exn)
@@ -782,8 +740,7 @@ let monitor_process t server generation process =
     (fun () ->
       await_process t server generation process >>= fun _ -> failed "server exited")
     (function
-      | Unix.Unix_error (error, function_name, argument) ->
-          failed (io_failure function_name argument error)
+      | Unix.Unix_error _ as exn -> failed (Io.message exn)
       | Lwt.Canceled -> Lwt.return_unit
       | exn -> Lwt.fail exn)
 
@@ -878,8 +835,7 @@ let start_server t server =
       | Lwt.Canceled ->
           set_state t server (Failed "server startup cancelled") >>= fun () ->
           Lwt.fail Lwt.Canceled
-      | Unix.Unix_error (error, function_name, argument) ->
-          set_state t server (Failed (io_failure function_name argument error))
+      | Unix.Unix_error _ as exn -> set_state t server (Failed (Io.message exn))
       | Invalid_argument message | Failure message -> set_state t server (Failed message)
       | exn -> Lwt.fail exn)
 
@@ -975,7 +931,7 @@ let send_document t server path text =
   | Error message -> fail_server t server message
 
 let touch t ~path =
-  let path = normalize_path ~cwd:t.cwd path in
+  let path = Path.normalize ~cwd:t.cwd path in
   match server_for_path t path with
   | None -> Lwt.return_unit
   | Some server when not (has_root_marker t server) -> Lwt.return_unit
@@ -998,7 +954,7 @@ let servers t =
 let handles t ~path =
   Option.map
     (fun server -> server.name)
-    (server_for_path t (normalize_path ~cwd:t.cwd path))
+    (server_for_path t (Path.normalize ~cwd:t.cwd path))
 
 let diagnostic_snapshot t path =
   match Hashtbl.find_opt t.diagnostics_table path with
@@ -1006,7 +962,7 @@ let diagnostic_snapshot t path =
   | Some state -> (state.values, state.serial)
 
 let diagnostics t ~path ~wait =
-  let path = normalize_path ~cwd:t.cwd path in
+  let path = Path.normalize ~cwd:t.cwd path in
   let initial_values, initial_serial = diagnostic_snapshot t path in
   if wait <= 0. then Lwt.return initial_values
   else
@@ -1041,7 +997,7 @@ let position_params ~path ~line ~col =
     ]
 
 let prepare_request t path =
-  let path = normalize_path ~cwd:t.cwd path in
+  let path = Path.normalize ~cwd:t.cwd path in
   match server_for_path t path with
   | None -> Lwt.return_error (`No_server path)
   | Some server when not (has_root_marker t server) -> Lwt.return_error (`No_server path)
@@ -1161,7 +1117,7 @@ let parse_text_edit server value =
   Ok { range; new_text }
 
 let parse_file_edits server path value =
-  match array_value value with
+  match Jsonx.array_members value with
   | None -> Error (`Rpc (server.name, "workspace edits must be arrays"))
   | Some values ->
       let rec collect acc = function
@@ -1184,13 +1140,13 @@ let merge_group path edits groups =
 let parse_workspace_edit ~cwd server value =
   let groups = ref [] in
   let parse_changes changes =
-    match object_value changes with
+    match Jsonx.object_members changes with
     | None -> Error (`Rpc (server.name, "workspace changes is not an object"))
     | Some members ->
         let rec loop = function
           | [] -> Ok ()
           | ((name, _), edits) :: rest ->
-              let path = normalize_path ~cwd (path_of_uri name) in
+              let path = Path.normalize ~cwd (path_of_uri name) in
               let* values = parse_file_edits server path edits in
               groups := merge_group path values !groups;
               loop rest
@@ -1198,7 +1154,7 @@ let parse_workspace_edit ~cwd server value =
         loop members
   in
   let parse_document_changes changes =
-    match array_value changes with
+    match Jsonx.array_members changes with
     | None -> Error (`Rpc (server.name, "documentChanges is not an array"))
     | Some values ->
         let rec loop = function
@@ -1215,7 +1171,7 @@ let parse_workspace_edit ~cwd server value =
                 | Some uri -> Ok uri
                 | None -> Error (`Rpc (server.name, "document change has no URI"))
               in
-              let path = normalize_path ~cwd (path_of_uri uri) in
+              let path = Path.normalize ~cwd (path_of_uri uri) in
               let* () =
                 match Jsonx.int_member "version" document with
                 | Some version -> (
@@ -1333,12 +1289,6 @@ let location_bytes text starts location =
     Error "edit range is reversed"
   else Ok (start_byte, end_byte)
 
-let fs_error_message = function
-  | `Already_exists -> "already exists"
-  | `Is_directory -> "is a directory"
-  | `Not_found -> "not found"
-  | `Permission_denied -> "permission denied"
-
 let compute_replacement path original edits =
   let starts = line_starts original in
   let ranges =
@@ -1384,12 +1334,11 @@ let compute_replacement path original edits =
   Ok (Buffer.contents buffer)
 
 let apply_file_edits ~cwd path edits =
-  let path = normalize_path ~cwd (path_of_uri path) in
+  let path = Path.normalize ~cwd (path_of_uri path) in
   Lwt.catch
     (fun () -> read_whole_file path >|= fun text -> Ok text)
     (function
-      | Unix.Unix_error (error, function_name, argument) ->
-          Lwt.return_error (`Io (path, io_failure function_name argument error))
+      | Unix.Unix_error _ as exn -> Lwt.return_error (`Io (path, Io.message exn))
       | Sys_error message -> Lwt.return_error (`Io (path, message))
       | exn -> Lwt.fail exn)
   >>= function
@@ -1407,9 +1356,8 @@ let apply_file_edits ~cwd path edits =
               >|= fun () -> Ok path)
             (function
               | Charamel_os.Fs.E (error, fs_path) ->
-                  Lwt.return_error (`Io (fs_path, fs_error_message error))
-              | Unix.Unix_error (error, function_name, argument) ->
-                  Lwt.return_error (`Io (path, io_failure function_name argument error))
+                  Lwt.return_error (`Io (fs_path, Io.fs_error error))
+              | Unix.Unix_error _ as exn -> Lwt.return_error (`Io (path, Io.message exn))
               | exn -> Lwt.fail exn))
 
 let apply_edits ~cwd grouped =
@@ -1431,6 +1379,16 @@ let reopen_documents t server =
   >>= fun documents ->
   Lwt_list.iter_s (fun (path, text) -> send_document t server path text) documents
 
+(* [stop] has already forced the group away; the status wait is bounded the same way, so a
+   child the kernel will not reap cannot hold [stop_server] open forever. *)
+let stop_process t server generation process =
+  Charamel_os.Process.stop process >>= fun () ->
+  Lwt.choose
+    [
+      (Lwt.protected (await_process t server generation process) >|= fun _ -> ());
+      Lwt_unix.sleep Charamel_os.Process.grace;
+    ]
+
 let stop_server t server ~final =
   server.stopping <- true;
   let process = server.process in
@@ -1443,19 +1401,9 @@ let stop_server t server ~final =
         Lwt.return_unit
     | _ -> Lwt.return_unit)
   >>= fun () ->
-  Option.iter (fun process -> signal_process process Sys.sigterm) process;
   (match process with
     | None -> Lwt.return_unit
-    | Some process ->
-        Lwt.catch
-          (fun () ->
-            Lwt_unix.with_timeout 2. (fun () ->
-                await_process t server generation process >>= fun _ -> Lwt.return_unit))
-          (function
-            | Lwt_unix.Timeout ->
-                signal_process process Sys.sigkill;
-                Lwt.return_unit
-            | exn -> Lwt.fail exn))
+    | Some process -> stop_process t server generation process)
   >>= fun () ->
   cleanup_streams server >>= fun () ->
   Lwt_mutex.with_lock t.lock (fun () ->
@@ -1509,10 +1457,9 @@ let stop_all t =
 let create ~sw ~clock ~fs_root ~cwd ~config =
   (* A relative create-time cwd anchors at the process directory; every
      later normalization threads [t.cwd] explicitly. *)
-  let cwd = normalize_path ~cwd:(Sys.getcwd ()) cwd in
+  let cwd = Path.normalize ~cwd:(Sys.getcwd ()) cwd in
   let configured =
-    let defaults_by_name = defaults in
-    let base = if config.Config.options.Config.auto_lsp then defaults_by_name else [] in
+    let base = if config.Config.options.Config.auto_lsp then defaults else [] in
     let replace name value values =
       let rec loop acc = function
         | [] -> List.rev ((name, value) :: acc)
@@ -1525,7 +1472,7 @@ let create ~sw ~clock ~fs_root ~cwd ~config =
     List.fold_left
       (fun values ((name, value) : string * Config.lsp) ->
         let value =
-          match List.assoc_opt name defaults_by_name with
+          match List.assoc_opt name defaults with
           | Some default when value.Config.filetypes = [] ->
               {
                 value with

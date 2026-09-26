@@ -458,12 +458,6 @@ let pp_update_error ppf = function
   | `Parse message -> Fmt.pf ppf "catalog cache parse error: %s" message
   | `Fetch error -> Fmt.pf ppf "catalog fetch error: %a" Charamel_fantasy.Error.pp error
 
-let fs_error_message = function
-  | `Not_found -> "not found"
-  | `Already_exists -> "already exists"
-  | `Permission_denied -> "permission denied"
-  | `Is_directory -> "is a directory"
-
 let document_text filename ~etag providers =
   try
     match Jsont_bytesrw.encode_string Jsont.json (cache_document ~etag providers) with
@@ -475,7 +469,7 @@ let document_text filename ~etag providers =
 
 let prepare_dir path =
   Charamel_os.Fs.mkdir_p path >>= function
-  | Error error -> Lwt.return (Error (`Io (path, fs_error_message error)))
+  | Error error -> Lwt.return (Error (`Io (path, Io.fs_error error)))
   | Ok () ->
       Lwt.catch (fun () -> Lwt_unix.chmod path 0o700) (fun _ -> Lwt.return_unit)
       >|= fun () -> Ok ()

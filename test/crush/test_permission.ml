@@ -273,34 +273,6 @@ let matches_cases () =
   Alcotest.check Alcotest.bool "different tool does not match" false
     (Permission.matches ~entry:"git" req)
 
-let canonical_pins () =
-  Alcotest.check Alcotest.string "empty stays empty" "" (Permission.canonical "");
-  Alcotest.check Alcotest.string "root stays root" "/" (Permission.canonical "/");
-  Alcotest.check Alcotest.string "dot-dot clamps at root" "/"
-    (Permission.canonical "/a/../..");
-  Alcotest.check Alcotest.string "inner dot-dot resolves" "/a/c"
-    (Permission.canonical "/a/b/../c");
-  Alcotest.check Alcotest.string "relative dot-dot is dropped" ""
-    (Permission.canonical "../..");
-  Alcotest.check Alcotest.string "relative path passes through" "a/b"
-    (Permission.canonical "a/b");
-  Alcotest.check Alcotest.bool "equal paths are within" true
-    (Permission.within ~root:"/a" "/a");
-  Alcotest.check Alcotest.bool "child is within" true
-    (Permission.within ~root:"/a" "/a/b");
-  Alcotest.check Alcotest.bool "sibling prefix is not within" false
-    (Permission.within ~root:"/a" "/ab");
-  Alcotest.check Alcotest.bool "relative path is never within" false
-    (Permission.within ~root:"/a" "a/b");
-  Alcotest.check Alcotest.bool "root contains every absolute path" true
-    (Permission.within ~root:"/" "/x");
-  Alcotest.check Alcotest.string "lone relative dot-dot is dropped" ""
-    (Permission.canonical "..");
-  Alcotest.check Alcotest.string "trailing slash is dropped" "/a/b"
-    (Permission.canonical "/a/b/");
-  Alcotest.check Alcotest.bool "relative path is never within root" false
-    (Permission.within ~root:"/" "a")
-
 let cases =
   [
     Test_tools_test_support.case "plan ceiling" `Quick plan_ceiling;
@@ -324,5 +296,4 @@ let cases =
     Test_tools_test_support.case "policy lock while asking" `Quick
       policy_lock_is_free_while_asking;
     Test_tools_test_support.case "entry matching" `Quick matches_cases;
-    Test_tools_test_support.case "canonical path pins" `Quick canonical_pins;
   ]

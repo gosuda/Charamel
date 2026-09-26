@@ -257,20 +257,6 @@ module Patch = struct
             removed )
 end
 
-let fs_error_text : Charamel_os.Fs.error -> string = function
-  | `Already_exists -> "already exists"
-  | `Is_directory -> "is a directory"
-  | `Not_found -> "not found"
-  | `Permission_denied -> "permission denied"
-
-let protect_io path f =
-  try Ok (await (f ())) with
-  | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Error (`Not_found path)
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (`Io (path, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
-  | Sys_error message -> Error (`Io (path, message))
-
 let lstat_kind_opt path =
   let open Lwt.Infix in
   Lwt.catch
@@ -294,30 +280,19 @@ let rec canonical_new_target ctx current components =
       Ok (New (append_components parent components))
 
 let resolve_write_target ctx absolute =
-  let* kind = protect_io absolute (fun () -> lstat_kind_opt absolute) in
+  let* kind = Io.trap_await absolute (fun () -> lstat_kind_opt absolute) in
   match kind with
   | None -> canonical_new_target ctx absolute []
   | Some _ ->
       let* target = Tool.canonical ctx absolute in
       Ok (Existing target)
 
-let canonical_for_read ctx absolute =
-  match Tool.canonical ctx absolute with
-  | Error (`Not_found _) -> Ok absolute
-  | resolved -> resolved
-
-let output ctx ?(diagnostics = []) text =
-  let content, artifact =
-    await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text)
-  in
-  Tool.ok ?artifact ~diagnostics content
-
 let diagnostics ctx target =
   match ctx.Tool.lsp with
   | None -> []
   | Some lsp ->
       begin match
-        protect_io target (fun () ->
+        Io.trap_await target (fun () ->
             let open Lwt.Infix in
             Lsp.touch lsp ~path:target >>= fun () ->
             Lsp.diagnostics lsp ~path:target ~wait:0.5)
@@ -332,7 +307,7 @@ let touch_lsp ctx target =
   | Some lsp ->
       begin match Lsp.handles lsp ~path:target with
       | None -> ()
-      | Some _ -> ignore (protect_io target (fun () -> Lsp.touch lsp ~path:target))
+      | Some _ -> ignore (Io.trap_await target (fun () -> Lsp.touch lsp ~path:target))
       end
 
 let truncate_line line =
@@ -490,7 +465,7 @@ let run_read ctx json =
               Ok (Tool.fail "not valid UTF-8")
             else
               Ok
-                (output ctx
+                (Tool.truncate ctx
                    (format_read_content base (Hashline.tag content) content selector))
         end
       end
@@ -508,16 +483,14 @@ let run_read ctx json =
               Ok (Tool.fail "not valid UTF-8")
             else
               Ok
-                (output ctx
+                (Tool.truncate ctx
                    (format_read_content base (Hashline.tag content) content selector))
         end
       end
       else
         let absolute = Tool.absolute ctx base in
-        let target_result = canonical_for_read ctx absolute in
-        let request_path =
-          match target_result with Ok target -> target | Error _ -> absolute
-        in
+        let target_result = Tool.canonical_or_abs ctx absolute in
+        let request_path = Result.value target_result ~default:absolute in
         begin
           let* () =
             Tool.request ctx ~read_only:true ~tool:"read" ~action:"read"
@@ -525,14 +498,14 @@ let run_read ctx json =
           in
           begin
             let* target = target_result in
-            let* stat = protect_io target (fun () -> Lwt_unix.stat target) in
+            let* stat = Io.trap_await target (fun () -> Lwt_unix.stat target) in
             match stat.Unix.st_kind with
             | Unix.S_DIR -> Ok (Tool.fail (Fmt.str "%s is a directory; use ls" target))
             | Unix.S_REG ->
                 if stat.Unix.st_size > max_file_bytes then
                   Ok (Tool.fail (Fmt.str "%s is too large (maximum is 10 MiB)" target))
                 else
-                  let* content = protect_io target (fun () -> load_file target) in
+                  let* content = Io.trap_await target (fun () -> load_file target) in
                   if (not (String.is_valid_utf_8 content)) || binary_content content then
                     Ok (Tool.fail "not valid UTF-8")
                   else begin
@@ -542,7 +515,7 @@ let run_read ctx json =
                     in
                     Hashtbl.replace ctx.Tool.read_tracker target now;
                     Ok
-                      (output ctx
+                      (Tool.truncate ctx
                          (format_read_content target (Hashline.tag content) content
                             selector))
                   end
@@ -554,22 +527,11 @@ let run_read ctx json =
 let save_file target content =
   match await (Charamel_os.Fs.mkdir_p (Filename.dirname target)) with
   | Error `Not_found -> Error (`Not_found target)
-  | Error error -> Error (`Io (target, fs_error_text error))
-  | Ok () -> (
-      try
-        await
-          (Charamel_os.Fs.with_open_out ~perm:0o644 target (fun channel ->
-               Lwt_io.write channel content));
-        Ok ()
-      with
-      | Charamel_os.Fs.E (`Not_found, path) -> Error (`Not_found path)
-      | Charamel_os.Fs.E (error, path) -> Error (`Io (path, fs_error_text error))
-      | Unix.Unix_error (error, function_name, argument) ->
-          Error
-            (`Io
-               ( target,
-                 Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument ))
-      | Sys_error message -> Error (`Io (target, message)))
+  | Error error -> Error (`Io (target, Io.fs_error error))
+  | Ok () ->
+      Io.trap_await target (fun () ->
+          Charamel_os.Fs.with_open_out ~perm:0o644 target (fun channel ->
+              Lwt_io.write channel content))
 
 let run_write ctx json =
   let* target_name, content = Tool.decode write_params_jsont json in
@@ -593,12 +555,12 @@ let run_write ctx json =
           (int_of_float (Charamel_os.Time.now ctx.Tool.clock *. 1000.));
         let tag = Hashline.tag content in
         Ok
-          (output ctx ~diagnostics:(diagnostics ctx target)
+          (Tool.truncate ~diagnostics:(diagnostics ctx target) ctx
              (Fmt.str "wrote %s (%d bytes) [%s#%s]" target (String.length content) target
                 tag))
       end
     | Existing target ->
-        let* stat = protect_io target (fun () -> Lwt_unix.stat target) in
+        let* stat = Io.trap_await target (fun () -> Lwt_unix.stat target) in
         begin match stat.Unix.st_kind with
         | Unix.S_REG ->
             if
@@ -617,7 +579,7 @@ let run_write ctx json =
                 (int_of_float (Charamel_os.Time.now ctx.Tool.clock *. 1000.));
               let tag = Hashline.tag content in
               Ok
-                (output ctx ~diagnostics:(diagnostics ctx target)
+                (Tool.truncate ~diagnostics:(diagnostics ctx target) ctx
                    (Fmt.str "wrote %s (%d bytes) [%s#%s]" target (String.length content)
                       target tag))
             end
@@ -676,9 +638,7 @@ let run_edit ctx json =
   | Ok patch ->
       let absolute = Tool.absolute ctx patch.Patch.path in
       let target_result = Tool.canonical ctx absolute in
-      let request_path =
-        match target_result with Ok target -> target | Error _ -> absolute
-      in
+      let request_path = Result.value target_result ~default:absolute in
       begin
         let* () =
           Tool.request ctx ~read_only:false ~tool:"edit" ~action:"edit" ~path:request_path
@@ -688,10 +648,10 @@ let run_edit ctx json =
         in
         begin
           let* target = target_result in
-          let* stat = protect_io target (fun () -> Lwt_unix.stat target) in
+          let* stat = Io.trap_await target (fun () -> Lwt_unix.stat target) in
           match stat.Unix.st_kind with
           | Unix.S_REG ->
-              let* content = protect_io target (fun () -> load_file target) in
+              let* content = Io.trap_await target (fun () -> load_file target) in
               if Hashline.tag content <> patch.Patch.tag then begin
                 let anchor =
                   match patch.Patch.ops with [] -> 1 | op :: _ -> first_patch_line op
@@ -712,7 +672,7 @@ let run_edit ctx json =
                       (int_of_float (Charamel_os.Time.now ctx.Tool.clock *. 1000.));
                     let tag = Hashline.tag updated in
                     Ok
-                      (output ctx ~diagnostics:(diagnostics ctx target)
+                      (Tool.truncate ~diagnostics:(diagnostics ctx target) ctx
                          (edit_output patch target added removed tag))
                   end
                 end

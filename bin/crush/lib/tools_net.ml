@@ -444,12 +444,6 @@ let rec fetch_uri ~headers ~(format : output_format) ~redirects uri :
       | Failure message -> Lwt.return (Error (`Unavailable message))
       | exn -> Lwt.fail exn)
 
-let output_with_artifact (ctx : Tool.ctx) content =
-  let content, artifact =
-    await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random content)
-  in
-  Tool.ok ?artifact content
-
 let fetch_schema =
   Tool.schema_object ~required:[ "url" ]
     [
@@ -493,6 +487,6 @@ let fetch =
             try await (Lwt_unix.with_timeout (float_of_int timeout_s) (fun () -> work))
             with Lwt_unix.Timeout -> Error (`Timeout (float_of_int timeout_s))
           with
-          | Ok content -> Ok (output_with_artifact ctx content)
+          | Ok content -> Ok (Tool.truncate ctx content)
           | Error error -> Error error);
   }

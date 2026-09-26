@@ -38,12 +38,6 @@ let schema =
         Tool.s_int ~default:8 ~desc:"Maximum active children, from one to eight" () );
     ]
 
-let truncate_output (ctx : Tool.ctx) text =
-  let content, artifact =
-    await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text)
-  in
-  Tool.ok ?artifact content
-
 let validate_request ({ prompt; tasks; max_active } : request) =
   if max_active < 1 || max_active > 8 then
     Error (`Invalid_input "max_active must be between 1 and 8")
@@ -105,7 +99,7 @@ let render_tasks results =
   (String.concat "\n" lines, !failures)
 
 let run_single ctx = function
-  | [ Ok text ] -> Ok (truncate_output ctx text)
+  | [ Ok text ] -> Ok (Tool.truncate ctx text)
   | [ Error message ] -> Ok (Tool.fail message)
   | _ -> Error (`Unavailable "agent returned no result")
 
@@ -121,7 +115,7 @@ let run_agent ctx input =
   | Some _, None -> run_single ctx results
   | None, Some _ ->
       let text, failed = render_tasks results in
-      let output = truncate_output ctx text in
+      let output = Tool.truncate ctx text in
       Ok (if failed then { output with is_error = true } else output)
   | _ -> Error (`Invalid_input "one of prompt or tasks is required")
 

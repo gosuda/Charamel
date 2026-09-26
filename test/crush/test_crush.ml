@@ -8,6 +8,7 @@ let suites =
     ("state-file", Test_state_file.cases);
     ("todos", Test_todos.cases);
     ("tool", Test_tool_runtime.cases);
+    ("path", Test_path.cases);
     ("permission", Test_permission.cases);
     ("rules", Test_rules.cases);
     ("skills", Test_skills.cases);

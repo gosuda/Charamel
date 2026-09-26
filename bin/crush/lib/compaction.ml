@@ -10,36 +10,8 @@ let needed ~context_window ~prompt_tokens ~completion_tokens ~disabled =
     let remaining = context_window - (max 0 prompt_tokens + max 0 completion_tokens) in
     remaining <= reserve ~context_window
 
-let output_string = function
-  | `Text text -> text
-  | `Error text -> "error: " ^ text
-  | `Media (mime, data) -> Fmt.str "media <%s> (%d bytes)" mime (String.length data)
-
-let part_text = function
-  | Charamel_fantasy.Message.Text text -> text
-  | Charamel_fantasy.Message.Reasoning { text; _ } ->
-      "<reasoning>" ^ text ^ "</reasoning>"
-  | Charamel_fantasy.Message.File { mime; data; name } ->
-      Fmt.str "file <%s> <%s> (%d bytes)" mime
-        (Option.value ~default:"" name)
-        (String.length data)
-  | Charamel_fantasy.Message.Tool_call { id; name; input } ->
-      Fmt.str "call %s (%s): %s" id name (Jsonx.display_string input)
-  | Charamel_fantasy.Message.Tool_result { id; name; output } ->
-      Fmt.str "result %s (%s): %s" id name (output_string output)
-
-let message_text { Charamel_fantasy.Message.role; parts } =
-  let role =
-    match role with
-    | Charamel_fantasy.Message.System -> "system"
-    | Charamel_fantasy.Message.User -> "user"
-    | Charamel_fantasy.Message.Assistant -> "assistant"
-    | Charamel_fantasy.Message.Tool -> "tool"
-  in
-  role ^ ": " ^ String.concat "" (List.map part_text parts)
-
 let event_bytes = function
-  | Session.Message { message; _ } -> String.length (message_text message)
+  | Session.Message { message; _ } -> String.length (Session.message_text message)
   | _ -> 0
 
 let suffix events first =
@@ -73,7 +45,7 @@ let render_prefix events through =
     let lines = ref [] in
     for index = 0 to limit do
       match events.(index) with
-      | Session.Message { message; _ } -> lines := message_text message :: !lines
+      | Session.Message { message; _ } -> lines := Session.message_text message :: !lines
       | Session.Summary { text; _ } -> lines := ("summary: " ^ text) :: !lines
       | Session.Note { text; _ } -> lines := ("note: " ^ text) :: !lines
       | Session.Tool_call { name; input; _ } ->

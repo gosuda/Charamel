@@ -280,14 +280,8 @@ let is_read_only command =
         | None -> false)
       segments
 
-let output_with_artifact (ctx : Tool.ctx) text =
-  let content, artifact =
-    await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text)
-  in
-  Tool.ok ?artifact content
-
 let output_with_status ctx ~status text =
-  let output = output_with_artifact ctx text in
+  let output = Tool.truncate ctx text in
   match status with `Ok -> output | `Error -> { output with is_error = true }
 
 let drain source ~mutex ~buffer ~captured ~truncated =
@@ -340,7 +334,6 @@ let run_foreground_with_timeout ctx ~cwd ~command ~timeout_s =
     with Lwt_unix.Timeout -> Error (`Timeout (float_of_int timeout_s))
   with
   | Error error ->
-      Charamel_os.Process.terminate process;
       Charamel_os.Process.kill_tree process;
       Error error
   | Ok (`Ok output) ->
@@ -396,7 +389,7 @@ let bash =
             Error (`Unavailable "command is blocked by the shell safety policy")
           else if run_in_background then
             let job_id = Jobs.start ctx.Tool.jobs ~cwd ~command ~env:[] ~timeout_s in
-            Ok (output_with_artifact ctx (Fmt.str "started %s" job_id))
+            Ok (Tool.truncate ctx (Fmt.str "started %s" job_id))
           else
             try run_foreground_with_timeout ctx ~cwd ~command ~timeout_s with
             | Unix.Unix_error (error, operation, argument) ->
@@ -447,7 +440,7 @@ let job_output =
                 | Jobs.Killed -> "killed"
               in
               let content = Fmt.str "status: %s\n%s" status_text captured in
-              Ok (output_with_artifact ctx content));
+              Ok (Tool.truncate ctx content));
   }
 
 let job_kill_schema =
@@ -471,6 +464,6 @@ let job_kill =
               ~description:(Fmt.str "Terminate %s" job_id)
           in
           match await (Jobs.kill ctx.Tool.jobs ~id:job_id) with
-          | Ok () -> Ok (output_with_artifact ctx (Fmt.str "killed %s" job_id))
+          | Ok () -> Ok (Tool.truncate ctx (Fmt.str "killed %s" job_id))
           | Error (`Not_found id) -> Error (`Not_found id));
   }

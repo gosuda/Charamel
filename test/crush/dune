@@ -11,6 +11,7 @@
   test_state_file
   test_todos
   test_tool_runtime
+  test_path
   test_permission
   test_rules
   test_skills

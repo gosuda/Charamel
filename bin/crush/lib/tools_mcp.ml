@@ -37,12 +37,6 @@ let map_mcp_error = function
   | `Timeout _ -> `Timeout 10.
   | `Transport (server, message) -> `Io (server, message)
 
-let truncate_output (ctx : Tool.ctx) text =
-  let content, artifact =
-    Lwt_direct.await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text)
-  in
-  Tool.ok ?artifact content
-
 let run_resources (ctx : Tool.ctx) input =
   let* ({ server } : resource_args) = Tool.decode resource_codec input in
   let* () =
@@ -61,7 +55,7 @@ let run_resources (ctx : Tool.ctx) input =
         | [] -> "no resources"
         | values -> String.concat "\n" (List.map line values)
       in
-      Ok (truncate_output ctx text)
+      Ok (Tool.truncate ctx text)
 
 let run_read_resource (ctx : Tool.ctx) input =
   let* ({ server; uri } : read_resource_args) = Tool.decode read_resource_codec input in
@@ -71,17 +65,7 @@ let run_read_resource (ctx : Tool.ctx) input =
   in
   match Lwt_direct.await (Mcp.read_resource ctx.Tool.mcp ~server ~uri) with
   | Error error -> Error (map_mcp_error error)
-  | Ok content -> Ok (truncate_output ctx (Mcp.content_text content))
-
-let array_member name value =
-  match Jsonx.member name value with
-  | Some (Jsont.Array (values, _)) -> Some values
-  | _ -> None
-
-let object_member name value =
-  match Jsonx.member name value with
-  | Some (Jsont.Object (values, _)) -> Some values
-  | _ -> None
+  | Ok content -> Ok (Tool.truncate ctx (Mcp.content_text content))
 
 let has_member name value = Option.is_some (Jsonx.member name value)
 
@@ -111,13 +95,15 @@ let rec validate_schema schema value path =
   | Some expected when not (type_matches expected value) ->
       fail (Fmt.str "expected %s, got %s" expected (json_kind value))
   | _ -> (
-      match array_member "enum" schema with
+      match Jsonx.array_member "enum" schema with
       | Some values when not (List.exists (Jsont.Json.equal value) values) ->
           fail "value is not in enum"
       | _ -> (
           match value with
           | Jsont.Object (_, _) -> (
-              let required = Option.value (array_member "required" schema) ~default:[] in
+              let required =
+                Option.value (Jsonx.array_member "required" schema) ~default:[]
+              in
               let missing =
                 List.find_map
                   (function
@@ -128,7 +114,9 @@ let rec validate_schema schema value path =
               match missing with
               | Some name -> fail (Fmt.str "missing required property %s" name)
               | None -> (
-                  match object_member "properties" schema with
+                  match
+                    Option.bind (Jsonx.member "properties" schema) Jsonx.object_members
+                  with
                   | None -> Ok ()
                   | Some properties ->
                       let rec check = function
@@ -180,7 +168,7 @@ let run_dynamic (definition : Mcp.tool) (ctx : Tool.ctx) input =
   with
   | Error error -> Error (map_mcp_error error)
   | Ok (content, is_error) ->
-      let output = truncate_output ctx (Mcp.content_text content) in
+      let output = Tool.truncate ctx (Mcp.content_text content) in
       Ok (if is_error then { output with is_error = true } else output)
 
 let mcp_tool (definition : Mcp.tool) =

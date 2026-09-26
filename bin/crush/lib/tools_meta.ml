@@ -104,12 +104,6 @@ let info_schema = Tool.schema_object []
 let info_codec = Jsont.Object.map () |> Jsont.Object.finish
 let logs_schema = Tool.schema_object [ ("lines", Tool.s_int ~default:50 ()) ]
 
-let truncate_output (ctx : Tool.ctx) text =
-  let content, artifact =
-    await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text)
-  in
-  Tool.ok ?artifact content
-
 let render_todo_counts items =
   let pending, in_progress, completed =
     List.fold_left
@@ -130,7 +124,7 @@ let run_todos (ctx : Tool.ctx) input =
   in
   Todos.set ctx.Tool.todos todos;
   let text = Todos.render todos ^ render_todo_counts todos in
-  Ok (truncate_output ctx text)
+  Ok (Tool.truncate ctx text)
 
 let words_count text =
   let count = ref 0 in
@@ -215,7 +209,7 @@ let run_question (ctx : Tool.ctx) input =
             answer_text question.header (answer_for answers question.header))
           questions
       in
-      Ok (truncate_output ctx (String.concat "\n" lines))
+      Ok (Tool.truncate ctx (String.concat "\n" lines))
 
 let selected_model_text = function
   | None -> "none"
@@ -322,9 +316,7 @@ let run_info (ctx : Tool.ctx) input =
         Fmt.str "  stop: %s" (hook_state ctx.Tool.hooks Config.Stop);
       ]
   in
-  Ok
-    (truncate_output ctx
-       (String.concat "\n" (List.filter (fun line -> line <> "") lines)))
+  Ok (Tool.truncate ctx (String.concat "\n" (List.filter (fun line -> line <> "") lines)))
 
 let read_log (ctx : Tool.ctx) =
   try Ok (await (Lwt_io.with_file ~mode:Lwt_io.Input ctx.Tool.log_path Lwt_io.read)) with
@@ -352,7 +344,7 @@ let run_logs (ctx : Tool.ctx) input =
         ~description:"Read the crush log"
     in
     let* body = read_log ctx in
-    Ok (truncate_output ctx (tail_lines ~count:lines body))
+    Ok (Tool.truncate ctx (tail_lines ~count:lines body))
 
 let todos =
   {

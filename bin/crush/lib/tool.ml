@@ -104,31 +104,6 @@ let decode codec value =
   | Ok decoded -> Ok decoded
   | Error message -> Error (`Invalid_input message)
 
-let split_components path =
-  String.split_on_char '/' path |> List.filter (fun part -> part <> "")
-
-let normalize_path path =
-  let is_absolute = String.length path > 0 && path.[0] = '/' in
-  let components = split_components path in
-  let stack = ref [] in
-  List.iter
-    (fun component ->
-      match component with
-      | "." -> ()
-      | ".." -> (
-          match !stack with
-          | top :: rest when top <> ".." -> stack := rest
-          | _ when not is_absolute -> stack := ".." :: !stack
-          | _ -> ())
-      | value -> stack := value :: !stack)
-    components;
-  let body = String.concat "/" (List.rev !stack) in
-  match (is_absolute, body = "") with
-  | true, true -> "/"
-  | true, false -> "/" ^ body
-  | false, true -> "."
-  | false, false -> body
-
 let home_dir ctx =
   match ctx.env "HOME" with Some home when home <> "" -> home | _ -> ctx.cwd
 
@@ -139,42 +114,17 @@ let absolute ctx path =
       Filename.concat (home_dir ctx) (String.sub path 2 (String.length path - 2))
     else path
   in
-  let path =
-    if String.length path > 0 && path.[0] = '/' then path
-    else Filename.concat ctx.cwd path
-  in
-  normalize_path path
-
-let component_prefix root path =
-  let root = normalize_path root in
-  let path = normalize_path path in
-  root = "/" || path = root
-  || String.length path > String.length root
-     && String.starts_with ~prefix:(root ^ "/") path
-
-let within_cwd ctx path = component_prefix ctx.cwd (absolute ctx path)
+  Path.normalize ~cwd:ctx.cwd path
 
 let unix_error path operation exception_ =
   match exception_ with
-  | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Error (`Not_found path)
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (`Io
-           ( path,
-             Fmt.str "%s: %s (%s %s)" operation (Unix.error_message error) function_name
-               argument ))
-  | Sys_error message -> Error (`Io (path, Fmt.str "%s: %s" operation message))
+  | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) | Charamel_os.Fs.E (`Not_found, _)
+    ->
+      Error (`Not_found path)
+  | (Unix.Unix_error _ | Charamel_os.Fs.E _ | Sys_error _) as exn ->
+      Error (`Io (path, Fmt.str "%s: %s" operation (Io.message exn)))
   | Invalid_argument message ->
       Error (`Invalid_input (Fmt.str "%s: %s" operation message))
-  | Charamel_os.Fs.E (error, target) ->
-      let name =
-        match error with
-        | `Not_found -> "not found"
-        | `Already_exists -> "already exists"
-        | `Permission_denied -> "permission denied"
-        | `Is_directory -> "is a directory"
-      in
-      Error (`Io (path, Fmt.str "%s: %s (%s)" operation name target))
   | exception_ -> Printexc.raise_with_backtrace exception_ (Printexc.get_raw_backtrace ())
 
 let canonical ctx path =
@@ -197,6 +147,22 @@ let canonical_parent ctx path =
         | Error _ as error -> error
         | Ok resolved_parent -> Ok (Filename.concat resolved_parent base))
   | Error error -> Error error
+
+let canonical_or_abs ctx path =
+  let absolute = absolute ctx path in
+  match canonical ctx absolute with
+  | Error (`Not_found _) -> Ok absolute
+  | result -> result
+
+let request_path ctx path =
+  let absolute = absolute ctx path in
+  match canonical ctx absolute with Ok target -> target | Error _ -> absolute
+
+let truncate ?(diagnostics = []) ctx text =
+  let content, artifact =
+    await (Artifact.truncate ctx.artifacts ~random:ctx.random text)
+  in
+  ok ?artifact ~diagnostics content
 
 let request ctx ~read_only ~tool ~action ~path ~description =
   let request : Permission.request =

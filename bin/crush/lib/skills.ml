@@ -8,28 +8,6 @@ let max_name_bytes = 256
 let max_description_bytes = 8_192
 let path_of fs_root path = Filename.concat fs_root path
 
-exception Over_limit
-
-let read_file_opt path =
-  let buffer = Buffer.create 4096 in
-  let rec pump channel =
-    Lwt_io.read ~count:4096 channel >>= fun chunk ->
-    if String.is_empty chunk then Lwt.return_unit
-    else if Buffer.length buffer + String.length chunk > max_file_bytes + 1 then
-      Lwt.fail Over_limit
-    else (
-      Buffer.add_string buffer chunk;
-      pump channel)
-  in
-  Lwt.catch
-    (fun () ->
-      Lwt_io.with_file ~mode:Lwt_io.Input path (fun channel ->
-          pump channel >>= fun () -> Lwt.return (Buffer.contents buffer))
-      >>= fun content -> Lwt.return_some content)
-    (function
-      | Over_limit | Unix.Unix_error _ | Sys_error _ -> Lwt.return_none
-      | exn -> Lwt.fail exn)
-
 let kind path =
   Lwt.catch
     (fun () -> Lwt_unix.stat path >|= fun stats -> Some stats.Unix.st_kind)
@@ -37,13 +15,6 @@ let kind path =
 
 let is_directory path = kind path >|= function Some Unix.S_DIR -> true | _ -> false
 let is_regular_file path = kind path >|= function Some Unix.S_REG -> true | _ -> false
-
-let trim_cr line =
-  let length = String.length line in
-  if length > 0 && Char.equal line.[length - 1] '\r' then String.sub line 0 (length - 1)
-  else line
-
-let split_lines text = List.map trim_cr (String.split_on_char '\n' text)
 
 let invalid path detail =
   invalid_arg (Fmt.str "invalid skill frontmatter in %s: %s" path detail)
@@ -70,33 +41,31 @@ let parse_header path lines =
   (!name, Option.value !description ~default:"")
 
 let parse_document path content ~default_name =
-  if String.length content > max_file_bytes then None
-  else
-    match split_lines content with
-    | first :: rest when String.equal first "---" ->
-        let rec close_header index = function
-          | [] -> invalid path "unterminated frontmatter"
-          | line :: tail when String.equal line "---" -> (index, tail)
-          | _ :: tail -> close_header (index + 1) tail
-        in
-        let header_count, body_lines = close_header 0 rest in
-        let header_lines = List.filteri (fun index _ -> index < header_count) rest in
-        let front_name, description = parse_header path header_lines in
-        let name = Option.value front_name ~default:default_name in
-        if String.equal name "" then invalid path "name must not be empty";
-        if String.length name > max_name_bytes then invalid path "name is too long";
-        if
-          String.equal name "." || String.equal name ".." || String.contains name '/'
-          || String.contains name '\\'
-        then invalid path "name contains a path separator";
-        if String.length description > max_description_bytes then
-          invalid path "description is too long";
-        let body = String.concat "\n" body_lines in
-        Some (name, description, body)
-    | _ ->
-        if String.length default_name > max_name_bytes then
-          invalid path "directory name is too long";
-        Some (default_name, "", content)
+  match Io.lines content with
+  | first :: rest when String.equal first "---" ->
+      let rec close_header index = function
+        | [] -> invalid path "unterminated frontmatter"
+        | line :: tail when String.equal line "---" -> (index, tail)
+        | _ :: tail -> close_header (index + 1) tail
+      in
+      let header_count, body_lines = close_header 0 rest in
+      let header_lines = List.filteri (fun index _ -> index < header_count) rest in
+      let front_name, description = parse_header path header_lines in
+      let name = Option.value front_name ~default:default_name in
+      if String.equal name "" then invalid path "name must not be empty";
+      if String.length name > max_name_bytes then invalid path "name is too long";
+      if
+        String.equal name "." || String.equal name ".." || String.contains name '/'
+        || String.contains name '\\'
+      then invalid path "name contains a path separator";
+      if String.length description > max_description_bytes then
+        invalid path "description is too long";
+      let body = String.concat "\n" body_lines in
+      (name, description, body)
+  | _ ->
+      if String.length default_name > max_name_bytes then
+        invalid path "directory name is too long";
+      (default_name, "", content)
 
 let discover_entry fs_root directory name =
   let skill_dir = Filename.concat directory name in
@@ -108,14 +77,13 @@ let discover_entry fs_root directory name =
     is_regular_file (path_of fs_root document) >>= fun is_file ->
     if not is_file then reject
     else
-      read_file_opt (path_of fs_root document) >>= function
+      Io.read_bounded (path_of fs_root document) ~max:max_file_bytes >>= function
       | None -> reject
       | Some content ->
-          Lwt.return
-          @@ Option.map
-               (fun (name, description, body) ->
-                 { name; description; dir = skill_dir; body })
-               (parse_document document content ~default_name:name)
+          let skill_name, description, body =
+            parse_document document content ~default_name:name
+          in
+          Lwt.return_some { name = skill_name; description; dir = skill_dir; body }
 
 let discover_directory fs_root directory =
   is_directory (path_of fs_root directory) >>= fun is_dir ->
@@ -167,11 +135,6 @@ let safe_relative_path path =
        (fun component -> component <> "" && component <> "." && component <> "..")
        (String.split_on_char '/' path)
 
-let within ~root path =
-  String.equal root path
-  || String.length path > String.length root
-     && String.starts_with ~prefix:(root ^ Filename.dir_sep) path
-
 let resolve fs_root relative =
   Lwt.catch
     (fun () ->
@@ -186,7 +149,8 @@ let read_skill_relative fs_root skill relative =
   | Some root -> (
       resolve fs_root (Filename.concat skill.dir relative) >>= fun target ->
       match target with
-      | Some target when within ~root target -> read_file_opt target
+      | Some target when Path.within ~root target ->
+          Io.read_bounded target ~max:max_file_bytes
       | _ -> Lwt.return_none)
 
 let resolve_uri t ~fs_root uri =
@@ -208,5 +172,5 @@ let resolve_uri t ~fs_root uri =
           | None -> missing ()
           | Some skill -> (
               read_skill_relative fs_root skill relative >>= function
-              | Some body when String.length body <= max_file_bytes -> Lwt.return_ok body
-              | _ -> missing ()))
+              | Some body -> Lwt.return_ok body
+              | None -> missing ()))

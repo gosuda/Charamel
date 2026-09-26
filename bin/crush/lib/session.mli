@@ -163,6 +163,13 @@ val messages : t -> Charamel_fantasy.Message.t list
     by a synthetic user summary and assistant acknowledgement; observability-only tool
     events are not duplicated. *)
 
+val message_text : Charamel_fantasy.Message.t -> string
+(** [message_text message] renders [message] as one prompt-facing line: the role, then
+    every part in order — text as itself, reasoning wrapped in a tag, a file or a media
+    tool result reduced to its type and size, and a tool call or result prefixed with its
+    id and name. It carries no wire format: the JSONL store writes the structured event,
+    and this rendering is only for the text a model is asked to read. *)
+
 val usage_total : t -> Charamel_fantasy.Usage.t * float
 (** [usage_total session] sums all usage events and their dollar costs. *)
 

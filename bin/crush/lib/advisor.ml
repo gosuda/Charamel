@@ -30,35 +30,8 @@ let create (config : Config.advisor) =
     quarantined = false;
   }
 
-let output_string = function
-  | `Text text -> text
-  | `Error text -> "error: " ^ text
-  | `Media (mime, data) -> Fmt.str "media <%s> (%d bytes)" mime (String.length data)
-
-let part_text = function
-  | Charamel_fantasy.Message.Text text -> text
-  | Charamel_fantasy.Message.Reasoning { text; _ } ->
-      "<reasoning>" ^ text ^ "</reasoning>"
-  | Charamel_fantasy.Message.File { mime; data; name } ->
-      Fmt.str "<file mime=%s name=%s bytes=%d>" mime
-        (Option.value ~default:"" name)
-        (String.length data)
-  | Charamel_fantasy.Message.Tool_call { id; name; input } ->
-      Fmt.str "call %s (%s): %s" id name (Jsonx.display_string input)
-  | Charamel_fantasy.Message.Tool_result { id; name; output } ->
-      Fmt.str "result %s (%s): %s" id name (output_string output)
-
-let message_text { Charamel_fantasy.Message.role; parts } =
-  let role =
-    match role with
-    | Charamel_fantasy.Message.System -> "system"
-    | Charamel_fantasy.Message.User -> "user"
-    | Charamel_fantasy.Message.Assistant -> "assistant"
-    | Charamel_fantasy.Message.Tool -> "tool"
-  in
-  role ^ ": " ^ String.concat "" (List.map part_text parts)
-
-let render_last_turn messages = String.concat "\n" (List.map message_text messages)
+let render_last_turn messages =
+  String.concat "\n" (List.map Session.message_text messages)
 
 let first_json_object text =
   Option.bind (String.index_opt text '{') (fun start ->

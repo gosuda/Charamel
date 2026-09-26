@@ -71,27 +71,6 @@ let fantasy_case () =
   Alcotest.(check string)
     "fantasy tool description" "Read a file" converted.Charamel_fantasy.Tool.description
 
-let normalizer_pins () =
-  Alcotest.check Alcotest.string "empty normalizes to dot" "." (Tool.normalize_path "");
-  Alcotest.check Alcotest.string "root stays root" "/" (Tool.normalize_path "/");
-  Alcotest.check Alcotest.string "dot-dot clamps at root" "/"
-    (Tool.normalize_path "/../..");
-  Alcotest.check Alcotest.string "relative dot-dot is preserved" "../.."
-    (Tool.normalize_path "../..");
-  Alcotest.check Alcotest.string "dot is dropped" "a/b" (Tool.normalize_path "a/./b");
-  Alcotest.check Alcotest.string "mid-path dot-dot resolves" "a/c"
-    (Tool.normalize_path "a/b/../c");
-  Alcotest.check Alcotest.string "trailing slash is dropped" "/a/b"
-    (Tool.normalize_path "/a/b/");
-  Alcotest.check Alcotest.bool "equal paths share a prefix" true
-    (Tool.component_prefix "/a" "/a");
-  Alcotest.check Alcotest.bool "child shares a prefix" true
-    (Tool.component_prefix "/a" "/a/b");
-  Alcotest.check Alcotest.bool "sibling prefix is not a prefix" false
-    (Tool.component_prefix "/a" "/ab");
-  Alcotest.check Alcotest.bool "root prefixes every absolute path" true
-    (Tool.component_prefix "/" "/x")
-
 let cases =
   [
     Test_tools_test_support.case "ok output" `Quick output_case;
@@ -100,5 +79,4 @@ let cases =
     Test_tools_test_support.case "decode valid JSON" `Quick decode_case;
     Test_tools_test_support.case "decode invalid JSON" `Quick invalid_decode_case;
     Test_tools_test_support.case "fantasy conversion" `Quick fantasy_case;
-    Test_tools_test_support.case "normalizer pins" `Quick normalizer_pins;
   ]

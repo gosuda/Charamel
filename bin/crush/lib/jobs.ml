@@ -29,7 +29,6 @@ type t = {
 let max_output_bytes = 10 * 1024 * 1024
 let max_completed_jobs = 128
 let wait_timeout_s = 600.
-let graceful_window_s = 2.
 
 let create ~sw ~artifacts =
   {
@@ -70,32 +69,13 @@ let merged_environment overrides =
     inherited overrides
   |> Array.of_list
 
-let signal_group process signal =
-  let group = -Charamel_os.Process.pid process in
-  try Unix.kill group signal with Unix.Unix_error (Unix.ESRCH, _, _) -> ()
-
-let process_group_exists process =
-  let group = -Charamel_os.Process.pid process in
-  try
-    Unix.kill group 0;
-    true
-  with
-  | Unix.Unix_error (Unix.ESRCH, _, _) -> false
-  | Unix.Unix_error (Unix.EPERM, _, _) -> true
-
-let terminate_group process =
-  signal_group process Sys.sigterm;
-  Lwt_unix.sleep graceful_window_s >>= fun () ->
-  signal_group process Sys.sigkill;
-  Lwt.return_unit
-
 let schedule_delayed_kill t job process =
   Lwt.async (fun () ->
       Lwt.catch
         (fun () ->
-          Lwt_unix.sleep graceful_window_s >>= fun () ->
+          Lwt_unix.sleep Charamel_os.Process.grace >>= fun () ->
           Lwt_mutex.with_lock t.lock (fun () ->
-              if status_is_running job.status then signal_group process Sys.sigkill;
+              if status_is_running job.status then Charamel_os.Process.kill_tree process;
               Lwt.return_unit))
         (function Unix.Unix_error _ -> Lwt.return_unit | exn -> Lwt.fail exn))
 
@@ -108,7 +88,7 @@ let set_process t job process =
   >>= function
   | false -> Lwt.return_unit
   | true ->
-      signal_group process Sys.sigterm;
+      Charamel_os.Process.terminate_tree process;
       Lwt.return (schedule_delayed_kill t job process)
 
 let append_spawn_error t job message =
@@ -187,18 +167,18 @@ let exit_within process timeout_s =
         (Lwt_unix.sleep (float_of_int timeout_s) >|= fun () -> `Deadline);
       ]
 
-(* The deadline owns the kill, as before the cutover: SIGTERM to the group, the
-   graceful window, SIGKILL, then the reap. The capture pump ends when the group
-   dies, so it is awaited after the kill, never before it. *)
+(* The deadline owns the kill: a graceful request to the group, the grace window, then
+   the force. The capture pump ends when the group dies, so it is awaited after the kill,
+   never before it. *)
 let kill_at_deadline process =
-  signal_group process Sys.sigterm;
-  Lwt_unix.sleep graceful_window_s >>= fun () ->
-  signal_group process Sys.sigkill;
+  Charamel_os.Process.stop_after_grace process >>= fun () ->
   reap process >|= fun _ -> ()
 
 let settle t job process captured code =
   let teardown =
-    if process_group_exists process then terminate_group process else Lwt.return_unit
+    if Charamel_os.Process.group_alive process then
+      Charamel_os.Process.stop_after_grace process
+    else Lwt.return_unit
   in
   (* The drain and the group teardown run beside each other — a grandchild holding a
      pipe open is closed by that teardown — and the job finishes only once both are
@@ -219,14 +199,14 @@ let report_spawn t job message =
 
 let cancel_job t job =
   Lwt_mutex.with_lock t.lock (fun () -> Lwt.return job.process) >>= fun process ->
-  Option.iter (fun process -> signal_group process Sys.sigkill) process;
+  Option.iter (fun process -> Charamel_os.Process.kill_tree process) process;
   finish t job Killed
 
 let spawn_failure t job = function
   | Unix.Unix_error (error, function_name, argument) ->
       report_spawn t job
-        (Fmt.str "job %s: %s (%s %s)" job.id (Unix.error_message error) function_name
-           argument)
+        (Fmt.str "job %s: %s" job.id
+           (Io.message (Unix.Unix_error (error, function_name, argument))))
   | Invalid_argument message -> report_spawn t job (Fmt.str "job %s: %s" job.id message)
   | Lwt.Canceled -> cancel_job t job
   | exn -> Lwt.fail exn
@@ -341,7 +321,7 @@ let kill t ~id =
         match process with
         | None -> Lwt.return_unit
         | Some process ->
-            signal_group process Sys.sigterm;
+            Charamel_os.Process.terminate_tree process;
             schedule_force_kill t job )
       >>= fun () -> Lwt.return_ok ()
 
@@ -368,12 +348,12 @@ let kill_all t =
   if jobs = [] then Lwt.return_unit
   else
     Lwt_list.iter_s (fun (id, _) -> kill t ~id >|= fun _ -> ()) jobs >>= fun () ->
-    Lwt_unix.sleep graceful_window_s >>= fun () ->
+    Lwt_unix.sleep Charamel_os.Process.grace >>= fun () ->
     running_processes t >>= fun running ->
     Lwt_list.iter_s
       (fun (job, process) ->
         Lwt_mutex.with_lock t.lock (fun () ->
-            if status_is_running job.status then signal_group process Sys.sigkill;
+            if status_is_running job.status then Charamel_os.Process.kill_tree process;
             Lwt.return_unit))
       running
 

@@ -7,29 +7,6 @@ let head_lines = 50
 let tail_lines = 20
 let path t name = Filename.concat (Filename.concat t.fs_root t.dir) name
 
-let error_text = function
-  | `Not_found -> "not found"
-  | `Already_exists -> "already exists"
-  | `Permission_denied -> "permission denied"
-  | `Is_directory -> "is a directory"
-
-let describe = function
-  | Unix.Unix_error (error, function_name, argument) ->
-      Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument
-  | Charamel_os.Fs.E (error, target) -> Fmt.str "%s: %s" (error_text error) target
-  | Sys_error message -> message
-  | exn -> Printexc.to_string exn
-
-let protect_io target f =
-  Lwt.try_bind f
-    (fun value -> Lwt.return_ok value)
-    (function
-      | Unix.Unix_error (Unix.ENOENT, _, _) -> Lwt.return_error (`Not_found target)
-      | Charamel_os.Fs.E (`Not_found, _) -> Lwt.return_error (`Not_found target)
-      | (Unix.Unix_error _ | Charamel_os.Fs.E _ | Sys_error _) as exn ->
-          Lwt.return_error (`Io (target, describe exn))
-      | exn -> Lwt.fail exn)
-
 let create_dir path =
   Lwt.catch
     (fun () -> Lwt_unix.mkdir path 0o700)
@@ -52,7 +29,7 @@ let save_path path contents =
       >>= fun () -> Lwt.return_ok ())
     (function
       | Unix.Unix_error (Unix.EEXIST, _, _) -> Lwt.return_error `Exists
-      | exn -> Lwt.return_error (`Io (path, describe exn)))
+      | exn -> Lwt.return_error (`Io (path, Io.message exn)))
 
 let create ~fs_root ~dir = { fs_root; dir; mutex = Lwt_mutex.create () }
 let hex_byte c = Fmt.str "%02x" (Char.code c)
@@ -66,7 +43,7 @@ let id_of_random random =
 let save t ~random contents =
   Lwt_mutex.with_lock t.mutex (fun () ->
       let directory = Filename.concat t.fs_root t.dir in
-      protect_io t.dir (fun () -> create_dir directory) >>= function
+      Io.trap t.dir (fun () -> create_dir directory) >>= function
       | Error (`Not_found path) ->
           Lwt.return_error (`Io (path, "artifact directory does not exist"))
       | Error (`Io _) as error -> Lwt.return error
@@ -101,9 +78,9 @@ let load t ~id =
   else
     let target = Filename.concat t.dir (id ^ ".txt") in
     let file = path t (id ^ ".txt") in
-    protect_io target (fun () -> Lwt_unix.lstat file) >>= function
+    Io.trap target (fun () -> Lwt_unix.lstat file) >>= function
     | Error error -> Lwt.return_error error
-    | Ok { Unix.st_kind = Unix.S_REG; _ } -> protect_io target (fun () -> read_all file)
+    | Ok { Unix.st_kind = Unix.S_REG; _ } -> Io.trap target (fun () -> read_all file)
     | Ok _ -> Lwt.return_error (`Not_found target)
 
 let is_utf8_continuation c = Char.code c land 0xC0 = 0x80

@@ -96,3 +96,34 @@ val alive : t -> bool
 (** Whether the child is still running, as far as the reaper has noticed: [true] until the
     promise {!val:await} returns settles, which means a stopped or just-exited child not
     yet collected still answers [true]. *)
+
+val grace : float
+(** {!val:stop}'s default graceful window, in seconds: the time a child is given to react
+    to the first request before it is forced away. *)
+
+val terminate_tree : t -> unit
+(** Ask the child and everything in its process group to stop with [SIGTERM], ignoring a
+    group that is already gone or refuses the signal. Use it when the child is a shell
+    wrapper whose grandchildren must also be told to stop; {!val:terminate} reaches only
+    the child. On Windows there are no process groups, so this is {!val:terminate}. *)
+
+val group_alive : t -> bool
+(** Whether the child's process group still holds a live member, tested with signal [0]. A
+    group this process may not signal counts as alive. On Windows, where there are no
+    groups, this is {!val:alive}. *)
+
+val stop : ?grace:float -> t -> unit Lwt.t
+(** [stop ?grace t] ends the child and everything still in its process group: it asks them
+    to stop with {!val:terminate_tree}, gives the child until [grace] seconds (default
+    {!val:grace}) to leave on its own, and then forces whatever is still in the group away
+    with {!val:kill_tree}. The wait ends as soon as the child exits, so a child that
+    leaves promptly costs nothing. It never waits for the exit status, which {!val:await}
+    reports separately, and it signals nothing once the group is empty, so a recycled
+    process id is never reached. *)
+
+val stop_after_grace : ?grace:float -> t -> unit Lwt.t
+(** [stop_after_grace ?grace t] is {!val:stop} for a caller that must hold the whole
+    window open instead of returning as soon as the child is gone: the group is asked to
+    stop, the full [grace] seconds elapse, and whatever is still in the group is then
+    forced away. Use it where a deadline owns the kill and the caller measures the window
+    it waited. *)

@@ -193,6 +193,33 @@ let message_jsont =
          value.Charamel_fantasy.Message.parts)
   |> Object.finish
 
+let tool_output_text = function
+  | `Text text -> text
+  | `Error text -> "error: " ^ text
+  | `Media (mime, data) -> Fmt.str "media <%s> (%d bytes)" mime (String.length data)
+
+let part_text = function
+  | Charamel_fantasy.Message.Text text -> text
+  | Charamel_fantasy.Message.Reasoning { text; _ } ->
+      "<reasoning>" ^ text ^ "</reasoning>"
+  | Charamel_fantasy.Message.File { mime; data; name } ->
+      Fmt.str "<file mime=%s name=%s bytes=%d>" mime
+        (Option.value ~default:"" name)
+        (String.length data)
+  | Charamel_fantasy.Message.Tool_call { id; name; input } ->
+      Fmt.str "call %s (%s): %s" id name (Jsonx.display_string input)
+  | Charamel_fantasy.Message.Tool_result { id; name; output } ->
+      Fmt.str "result %s (%s): %s" id name (tool_output_text output)
+
+let role_text = function
+  | Charamel_fantasy.Message.System -> "system"
+  | Charamel_fantasy.Message.User -> "user"
+  | Charamel_fantasy.Message.Assistant -> "assistant"
+  | Charamel_fantasy.Message.Tool -> "tool"
+
+let message_text { Charamel_fantasy.Message.role; parts } =
+  role_text role ^ ": " ^ String.concat "" (List.map part_text parts)
+
 let model_ref_jsont =
   let open Jsont in
   Object.map (fun provider model -> { provider; model })
@@ -458,31 +485,6 @@ let sessions_dir store = Filename.concat store.root "sessions"
 let index_path store = Filename.concat store.root "sessions.json"
 let session_path store id = Filename.concat (sessions_dir store) (id ^ ".jsonl")
 
-let error_text = function
-  | `Not_found -> "not found"
-  | `Already_exists -> "already exists"
-  | `Permission_denied -> "permission denied"
-  | `Is_directory -> "is a directory"
-
-let io_message exn =
-  match exn with
-  | Unix.Unix_error (error, function_name, argument) ->
-      Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument
-  | Charamel_os.Fs.E (error, target) -> Fmt.str "%s: %s" (error_text error) target
-  | exn -> Printexc.to_string exn
-
-let protect_io target f =
-  Lwt.try_bind f
-    (fun value -> Lwt.return_ok value)
-    (function
-      | Unix.Unix_error (Unix.ENOENT, _, _)
-      | Unix.Unix_error (Unix.ENOTDIR, _, _)
-      | Charamel_os.Fs.E (`Not_found, _) ->
-          Lwt.return_error (`Not_found target)
-      | (Unix.Unix_error _ | Charamel_os.Fs.E _ | Sys_error _) as exn ->
-          Lwt.return_error (`Io (target, io_message exn))
-      | exn -> Lwt.fail exn)
-
 let write_channel path flags perm contents =
   Lwt_unix.openfile path flags perm >>= fun fd ->
   let channel = Lwt_io.of_fd ~mode:Lwt_io.Output fd in
@@ -490,12 +492,12 @@ let write_channel path flags perm contents =
 
 let write_append target fs_root contents =
   let file = fs_path fs_root target in
-  protect_io target (fun () ->
+  Io.trap target (fun () ->
       write_channel file [ O_WRONLY; O_APPEND; O_CREAT ] 0o600 contents)
 
 let write_truncate target fs_root contents =
   let file = fs_path fs_root target in
-  protect_io target (fun () ->
+  Io.trap target (fun () ->
       write_channel file [ O_WRONLY; O_CREAT; O_TRUNC ] 0o600 contents)
 
 let write_exclusive target fs_root contents =
@@ -507,7 +509,7 @@ let write_exclusive target fs_root contents =
     (function
       | Unix.Unix_error (Unix.EEXIST, _, _) -> Lwt.return_error `Exists
       | (Unix.Unix_error _ | Charamel_os.Fs.E _ | Sys_error _) as exn ->
-          Lwt.return_error (`Io (target, io_message exn))
+          Lwt.return_error (`Io (target, Io.message exn))
       | exn -> Lwt.fail exn)
 
 let read_file path =
@@ -517,7 +519,7 @@ let remove_file target fs_root =
   Charamel_os.Fs.unlink (fs_path fs_root target) >>= function
   | Ok () | Error `Already_exists -> Lwt.return_ok ()
   | Error `Not_found -> Lwt.return_error (`Not_found target)
-  | Error error -> Lwt.return_error (`Io (target, error_text error))
+  | Error error -> Lwt.return_error (`Io (target, Io.fs_error error))
 
 let mkdir_private path =
   Charamel_os.Fs.mkdir_p path >>= function
@@ -525,7 +527,7 @@ let mkdir_private path =
   | Error error -> Lwt.fail (Charamel_os.Fs.E (error, path))
 
 let ensure_directories store =
-  protect_io store.root (fun () ->
+  Io.trap store.root (fun () ->
       mkdir_private (fs_path store.fs_root store.root) >>= fun () ->
       mkdir_private (fs_path store.fs_root (sessions_dir store)))
 
@@ -534,7 +536,7 @@ let decode codec text = Jsonx.decode codec text
 
 let load_index store =
   let target = index_path store in
-  protect_io target (fun () -> read_file (fs_path store.fs_root target)) >>= function
+  Io.trap target (fun () -> read_file (fs_path store.fs_root target)) >>= function
   | Error (`Not_found _) -> Lwt.return_ok []
   | Error (`Io (path, message)) ->
       Lwt.return_error (`Index (Fmt.str "%s: %s" path message))
@@ -710,11 +712,11 @@ let open_ store ~id =
   else
     let target = session_path store id in
     let file = fs_path store.fs_root target in
-    protect_io target (fun () -> Lwt_unix.lstat file) >>= function
+    Io.trap target (fun () -> Lwt_unix.lstat file) >>= function
     | Error (`Not_found _) -> Lwt.return_error (`Not_found target)
     | Error (`Io _ as failure) -> Lwt.return (Error failure)
     | Ok { Unix.st_kind = Unix.S_REG; _ } -> (
-        protect_io target (fun () -> read_file file) >>= function
+        Io.trap target (fun () -> read_file file) >>= function
         | Error (`Not_found _) -> Lwt.return_error (`Not_found target)
         | Error (`Io _ as failure) -> Lwt.return (Error failure)
         | Ok text -> (
@@ -870,7 +872,7 @@ let delete store ~id =
   else
     let target = session_path store id in
     let file = fs_path store.fs_root target in
-    protect_io target (fun () -> Lwt_unix.lstat file) >>= function
+    Io.trap target (fun () -> Lwt_unix.lstat file) >>= function
     | Error (`Not_found _) -> Lwt.return_error (`Not_found target)
     | Error (`Io _ as failure) -> Lwt.return (Error failure)
     | Ok { Unix.st_kind = Unix.S_REG; _ } -> (
@@ -885,7 +887,7 @@ let delete store ~id =
                 Lwt.catch
                   (fun () ->
                     remove_tree (fs_path store.fs_root artifacts) >|= fun () -> Ok ())
-                  (fun exn -> Lwt.return_error (`Io (artifacts, io_message exn)))
+                  (fun exn -> Lwt.return_error (`Io (artifacts, Io.message exn)))
                 >>= function
                 | Ok () -> Lwt.return_ok ()
                 | Error _ as failure -> Lwt.return failure)))

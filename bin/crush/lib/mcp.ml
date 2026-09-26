@@ -70,16 +70,6 @@ let json_object members =
   |> List.map (fun (name, value) -> Jsont.Json.mem (Jsont.Json.name name) value)
   |> Jsont.Json.object'
 
-let array_member name value =
-  match Jsonx.member name value with
-  | Some (Jsont.Array (values, _)) -> Some values
-  | _ -> None
-
-let object_member name value =
-  match Jsonx.member name value with
-  | Some (Jsont.Object _ as value) -> Some value
-  | _ -> None
-
 let error_message = function
   | `Unknown_server server -> Fmt.str "unknown MCP server %s" server
   | `Not_connected server -> Fmt.str "MCP server %s is not connected" server
@@ -158,28 +148,6 @@ let fork f = ignore (guarded f)
 let close_channel channel =
   Lwt.catch (fun () -> Lwt_io.abort channel) (fun _ -> Lwt.return_unit)
 
-(* [Charamel_os.Process.await] hands out the one shared promise the reaper
-   resolves; [Lwt_unix.with_timeout] and [Lwt.pick] cancel what they wrap or race,
-   which would poison every later await of the same child and make {!close} reject
-   with [Lwt.Canceled]. The race goes through [Lwt.protected], the documented
-   cancel barrier, and [Lwt.choose], which never cancels the loser. *)
-let await_within seconds process =
-  Lwt.choose
-    [
-      (Lwt.protected (Charamel_os.Process.await process) >|= fun code -> Some code);
-      (Lwt_unix.sleep seconds >|= fun () -> None);
-    ]
-
-let terminate_process process =
-  Charamel_os.Process.terminate process;
-  await_within 2. process >>= function
-  | Some _ -> Lwt.return_unit
-  | None ->
-      Charamel_os.Process.kill_tree process;
-      (* A wedged child still must not fail the close: the final race resolves to
-         [None] after its own timer and the wait is simply abandoned. *)
-      await_within 1. process >|= fun _ -> ()
-
 let stop_http (http : http) =
   if not http.closed then (
     http.closed <- true;
@@ -188,7 +156,10 @@ let stop_http (http : http) =
 let cleanup_transport = function
   | Stdio stdio ->
       close_channel stdio.input >>= fun () ->
-      close_channel stdio.output >>= fun () -> terminate_process stdio.process
+      (* A wedged child must not fail the close: [stop] asks the group to leave, waits the
+         grace window, forces the remainder away, and returns without collecting the exit
+         status — the reaper started at [spawn] collects it. *)
+      close_channel stdio.output >>= fun () -> Charamel_os.Process.stop stdio.process
   | Http_transport http ->
       stop_http http;
       Lwt.return_unit
@@ -252,7 +223,7 @@ let close_server (server : server) =
   | Some transport -> cleanup_transport transport
 
 let response_error server value =
-  match object_member "error" value with
+  match Jsonx.object_member "error" value with
   | Some error ->
       let code = Option.value (Jsonx.int_member "code" error) ~default:(-32_000) in
       let message =
@@ -876,7 +847,7 @@ let parse_prompt server value : (prompt, error) result Lwt.t =
   let* name = parse_required_string server "name" value in
   let description = Option.value (Jsonx.string_member "description" value) ~default:"" in
   let* arguments =
-    match array_member "arguments" value with
+    match Jsonx.array_member "arguments" value with
     | None -> Lwt.return_ok []
     | Some values ->
         let rec loop acc = function
@@ -895,7 +866,7 @@ let next_cursor value =
   | _ -> None
 
 let page_values server field parser value =
-  match array_member field value with
+  match Jsonx.array_member field value with
   | None ->
       Lwt.return_error
         (`Transport (server.name, Fmt.str "MCP response is missing array field %s" field))
@@ -1177,7 +1148,7 @@ let content_of_json server value =
       in
       Lwt.return_ok (Image { mime; data })
   | "resource" -> (
-      match object_member "resource" value with
+      match Jsonx.object_member "resource" value with
       | None ->
           Lwt.return_error
             (`Transport (server.name, "MCP resource content is missing resource"))
@@ -1198,7 +1169,7 @@ let content_of_json server value =
         (`Transport (server.name, Fmt.str "unsupported MCP content type %s" other))
 
 let contents_of_result server value =
-  match array_member "content" value with
+  match Jsonx.array_member "content" value with
   | None -> Lwt.return_error (`Transport (server.name, "MCP result is missing content"))
   | Some values ->
       let rec loop acc = function
@@ -1225,7 +1196,7 @@ let read_resource t ~server ~uri =
   | Some server -> (
       let params = json_object [ ("uri", json_string uri) ] in
       let* result = rpc server ~method_name:"resources/read" ~params in
-      match array_member "contents" result with
+      match Jsonx.array_member "contents" result with
       | None ->
           Lwt.return_error
             (`Transport (server.name, "MCP resources/read result is missing contents"))
@@ -1294,7 +1265,7 @@ let get_prompt t ~server ~name ~args =
       in
       let params = json_object [ ("name", json_string name); ("arguments", arguments) ] in
       let* result = rpc server ~method_name:"prompts/get" ~params in
-      match array_member "messages" result with
+      match Jsonx.array_member "messages" result with
       | None ->
           Lwt.return_error
             (`Transport (server.name, "MCP prompts/get result is missing messages"))

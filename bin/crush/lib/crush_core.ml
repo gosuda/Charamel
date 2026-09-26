@@ -1,4 +1,6 @@
 module Hashline = Hashline
+module Path = Path
+module Io = Io
 module Config = Config
 module Auth = Auth
 module Models = Models

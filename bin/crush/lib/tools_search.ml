@@ -1,18 +1,9 @@
 open Result.Syntax
-open Lwt_direct
 
 let max_ls_entries = 1000
 let max_glob_results = 100
 let max_grep_results = 500
 let max_file_bytes = 10 * 1024 * 1024
-
-let protect_io path f =
-  try Ok (await (f ())) with
-  | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Error (`Not_found path)
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (`Io (path, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
-  | Sys_error message -> Error (`Io (path, message))
 
 let file_kind (stat : Unix.stats) =
   match stat.Unix.st_kind with
@@ -65,18 +56,6 @@ let read_directory_entries dir =
     names
 
 let load_file path = Lwt_io.with_file ~mode:Lwt_io.Input path Lwt_io.read
-
-let canonical_or_abs ctx absolute =
-  match Tool.canonical ctx absolute with
-  | Ok target -> Ok target
-  | Error (`Not_found _) -> Ok absolute
-  | Error error -> Error error
-
-let output ctx text =
-  let content, artifact =
-    await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text)
-  in
-  Tool.ok ?artifact content
 
 let trim_slashes path =
   let length = String.length path in
@@ -210,7 +189,7 @@ let ls_entries ctx ~timeout root ~ignore ~depth =
       Ok ()
     end
     else
-      match protect_io current (fun () -> read_directory_entries current) with
+      match Io.trap_await current (fun () -> read_directory_entries current) with
       | Error _ as error -> error
       | Ok entries ->
           let entries =
@@ -241,7 +220,7 @@ let ls_entries ctx ~timeout root ~ignore ~depth =
           visit entries
   in
   let root_path = root in
-  match protect_io root (fun () -> path_kind ~follow:true root_path) with
+  match Io.trap_await root (fun () -> path_kind ~follow:true root_path) with
   | Error error -> Error error
   | Ok `Directory ->
       let root_name = basename root in
@@ -267,13 +246,9 @@ let run_ls ctx json =
   if depth < 0 then Error (`Invalid_input "depth must not be negative")
   else
     let depth = min 10 depth in
-    let absolute =
-      Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) |> trim_slashes
-    in
-    let target_result = canonical_or_abs ctx absolute in
-    let request_path =
-      match target_result with Ok target -> target | Error _ -> absolute
-    in
+    let absolute = Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) in
+    let target_result = Tool.canonical_or_abs ctx absolute in
+    let request_path = Result.value target_result ~default:absolute in
     begin
       let* () =
         Tool.request ctx ~read_only:true ~tool:"ls" ~action:"ls" ~path:request_path
@@ -282,7 +257,7 @@ let run_ls ctx json =
       begin
         let* target = target_result in
         match ls_entries ctx ~timeout:30. target ~ignore ~depth with
-        | Ok text -> Ok (output ctx text)
+        | Ok text -> Ok (Tool.truncate ctx text)
         | Error error -> Error error
       end
     end
@@ -295,13 +270,15 @@ let collect_files ctx ~timeout ?(include_hidden = false) ?(include_generated = f
   let rec walk current relative =
     if deadline_exceeded ctx deadline then Error (`Timeout timeout)
     else
-      match protect_io current (fun () -> path_kind ~follow:false current) with
+      match Io.trap_await current (fun () -> path_kind ~follow:false current) with
       | Error error -> Error error
       | Ok `Symbolic_link -> Ok ()
       | Ok `Regular_file ->
           callback current (if relative = "." then basename current else relative)
       | Ok `Directory -> begin
-          let* entries = protect_io current (fun () -> read_directory_entries current) in
+          let* entries =
+            Io.trap_await current (fun () -> read_directory_entries current)
+          in
           let entries =
             List.sort (fun (_, left) (_, right) -> String.compare left right) entries
           in
@@ -369,13 +346,9 @@ let run_glob ctx pattern path_opt =
   match compile_glob pattern with
   | Error message -> Error (`Invalid_input message)
   | Ok expression ->
-      let absolute =
-        Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) |> trim_slashes
-      in
-      let target_result = canonical_or_abs ctx absolute in
-      let request_path =
-        match target_result with Ok target -> target | Error _ -> absolute
-      in
+      let absolute = Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) in
+      let target_result = Tool.canonical_or_abs ctx absolute in
+      let request_path = Result.value target_result ~default:absolute in
       begin
         let* () =
           Tool.request ctx ~read_only:true ~tool:"glob" ~action:pattern ~path:request_path
@@ -390,7 +363,7 @@ let run_glob ctx pattern path_opt =
             in
             if not (Re.execp expression candidate) then Ok ()
             else
-              let* stat = protect_io file (fun () -> Lwt_unix.stat file) in
+              let* stat = Io.trap_await file (fun () -> Lwt_unix.stat file) in
               matches :=
                 { relative = relative_to_cwd ctx file; mtime = stat.Unix.st_mtime }
                 :: !matches;
@@ -418,7 +391,7 @@ let run_glob ctx pattern path_opt =
                 | [] -> "No files found"
                 | _ -> String.concat "\n" (List.map (fun item -> item.relative) sorted)
               in
-              Ok (output ctx text)
+              Ok (Tool.truncate ctx text)
         end
       end
 
@@ -474,13 +447,9 @@ let run_grep ctx pattern path_opt include_opt literal max_results =
     match (matcher, include_matcher) with
     | Error error, _ | _, Error error -> Error error
     | Ok matcher, Ok include_matcher ->
-        let absolute =
-          Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) |> trim_slashes
-        in
-        let target_result = canonical_or_abs ctx absolute in
-        let request_path =
-          match target_result with Ok target -> target | Error _ -> absolute
-        in
+        let absolute = Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) in
+        let target_result = Tool.canonical_or_abs ctx absolute in
+        let request_path = Result.value target_result ~default:absolute in
         begin
           let* () =
             Tool.request ctx ~read_only:true ~tool:"grep" ~action:pattern
@@ -500,11 +469,11 @@ let run_grep ctx pattern path_opt include_opt literal max_results =
               in
               if excluded then Ok ()
               else
-                match protect_io file (fun () -> Lwt_unix.stat file) with
+                match Io.trap_await file (fun () -> Lwt_unix.stat file) with
                 | Error error -> Error error
                 | Ok stat when stat.Unix.st_size > max_file_bytes -> Ok ()
                 | Ok _ -> begin
-                    let* content = protect_io file (fun () -> load_file file) in
+                    let* content = Io.trap_await file (fun () -> load_file file) in
                     if binary content || not (String.is_valid_utf_8 content) then Ok ()
                     else
                       let lines = read_lines content in
@@ -537,7 +506,7 @@ let run_grep ctx pattern path_opt include_opt literal max_results =
                   if !truncated then lines @ [ Fmt.str "(truncated at %d)" max_results ]
                   else lines
                 in
-                Ok (output ctx (String.concat "\n" lines))
+                Ok (Tool.truncate ctx (String.concat "\n" lines))
           end
         end
 
