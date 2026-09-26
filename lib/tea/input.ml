@@ -144,6 +144,82 @@ let make_key ?(mods = no_mods) ?(text = "") ?shifted ?base ?(event = Key.Press) 
   { Key.code; mods; text; shifted; base; event }
 
 let add_alt (k : Key.t) = { k with Key.mods = { k.Key.mods with alt = true }; text = "" }
+let zero_width_joiner = Uchar.of_int 0x200d
+
+let hangul_class u =
+  let n = Uchar.to_int u in
+  if (n >= 0x1100 && n <= 0x115f) || (n >= 0xa960 && n <= 0xa97c) then Some `L
+  else if (n >= 0x1160 && n <= 0x11a7) || (n >= 0xd7b0 && n <= 0xd7c6) then Some `V
+  else if (n >= 0x11a8 && n <= 0x11ff) || (n >= 0xd7cb && n <= 0xd7fb) then Some `T
+  else if n >= 0xac00 && n <= 0xd7a3 then
+    Some (if (n - 0xac00) mod 28 = 0 then `LV else `LVT)
+  else None
+
+let hangul_joins tail u =
+  match (hangul_class tail, hangul_class u) with
+  | Some `L, (Some `L | Some `V | Some `LV | Some `LVT) -> true
+  | (Some `V | Some `LV), (Some `V | Some `T) -> true
+  | Some (`LVT | `T), Some `T -> true
+  | _ -> false
+
+let cluster_continues tail parity u =
+  Uucp.Func.is_grapheme_extend u
+  || Uchar.equal tail zero_width_joiner
+  || hangul_joins tail u
+  || Uucp.Func.is_regional_indicator tail
+     && parity = 1
+     && Uucp.Func.is_regional_indicator u
+
+let cluster_may_extend tail parity =
+  Option.is_some (hangul_class tail)
+  || Uchar.equal tail zero_width_joiner
+  || (Uucp.Func.is_regional_indicator tail && parity = 1)
+
+let last_scalar text =
+  let rec go offset last =
+    if offset >= String.length text then last
+    else
+      match String.get_utf_8_uchar text offset with
+      | decoded when Uchar.utf_decode_is_valid decoded ->
+          go
+            (offset + Uchar.utf_decode_length decoded)
+            (Some (Uchar.utf_decode_uchar decoded))
+      | _ -> go (offset + 1) last
+  in
+  go 0 None
+
+let regional_indicator_parity text =
+  let rec go offset parity =
+    if offset >= String.length text then parity
+    else
+      match String.get_utf_8_uchar text offset with
+      | decoded when Uchar.utf_decode_is_valid decoded ->
+          let u = Uchar.utf_decode_uchar decoded in
+          let parity = if Uucp.Func.is_regional_indicator u then 1 - parity else parity in
+          go (offset + Uchar.utf_decode_length decoded) parity
+      | _ -> go (offset + 1) parity
+  in
+  go 0 0
+
+let text_may_extend text =
+  match last_scalar text with
+  | None -> false
+  | Some tail -> cluster_may_extend tail (regional_indicator_parity text)
+
+let held_continues held u =
+  match last_scalar held.Key.text with
+  | None -> false
+  | Some tail -> cluster_continues tail (regional_indicator_parity held.Key.text) u
+
+let text_cluster_head (key : Key.t) =
+  match key.Key.code with
+  | Key.Char u when Uchar.to_int u >= 0x80 ->
+      if
+        key.Key.mods = no_mods && key.Key.event = Key.Press && key.Key.text <> ""
+        && String.length key.Key.text > 0
+      then Some u
+      else None
+  | _ -> None
 
 let parse_decimal s start stop =
   if start >= stop then None
@@ -636,6 +712,48 @@ let parse_color s =
     | _ -> None
   else Charamel_ansi.Color.of_hex s
 
+let hex_decode s =
+  let len = String.length s in
+  if len mod 2 <> 0 then None
+  else
+    let out = Bytes.create (len / 2) in
+    let valid = ref true in
+    for i = 0 to (len / 2) - 1 do
+      match (parse_hex_digit s.[2 * i], parse_hex_digit s.[(2 * i) + 1]) with
+      | Some hi, Some lo -> Bytes.set out i (Char.chr ((hi * 16) + lo))
+      | _ -> valid := false
+    done;
+    if !valid then Some (Bytes.to_string out) else None
+
+let clipboard_of_payload payload =
+  match String.index_opt payload ';' with
+  | None -> None
+  | Some cut -> (
+      let data = String.sub payload (cut + 1) (String.length payload - cut - 1) in
+      let selection =
+        match String.sub payload 0 cut with
+        | "c" | "" -> Some `System
+        | "p" -> Some `Primary
+        | _ -> None
+      in
+      if data = "?" then None
+      else
+        match (selection, Base64.decode data) with
+        | Some selection, Ok content -> Some (Event.Clipboard { selection; content })
+        | _ -> None)
+
+let capability_of_dcs params body =
+  match params with
+  | "0" -> Some (Event.Capability None)
+  | "1" -> (
+      match String.index_opt body '=' with
+      | None -> None
+      | Some cut -> (
+          match hex_decode (String.sub body (cut + 1) (String.length body - cut - 1)) with
+          | Some value -> Some (Event.Capability (Some value))
+          | None -> None))
+  | _ -> None
+
 let parse_osc s start =
   match find_termination ~accept_bel:true s start with
   | Need_termination -> `Need
@@ -663,6 +781,7 @@ let parse_osc s start =
           | Some 11 ->
               Option.map (fun c -> Event.Background_color c) (parse_color payload)
           | Some 12 -> Option.map (fun c -> Event.Cursor_color c) (parse_color payload)
+          | Some 52 -> clipboard_of_payload payload
           | _ -> None
         in
         match event with
@@ -671,6 +790,7 @@ let parse_osc s start =
 
 type dcs_header = {
   prefix : char option;
+  params : string;
   intermediates : string;
   final : char;
   data : int;
@@ -679,9 +799,11 @@ type dcs_header = {
 let parse_dcs_header s start stop =
   let i = ref start in
   let prefix = private_marker s i stop in
+  let param_start = !i in
   while !i < stop && byte s !i >= 0x30 && byte s !i <= 0x3f do
     incr i
   done;
+  let params = String.sub s param_start (!i - param_start) in
   let inter_start = !i in
   while !i < stop && byte s !i >= 0x20 && byte s !i <= 0x2f do
     incr i
@@ -691,6 +813,7 @@ let parse_dcs_header s start stop =
     Some
       {
         prefix;
+        params;
         intermediates = String.sub s inter_start (min 2 (!i - inter_start));
         final = s.[!i];
         data = !i + 1;
@@ -708,6 +831,10 @@ let parse_dcs s start =
       match parse_dcs_header s start at with
       | Some h when h.prefix = Some '>' && h.intermediates = "" && h.final = '|' ->
           `Done (next, [ Event.Terminal_version (String.sub s h.data (at - h.data)) ])
+      | Some { prefix = None; params; intermediates = "+"; final = 'r'; data } -> (
+          match capability_of_dcs params (String.sub s data (at - data)) with
+          | Some event -> `Done (next, [ event ])
+          | None -> `Done (next, [ Event.Unknown raw ]))
       | _ -> `Done (next, [ Event.Unknown raw ]))
 
 let parse_st_unknown s start =
@@ -1035,10 +1162,52 @@ let rec decode_one s =
 let paste_end_7 = "\027[201~"
 let paste_end_8 = "\155201~"
 
-type t = { mutable pending : string; mutable paste : bool }
+type t = { mutable pending : string; mutable paste : bool; mutable held : Key.t option }
 
-let create () = { pending = ""; paste = false }
+let create () = { pending = ""; paste = false; held = None }
 let pending_escape t = (not t.paste) && t.pending = String.make 1 esc
+let pending_cluster t = (not t.paste) && Option.is_some t.held
+
+let flush_held t output =
+  match t.held with
+  | None -> ()
+  | Some held ->
+      t.held <- None;
+      output := Event.Key held :: !output
+
+let hold_or_emit t output key =
+  if text_may_extend key.Key.text then t.held <- Some key
+  else output := Event.Key key :: !output
+
+let absorb_events t output events =
+  List.iter
+    (fun event ->
+      match event with
+      | Event.Key key -> (
+          match text_cluster_head key with
+          | Some u -> (
+              match t.held with
+              | Some held when held_continues held u ->
+                  let text = held.Key.text ^ key.Key.text in
+                  if String.length text > cap_bytes then begin
+                    flush_held t output;
+                    hold_or_emit t output key
+                  end
+                  else begin
+                    t.held <- Some { held with Key.text };
+                    if text_may_extend text then () else flush_held t output
+                  end
+              | Some _ ->
+                  flush_held t output;
+                  hold_or_emit t output key
+              | None -> hold_or_emit t output key)
+          | None ->
+              flush_held t output;
+              output := Event.Key key :: !output)
+      | event ->
+          flush_held t output;
+          output := event :: !output)
+    events
 
 let rec drain_paste t output =
   let first = find_substring t.pending paste_end_7 0 in
@@ -1097,6 +1266,7 @@ let rec drain t output ~force =
   else
     match decode_one t.pending with
     | Need when force ->
+        flush_held t output;
         if t.pending = String.make 1 esc then
           output := Event.Key (make_key Key.Escape) :: !output
         else if String.length t.pending > cap_bytes then
@@ -1107,7 +1277,7 @@ let rec drain t output ~force =
     | Done (n, events) ->
         let consumed = String.sub t.pending 0 n in
         t.pending <- drop_prefix t.pending n;
-        output := List.rev_append events !output;
+        absorb_events t output events;
         if consumed = "\027[200~" || consumed = "\155200~" then begin
           t.paste <- true;
           drain_paste t output;
@@ -1132,5 +1302,7 @@ let flush t =
   if t.paste then []
   else
     let output = ref [] in
+    flush_held t output;
     drain t output ~force:true;
+    flush_held t output;
     List.rev !output

@@ -18,11 +18,14 @@ type 'msg t = private
   | Resize of (rows:int -> cols:int -> 'msg)
   | Every of float * (Mtime.t -> 'msg)
   | Terminal of (Event.t -> 'msg)
+  | Stream of 'msg Lwt_stream.t
+  | Resume of (unit -> 'msg)
       (** The type for a subscription.
 
           [Every] is keyed by its interval: the runtime runs one timer fiber per distinct
           interval across the whole subscription tree, started and stopped as the interval
-          set changes from one update to the next. [Map] transforms every message a
+          set changes from one update to the next. [Stream] is keyed the same way by the
+          physical identity of the stream it reads. [Map] transforms every message a
           subscription produces. *)
 
 val none : 'msg t
@@ -58,3 +61,26 @@ val every : float -> (Mtime.t -> 'msg) -> 'msg t
 val terminal : (Event.t -> 'msg) -> 'msg t
 (** [terminal handler] delivers terminal reports to [handler]: replies to {!val:Cmd.query}
     and any input the runtime could not classify. *)
+
+val stream : 'msg Lwt_stream.t -> 'msg t
+(** [stream source] delivers every message [source] yields to [update], turning an
+    external event source — the output of a worker, another program's event feed — into
+    ordinary application messages.
+
+    The runtime reads each distinct stream with exactly one task, keyed by {!Stdlib.(==)}
+    on the stream itself: subscribing to the same stream twice, however it is nested in
+    the subscription tree, still reads it once, and a stream that leaves the set is no
+    longer read. A stream that ends cleanly simply stops delivering; the run is unaffected
+    and may keep going. Messages are queued like any other input, so a stream that
+    produces faster than [update] consumes applies back-pressure through the runtime's
+    bounded event queue rather than dropping or buffering without limit. *)
+
+val resume : (unit -> 'msg) -> 'msg t
+(** [resume handler] delivers [handler ()] once each time the program resumes: after a
+    {!val:Cmd.suspend} the shell continues, after a {!val:Cmd.exec} child exits, and after
+    an external [SIGCONT] following [Ctrl-Z]. It is how a program repaints itself when the
+    user brings it back to the foreground.
+
+    Nothing is delivered on Windows, which has no job control, nor on a transport that is
+    not the local terminal, where {!val:Cmd.suspend} is itself a no-op; see
+    {!constructor:Event.Resume}, the same notification as an event. *)

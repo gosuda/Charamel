@@ -73,7 +73,7 @@ let test_mode_only_delta () =
 let test_cursor_colors_and_progress () =
   let screen = Screen.create ~rows:2 ~cols:10 in
   ignore (Screen.render screen (View.v "x"));
-  let cursor = { Cursor.row = 0; col = 1; shape = Cursor.Underline; blink = false } in
+  let cursor = Cursor.v ~shape:Cursor.Underline ~blink:false 0 1 in
   let view =
     View.v ~cursor
       ~background:(Charamel_ansi.Color.Rgb (1, 2, 3))
@@ -121,6 +121,28 @@ let test_clear_reset_restore () =
   check_string "restore releases terminal modes"
     "\x1b[?2026l\x1b[?2004l\x1b[?25h\x1b[m\x1b[<u" (Screen.restore screen)
 
+let test_cursor_color_diff () =
+  let screen = Screen.create ~rows:2 ~cols:10 in
+  ignore (Screen.render screen (View.v "x"));
+  let rgb = Charamel_ansi.Color.Rgb (1, 2, 3) in
+  let colored = Screen.render screen (View.v ~cursor:(Cursor.v ~color:rgb 0 1) "x") in
+  check_string "OSC 12 carries the cursor color"
+    (sync "\x1b[?25h\x1b]12;#010203\x1b\\")
+    colored;
+  check_string "an unchanged cursor color is silent" ""
+    (Screen.render screen (View.v ~cursor:(Cursor.v ~color:rgb 0 1) "x"));
+  check_string "leaving the color resets with OSC 112" (sync "\x1b]112\x1b\\")
+    (Screen.render screen (View.v ~cursor:(Cursor.v 0 1) "x"));
+  ignore (Screen.render screen (View.v ~cursor:(Cursor.v ~color:rgb 0 1) "x"));
+  check_string "restore resets an applied cursor color"
+    "\x1b[?2026l\x1b[?2004l\x1b]112\x1b\\\x1b[m\x1b[<u" (Screen.restore screen)
+
+let test_cursor_snaps_off_wide_continuation () =
+  let screen = Screen.create ~rows:2 ~cols:6 in
+  check_string "a cursor on a continuation cell lands on the glyph"
+    (sync "\x1b[?1049h\x1b[>1u\x1b[?2004h\x1b[2J\x1b[H漢x\x1b[H")
+    (Screen.render screen (View.v ~alt_screen:true ~cursor:(Cursor.v 0 1) "漢x"))
+
 let cases =
   [
     Alcotest.test_case "full and changed frames" `Quick test_full_and_changed_frame;
@@ -133,4 +155,7 @@ let cases =
     Alcotest.test_case "cursor colors and progress" `Quick test_cursor_colors_and_progress;
     Alcotest.test_case "kitty alternate stacks" `Quick test_kitty_alt_screen_stacks;
     Alcotest.test_case "clear reset restore" `Quick test_clear_reset_restore;
+    Alcotest.test_case "cursor color diff" `Quick test_cursor_color_diff;
+    Alcotest.test_case "cursor snaps off wide continuation" `Quick
+      test_cursor_snaps_off_wide_continuation;
   ]

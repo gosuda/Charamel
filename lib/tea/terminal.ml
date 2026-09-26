@@ -5,6 +5,8 @@ type t = {
   on_resize : (unit -> unit) Lwt_stream.t option;
   env : string -> string option;
   is_tty : bool;
+  local : bool;
+  exec : (string list -> int Lwt.t) option;
   enter : unit -> unit;
   leave : unit -> unit;
 }
@@ -61,8 +63,24 @@ let local ?(output = `Stdout) () =
     on_resize = None;
     env = getenv;
     is_tty;
+    local = true;
+    exec = None;
     enter;
     leave;
+  }
+
+let custom_transport ~exec ~input ~output ~size ~on_resize ~env ~is_tty =
+  {
+    input;
+    output;
+    size;
+    on_resize;
+    env;
+    is_tty;
+    local = false;
+    exec;
+    enter = (fun () -> ());
+    leave = (fun () -> ());
   }
 
 let custom :
@@ -74,13 +92,16 @@ let custom :
     is_tty:bool ->
     t =
  fun ~input ~output ~size ~on_resize ~env ~is_tty ->
-  {
-    input;
-    output;
-    size;
-    on_resize;
-    env;
-    is_tty;
-    enter = (fun () -> ());
-    leave = (fun () -> ());
-  }
+  custom_transport ~exec:None ~input ~output ~size ~on_resize ~env ~is_tty
+
+let custom_with_exec :
+    input:Charamel_os.Console_input.console_input ->
+    output:Lwt_io.output_channel ->
+    size:(unit -> int * int) ->
+    on_resize:(unit -> unit) Lwt_stream.t option ->
+    env:(string -> string option) ->
+    is_tty:bool ->
+    exec:(string list -> int Lwt.t) ->
+    t =
+ fun ~input ~output ~size ~on_resize ~env ~is_tty ~exec ->
+  custom_transport ~exec:(Some exec) ~input ~output ~size ~on_resize ~env ~is_tty

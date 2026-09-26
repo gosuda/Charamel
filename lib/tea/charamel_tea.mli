@@ -89,8 +89,20 @@ module Cmd : sig
       screen [s] is queued until the run exits. Queued output is written even when the run
       ends by an exception or by cancellation. *)
 
-  val set_clipboard : string -> 'msg t
-  (** [set_clipboard s] sets the terminal's clipboard to [s] through OSC 52. *)
+  val set_clipboard : ?selection:[ `System | `Primary ] -> string -> 'msg t
+  (** [set_clipboard ~selection s] sets the terminal's clipboard ([`System], the default)
+      or primary selection ([`Primary]) to [s] through OSC 52. *)
+
+  val read_clipboard : [ `System | `Primary ] -> 'msg t
+  (** [read_clipboard selection] asks the terminal for its clipboard ([`System]) or
+      primary selection ([`Primary]) through an OSC 52 query. The reply arrives as
+      {!constructor:Event.Clipboard} through {!Sub.terminal}; a terminal that disallows
+      clipboard reads sends nothing. *)
+
+  val raw : string -> 'msg t
+  (** [raw bytes] writes [bytes] verbatim to the terminal. The renderer records none of
+      the state those bytes change, so this is the hatch for control sequences the library
+      does not model. *)
 
   val query :
     [ `Background
@@ -98,12 +110,14 @@ module Cmd : sig
     | `Cursor_color
     | `Terminal_version
     | `Kitty_flags
-    | `Cursor_position ] ->
+    | `Cursor_position
+    | `Capability of string ] ->
     'msg t
-  (** [query kind] asks the terminal for [kind]. The run never waits for the answer. If
-      the terminal replies, the reply arrives as the matching {!Event.t} constructor
-      through {!Sub.terminal}. A terminal that does not support the query sends nothing.
-  *)
+  (** [query kind] asks the terminal for [kind], as an OSC 10/11/12, XTVERSION,
+      Kitty-flags, cursor-position (DCR) or XTGETTCAP request. The run never waits for the
+      answer. If the terminal replies, the reply arrives as the matching {!Event.t}
+      constructor through {!Sub.terminal}. A terminal that does not support the query
+      sends nothing. *)
 
   val window_size : 'msg t
   (** [window_size] re-delivers the current terminal size through {!Sub.resize}. *)
@@ -160,6 +174,18 @@ module Sub : sig
   (** [terminal handler] delivers terminal reports to [handler]. These are the replies to
       {!Cmd.query} and any input the runtime could not classify, delivered as
       {!constructor:Event.Unknown} with the raw bytes. *)
+
+  val stream : 'msg Lwt_stream.t -> 'msg t
+  (** [stream source] delivers every message [source] yields, reading each distinct stream
+      with exactly one task keyed by physical equality on the stream. A stream that ends
+      cleanly simply stops delivering. Messages are queued like any other input, so a fast
+      producer meets back-pressure from the runtime's bounded queue. *)
+
+  val resume : (unit -> 'msg) -> 'msg t
+  (** [resume handler] delivers [handler ()] once each time the program resumes: after a
+      {!val:Cmd.suspend} the shell continues, after a {!val:Cmd.exec} child exits, and
+      after an external [SIGCONT]. Nothing is delivered on Windows, which has no job
+      control, nor on a transport that is not the local terminal. *)
 end
 
 type ('model, 'msg) app = {
@@ -211,21 +237,37 @@ module Terminal : sig
       drives color profile detection. [is_tty] states whether the far end is a terminal
       device. No raw mode is negotiated on a custom transport, and {!Cmd.exec} runs a
       child on the local process's own descriptors, so a command that execs on a remote
-      transport inherits this process's terminal, not the far end's. The caller owns that
-      on its side of the connection. *)
+      transport inherits this process's terminal, not the far end's; the caller owns that
+      on its side of the connection, or replaces it with {!val:custom_with_exec}. *)
+
+  val custom_with_exec :
+    input:Charamel_os.Console_input.console_input ->
+    output:Lwt_io.output_channel ->
+    size:(unit -> int * int) ->
+    on_resize:(unit -> unit) Lwt_stream.t option ->
+    env:(string -> string option) ->
+    is_tty:bool ->
+    exec:(string list -> int Lwt.t) ->
+    t
+  (** [custom_with_exec ~input ~output ~size ~on_resize ~env ~is_tty ~exec] is
+      {!val:custom} whose {!Cmd.exec} runs through [exec]: the runtime releases the
+      transport, awaits [exec argv], restores the transport, and delivers the exit code
+      [exec] returns to the program's [on_exit] handler. *)
 end
 
-type error = [ `Interrupted | `Killed | `Exn of exn * Printexc.raw_backtrace ]
-(** The type for run failures. [`Interrupted] is the result of {!Cmd.interrupt}. [`Killed]
-    is the result of the run being stopped from outside the application rather than by one
-    of its commands. [`Exn (e, bt)] is the exception [e] raised by [update], [view] or a
-    command, with the backtrace [bt] captured at the raise. In every case the terminal has
-    already been restored when {!run} returns. *)
+type error = [ `Interrupted | `Exn of exn * Printexc.raw_backtrace ]
+(** The type for run failures. [`Interrupted] is the result of {!Cmd.interrupt}, of
+    [ctrl+c], or of a [SIGINT] or [SIGTERM] the runtime was asked to honor. [`Exn (e, bt)]
+    is the exception [e] raised by [update], [view] or a command, with the backtrace [bt]
+    captured at the raise. In every case the terminal has already been restored when
+    {!run} returns. *)
 
 val run :
   ?terminal:Terminal.t ->
   ?fps:int ->
   ?filter:('model -> 'msg -> 'msg option) ->
+  ?renderer:[ `Terminal | `None ] ->
+  ?color_profile:Charamel_colorprofile.t ->
   clock:Charamel_os.Time.clock ->
   ('model, 'msg) app ->
   ('model, error) result Lwt.t
@@ -235,9 +277,13 @@ val run :
     defaults to [60]. Values above [120] are treated as [120]. [filter] runs on every
     message before [update] with the current model. It defaults to accepting every
     message. Returning [None] drops the message. [clock] times frames, {!Cmd.after} and
-    {!Sub.every}. Terminal state is restored before the returned promise resolves, on a
-    normal stop, on an error and on cancellation. Cancelling the promise propagates as
-    [Lwt.Canceled] after the terminal is restored. It never resolves with [Ok].
+    {!Sub.every}. [renderer] defaults to [`Terminal]; [`None] runs the program with no
+    renderer, which never enters raw mode and never paints, so only {!Cmd.print} output
+    reaches the terminal — the shape a daemon that also serves a TUI wants.
+    [color_profile] overrides the profile detected from [terminal]. Terminal state is
+    restored before the returned promise resolves, on a normal stop, on an error and on
+    cancellation. Cancelling the promise propagates as [Lwt.Canceled] after the terminal
+    is restored.
 
     @raise Invalid_argument if [fps] is not positive. *)
 

@@ -58,90 +58,6 @@ let line_bounds ~force old_line new_line =
         (first, last, clear_tail))
       (if force then Some 0 else first_diff old_line new_line n)
 
-let color_value = function Some n -> n | None -> 0
-
-let underline_of = function
-  | [] | [ None ] | [ Some 1 ] -> Charamel_ansi.Style.Single
-  | [ Some 0 ] -> Charamel_ansi.Style.No_underline
-  | [ Some 2 ] -> Charamel_ansi.Style.Double
-  | [ Some 3 ] -> Charamel_ansi.Style.Curly
-  | [ Some 4 ] -> Charamel_ansi.Style.Dotted
-  | [ Some 5 ] -> Charamel_ansi.Style.Dashed
-  | _ -> Charamel_ansi.Style.Single
-
-let extended_color subs rest =
-  let values, rest =
-    if subs <> [] then (subs, rest)
-    else
-      match rest with
-      | [ Some 5 ] :: index :: more -> ([ Some 5 ] @ index, more)
-      | [ Some 2 ] :: r :: g :: b :: more -> ([ Some 2 ] @ r @ g @ b, more)
-      | _ -> ([], rest)
-  in
-  let color =
-    match values with
-    | Some 5 :: index :: _ -> (
-        match Charamel_ansi.Color.indexed (color_value index) with
-        | Some color -> color
-        | None -> Charamel_ansi.Color.Default)
-    | Some 2 :: _colorspace :: r :: g :: b :: _ -> (
-        match Charamel_ansi.Color.rgb (color_value r) (color_value g) (color_value b) with
-        | Some color -> color
-        | None -> Charamel_ansi.Color.Default)
-    | Some 2 :: r :: g :: b :: _ -> (
-        match Charamel_ansi.Color.rgb (color_value r) (color_value g) (color_value b) with
-        | Some color -> color
-        | None -> Charamel_ansi.Color.Default)
-    | _ -> Charamel_ansi.Color.Default
-  in
-  (color, rest)
-
-let rec apply_sgr (style : Charamel_ansi.Style.t) params =
-  match params with
-  | [] -> style
-  | parameter :: rest -> (
-      match parameter with
-      | [] | [ None ] | [ Some 0 ] -> apply_sgr Charamel_ansi.Style.default rest
-      | [ Some 1 ] -> apply_sgr { style with bold = true } rest
-      | [ Some 2 ] -> apply_sgr { style with faint = true } rest
-      | [ Some 3 ] -> apply_sgr { style with italic = true } rest
-      | Some 4 :: subparameters ->
-          apply_sgr { style with underline = underline_of subparameters } rest
-      | [ Some 5 ] | [ Some 6 ] -> apply_sgr { style with blink = true } rest
-      | [ Some 7 ] -> apply_sgr { style with reverse = true } rest
-      | [ Some 8 ] -> apply_sgr { style with conceal = true } rest
-      | [ Some 9 ] -> apply_sgr { style with strike = true } rest
-      | [ Some 22 ] -> apply_sgr { style with bold = false; faint = false } rest
-      | [ Some 23 ] -> apply_sgr { style with italic = false } rest
-      | [ Some 24 ] ->
-          apply_sgr { style with underline = Charamel_ansi.Style.No_underline } rest
-      | [ Some 25 ] -> apply_sgr { style with blink = false } rest
-      | [ Some 27 ] -> apply_sgr { style with reverse = false } rest
-      | [ Some 28 ] -> apply_sgr { style with conceal = false } rest
-      | [ Some 29 ] -> apply_sgr { style with strike = false } rest
-      | Some 38 :: subparameters ->
-          let color, rest = extended_color subparameters rest in
-          apply_sgr { style with fg = color } rest
-      | [ Some 39 ] -> apply_sgr { style with fg = Charamel_ansi.Color.Default } rest
-      | Some 48 :: subparameters ->
-          let color, rest = extended_color subparameters rest in
-          apply_sgr { style with bg = color } rest
-      | [ Some 49 ] -> apply_sgr { style with bg = Charamel_ansi.Color.Default } rest
-      | Some 58 :: subparameters ->
-          let color, rest = extended_color subparameters rest in
-          apply_sgr { style with underline_color = color } rest
-      | [ Some 59 ] ->
-          apply_sgr { style with underline_color = Charamel_ansi.Color.Default } rest
-      | [ Some n ] when n >= 30 && n <= 37 ->
-          apply_sgr { style with fg = Charamel_ansi.Color.Basic (n - 30) } rest
-      | [ Some n ] when n >= 40 && n <= 47 ->
-          apply_sgr { style with bg = Charamel_ansi.Color.Basic (n - 40) } rest
-      | [ Some n ] when n >= 90 && n <= 97 ->
-          apply_sgr { style with fg = Charamel_ansi.Color.Basic (n - 90 + 8) } rest
-      | [ Some n ] when n >= 100 && n <= 107 ->
-          apply_sgr { style with bg = Charamel_ansi.Color.Basic (n - 100 + 8) } rest
-      | _ -> apply_sgr style rest)
-
 let valid_parameter s =
   let len = String.length s in
   let rec loop i =
@@ -253,10 +169,10 @@ let layout ~cols ~max_rows content =
       | Charamel_ansi.Parser.Execute _ -> flush_print ()
       | Charamel_ansi.Parser.Csi { final = 'm'; params = []; _ } ->
           flush_print ();
-          style := apply_sgr !style [ [ Some 0 ] ]
+          style := Charamel_ansi.Style.of_sgr ~params:[ [ Some 0 ] ] !style
       | Charamel_ansi.Parser.Csi { final = 'm'; params; _ } ->
           flush_print ();
-          style := apply_sgr !style params
+          style := Charamel_ansi.Style.of_sgr ~params !style
       | Charamel_ansi.Parser.Csi _ -> flush_print ()
       | Charamel_ansi.Parser.Osc ("8" :: parameters :: rest) ->
           flush_print ();
@@ -333,6 +249,12 @@ let applied_color = function
   | Some (Charamel_ansi.Color.Rgb _) as color -> color
   | _ -> None
 
+let snap_off_continuation grid row col =
+  if row < 0 || row >= Array.length grid then col
+  else
+    let line = grid.(row) in
+    if col > 0 && col < Array.length line && line.(col).cont then col - 1 else col
+
 let clamp_pct n = max 0 (min 100 n)
 
 let progress_osc = function
@@ -360,6 +282,7 @@ type t = {
   mutable focus : bool;
   mutable cursor_visible : bool;
   mutable cursor_shape_code : int;
+  mutable cursor_color : Charamel_ansi.Color.t option;
   mutable title : string option;
   mutable bg : Charamel_ansi.Color.t option;
   mutable fg : Charamel_ansi.Color.t option;
@@ -389,6 +312,7 @@ let create ~rows ~cols =
     focus = false;
     cursor_visible = true;
     cursor_shape_code = 1;
+    cursor_color = None;
     title = None;
     bg = None;
     fg = None;
@@ -425,6 +349,7 @@ let reset t =
   t.focus <- false;
   t.cursor_visible <- true;
   t.cursor_shape_code <- 1;
+  t.cursor_color <- None;
   t.title <- None;
   t.bg <- None;
   t.fg <- None;
@@ -512,6 +437,7 @@ let render_alt t buf (view : View.t) =
   | Some cursor ->
       let row = if t.rows <= 0 then 0 else max 0 (min cursor.Cursor.row (t.rows - 1)) in
       let col = if t.cols <= 0 then 0 else max 0 (min cursor.Cursor.col (t.cols - 1)) in
+      let col = snap_off_continuation new_grid row col in
       if t.alt_pos <> Some (row, col) then begin
         Buffer.add_string buf (Charamel_ansi.Seq.cup ~row:(row + 1) ~col:(col + 1));
         t.alt_pos <- Some (row, col)
@@ -578,6 +504,7 @@ let render_inline t buf (view : View.t) =
   | Some cursor ->
       let row = if h_new <= 0 then 0 else max 0 (min cursor.Cursor.row (h_new - 1)) in
       let col = if t.cols <= 0 then 0 else max 0 (min cursor.Cursor.col (t.cols - 1)) in
+      let col = snap_off_continuation new_window row col in
       goto row col
   | None ->
       if h_new > 0 then begin
@@ -638,14 +565,26 @@ let cursor_visibility_and_shape buf t (cursor : Cursor.t option) =
          Charamel_ansi.Seq.cursor_visible);
     t.cursor_visible <- visible
   end;
-  match cursor with
+  (match cursor with
   | None -> ()
   | Some cursor ->
       let code = cursor_style_code cursor in
       if code <> t.cursor_shape_code then begin
         Buffer.add_string buf (if code = 1 then "\x1b[0 q" else Fmt.str "\x1b[%d q" code);
         t.cursor_shape_code <- code
-      end
+      end);
+  let target_color =
+    match cursor with Some cursor -> applied_color cursor.Cursor.color | None -> None
+  in
+  if not (Option.equal Charamel_ansi.Color.equal target_color t.cursor_color) then begin
+    (match target_color with
+    | Some color -> (
+        match hex_of_color color with
+        | Some hex -> Buffer.add_string buf (Fmt.str "\x1b]12;%s\x1b\\" hex)
+        | None -> ())
+    | None -> Buffer.add_string buf "\x1b]112\x1b\\");
+    t.cursor_color <- target_color
+  end
 
 let render t (view : View.t) =
   let buf = Buffer.create 256 in
@@ -775,6 +714,9 @@ let restore t =
   | None -> ());
   (match t.bg with Some _ -> Buffer.add_string buf "\x1b]111\x07" | None -> ());
   (match t.fg with Some _ -> Buffer.add_string buf "\x1b]110\x07" | None -> ());
+  (match t.cursor_color with
+  | Some _ -> Buffer.add_string buf "\x1b]112\x1b\\"
+  | None -> ());
   if t.progress <> View.Progress_none then
     Buffer.add_string buf (progress_osc View.Progress_none);
   (match t.link_open with

@@ -232,24 +232,19 @@ let code_name = function
       Buffer.contents b
   | c -> ( match name_of_code c with Some n -> n | None -> assert false)
 
-let is_ctrl_mod_code = function Left_ctrl | Right_ctrl -> true | _ -> false
-let is_alt_mod_code = function Left_alt | Right_alt -> true | _ -> false
-let is_shift_mod_code = function Left_shift | Right_shift -> true | _ -> false
-let is_meta_mod_code = function Left_meta | Right_meta -> true | _ -> false
-let is_super_mod_code = function Left_super | Right_super -> true | _ -> false
-let is_hyper_mod_code = function Left_hyper | Right_hyper -> true | _ -> false
+let is_mod_code left right code = code = left || code = right
 
 let to_string k =
   let b = Buffer.create 16 in
   let add cond suffix pred =
     if cond && not (pred k.code) then Buffer.add_string b suffix
   in
-  add k.mods.ctrl "ctrl+" is_ctrl_mod_code;
-  add k.mods.alt "alt+" is_alt_mod_code;
-  add k.mods.shift "shift+" is_shift_mod_code;
-  add k.mods.meta "meta+" is_meta_mod_code;
-  add k.mods.super "super+" is_super_mod_code;
-  add k.mods.hyper "hyper+" is_hyper_mod_code;
+  add k.mods.ctrl "ctrl+" (is_mod_code Left_ctrl Right_ctrl);
+  add k.mods.alt "alt+" (is_mod_code Left_alt Right_alt);
+  add k.mods.shift "shift+" (is_mod_code Left_shift Right_shift);
+  add k.mods.meta "meta+" (is_mod_code Left_meta Right_meta);
+  add k.mods.super "super+" (is_mod_code Left_super Right_super);
+  add k.mods.hyper "hyper+" (is_mod_code Left_hyper Right_hyper);
   if k.mods.caps_lock then Buffer.add_string b "caps_lock+";
   if k.mods.num_lock then Buffer.add_string b "num_lock+";
   let has_prefix = Buffer.length b > 0 in

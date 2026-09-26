@@ -20,6 +20,17 @@ type t = private {
   is_tty : bool;
       (** [true] when both the input and the output are attached to a real terminal
           device. *)
+  local : bool;
+      (** [true] when the transport is the calling process's own terminal, reached through
+          its standard descriptors, rather than caller-supplied channels carrying some
+          other terminal. Job control only means anything on a local transport: suspending
+          a program that serves a remote terminal would stop the serving process, not the
+          terminal. *)
+  exec : (string list -> int Lwt.t) option;
+      (** [exec argv] runs a child process for {!Charamel_tea.Cmd.exec} and answers with
+          its exit code. [None] keeps the default: the child runs on the calling process's
+          own standard descriptors. A transport that serves another machine's terminal
+          supplies its own implementation through {!val:custom}. *)
   enter : unit -> unit;
       (** [enter ()] switches the transport into raw, unbuffered mode. *)
   leave : unit -> unit;
@@ -41,7 +52,7 @@ val local : ?output:[ `Stdout | `Stderr ] -> unit -> t
     {!Charamel_os.Tty.enter_raw} and do nothing when [is_tty] is [false]. [env] reads the
     process environment. [on_resize] is [None]; the runtime watches SIGWINCH itself, which
     is why a transport over another process's terminal must supply [on_resize] of its own.
-*)
+    [local] is [true]. *)
 
 val custom :
   input:Charamel_os.Console_input.console_input ->
@@ -60,5 +71,23 @@ val custom :
     color profile detection. [is_tty] states whether the far end is a terminal device. No
     raw mode is negotiated on a custom transport, and {!Charamel_tea.Cmd.exec} runs a
     child on the local process's own descriptors, so a command that execs on a remote
-    transport inherits this process's terminal, not the far end's. The caller owns that on
-    its side of the connection. *)
+    transport inherits this process's terminal, not the far end's; the caller owns that on
+    its side of the connection, or replaces it with {!val:custom_with_exec}. [local] is
+    [false], so a program served over this transport cannot suspend the terminal it is
+    serving. *)
+
+val custom_with_exec :
+  input:Charamel_os.Console_input.console_input ->
+  output:Lwt_io.output_channel ->
+  size:(unit -> int * int) ->
+  on_resize:(unit -> unit) Lwt_stream.t option ->
+  env:(string -> string option) ->
+  is_tty:bool ->
+  exec:(string list -> int Lwt.t) ->
+  t
+(** [custom_with_exec ~input ~output ~size ~on_resize ~env ~is_tty ~exec] is {!val:custom}
+    whose {!Charamel_tea.Cmd.exec} runs through [exec]. The runtime releases the
+    transport, awaits [exec argv] for the command named by [argv], restores the transport,
+    and delivers the exit code [exec] returns to the program's [on_exit] handler, so a
+    serving process can run the child where the client's terminal actually is. [exec]
+    raising ends the run with the exception, as on the local transport. *)

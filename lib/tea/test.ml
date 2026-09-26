@@ -40,5 +40,4 @@ let run ?output app ~events ~size =
   match step virtual_clock advance clock promise 0 with
   | Ok value -> value
   | Error `Interrupted -> invalid_arg "scripted Tea program was interrupted"
-  | Error `Killed -> invalid_arg "scripted Tea program was killed"
   | Error (`Exn (exn, backtrace)) -> Printexc.raise_with_backtrace exn backtrace

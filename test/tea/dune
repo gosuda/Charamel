@@ -11,11 +11,14 @@
   test_program)
  (libraries
   charamel.tea
+  charamel.colorprofile
   charamel.os
   charamel.ansi
   alcotest
   fmt
   lwt
   lwt.unix
+  qcheck-alcotest
+  qcheck-core
   test_support
   unix))

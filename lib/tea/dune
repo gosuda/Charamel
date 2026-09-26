@@ -20,6 +20,7 @@
   charamel.ansi
   charamel.colorprofile
   charamel.os
+  base64
   cstruct
   fmt
   lwt

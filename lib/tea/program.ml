@@ -1,6 +1,6 @@
 open Lwt.Syntax
 
-type error = [ `Interrupted | `Killed | `Exn of exn * Printexc.raw_backtrace ]
+type error = [ `Interrupted | `Exn of exn * Printexc.raw_backtrace ]
 
 type 'msg script_event =
   [ `Key of Key.t
@@ -9,7 +9,7 @@ type 'msg script_event =
   | `Msg of 'msg
   | `Wait of float ]
 
-type stop_reason = [ `Normal | `Interrupted | `Killed ]
+type stop_reason = [ `Normal | `Interrupted ]
 
 exception Daemon_failed of exn * Printexc.raw_backtrace
 
@@ -20,14 +20,17 @@ type 'msg action =
   | Effect_resume
   | Effect_exec of string list * (int -> 'msg)
   | Effect_print of string
-  | Effect_clipboard of string
+  | Effect_clipboard of { selection : [ `System | `Primary ]; content : string }
+  | Effect_read_clipboard of [ `System | `Primary ]
+  | Effect_raw of string
   | Effect_query of
       [ `Background
       | `Foreground
       | `Cursor_color
       | `Terminal_version
       | `Kitty_flags
-      | `Cursor_position ]
+      | `Cursor_position
+      | `Capability of string ]
   | Effect_window_size
 
 let map_effect : type a b. (a -> b) -> a action -> b action =
@@ -39,7 +42,9 @@ let map_effect : type a b. (a -> b) -> a action -> b action =
   | Effect_resume -> Effect_resume
   | Effect_exec (argv, on_exit) -> Effect_exec (argv, fun code -> mapping (on_exit code))
   | Effect_print text -> Effect_print text
-  | Effect_clipboard text -> Effect_clipboard text
+  | Effect_clipboard clipboard -> Effect_clipboard clipboard
+  | Effect_read_clipboard selection -> Effect_read_clipboard selection
+  | Effect_raw bytes -> Effect_raw bytes
   | Effect_query query -> Effect_query query
   | Effect_window_size -> Effect_window_size
 
@@ -51,6 +56,9 @@ type 'msg queued =
   | Queued_stop of stop_reason
   | Queued_script_done
 
+type 'msg stream_source = { identity : Obj.t; pull : unit -> 'msg option Lwt.t }
+type 'msg stream_reader = { source : 'msg stream_source; cancel : unit Lwt.t option ref }
+
 type 'msg handlers = {
   key : (Key.t -> 'msg) list;
   key_release : (Key.t -> 'msg) list;
@@ -60,6 +68,8 @@ type 'msg handlers = {
   resize : (rows:int -> cols:int -> 'msg) list;
   terminal : (Event.t -> 'msg) list;
   every : (float * (Mtime.t -> 'msg)) list;
+  streams : 'msg stream_source list;
+  resume : (unit -> 'msg) list;
 }
 
 type 'msg timer = {
@@ -98,6 +108,7 @@ type ('model, 'msg) runtime_state = {
   mutable anchor : anchor;
   mutable last_frame : string;
   mutable timers : 'msg timer list;
+  mutable streams : 'msg stream_reader list;
   mutable renderer_stop : bool;
   backlog : string Queue.t;
 }
@@ -112,9 +123,11 @@ let empty_handlers =
     resize = [];
     terminal = [];
     every = [];
+    streams = [];
+    resume = [];
   }
 
-let append_handlers a b =
+let append_handlers (a : 'msg handlers) (b : 'msg handlers) =
   {
     key = a.key @ b.key;
     key_release = a.key_release @ b.key_release;
@@ -124,7 +137,28 @@ let append_handlers a b =
     resize = a.resize @ b.resize;
     terminal = a.terminal @ b.terminal;
     every = a.every @ b.every;
+    streams = a.streams @ b.streams;
+    resume = a.resume @ b.resume;
   }
+
+let map_stream_source f source =
+  let pull () =
+    let* next = source.pull () in
+    Lwt.return (Option.map f next)
+  in
+  { identity = source.identity; pull }
+
+let same_stream_source a b = a.identity == b.identity
+
+let dedupe_streams sources =
+  let rec loop seen = function
+    | [] -> List.rev seen
+    | source :: rest ->
+        if List.exists (fun other -> same_stream_source source other) seen then
+          loop seen rest
+        else loop (source :: seen) rest
+  in
+  loop [] sources
 
 let rec collect_sub : type a. a Sub.t -> a handlers = function
   | Sub.None_ -> empty_handlers
@@ -147,6 +181,8 @@ let rec collect_sub : type a. a Sub.t -> a handlers = function
           List.map
             (fun (interval, handler) -> (interval, fun time -> f (handler time)))
             handlers.every;
+        streams = List.map (map_stream_source f) handlers.streams;
+        resume = List.map (fun handler () -> f (handler ())) handlers.resume;
       }
   | Sub.Key handler -> { empty_handlers with key = [ handler ] }
   | Sub.Key_release handler -> { empty_handlers with key_release = [ handler ] }
@@ -157,6 +193,13 @@ let rec collect_sub : type a. a Sub.t -> a handlers = function
   | Sub.Every (interval, handler) ->
       { empty_handlers with every = [ (interval, handler) ] }
   | Sub.Terminal handler -> { empty_handlers with terminal = [ handler ] }
+  | Sub.Stream stream ->
+      {
+        empty_handlers with
+        streams =
+          [ { identity = Obj.repr stream; pull = (fun () -> Lwt_stream.get stream) } ];
+      }
+  | Sub.Resume handler -> { empty_handlers with resume = [ handler ] }
 
 let group_every entries =
   List.fold_left
@@ -219,6 +262,27 @@ let normalize_print text =
   else if String.get text (String.length text - 1) = '\n' then text
   else text ^ "\n"
 
+let clipboard_prefix = function `System -> "c" | `Primary -> "p"
+
+let clipboard_set_bytes selection content =
+  "\x1b]52;" ^ clipboard_prefix selection ^ ";" ^ Base64.encode_string content ^ "\x07"
+
+let clipboard_read_bytes selection = "\x1b]52;" ^ clipboard_prefix selection ^ ";?\x07"
+
+let hex_digit value =
+  Char.chr (if value < 10 then Char.code '0' + value else Char.code 'a' + value - 10)
+
+let hex_encode s =
+  let out = Buffer.create (String.length s * 2) in
+  String.iter
+    (fun c ->
+      let value = Char.code c in
+      Buffer.add_char out (hex_digit (value lsr 4));
+      Buffer.add_char out (hex_digit (value land 15)))
+    s;
+  Buffer.contents out
+
+let capability_query_bytes name = "\x1bP+q" ^ hex_encode name ^ "\x1b\\"
 let set_dirty state = mutate_state state (fun () -> state.dirty <- true)
 let update_anchor state anchor = mutate_state state (fun () -> state.anchor <- anchor)
 let set_paused state paused = mutate_state state (fun () -> state.paused <- paused)
@@ -229,7 +293,7 @@ let drain_queue queue =
   in
   loop []
 
-let take_render_batch state =
+let take_render_batch ~paint state =
   let rec wait () =
     if
       (not state.renderer_stop)
@@ -244,23 +308,32 @@ let take_render_batch state =
       let effects =
         if state.paused && not state.renderer_stop then [] else drain_queue state.effects
       in
-      let should_render = state.dirty && ((not state.paused) || state.renderer_stop) in
-      if should_render then state.dirty <- false;
+      let should_render =
+        state.dirty && paint && ((not state.paused) || state.renderer_stop)
+      in
+      if should_render || not paint then state.dirty <- false;
       Lwt.return (effects, should_render, state.renderer_stop))
 
 let queue_size = 256
 
 let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~signals
-    ?script (app : ('model, 'msg) App.t) =
+    ?(paint = true) ?profile ?script (app : ('model, 'msg) App.t) =
   if fps <= 0 then invalid_arg "fps must be positive";
   let fps = min 120 fps in
   let rows, cols = terminal.Terminal.size () in
   if rows <= 0 || cols <= 0 then invalid_arg "terminal size must be positive";
   let screen = Screen.create ~rows ~cols in
   let output_mutex = Lwt_mutex.create () in
+  let can_suspend =
+    Charamel_os.Tty.supports_suspend && terminal.Terminal.local
+    && terminal.Terminal.is_tty
+  in
   let profile =
-    Charamel_colorprofile.detect ~is_tty:terminal.Terminal.is_tty
-      ~env:terminal.Terminal.env
+    match profile with
+    | Some profile -> profile
+    | None ->
+        Charamel_colorprofile.detect ~is_tty:terminal.Terminal.is_tty
+          ~env:terminal.Terminal.env
   in
   let writer = Charamel_colorprofile.Writer.create ~profile terminal.Terminal.output in
   let entered = ref false in
@@ -288,7 +361,10 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
       | None -> Lwt.return_unit
       | Some state ->
           with_output (fun () ->
-              let* () = write_output_locked (Screen.restore screen) in
+              let* () =
+                if paint then write_output_locked (Screen.restore screen)
+                else Lwt.return_unit
+              in
               Lwt_list.iter_s write_output_locked (drain_queue state.backlog))
     in
     let leave_terminal () =
@@ -305,8 +381,10 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
     (fun () ->
       Lwt.finalize
         (fun () ->
-          entered := true;
-          terminal.Terminal.enter ();
+          if paint then begin
+            entered := true;
+            terminal.Terminal.enter ()
+          end;
           Lwt_switch.with_switch (fun sw ->
               let daemons : unit Lwt.t list ref = ref [] in
               Lwt_switch.add_hook (Some sw) (fun () ->
@@ -314,8 +392,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   daemons := [];
                   List.iter Lwt.cancel handles;
                   Lwt.return_unit);
-              let spawn_daemon body =
-                let stop = fst (Lwt.task ()) in
+              let spawn_daemon_with_stop stop body =
                 let task =
                   Lwt.catch
                     (fun () -> Lwt.pick [ body stop (); stop ])
@@ -332,7 +409,12 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                       (fun () -> task)
                       (fun () ->
                         daemons := List.filter (fun other -> other != task) !daemons;
-                        Lwt.return_unit));
+                        Lwt.return_unit))
+              in
+              let new_daemon_stop () = fst (Lwt.task ()) in
+              let spawn_daemon body =
+                let stop = new_daemon_stop () in
+                spawn_daemon_with_stop stop body;
                 stop
               in
               let fork_daemon body = ignore (spawn_daemon body) in
@@ -365,6 +447,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   anchor = Fresh_line;
                   last_frame = Charamel_ansi.Text.strip initial_view.View.content;
                   timers = [];
+                  streams = [];
                   renderer_stop = false;
                   backlog = Queue.create ();
                 }
@@ -459,35 +542,40 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               let enqueue_output action =
                 mutate_state state (fun () -> Queue.add action state.effects)
               in
+              let print_above_view text =
+                let* view = peek_state state (fun () -> state.view) in
+                if view.View.alt_screen then Lwt.return_unit
+                else
+                  let* anchor = peek_state state (fun () -> state.anchor) in
+                  let* () =
+                    match anchor with
+                    | Fresh_line -> write_output_locked "\r\n"
+                    | Column_start -> write_output_locked "\r"
+                    | No_anchor -> Lwt.return_unit
+                  in
+                  let* () =
+                    if anchor <> No_anchor then
+                      mutate_state state (fun () -> state.anchor <- No_anchor)
+                    else Lwt.return_unit
+                  in
+                  let* () = write_output_locked (Screen.clear screen) in
+                  let* () = write_output_locked text in
+                  render_locked ()
+              in
               let process_output_effect = function
                 | Output_bytes (bytes, resolver) ->
-                    let* () = write_output_locked bytes in
+                    let* () =
+                      if paint then write_output_locked bytes else Lwt.return_unit
+                    in
                     Lwt.wakeup_later resolver () |> Lwt.return
                 | Output_print (text, resolver) ->
-                    let* view = peek_state state (fun () -> state.view) in
                     let* () =
-                      if view.View.alt_screen then Lwt.return_unit
-                      else
-                        let* anchor = peek_state state (fun () -> state.anchor) in
-                        let* () =
-                          match anchor with
-                          | Fresh_line -> write_output_locked "\r\n"
-                          | Column_start -> write_output_locked "\r"
-                          | No_anchor -> Lwt.return_unit
-                        in
-                        let* () =
-                          if anchor <> No_anchor then
-                            mutate_state state (fun () -> state.anchor <- No_anchor)
-                          else Lwt.return_unit
-                        in
-                        let* () = write_output_locked (Screen.clear screen) in
-                        let* () = write_output_locked text in
-                        render_locked ()
+                      if paint then print_above_view text else write_output_locked text
                     in
                     Lwt.wakeup_later resolver () |> Lwt.return
               in
               let rec renderer_loop () =
-                let* effects, should_render, finishing = take_render_batch state in
+                let* effects, should_render, finishing = take_render_batch ~paint state in
                 if finishing && effects = [] && not should_render then Lwt.return_unit
                 else
                   let* () =
@@ -504,22 +592,25 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                        if Lwt.is_sleeping renderer_promise then
                          Lwt.wakeup_later renderer_resolver ();
                        Lwt.return_unit));
+              let input_awaits_flush decoder =
+                Input.pending_escape decoder || Input.pending_cluster decoder
+              in
               let feed_bytes decoder bytes =
                 let events = Input.feed decoder bytes in
                 incr escape_generation;
                 let queue_event event = queue_external state (Queued_event event) in
                 let* () = Lwt_list.iter_s queue_event events in
-                if not (Input.pending_escape decoder) then Lwt.return_unit
-                else begin
+                if not (input_awaits_flush decoder) then Lwt.return_unit
+                else
                   let generation = !escape_generation in
-                  fork_daemon (fun _stop ->
-                      fun () ->
-                       let* () = Charamel_os.Time.sleep clock 0.05 in
-                       if generation = !escape_generation && Input.pending_escape decoder
-                       then Lwt_list.iter_s queue_event (Input.flush decoder)
-                       else Lwt.return_unit);
+                  let flush_pending () =
+                    let* () = Charamel_os.Time.sleep clock 0.05 in
+                    if generation = !escape_generation && input_awaits_flush decoder then
+                      Lwt_list.iter_s queue_event (Input.flush decoder)
+                    else Lwt.return_unit
+                  in
+                  fork_daemon (fun _stop -> flush_pending);
                   Lwt.return_unit
-                end
               in
               let rec read_input ~generation ~decoder ~finish_input =
                 if generation <> !reader_generation || state.stop_requested then
@@ -534,48 +625,71 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
               let start_reader () =
                 incr reader_generation;
                 let generation = !reader_generation in
-                ignore
-                  (spawn_daemon (fun stop () ->
-                       let decoder = Input.create () in
-                       let finish_input () =
-                         let queue_event event =
-                           queue_external state (Queued_event event)
-                         in
-                         let* () = Lwt_list.iter_s queue_event (Input.flush decoder) in
-                         queue_external state (Queued_stop `Normal)
-                       in
-                       if generation = !reader_generation then reader_cancel := Some stop;
-                       Lwt.finalize
-                         (fun () -> read_input ~generation ~decoder ~finish_input)
-                         (fun () ->
-                           if generation = !reader_generation then reader_cancel := None;
-                           Lwt.return_unit)))
+                let stop = new_daemon_stop () in
+                if generation = !reader_generation then reader_cancel := Some stop;
+                spawn_daemon_with_stop stop (fun _stop () ->
+                    let decoder = Input.create () in
+                    let finish_input () =
+                      let queue_event event = queue_external state (Queued_event event) in
+                      let* () = Lwt_list.iter_s queue_event (Input.flush decoder) in
+                      queue_external state (Queued_stop `Normal)
+                    in
+                    Lwt.finalize
+                      (fun () -> read_input ~generation ~decoder ~finish_input)
+                      (fun () ->
+                        if generation = !reader_generation then reader_cancel := None;
+                        Lwt.return_unit))
               in
               let cancel_timer timer =
                 match !(timer.cancel) with None -> () | Some cancel -> Lwt.cancel cancel
               in
               let start_timer timer =
-                ignore
-                  (spawn_daemon (fun stop () ->
-                       timer.cancel := Some stop;
-                       let rec loop () =
-                         if state.stop_requested || state.script_finished then
-                           Lwt.return_unit
-                         else
-                           let* () = Charamel_os.Time.sleep clock timer.interval in
-                           if state.stop_requested || state.script_finished then
-                             Lwt.return_unit
-                           else begin
-                             let callbacks = timer.callbacks in
-                             let tick callback =
-                               let message = callback (now ()) in
-                               queue_external state (Queued_message (message, None))
-                             in
-                             let* () = Lwt_list.iter_s tick callbacks in
-                             loop ()
-                           end
-                       in
-                       loop ()))
+                let stop = new_daemon_stop () in
+                timer.cancel := Some stop;
+                spawn_daemon_with_stop stop (fun _stop () ->
+                    let rec loop () =
+                      if state.stop_requested || state.script_finished then
+                        Lwt.return_unit
+                      else
+                        let* () = Charamel_os.Time.sleep clock timer.interval in
+                        if state.stop_requested || state.script_finished then
+                          Lwt.return_unit
+                        else begin
+                          let callbacks = timer.callbacks in
+                          let tick callback =
+                            let message = callback (now ()) in
+                            queue_external state (Queued_message (message, None))
+                          in
+                          let* () = Lwt_list.iter_s tick callbacks in
+                          loop ()
+                        end
+                    in
+                    loop ())
+              in
+              let start_stream_reader source =
+                let stop = new_daemon_stop () in
+                let reader = { source; cancel = ref (Some stop) } in
+                spawn_daemon_with_stop stop (fun _stop () ->
+                    let rec loop () =
+                      if state.stop_requested || state.script_finished then
+                        Lwt.return_unit
+                      else
+                        let* next = source.pull () in
+                        match next with
+                        | None -> Lwt.return_unit
+                        | Some message ->
+                            let* () =
+                              queue_external state (Queued_message (message, None))
+                            in
+                            loop ()
+                    in
+                    loop ());
+                reader
+              in
+              let cancel_stream_reader (reader : 'msg stream_reader) =
+                match !(reader.cancel) with
+                | None -> ()
+                | Some cancel -> Lwt.cancel cancel
               in
               let sync_subscriptions () =
                 let handlers = collect_sub (app.App.subscriptions state.model) in
@@ -608,6 +722,28 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                     then cancel_timer timer)
                   old_timers;
                 state.timers <- new_timers;
+                let sources = dedupe_streams handlers.streams in
+                let kept =
+                  List.filter
+                    (fun reader -> List.exists (same_stream_source reader.source) sources)
+                    state.streams
+                in
+                List.iter
+                  (fun reader ->
+                    if not (List.exists (fun other -> other == reader) kept) then
+                      cancel_stream_reader reader)
+                  state.streams;
+                let already_reading source reader =
+                  same_stream_source source reader.source
+                in
+                let started =
+                  List.filter_map
+                    (fun source ->
+                      if List.exists (already_reading source) kept then None
+                      else Some (start_stream_reader source))
+                    sources
+                in
+                state.streams <- kept @ started;
                 Lwt.return_unit
               in
               let mark_initial_event () =
@@ -678,7 +814,11 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                       if argv = [] then invalid_arg "exec requires a command";
                       emit_effect (Effect_exec (argv, on_exit))
                   | Cmd.Print text -> emit_effect (Effect_print (normalize_print text))
-                  | Cmd.Set_clipboard text -> emit_effect (Effect_clipboard text)
+                  | Cmd.Set_clipboard { selection; content } ->
+                      emit_effect (Effect_clipboard { selection; content })
+                  | Cmd.Read_clipboard selection ->
+                      emit_effect (Effect_read_clipboard selection)
+                  | Cmd.Raw bytes -> emit_effect (Effect_raw bytes)
                   | Cmd.Query query -> emit_effect (Effect_query query)
                   | Cmd.Window_size -> emit_effect Effect_window_size
                 in
@@ -779,6 +919,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   | Event.Profile _ | Event.Cursor_position _ | Event.Background_color _
                   | Event.Foreground_color _ | Event.Cursor_color _
                   | Event.Terminal_version _ | Event.Kitty_flags _ | Event.Mode_report _
+                  | Event.Resume | Event.Clipboard _ | Event.Capability _
                   | Event.Unknown _ ->
                       Lwt.return
                         (List.map (fun handler -> handler event) handlers.terminal)
@@ -792,6 +933,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                 | `Terminal_version -> Charamel_ansi.Seq.xtversion
                 | `Kitty_flags -> "\x1b[?u"
                 | `Cursor_position -> "\x1b[6n"
+                | `Capability name -> capability_query_bytes name
               in
               let request_stop reason =
                 if state.stop_requested then ()
@@ -805,13 +947,23 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                          List.iter Lwt.cancel (List.map snd !(state.command_cancels))))
                 end
               in
+              let deliver_resume () =
+                if Charamel_os.Tty.supports_suspend && terminal.Terminal.local then begin
+                  let* () = queue_external state (Queued_event Event.Resume) in
+                  Lwt_list.iter_s
+                    (fun make -> queue_external state (Queued_message (make (), None)))
+                    state.handlers.resume
+                end
+                else Lwt.return_unit
+              in
               let resume_after_foreign () =
                 with_output (fun () ->
-                    terminal.Terminal.enter ();
+                    if paint then terminal.Terminal.enter ();
                     Screen.reset screen;
                     let* () = update_anchor state Fresh_line in
                     let* () = set_paused state false in
                     if script = None && not state.stop_requested then start_reader ();
+                    let* () = deliver_resume () in
                     set_dirty state)
               in
               let with_foreign fn =
@@ -820,7 +972,10 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                 Lwt.finalize
                   (fun () ->
                     with_output (fun () ->
-                        let* () = write_output_locked (Screen.restore screen) in
+                        let* () =
+                          if paint then write_output_locked (Screen.restore screen)
+                          else Lwt.return_unit
+                        in
                         terminal.Terminal.leave ();
                         fn ()))
                   resume_after_foreign
@@ -835,7 +990,8 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                     request_stop `Interrupted;
                     Lwt.return (resolve ())
                 | Effect_suspend ->
-                    if state.stop_requested then Lwt.return (resolve ())
+                    if state.stop_requested || not can_suspend then
+                      Lwt.return (resolve ())
                     else
                       let* () =
                         with_foreign (fun () ->
@@ -861,9 +1017,13 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                       Lwt.return (resolve ())
                     end
                     else enqueue_output (Output_print (text, resolver))
-                | Effect_clipboard text ->
+                | Effect_clipboard { selection; content } ->
                     enqueue_output
-                      (Output_bytes (Charamel_ansi.Seq.clipboard_osc52 text, resolver))
+                      (Output_bytes (clipboard_set_bytes selection content, resolver))
+                | Effect_read_clipboard selection ->
+                    enqueue_output
+                      (Output_bytes (clipboard_read_bytes selection, resolver))
+                | Effect_raw bytes -> enqueue_output (Output_bytes (bytes, resolver))
                 | Effect_query query ->
                     enqueue_output (Output_bytes (query_bytes query, resolver))
                 | Effect_window_size ->
@@ -872,11 +1032,11 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                     Lwt.return (resolve ())
               in
               (* Delivery runs the action itself. A flag polled by a waiting fiber loses
-                 the wakeup between the failed check and the park — the race
-                 [Eio.Condition.loop_no_mutex] used to close atomically. On POSIX the
-                 action runs from [Lwt_unix.on_signal], which hands the signal to the
-                 event loop; on Windows the CRT handler installed here runs it directly,
-                 and resizes keep arriving through the console record queue. *)
+                 the wakeup between the failed check and the park — the race an
+                 atomic condition loop used to close. On POSIX the action runs from
+                 [Lwt_unix.on_signal], which hands the signal to the event loop; on
+                 Windows the CRT handler installed here runs it directly, and resizes
+                 keep arriving through the console record queue. *)
               let install_signal signal action =
                 if Charamel_os.Signal.supported (Sys.signal_to_int signal) then begin
                   let number = Sys.signal_to_int signal in
@@ -1006,7 +1166,6 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                     match state.stop_reason with
                     | `Normal -> Ok (model, frame)
                     | `Interrupted -> Error `Interrupted
-                    | `Killed -> Error `Killed
                   in
                   Lwt.return (Some result)
                 end
@@ -1060,11 +1219,16 @@ let spawn_foreground argv =
       let executable = Option.value (Charamel_os.Exe.find program) ~default:program in
       Unix.create_process executable arguments Unix.stdin Unix.stdout Unix.stderr
 
-let run ?terminal ?fps ?filter ~clock app =
+let run ?terminal ?fps ?filter ?renderer ?color_profile ~clock app =
+  let paint =
+    match Option.value renderer ~default:`Terminal with
+    | `None -> false
+    | `Terminal -> true
+  in
   let terminal = Option.value terminal ~default:(Terminal.local ()) in
   let fps = Option.value fps ~default:60 in
   let filter = Option.value filter ~default:(fun _ message -> Some message) in
-  let exec argv =
+  let default_exec argv =
     let pid = spawn_foreground argv in
     let* _, status = Lwt_unix.waitpid [] pid in
     Lwt.return
@@ -1072,12 +1236,10 @@ let run ?terminal ?fps ?filter ~clock app =
       | Unix.WEXITED code -> code
       | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal)
   in
-  let suspend () =
-    if terminal.Terminal.is_tty then Unix.kill (Unix.getpid ()) Sys.sigstop
-    else invalid_arg "suspend requires a local terminal"
-  in
+  let exec = Option.value ~default:default_exec terminal.Terminal.exec in
+  let suspend () = Unix.kill (Unix.getpid ()) Sys.sigstop in
   let* result =
-    run_core ~terminal ~fps ~filter ~clock
+    run_core ~terminal ~fps ~filter ~clock ~paint ?profile:color_profile
       ~now:(fun () -> Mtime_clock.now ())
       ~exec ~suspend ~signals:true app
   in
