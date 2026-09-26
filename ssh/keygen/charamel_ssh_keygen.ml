@@ -57,6 +57,27 @@ let public_blob t =
   | Ecdsa_p256 | Ecdsa_p384 | Ecdsa_p521 ->
       Openssh_key.wire_pub_ecdsa (ecdsa_curve_name t.algorithm) t.pub_octets
 
+let wire_ed25519_blob octets = Openssh_key.wire_pub_ed25519 octets
+
+let unsigned_bytes value =
+  let bits = Z.to_bits value in
+  let last = ref (String.length bits - 1) in
+  while !last >= 0 && String.get bits !last = '\000' do
+    decr last
+  done;
+  let bytes = Bytes.create (!last + 1) in
+  for index = 0 to !last do
+    Bytes.set bytes index (String.get bits (!last - index))
+  done;
+  Bytes.to_string bytes
+
+let wire_rsa_blob ~e ~n =
+  let buffer = Buffer.create 64 in
+  Openssh_key.put_string buffer {|ssh-rsa|};
+  Openssh_key.put_uint_mpint buffer (unsigned_bytes e);
+  Openssh_key.put_uint_mpint buffer (unsigned_bytes n);
+  Buffer.contents buffer
+
 let fingerprint_sha256 t =
   let digest = Digestif.SHA256.digest_string (public_blob t) in
   "SHA256:" ^ Base64.encode_string ~pad:false (Digestif.SHA256.to_raw_string digest)
@@ -197,6 +218,71 @@ let authorized_key ?(comment = "") t =
   if String.equal comment "" then Fmt.str "%s %s" (keytype_name t.algorithm) b64
   else Fmt.str "%s %s %s" (keytype_name t.algorithm) b64 comment
 
+type authorized_entry = {
+  options : string option;
+  type_name : string;
+  blob : string;
+  comment : string;
+}
+
+let is_keytype_name name =
+  String.starts_with ~prefix:{|ssh-|} name
+  || String.starts_with ~prefix:{|ecdsa-|} name
+  || String.starts_with ~prefix:{|sk-|} name
+
+let line_fields line =
+  let fields = Dynarray.create () in
+  let token = Buffer.create 32 in
+  let quoted = ref false in
+  let flush () =
+    if Buffer.length token > 0 then begin
+      Dynarray.add_last fields (Buffer.contents token);
+      Buffer.clear token
+    end
+  in
+  String.iter
+    (fun ch ->
+      match ch with
+      | '"' ->
+          Buffer.add_char token ch;
+          quoted := not !quoted
+      | (' ' | '\t' | '\r') when not !quoted -> flush ()
+      | ch -> Buffer.add_char token ch)
+    line;
+  flush ();
+  Dynarray.to_list fields
+
+let blob_type blob =
+  if String.length blob < 4 then None
+  else
+    let len = Int32.to_int (String.get_int32_be blob 0) in
+    if len < 0 || 4 + len > String.length blob then None else Some (String.sub blob 4 len)
+
+let entry_of_blob options keytype b64 rest =
+  match Base64.decode ~pad:false b64 with
+  | Error _ -> None
+  | Ok blob -> (
+      match blob_type blob with
+      | Some inner when String.equal inner keytype ->
+          Some { options; type_name = keytype; blob; comment = String.concat {| |} rest }
+      | _ -> None)
+
+let entry_of_line line =
+  match line_fields line with
+  | keytype :: b64 :: rest when is_keytype_name keytype ->
+      entry_of_blob None keytype b64 rest
+  | options :: keytype :: b64 :: rest when is_keytype_name keytype ->
+      entry_of_blob (Some options) keytype b64 rest
+  | _ -> None
+
+let parse_authorized_keys text =
+  let entry line =
+    let line = String.trim line in
+    if String.is_empty line || String.starts_with ~prefix:{|#|} line then None
+    else entry_of_line line
+  in
+  List.filter_map entry (String.split_on_char '\n' text)
+
 (* The pair write is not atomic across two names. On failure this module
    removes only the files the failing call itself created. *)
 let fs_text = function
@@ -279,19 +365,76 @@ let write_pair p path_name pub_p pub_name private_body pub_body =
               Lwt.return (Ok ())))
     (fun () -> if !committed then Lwt.return_unit else rollback !created)
 
-let write ~fs_root ~path ?comment t =
+let temp_of dest suffix =
+  Filename.concat (Filename.dirname dest)
+    (Fmt.str ".charamel-keygen-%d-%s" (Unix.getpid ()) suffix)
+
+let remove q =
+  Lwt.catch
+    (fun () -> Charamel_os.Fs.unlink q >|= fun _ -> ())
+    (fun _exn -> Lwt.return_unit)
+
+let write_temp dest suffix perm body =
+  let q = temp_of dest suffix in
+  io_of (fun () ->
+      Lwt_unix.openfile q [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] perm >>= fun fd ->
+      let channel = Lwt_io.of_fd ~mode:Lwt_io.output fd in
+      Lwt_io.write channel body >>= fun () -> Lwt_io.close channel)
+  >>= function
+  | Ok () -> Lwt.return (Ok q)
+  | Error _ as err -> remove q >>= fun () -> Lwt.return err
+
+let rec drop_targets = function
+  | [] -> Lwt.return_unit
+  | (_, q) :: rest -> remove q >>= fun () -> drop_targets rest
+
+let rec write_temps acc i = function
+  | [] -> Lwt.return (Ok (List.rev acc))
+  | (dest, perm, body) :: rest -> (
+      write_temp dest (string_of_int i) perm body >>= function
+      | Ok q -> write_temps ((dest, q) :: acc) (i + 1) rest
+      | Error _ as err -> drop_targets acc >>= fun () -> Lwt.return err)
+
+let rec commit = function
+  | [] -> Lwt.return (Ok ())
+  | ((dest, q) as target) :: rest -> (
+      io_of (fun () -> Charamel_os.Fs.rename_replace ~src:q ~dst:dest) >>= function
+      | Ok () -> commit rest
+      | Error _ as err -> drop_targets (target :: rest) >>= fun () -> Lwt.return err)
+
+let directory_at (dest, name) =
+  Charamel_os.Fs.stat dest >|= function
+  | Ok { Unix.st_kind = Unix.S_DIR; _ } -> Some name
+  | Ok _ | Error _ -> None
+
+let rejected_directories names =
+  Lwt_list.filter_map_s directory_at names >|= function
+  | name :: _ -> Error (`Io (Fmt.str "%s: is a directory" name))
+  | [] -> Ok ()
+
+let replace_pair p path_name pub_p pub_name private_body pub_body =
+  let targets = [ (p, 0o600, private_body); (pub_p, 0o644, pub_body) ] in
+  rejected_directories [ (p, path_name); (pub_p, pub_name) ] >>= function
+  | Error _ as err -> Lwt.return err
+  | Ok () -> (
+      write_temps [] 0 targets >>= function
+      | Error _ as err -> Lwt.return err
+      | Ok staged -> commit staged)
+
+let write ~fs_root ~path ?comment ?(overwrite = false) t =
   let p = path_of fs_root path in
   let pub_name = path ^ ".pub" in
   let pub_p = path_of fs_root pub_name in
-  path_exists p >>= function
-  | true -> Lwt.return (Error (`Already_exists path))
-  | false -> (
-      path_exists pub_p >>= function
-      | true -> Lwt.return (Error (`Already_exists pub_name))
-      | false ->
-          write_pair p path pub_p pub_name
-            (to_openssh_private ?comment t)
-            (authorized_key ?comment t))
+  let private_body = to_openssh_private ?comment t in
+  let public_body = authorized_key ?comment t in
+  if overwrite then replace_pair p path pub_p pub_name private_body public_body
+  else
+    path_exists p >>= function
+    | true -> Lwt.return (Error (`Already_exists path))
+    | false -> (
+        path_exists pub_p >>= function
+        | true -> Lwt.return (Error (`Already_exists pub_name))
+        | false -> write_pair p path pub_p pub_name private_body public_body)
 
 let max_key_file_size = 65536
 

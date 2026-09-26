@@ -32,6 +32,7 @@ type connection = {
   mutable session : session option;
   endpoint : session -> unit Lwt.t;
   banner : string option;
+  banner_handler : (session -> string option) option;
   mutable banner_sent : bool;
 }
 
@@ -41,6 +42,7 @@ and session = {
   mutable authenticated_key : Awa.Hostkey.pub option;
   mutable command_words : string list;
   mutable terminal : pty option;
+  mutable allocated_pty : Charamel_os.Pty.t option;
   mutable environment : (string * string) list;
   resize : (int * int) Lwt_stream.t;
   resize_to : (int * int) option -> unit;
@@ -235,6 +237,12 @@ module Session = struct
   let stdout t = t.stdout
   let stderr t = t.stderr
   let exit t code = request_exit t code
+  let print t text = Lwt_io.write t.stdout text >>= fun () -> Lwt_io.flush t.stdout
+  let print_line t text = print t (text ^ "\n")
+  let write_string t text = print t text >|= fun () -> String.length text
+  let error t text = Lwt_io.write t.stderr text >>= fun () -> Lwt_io.flush t.stderr
+  let error_line t text = error t (text ^ "\n")
+  let fatal t text = error_line t text >>= fun () -> exit t 1
 end
 
 type handler = Session.t -> unit Lwt.t
@@ -281,9 +289,16 @@ let update_environment session key value =
 
 let int32_dimension value = max 0 (Int32.to_int value)
 
+let size_allocated session rows cols =
+  match session.allocated_pty with
+  | None -> ()
+  | Some pty -> (
+      match Charamel_os.Pty.resize pty ~rows ~cols with Ok () | Error _ -> ())
+
 let set_pty session term cols rows =
   let next = { term; rows = int32_dimension rows; cols = int32_dimension cols } in
-  session.terminal <- Some next
+  session.terminal <- Some next;
+  size_allocated session next.rows next.cols
 
 let resize_pty session cols rows =
   match session.terminal with
@@ -292,7 +307,8 @@ let resize_pty session cols rows =
       let rows = int32_dimension rows in
       let cols = int32_dimension cols in
       session.terminal <- Some { current with rows; cols };
-      session.resize_to (Some (rows, cols))
+      session.resize_to (Some (rows, cols));
+      size_allocated session rows cols
 
 let start_handler connection session =
   let task =
@@ -347,9 +363,14 @@ let authenticate connection username auth =
         in
         (callback_ok, None)
   in
-  (match (connection.banner, connection.banner_sent) with
-  | Some banner, false when String.length banner > 0 ->
-      emit_message_locked connection (Awa.Ssh.Msg_userauth_banner (banner, ""));
+  let banner =
+    match connection.banner_handler with
+    | Some handler -> handler session
+    | None -> connection.banner
+  in
+  (match (banner, connection.banner_sent) with
+  | Some text, false when String.length text > 0 ->
+      emit_message_locked connection (Awa.Ssh.Msg_userauth_banner (text, ""));
       connection.banner_sent <- true
   | _ -> ());
   if accepted then begin
@@ -471,7 +492,7 @@ let writer connection =
       | exn -> Lwt.fail exn)
 
 let make_connection ~idle_timeout ~public_key_auth ~password_auth ~flow ~remote_addr
-    ~state ~banner endpoint =
+    ~state ~banner ~banner_handler endpoint =
   let outgoing, emit = Lwt_stream.create () in
   let stdin, feed = input_channel () in
   let resize, resize_to = Lwt_stream.create () in
@@ -494,6 +515,7 @@ let make_connection ~idle_timeout ~public_key_auth ~password_auth ~flow ~remote_
       session = None;
       endpoint;
       banner;
+      banner_handler;
       banner_sent = false;
     }
   in
@@ -504,6 +526,7 @@ let make_connection ~idle_timeout ~public_key_auth ~password_auth ~flow ~remote_
       authenticated_key = None;
       command_words = [];
       terminal = None;
+      allocated_pty = None;
       environment = [];
       resize;
       resize_to;
@@ -538,11 +561,11 @@ let report_failure remote_addr = function
             (Printexc.to_string exn))
 
 let run_connection ~idle_timeout ~public_key_auth ~password_auth ~max_timeout ~flow
-    ~remote_addr ~host_key ~banner endpoint =
+    ~remote_addr ~host_key ~banner ~banner_handler endpoint =
   let state, initial_messages = Awa.Server.make host_key in
   let connection =
     make_connection ~idle_timeout ~public_key_auth ~password_auth ~flow ~remote_addr
-      ~state ~banner endpoint
+      ~state ~banner ~banner_handler endpoint
   in
   let run () =
     Lwt_switch.with_switch (fun worker_sw ->
@@ -590,16 +613,92 @@ let valid_timeout name value =
       invalid_arg (Fmt.str "%s must be positive" name)
   | FP_zero | FP_normal | FP_subnormal -> value
 
-let write_line session text =
-  let output = Session.stdout session in
-  Lwt_io.write output (text ^ "\n") >>= fun () -> Lwt_io.flush output
+let windows_unsupported = "pseudo-terminals are not supported on Windows"
+
+let pty_size session =
+  match Session.pty session with
+  | Some { rows; cols; _ } when rows > 0 && cols > 0 -> (rows, cols)
+  | _ -> (24, 80)
+
+let exit_code = function
+  | Unix.WEXITED code -> code
+  | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal
+
+let wait_exit_code pid = Lwt_unix.waitpid [] pid >|= fun (_, status) -> exit_code status
+
+let command_env session extra =
+  Array.of_list
+    (Array.to_list (Unix.environment ())
+    @ List.map (fun (key, value) -> Fmt.str "%s=%s" key value) (Session.env session)
+    @ extra)
+
+let rec copy_pty session pty =
+  Charamel_os.Pty.read pty 4096 >>= function
+  | Ok "" -> Lwt.return_unit
+  | Ok data -> Session.print session data >>= fun () -> copy_pty session pty
+  | Error _ -> Lwt.return_unit
+
+let rec write_pty pty text off =
+  let length = String.length text - off in
+  if length <= 0 then Lwt.return_unit
+  else
+    Charamel_os.Pty.write pty text off length >>= function
+    | Ok 0 | Error _ -> Lwt.return_unit
+    | Ok count -> write_pty pty text (off + count)
+
+let rec pump_input session pty =
+  Lwt_io.read ~count:4096 (Session.stdin session) >>= fun data ->
+  if String.is_empty data then Lwt.return_unit
+  else write_pty pty data 0 >>= fun () -> pump_input session pty
+
+let pty_failure = function
+  | `Error message -> message
+  | `Unsupported -> windows_unsupported
+
+let with_session_pty session body =
+  match session.allocated_pty with
+  | Some pty -> body pty
+  | None -> (
+      let rows, cols = pty_size session in
+      Charamel_os.Pty.create ~rows ~cols () >>= function
+      | Error reason -> Lwt.return (Error (`Failed (pty_failure reason)))
+      | Ok pty ->
+          session.allocated_pty <- Some pty;
+          Lwt.finalize
+            (fun () -> body pty)
+            (fun () ->
+              session.allocated_pty <- None;
+              Charamel_os.Pty.terminate pty;
+              Charamel_os.Pty.close pty;
+              Lwt.return_unit))
+
+let command ?dir ?env session program args =
+  let argv = program :: args in
+  let child_env = command_env session (Option.value ~default:[] env) in
+  with_session_pty session (fun pty ->
+      Charamel_os.Pty.exec pty ?cwd:dir ~env:child_env argv >>= function
+      | Error reason -> Lwt.return (Error (`Failed (pty_failure reason)))
+      | Ok pid ->
+          let input = pump_input session pty in
+          Lwt.finalize
+            (fun () -> copy_pty session pty)
+            (fun () ->
+              Lwt.cancel input;
+              Lwt.return_unit)
+          >>= fun () ->
+          Lwt.catch
+            (fun () -> wait_exit_code pid >|= fun code -> Ok code)
+            (fun exn -> Lwt.return (Error (`Failed (Printexc.to_string exn)))))
+
+let session_exec session = function
+  | [] -> invalid_arg "exec requires a command"
+  | program :: args -> (
+      command session program args >>= function
+      | Ok code -> Lwt.return code
+      | Error (`Failed reason) -> Lwt.fail (Failure reason))
 
 let tea ~env make _next session =
-  let size () =
-    match Session.pty session with
-    | Some { rows; cols; _ } when rows > 0 && cols > 0 -> (rows, cols)
-    | _ -> (24, 80)
-  in
+  let size () = pty_size session in
   let environment name =
     match List.assoc_opt name (Session.env session) with
     | Some value -> Some value
@@ -618,41 +717,140 @@ let tea ~env make _next session =
     in
     loop ()
   in
+  let input = Charamel_os.Console_input.of_channel (Session.stdin session) in
+  let output = Session.stdout session in
+  let on_resize = Some notifications in
+  let is_tty = Option.is_some (Session.pty session) in
   let terminal =
-    Charamel_tea.Terminal.custom
-      ~input:(Charamel_os.Console_input.of_channel (Session.stdin session))
-      ~output:(Session.stdout session) ~size ~on_resize:(Some notifications)
-      ~env:environment
-      ~is_tty:(Option.is_some (Session.pty session))
+    match session.allocated_pty with
+    | None ->
+        Charamel_tea.Terminal.custom ~input ~output ~size ~on_resize ~env:environment
+          ~is_tty
+    | Some _ ->
+        Charamel_tea.Terminal.custom_with_exec ~input ~output ~size ~on_resize
+          ~env:environment ~is_tty ~exec:(session_exec session)
+  in
+  let color_profile =
+    match session.allocated_pty with
+    | Some _ -> Some (Charamel_colorprofile.detect ~is_tty:true ~env:environment)
+    | None -> None
   in
   let report_error exn =
-    let output = Session.stderr session in
-    Lwt_io.write output (Fmt.str "tea: %s\n" (Printexc.to_string exn)) >>= fun () ->
-    Lwt_io.flush output
+    Session.error session (Fmt.str "tea: %s\n" (Printexc.to_string exn))
   in
   Lwt.finalize
     (fun () ->
-      Charamel_tea.run ~terminal ~clock:env.Charamel_cli.Env.clock (make session)
+      Charamel_tea.run ~terminal ?color_profile ~clock:env.Charamel_cli.Env.clock
+        (make session)
       >>= function
       | Ok _ -> Session.exit session 0
       | Error `Interrupted -> Session.exit session 130
-      | Error `Killed -> Session.exit session 137
       | Error (`Exn (exn, _)) -> report_error exn >>= fun () -> Session.exit session 1)
     (fun () ->
       Lwt.cancel relay;
       Lwt.return_unit)
 
+let tea_with_stream ~env make next session =
+  let app, stream = make session in
+  let stream_app =
+    {
+      app with
+      Charamel_tea.subscriptions =
+        (fun model ->
+          Charamel_tea.Sub.batch
+            [ app.Charamel_tea.subscriptions model; Charamel_tea.Sub.stream stream ]);
+    }
+  in
+  tea ~env (fun _session -> stream_app) next session
+
 let active_term next session =
   match Session.pty session with
   | Some _ -> next session
   | None ->
-      write_line session "Requires an active PTY" >>= fun () -> Session.exit session 1
+      Session.print_line session "Requires an active PTY" >>= fun () ->
+      Session.exit session 1
 
-let access_control ~authorized next session =
+let allocate_pty next session =
+  let rows, cols = pty_size session in
+  Charamel_os.Pty.create ~rows ~cols () >>= function
+  | Error reason ->
+      Session.fatal session (Fmt.str "cannot allocate a PTY: %s" (pty_failure reason))
+  | Ok pty ->
+      session.allocated_pty <- Some pty;
+      Lwt.finalize
+        (fun () -> next session)
+        (fun () ->
+          session.allocated_pty <- None;
+          Charamel_os.Pty.terminate pty;
+          Charamel_os.Pty.close pty;
+          Lwt.return_unit)
+
+let emulated_pty session = Option.is_none session.allocated_pty
+
+let public_blob public_key =
+  match public_key with
+  | Awa.Hostkey.Ed25519_pub pub ->
+      Charamel_ssh_keygen.wire_ed25519_blob (Mirage_crypto_ec.Ed25519.pub_to_octets pub)
+  | Awa.Hostkey.Rsa_pub rsa ->
+      Charamel_ssh_keygen.wire_rsa_blob ~e:rsa.Mirage_crypto_pk.Rsa.e
+        ~n:rsa.Mirage_crypto_pk.Rsa.n
+
+let admitted_by public_key entries =
+  let blob = public_blob public_key in
+  List.exists
+    (fun (entry : Charamel_ssh_keygen.authorized_entry) -> String.equal entry.blob blob)
+    entries
+
+let deny_session session =
+  Session.print_line session "Access denied" >>= fun () -> Session.exit session 1
+
+let password_or_key_auth ~authorized next session =
   match Session.public_key session with
   | Some public_key when List.exists (Awa.Hostkey.pub_eq public_key) authorized ->
       next session
-  | _ -> write_line session "Access denied" >>= fun () -> Session.exit session 1
+  | _ -> deny_session session
+
+let read_authorized_keys path =
+  Lwt.catch
+    (fun () ->
+      Lwt_io.with_file ~mode:Lwt_io.input path (fun channel ->
+          Lwt_io.read channel >|= fun text ->
+          Ok (Charamel_ssh_keygen.parse_authorized_keys text)))
+    (fun exn -> Lwt.return (Error (Printexc.to_string exn)))
+
+let authorized_keys_file ~path next session =
+  read_authorized_keys path >>= function
+  | Error message ->
+      Log.warn (fun log -> log "authorized_keys %s: %s" path message);
+      deny_session session
+  | Ok entries -> (
+      match Session.public_key session with
+      | Some public_key when admitted_by public_key entries -> next session
+      | Some _ | None -> deny_session session)
+
+let allow_commands allowed next session =
+  match Session.command session with
+  | [] -> next session
+  | program :: _ when List.exists (String.equal program) allowed -> next session
+  | program :: _ -> Session.fatal session (Fmt.str "Command is not allowed: %s" program)
+
+let subsystem handlers next session =
+  match Session.command session with
+  | [ {|subsystem|}; name ] -> (
+      match List.assoc_opt name handlers with
+      | Some handler -> handler session
+      | None -> Session.fatal session (Fmt.str "unknown subsystem: %s" name))
+  | _ -> next session
+
+let comment text next session = next session >>= fun () -> Session.print_line session text
+
+let recover next session =
+  Lwt.catch
+    (fun () -> next session)
+    (fun exn ->
+      Log.err (fun log ->
+          log "panic: %s\n%s" (Printexc.to_string exn) (Printexc.get_backtrace ()));
+      Session.exit session 1)
 
 let logging next (session : session) =
   let started = Charamel_os.Time.now Charamel_os.Time.lwt in
@@ -680,57 +878,93 @@ let logging next (session : session) =
       disconnect ();
       Lwt.return_unit)
 
-let rate_limit ~per_second ~burst =
+let default_rate_entries = 1024
+
+let evict_oldest buckets =
+  let target = ref None in
+  Hashtbl.iter
+    (fun key (_, _, seen) ->
+      match !target with
+      | Some (_, best) when best <= seen -> ()
+      | _ -> target := Some (key, seen))
+    buckets;
+  match !target with Some (key, _) -> Hashtbl.remove buckets key | None -> ()
+
+let token_bucket ?(max_entries = default_rate_entries) ~per_second ~burst () =
   (match classify_float per_second with
   | FP_nan | FP_infinite -> invalid_arg "per_second must be finite"
   | (FP_zero | FP_normal | FP_subnormal) when per_second <= 0. ->
       invalid_arg "per_second must be positive"
   | FP_zero | FP_normal | FP_subnormal -> ());
   if burst <= 0 then invalid_arg "burst must be positive";
+  if max_entries <= 0 then invalid_arg "max_entries must be positive";
   let buckets = Hashtbl.create 16 in
-  let lock = Lwt_mutex.create () in
-  let allow session =
-    Lwt_mutex.with_lock lock (fun () ->
-        let now = Charamel_os.Time.now Charamel_os.Time.lwt in
-        let key = rate_key (Session.remote_addr session) in
-        let tokens, last =
-          match Hashtbl.find_opt buckets key with
-          | Some bucket -> bucket
-          | None -> (float_of_int burst, now)
-        in
-        let replenished =
-          min (float_of_int burst) (tokens +. (max 0. (now -. last) *. per_second))
-        in
-        let allowed = replenished >= 1. in
-        let tokens = if allowed then replenished -. 1. else replenished in
-        Hashtbl.replace buckets key (tokens, now);
-        Lwt.return allowed)
+  let seen = ref 0 in
+  let allow key =
+    let now = Charamel_os.Time.now Charamel_os.Time.lwt in
+    let tokens, last =
+      match Hashtbl.find_opt buckets key with
+      | Some (tokens, last, _) -> (tokens, last)
+      | None -> (float_of_int burst, now)
+    in
+    let replenished =
+      min (float_of_int burst) (tokens +. (max 0. (now -. last) *. per_second))
+    in
+    let allowed = replenished >= 1. in
+    let tokens = if allowed then replenished -. 1. else replenished in
+    incr seen;
+    Hashtbl.replace buckets key (tokens, now, !seen);
+    if Hashtbl.length buckets > max_entries then evict_oldest buckets;
+    allowed
   in
+  (allow, fun () -> Hashtbl.length buckets)
+
+type rate_limiter = Session.t -> bool
+
+let rate_limit_custom limiter next session =
+  if limiter session then next session
+  else
+    Session.print_line session "rate limit exceeded, please try again later" >>= fun () ->
+    Session.exit session 1
+
+let rate_limit ?max_entries ~per_second ~burst =
+  let allow, _ = token_bucket ?max_entries ~per_second ~burst () in
+  rate_limit_custom (fun session -> allow (rate_key (Session.remote_addr session)))
+
+let duration_template : (float -> string, Format.formatter, unit, string) format4 = "%f"
+
+let elapsed_format template =
+  try Scanf.format_from_string template duration_template
+  with Scanf.Scan_failure _ ->
+    invalid_arg "elapsed_with_format needs one float placeholder"
+
+let elapsed_with_format template =
+  let format = elapsed_format template in
   fun next session ->
-    allow session >>= function
-    | true -> next session
-    | false ->
-        write_line session "rate limit exceeded, please try again later" >>= fun () ->
-        Session.exit session 1
+    let started = Charamel_os.Time.now Charamel_os.Time.lwt in
+    let report () =
+      let duration = max 0. (Charamel_os.Time.now Charamel_os.Time.lwt -. started) in
+      Session.print_line session (Fmt.str format duration)
+    in
+    Lwt.finalize
+      (fun () -> next session)
+      (fun () -> report () >>= fun () -> Lwt.return_unit)
 
-let elapsed next (session : session) =
-  let started = Charamel_os.Time.now Charamel_os.Time.lwt in
-  let report () =
-    let duration = max 0. (Charamel_os.Time.now Charamel_os.Time.lwt -. started) in
-    write_line session (Fmt.str "elapsed time: %.3fs" duration)
-  in
-  Lwt.finalize
-    (fun () -> next session)
-    (fun () -> report () >>= fun () -> Lwt.return_unit)
+let elapsed = elapsed_with_format "elapsed time: %.3fs"
 
-let serve ?stop ~host_key ~addr ?idle_timeout ?max_timeout ?banner
+let awa_ed25519 seed =
+  match Mirage_crypto_ec.Ed25519.priv_of_octets seed with
+  | Ok priv -> Awa.Hostkey.Ed25519_priv priv
+  | Error _ -> invalid_arg "wish requires a 32-byte Ed25519 host key seed"
+
+let serve ?stop ~host_key ~addr ?idle_timeout ?max_timeout ?banner ?banner_handler
     ?(public_key_auth : (user:string -> Awa.Hostkey.pub -> bool) option)
     ?(password_auth : (user:string -> string -> bool) option) (endpoint : handler) () =
   let idle_timeout = Option.map (valid_timeout "idle_timeout") idle_timeout in
   let max_timeout = Option.map (valid_timeout "max_timeout") max_timeout in
   let awa_host_key =
     match Charamel_ssh_keygen.ed25519_seed host_key with
-    | Some seed -> Awa.Keys.of_seed `Ed25519 seed
+    | Some seed -> awa_ed25519 seed
     | None -> invalid_arg "wish requires an Ed25519 host key with awa 0.6.1"
   in
   let domain, sockaddr = listen_address addr in
@@ -741,7 +975,7 @@ let serve ?stop ~host_key ~addr ?idle_timeout ?max_timeout ?banner
     Lwt.finalize
       (fun () ->
         run_connection ~idle_timeout ~public_key_auth ~password_auth ~max_timeout ~flow
-          ~remote_addr ~host_key:awa_host_key ~banner endpoint)
+          ~remote_addr ~host_key:awa_host_key ~banner ~banner_handler endpoint)
       (fun () -> Flow.close flow)
   in
   let rec accept_forever () =

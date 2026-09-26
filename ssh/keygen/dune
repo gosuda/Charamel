@@ -10,4 +10,5 @@
   lwt.unix
   mirage-crypto-ec
   mirage-crypto-rng
-  unix))
+  unix
+  zarith))

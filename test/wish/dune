@@ -12,8 +12,13 @@
   charamel.os
   charamel.cli
   awa
+  base64
+  mirage-crypto-ec
+  mirage-crypto-pk
+  zarith
   lwt
   lwt.unix
+  logs
   mirage-crypto-rng.unix
   cstruct
   fmt
