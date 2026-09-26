@@ -1,4 +1,4 @@
 (library
  (name charamel_lipgloss)
  (public_name charamel.lipgloss)
- (libraries charamel.ansi fmt uucp))
+ (libraries charamel.ansi charamel.colorprofile fmt lwt lwt.unix uucp))

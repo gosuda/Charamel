@@ -24,3 +24,9 @@ val bottom : t
 
 val to_float : t -> float
 (** [to_float p] is the fractional position represented by [p]. *)
+
+val split : t -> int -> int * int
+(** [split p n] is [(share, rest)] with [share + rest = n] and
+    [share = round (to_float p * n)], rounding halves away from zero. [left]/[top] gives
+    [(0, n)] and [right]/[bottom] gives [(n, 0)] by an exact integer shortcut. For
+    [n <= 0] the result is [(0, n)]. *)

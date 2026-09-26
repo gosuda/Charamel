@@ -1,3 +1,56 @@
+type side = [ `Top | `Right | `Bottom | `Left ]
+
+type sides = {
+  top : int option;
+  right : int option;
+  bottom : int option;
+  left : int option;
+}
+
+let no_sides = { top = None; right = None; bottom = None; left = None }
+let side_value = function Some n -> n | None -> 0
+
+let total_sides s =
+  if s.top = None && s.right = None && s.bottom = None && s.left = None then None
+  else
+    Some
+      {
+        Sides.top = side_value s.top;
+        right = side_value s.right;
+        bottom = side_value s.bottom;
+        left = side_value s.left;
+      }
+
+let set_side side value s =
+  match side with
+  | `Top -> { s with top = Some value }
+  | `Right -> { s with right = Some value }
+  | `Bottom -> { s with bottom = Some value }
+  | `Left -> { s with left = Some value }
+
+let clear_side side s =
+  match side with
+  | `Top -> { s with top = None }
+  | `Right -> { s with right = None }
+  | `Bottom -> { s with bottom = None }
+  | `Left -> { s with left = None }
+
+let pick_side side s =
+  match side with
+  | `Top -> s.top
+  | `Right -> s.right
+  | `Bottom -> s.bottom
+  | `Left -> s.left
+
+let is_unset s = s.top = None && s.right = None && s.bottom = None && s.left = None
+
+let check_fill_char name text =
+  if text = "" then ()
+  else
+    match Charamel_ansi.Width.graphemes text with
+    | [ _ ] -> ()
+    | _ -> invalid_arg (Printf.sprintf "Style.%s: one grapheme is required" name)
+
 type t = {
   bold : bool option;
   italic : bool option;
@@ -19,8 +72,10 @@ type t = {
   max_height : int option;
   align_horizontal : Position.t option;
   align_vertical : Position.t option;
-  padding : Sides.t option;
-  margin : Sides.t option;
+  padding : sides;
+  margin : sides;
+  padding_char : string option;
+  margin_char : string option;
   margin_background : Charamel_ansi.Color.t option;
   border : Border.t option;
   border_top : bool option;
@@ -29,6 +84,8 @@ type t = {
   border_left : bool option;
   border_foreground : Sides_color.t option;
   border_background : Sides_color.t option;
+  border_foreground_blend : Charamel_ansi.Color.t list option;
+  border_foreground_blend_offset : int option;
   inline : bool option;
   tab_width : int option;
   transform : (string -> string) option;
@@ -57,8 +114,10 @@ let empty =
     max_height = None;
     align_horizontal = None;
     align_vertical = None;
-    padding = None;
-    margin = None;
+    padding = no_sides;
+    margin = no_sides;
+    padding_char = None;
+    margin_char = None;
     margin_background = None;
     border = None;
     border_top = None;
@@ -67,6 +126,8 @@ let empty =
     border_left = None;
     border_foreground = None;
     border_background = None;
+    border_foreground_blend = None;
+    border_foreground_blend_offset = None;
     inline = None;
     tab_width = None;
     transform = None;
@@ -109,8 +170,42 @@ let max_height x t = { t with max_height = Some (clamp_size x) }
 let align x t = { t with align_horizontal = Some x; align_vertical = Some x }
 let align_horizontal x t = { t with align_horizontal = Some x }
 let align_vertical x t = { t with align_vertical = Some x }
-let padding x t = { t with padding = Some x }
-let margin x t = { t with margin = Some x }
+
+let padding x t =
+  {
+    t with
+    padding =
+      {
+        top = Some x.Sides.top;
+        right = Some x.Sides.right;
+        bottom = Some x.Sides.bottom;
+        left = Some x.Sides.left;
+      };
+  }
+
+let margin x t =
+  {
+    t with
+    margin =
+      {
+        top = Some x.Sides.top;
+        right = Some x.Sides.right;
+        bottom = Some x.Sides.bottom;
+        left = Some x.Sides.left;
+      };
+  }
+
+let padding_side side cells t = { t with padding = set_side side cells t.padding }
+let margin_side side cells t = { t with margin = set_side side cells t.margin }
+
+let padding_char text t =
+  check_fill_char "padding_char" text;
+  { t with padding_char = (if text = "" then None else Some text) }
+
+let margin_char text t =
+  check_fill_char "margin_char" text;
+  { t with margin_char = (if text = "" then None else Some text) }
+
 let margin_background x t = { t with margin_background = Some x }
 
 let border x t =
@@ -129,6 +224,11 @@ let border_bottom x t = { t with border_bottom = Some x }
 let border_left x t = { t with border_left = Some x }
 let border_foreground x t = { t with border_foreground = Some x }
 let border_background x t = { t with border_background = Some x }
+let border_foreground_blend x t = { t with border_foreground_blend = Some x }
+
+let border_foreground_blend_offset x t =
+  { t with border_foreground_blend_offset = Some x }
+
 let inline x t = { t with inline = Some x }
 let tab_width x t = { t with tab_width = Some (max (-1) x) }
 let transform f t = { t with transform = Some f }
@@ -154,8 +254,12 @@ let unset_max_height t = { t with max_height = None }
 let unset_align t = { t with align_horizontal = None; align_vertical = None }
 let unset_align_horizontal t = { t with align_horizontal = None }
 let unset_align_vertical t = { t with align_vertical = None }
-let unset_padding t = { t with padding = None }
-let unset_margin t = { t with margin = None }
+let unset_padding t = { t with padding = no_sides }
+let unset_margin t = { t with margin = no_sides }
+let unset_padding_side side t = { t with padding = clear_side side t.padding }
+let unset_margin_side side t = { t with margin = clear_side side t.margin }
+let unset_padding_char t = { t with padding_char = None }
+let unset_margin_char t = { t with margin_char = None }
 let unset_margin_background t = { t with margin_background = None }
 
 let unset_border t =
@@ -174,6 +278,11 @@ let unset_border_bottom t = { t with border_bottom = None }
 let unset_border_left t = { t with border_left = None }
 let unset_border_foreground t = { t with border_foreground = None }
 let unset_border_background t = { t with border_background = None }
+let unset_border_foreground_blend t = { t with border_foreground_blend = None }
+
+let unset_border_foreground_blend_offset t =
+  { t with border_foreground_blend_offset = None }
+
 let unset_inline t = { t with inline = None }
 let unset_tab_width t = { t with tab_width = None }
 let unset_transform t = { t with transform = None }
@@ -210,6 +319,8 @@ let inherit_ ~parent child =
     align_vertical = choose child.align_vertical parent.align_vertical;
     padding = child.padding;
     margin = child.margin;
+    padding_char = child.padding_char;
+    margin_char = child.margin_char;
     margin_background =
       choose child.margin_background
         (match parent.margin_background with
@@ -222,6 +333,10 @@ let inherit_ ~parent child =
     border_left = choose child.border_left parent.border_left;
     border_foreground = choose child.border_foreground parent.border_foreground;
     border_background = choose child.border_background parent.border_background;
+    border_foreground_blend =
+      choose child.border_foreground_blend parent.border_foreground_blend;
+    border_foreground_blend_offset =
+      choose child.border_foreground_blend_offset parent.border_foreground_blend_offset;
     inline = choose child.inline parent.inline;
     tab_width = choose child.tab_width parent.tab_width;
     transform = choose child.transform parent.transform;
@@ -232,8 +347,12 @@ let get_width t = t.width
 let get_height t = t.height
 let get_max_width t = t.max_width
 let get_max_height t = t.max_height
-let get_padding t = t.padding
-let get_margin t = t.margin
+let get_padding t = total_sides t.padding
+let get_margin t = total_sides t.margin
+let get_padding_side side t = pick_side side t.padding
+let get_margin_side side t = pick_side side t.margin
+let get_padding_char t = t.padding_char
+let get_margin_char t = t.margin_char
 let get_foreground t = t.foreground
 let get_background t = t.background
 let get_border t = t.border
@@ -243,10 +362,18 @@ let get_tab_width t = t.tab_width
 let get_hyperlink t = t.hyperlink
 let get_border_foreground t = t.border_foreground
 let get_border_background t = t.border_background
+let get_border_foreground_blend t = t.border_foreground_blend
+let get_border_foreground_blend_offset t = t.border_foreground_blend_offset
 
 let apply_ansi style text =
   if Charamel_ansi.Style.equal style Charamel_ansi.Style.default then text
   else Charamel_ansi.Style.to_sgr style ^ text ^ "\x1b[m"
+
+let fill_char = function Some c -> c | None -> " "
+
+let pad_fill char style cells =
+  if cells <= 0 then ""
+  else apply_ansi style (Whitespace.fill ~pattern:(fill_char char) cells)
 
 let resolve_underline t =
   match (t.underline, t.underline_style) with
@@ -396,8 +523,8 @@ let align_lines_vertical pos h ls =
       if pos = Position.top then (0, gap)
       else if pos = Position.bottom then (gap, 0)
       else
-        let a = int_of_float (Float.round (float gap *. Position.to_float pos)) in
-        (gap - a, a)
+        let share, rest = Position.split pos gap in
+        (rest, share)
     in
     Stdlib.List.init top (fun _ -> "") @ ls @ Stdlib.List.init bottom (fun _ -> "")
 
@@ -408,11 +535,11 @@ let align_lines_horizontal pos target te ls =
     (fun line ->
       let gap = target - line_width line in
       if gap <= 0 then line
+      else if pos = Position.left then line ^ styled_pad te gap
       else if pos = Position.right then styled_pad te gap ^ line
-      else if pos = Position.center then
-        let left = gap / 2 in
-        styled_pad te left ^ line ^ styled_pad te (gap - left)
-      else line ^ styled_pad te gap)
+      else
+        let share, rest = Position.split pos gap in
+        styled_pad te rest ^ line ^ styled_pad te share)
     ls
 
 let border_enabled t side =
@@ -471,6 +598,49 @@ let border_dimensions t =
       in
       (horizontal, vertical)
 
+let get_align t = t.align_horizontal
+
+let get_border_top_size t =
+  match t.border with
+  | None -> 0
+  | Some b when b = Border.none -> 0
+  | Some b -> if border_enabled t `Top then Border.top_size b else 0
+
+let get_border_right_size t =
+  match t.border with
+  | None -> 0
+  | Some b when b = Border.none -> 0
+  | Some b -> if border_enabled t `Right then Border.right_size b else 0
+
+let get_border_bottom_size t =
+  match t.border with
+  | None -> 0
+  | Some b when b = Border.none -> 0
+  | Some b -> if border_enabled t `Bottom then Border.bottom_size b else 0
+
+let get_border_left_size t =
+  match t.border with
+  | None -> 0
+  | Some b when b = Border.none -> 0
+  | Some b -> if border_enabled t `Left then Border.left_size b else 0
+
+let get_horizontal_border_size t = get_border_left_size t + get_border_right_size t
+let get_vertical_border_size t = get_border_top_size t + get_border_bottom_size t
+let get_horizontal_padding t = side_value t.padding.left + side_value t.padding.right
+let get_vertical_padding t = side_value t.padding.top + side_value t.padding.bottom
+let get_horizontal_margins t = side_value t.margin.left + side_value t.margin.right
+let get_vertical_margins t = side_value t.margin.top + side_value t.margin.bottom
+
+let get_horizontal_frame_size t =
+  get_horizontal_padding t + get_horizontal_margins t + get_horizontal_border_size t
+
+let get_vertical_frame_size t =
+  get_vertical_padding t + get_vertical_margins t + get_vertical_border_size t
+
+let get_frame_size t = (get_horizontal_frame_size t, get_vertical_frame_size t)
+let no_tab_conversion = -1
+let nbsp = "\u{00A0}"
+
 let side_color (sides : Sides_color.t option) side =
   match (sides, side) with
   | None, _ -> None
@@ -479,17 +649,96 @@ let side_color (sides : Sides_color.t option) side =
   | Some s, `Bottom -> s.Sides_color.bottom
   | Some s, `Left -> s.Sides_color.left
 
-let color_text t side text =
-  let foreground = side_color t.border_foreground side in
-  let background = side_color t.border_background side in
-  let style =
-    {
-      Charamel_ansi.Style.default with
-      fg = (match foreground with Some c -> c | None -> Charamel_ansi.Color.Default);
-      bg = (match background with Some c -> c | None -> Charamel_ansi.Color.Default);
-    }
+let edge_background t side =
+  match side_color t.border_background side with
+  | Some c -> c
+  | None -> Charamel_ansi.Color.Default
+
+let color_text ?fg t side text =
+  let foreground =
+    match fg with
+    | Some c -> c
+    | None -> (
+        match side_color t.border_foreground side with
+        | Some c -> c
+        | None -> Charamel_ansi.Color.Default)
   in
-  apply_ansi style text
+  apply_ansi
+    { Charamel_ansi.Style.default with fg = foreground; bg = edge_background t side }
+    text
+
+type border_slices = {
+  top_g : Charamel_ansi.Color.t array;
+  right_g : Charamel_ansi.Color.t array;
+  bottom_g : Charamel_ansi.Color.t array;
+  left_g : Charamel_ansi.Color.t array;
+}
+
+let rotate xs offset =
+  let n = Stdlib.List.length xs in
+  if n = 0 then xs
+  else
+    let r = offset mod n in
+    let r = if r < 0 then r + n else r in
+    if r = 0 then xs
+    else
+      let a = Array.of_list xs in
+      Array.to_list Array.(append (sub a r (n - r)) (sub a 0 r))
+
+let border_blend t ~width ~height =
+  match t.border_foreground_blend with
+  | Some (_ :: _ as colors) ->
+      let offset = Option.value ~default:0 t.border_foreground_blend_offset in
+      let steps = (height + width + 2) * 2 in
+      let rotated = rotate (Blending.blend1d ~steps colors) (-offset) in
+      let take n xs = Stdlib.List.filteri (fun i _ -> i < n) xs in
+      let drop n xs = Stdlib.List.filteri (fun i _ -> i >= n) xs in
+      let top_slice = take (width + 2) rotated in
+      let after_top = drop (width + 2) rotated in
+      let right_slice = take height after_top in
+      let after_right = drop height after_top in
+      let bottom_slice = Stdlib.List.rev (take (width + 2) after_right) in
+      let after_bottom = drop (width + 2) after_right in
+      let left_slice = Stdlib.List.rev (take height after_bottom) in
+      Some
+        {
+          top_g = Array.of_list top_slice;
+          right_g = Array.of_list right_slice;
+          bottom_g = Array.of_list bottom_slice;
+          left_g = Array.of_list left_slice;
+        }
+  | _ -> None
+
+let blend_text slice background text =
+  let glyphs = Charamel_ansi.Width.graphemes text in
+  let last = Array.length slice - 1 in
+  let out = Buffer.create (String.length text + (32 * Stdlib.List.length glyphs)) in
+  Stdlib.List.iteri
+    (fun i glyph ->
+      let fg = if i <= last then slice.(i) else Charamel_ansi.Color.Default in
+      Buffer.add_string out
+        (Charamel_ansi.Style.to_sgr
+           { Charamel_ansi.Style.default with fg; bg = background });
+      Buffer.add_string out glyph)
+    glyphs;
+  Buffer.add_string out "\x1b[m";
+  Buffer.contents out
+
+let edge_text t blend ~top_line text =
+  let side = if top_line then `Top else `Bottom in
+  match blend with
+  | None -> color_text t side text
+  | Some slices ->
+      let slice = if top_line then slices.top_g else slices.bottom_g in
+      blend_text slice (edge_background t side) text
+
+let side_text t blend side i glyph =
+  match blend with
+  | None -> color_text t side glyph
+  | Some slices ->
+      let slice = if side = `Left then slices.left_g else slices.right_g in
+      let fg = slice.(min i (Array.length slice - 1)) in
+      color_text ~fg t side glyph
 
 let apply_border t ls =
   match t.border with
@@ -505,6 +754,11 @@ let apply_border t ls =
         let content_width = max_line_width ls in
         let left_w = if left then border_edge_width b `Left ~top ~bottom else 0
         and right_w = if right then border_edge_width b `Right ~top ~bottom else 0 in
+        let blend =
+          border_blend t
+            ~width:(content_width + left_w + right_w)
+            ~height:(Stdlib.List.length ls)
+        in
         let cycle_glyphs s =
           match Charamel_ansi.Width.graphemes s with [] -> [ " " ] | gs -> gs
         in
@@ -517,14 +771,24 @@ let apply_border t ls =
                     gs)
           then ""
           else
-            let out = Buffer.create (max 16 target_width) in
-            let i = ref 0 and columns = ref 0 in
-            while !columns < target_width do
-              let g = Stdlib.List.nth gs (!i mod Stdlib.List.length gs) in
-              Buffer.add_string out g;
-              columns := !columns + Charamel_ansi.Width.grapheme_width g;
-              incr i
+            let out = Buffer.create target_width in
+            let n = Stdlib.List.length gs in
+            let i = ref 0 and columns = ref 0 and fits = ref true in
+            while !fits do
+              let g = Stdlib.List.nth gs (!i mod n) in
+              let w = Charamel_ansi.Width.grapheme_width g in
+              if w <= 0 then begin
+                Buffer.add_string out g;
+                incr i
+              end
+              else if !columns + w <= target_width then begin
+                Buffer.add_string out g;
+                columns := !columns + w;
+                incr i
+              end
+              else fits := false
             done;
+            Buffer.add_string out (spaces (target_width - !columns));
             Buffer.contents out
         in
         let fit_edge side width glyph =
@@ -549,7 +813,7 @@ let apply_border t ls =
             ^ fill_edge (cycle_glyphs mid) content_width
             ^ if right then corner `Right top_line else ""
           in
-          color_text t (if top_line then `Top else `Bottom) text
+          edge_text t blend ~top_line text
         in
         let left_glyphs = cycle_glyphs b.Border.left
         and right_glyphs = cycle_glyphs b.Border.right in
@@ -563,8 +827,12 @@ let apply_border t ls =
           Stdlib.List.mapi
             (fun i line ->
               let line = line ^ spaces (content_width - line_width line) in
-              let l = if left then color_text t `Left (side_glyph `Left i) else "" in
-              let r = if right then color_text t `Right (side_glyph `Right i) else "" in
+              let l =
+                if left then side_text t blend `Left i (side_glyph `Left i) else ""
+              in
+              let r =
+                if right then side_text t blend `Right i (side_glyph `Right i) else ""
+              in
               l ^ line ^ r)
             ls
         in
@@ -572,27 +840,27 @@ let apply_border t ls =
         top_line @ body @ bottom_line
 
 let apply_margins t ls =
-  match t.margin with
-  | None -> ls
-  | Some m ->
-      let margin_style =
-        match t.margin_background with
-        | None -> Charamel_ansi.Style.default
-        | Some c -> { Charamel_ansi.Style.default with bg = c }
-      in
-      let content_width = max_line_width ls + m.Sides.left + m.Sides.right in
-      let body =
-        Stdlib.List.map
-          (fun line ->
-            styled_pad margin_style m.Sides.left
-            ^ line
-            ^ styled_pad margin_style m.Sides.right)
-          ls
-      in
-      let blank = apply_ansi margin_style (spaces content_width) in
-      Stdlib.List.init m.Sides.top (fun _ -> blank)
-      @ body
-      @ Stdlib.List.init m.Sides.bottom (fun _ -> blank)
+  let m = t.margin in
+  if is_unset m then ls
+  else
+    let margin_style =
+      match t.margin_background with
+      | None -> Charamel_ansi.Style.default
+      | Some c -> { Charamel_ansi.Style.default with bg = c }
+    in
+    let left = side_value m.left and right = side_value m.right in
+    let body =
+      Stdlib.List.map
+        (fun line ->
+          pad_fill t.margin_char margin_style left
+          ^ line
+          ^ pad_fill t.margin_char margin_style right)
+        ls
+    in
+    let blank = pad_fill t.margin_char margin_style (max_line_width ls + left + right) in
+    Stdlib.List.init (side_value m.top) (fun _ -> blank)
+    @ body
+    @ Stdlib.List.init (side_value m.bottom) (fun _ -> blank)
 
 let render t input =
   let input = match t.transform with None -> input | Some f -> f input in
@@ -612,7 +880,8 @@ let render t input =
     && Option.is_none t.max_height
     && Option.is_none t.align_horizontal
     && Option.is_none t.align_vertical
-    && Option.is_none t.padding && Option.is_none t.margin
+    && is_unset t.padding && is_unset t.margin && Option.is_none t.padding_char
+    && Option.is_none t.margin_char
     && Option.is_none t.margin_background
     && Option.is_none t.border && Option.is_none t.border_top
     && Option.is_none t.border_right
@@ -620,6 +889,8 @@ let render t input =
     && Option.is_none t.border_left
     && Option.is_none t.border_foreground
     && Option.is_none t.border_background
+    && Option.is_none t.border_foreground_blend
+    && Option.is_none t.border_foreground_blend_offset
     && Option.is_none t.inline && Option.is_none t.tab_width && Option.is_none t.hyperlink
   then input
   else
@@ -642,14 +913,14 @@ let render t input =
     let input =
       if inline then String.concat "" (String.split_on_char '\n' input) else input
     in
-    let padding = match t.padding with Some x -> x | None -> Sides.v () in
+    let padding = t.padding in
     let border_h, border_v = border_dimensions t in
     let requested_width = Option.value ~default:0 t.width - border_h in
     let requested_height = Option.value ~default:0 t.height - border_v in
     let input =
       if (not inline) && requested_width > 0 then
         Charamel_ansi.Text.wrap
-          ~width:(requested_width - padding.Sides.left - padding.Sides.right)
+          ~width:(requested_width - side_value padding.left - side_value padding.right)
           input
       else input
     in
@@ -727,17 +998,18 @@ let render t input =
       else
         Stdlib.List.map
           (fun line ->
-            styled_pad te_whitespace padding.Sides.left
+            pad_fill t.padding_char te_whitespace (side_value padding.left)
             ^ line
-            ^ styled_pad te_whitespace padding.Sides.right)
+            ^ pad_fill t.padding_char te_whitespace (side_value padding.right))
           rendered
     in
     let rendered =
       if inline then rendered
       else
-        Stdlib.List.init padding.Sides.top (fun _ -> "")
+        let blank = pad_fill t.padding_char te_whitespace (max_line_width rendered) in
+        Stdlib.List.init (side_value padding.top) (fun _ -> blank)
         @ rendered
-        @ Stdlib.List.init padding.Sides.bottom (fun _ -> "")
+        @ Stdlib.List.init (side_value padding.bottom) (fun _ -> blank)
     in
     let rendered =
       align_lines_vertical

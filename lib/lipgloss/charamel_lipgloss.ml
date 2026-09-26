@@ -3,6 +3,19 @@ module Sides = Sides
 module Sides_color = Sides_color
 module Border = Border
 module Color = Charamel_ansi.Color
+module Color_util = Color_util
+module Blending = Blending
+module Print = Print
+
+module Underline = struct
+  type t = Charamel_ansi.Style.underline =
+    | No_underline
+    | Single
+    | Double
+    | Curly
+    | Dotted
+    | Dashed
+end
 
 let light_dark ~is_dark ~light ~dark = if is_dark then dark else light
 

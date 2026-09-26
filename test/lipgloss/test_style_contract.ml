@@ -582,6 +582,44 @@ let test_zero_width_border_glyphs () =
   let rendered = Style.render (Style.border border Style.empty) "x" in
   check_int "zero-width border glyphs do not create fake cells" 1 (Layout.width rendered)
 
+let test_fractional_align_horizontal () =
+  let style = Style.(align_horizontal (Position.v 0.25) (width 5 Style.empty)) in
+  check_string "quarter position pads three left, one right" "   x "
+    (Style.render style "x")
+
+let test_layout_fractional_orientation_preserved () =
+  check_string "join horizontal keeps block one row down" "a \nbc"
+    (Layout.join_horizontal ~pos:(Position.v 0.75) [ "a\nb"; "c" ]);
+  check_string "join vertical pads one left" "aa\n b"
+    (Layout.join_vertical ~pos:(Position.v 0.75) [ "aa"; "b" ]);
+  check_string "place vertical splits two up one down" " \n \na\n "
+    (Layout.place_vertical ~height:4 ~pos:(Position.v 0.25) "a");
+  check_string "style height splits two above one below" " \n \na\n "
+    (Style.render Style.(align_vertical (Position.v 0.25) (height 4 Style.empty)) "a")
+
+let test_cjk_border_edge_stays_bounded () =
+  let rand = Random.State.make [| 20260926 |] in
+  let check i =
+    let glyph = QCheck2.Gen.generate1 ~rand Test_support.cjk_gen in
+    let target = 1 + (i mod 9) in
+    let border = { Border.normal with top = glyph } in
+    let style =
+      Style.border_top true
+        (Style.border_right false
+           (Style.border_bottom false
+              (Style.border_left false
+                 (Style.border border (Style.width target Style.empty)))))
+    in
+    let rendered = Style.render style "x" in
+    let top = Stdlib.List.nth (String.split_on_char '\n' rendered) 0 in
+    Alcotest.(check bool)
+      (Printf.sprintf "top border edge of width %d from %S fits: rendered=%S" target glyph
+         rendered)
+      true
+      (Charamel_ansi.Text.width (Charamel_ansi.Text.strip top) <= target)
+  in
+  Stdlib.List.iter check (Stdlib.List.init 200 Fun.id)
+
 let cases =
   [
     ("bool props set/unset", `Quick, test_bool_props_set_unset);
@@ -628,4 +666,9 @@ let cases =
     ("escape payload terminators", `Quick, test_escape_payload_terminators);
     ("color_whitespace", `Quick, test_color_whitespace);
     ("margin-only render", `Quick, test_margin_only_render);
+    ("fractional horizontal align is weighted", `Quick, test_fractional_align_horizontal);
+    ( "layout fractional orientation preserved",
+      `Quick,
+      test_layout_fractional_orientation_preserved );
+    ("cjk border edge width stays bounded", `Quick, test_cjk_border_edge_stays_bounded);
   ]

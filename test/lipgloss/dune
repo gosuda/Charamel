@@ -1,4 +1,13 @@
 (test
  (name test_lipgloss)
  (package charamel)
- (libraries charamel.lipgloss charamel.ansi alcotest fmt))
+ (libraries
+  charamel.lipgloss
+  charamel.ansi
+  charamel.colorprofile
+  alcotest
+  fmt
+  lwt
+  lwt.unix
+  qcheck-core
+  test_support))

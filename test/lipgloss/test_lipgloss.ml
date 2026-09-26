@@ -82,6 +82,9 @@ let () =
       ("table", [ Alcotest.test_case "table render" `Quick test_table ]);
       ("tree-list", [ Alcotest.test_case "tree and list" `Quick test_tree_and_list ]);
       ("style-contract", Test_style_contract.cases);
+      ("color-util", Test_color_util.cases);
+      ("blending", Test_blending.cases);
+      ("surface-contract", Test_surface_contract.cases);
       ("layout-contract", Test_layout_contract.cases);
       ("structures-contract", Test_structures_contract.cases);
     ]
