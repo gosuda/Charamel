@@ -1,3 +1,4 @@
+open Lwt.Syntax
 module Cmd = Charamel_tea.Cmd
 module Sub = Charamel_tea.Sub
 module Key = Charamel_tea.Key
@@ -696,34 +697,33 @@ let state t =
 let results t = complete_results t t.results 0
 
 let run_accessible env ~out reader t =
-  let rec groups_loop group_index results =
-    if group_index = Array.length t.groups then results
+  let rec field_loop group field_index results =
+    if field_index = Group.field_count group then Lwt.return (group, results)
+    else
+      let field = Group.field field_index group in
+      let context =
+        {
+          Field_impl.styles = t.styles;
+          keymap = t.keymap;
+          width = 80;
+          height = 0;
+          position = default_position;
+          results;
+          env;
+        }
+      in
+      let field = Field_impl.reevaluate field context in
+      let* field = Field_impl.run_accessible field context ~out reader in
+      let results = Field_impl.commit field results in
+      field_loop (Group.set_field field_index field group) (field_index + 1) results
+  in
+  let rec group_loop group_index results =
+    if group_index = Array.length t.groups then Lwt.return results
     else
       let group = t.groups.(group_index) in
-      if Group.is_hidden ~results group then groups_loop (group_index + 1) results
+      if Group.is_hidden ~results group then group_loop (group_index + 1) results
       else
-        let group = ref group in
-        let results = ref results in
-        for field_index = 0 to Group.field_count !group - 1 do
-          let field = Group.field field_index !group in
-          let width = 80 in
-          let height = 0 in
-          let context =
-            {
-              Field_impl.styles = t.styles;
-              keymap = t.keymap;
-              width;
-              height;
-              position = default_position;
-              results = !results;
-              env;
-            }
-          in
-          let field = Field_impl.reevaluate field context in
-          let field = Field_impl.run_accessible field context ~out reader in
-          group := Group.set_field field_index field !group;
-          results := Field_impl.commit field !results
-        done;
-        groups_loop (group_index + 1) !results
+        let* _, results = field_loop group 0 results in
+        group_loop (group_index + 1) results
   in
-  groups_loop 0 t.results
+  group_loop 0 t.results

@@ -51,6 +51,7 @@ let c_create_file_w =
 let u32 value = UInt32.of_int value
 let std_input_handle = u32 (-10)
 let std_output_handle = u32 (-11)
+let std_error_handle = u32 (-12)
 let invalid_handle = Nativeint.minus_one
 let no_handle = Nativeint.zero
 let generic_read = u32 0x80000000
@@ -82,6 +83,7 @@ let std_handle which name =
 
 let std_input () = std_handle std_input_handle "CONIN$"
 let std_output () = std_handle std_output_handle "CONOUT$"
+let std_error () = std_handle std_error_handle "CONOUT$"
 
 let get_console_mode handle =
   let word = allocate_n uint32_t ~count:1 in

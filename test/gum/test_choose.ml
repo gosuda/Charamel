@@ -36,7 +36,7 @@ let non_tty_shortcut () =
 
 let cases =
   [
-    Alcotest.test_case "option parsing" `Quick parse_options;
-    Alcotest.test_case "scripted selection" `Quick scripted_selection;
-    Alcotest.test_case "non-tty sole option" `Quick non_tty_shortcut;
+    Alcotest_lwt.test_case_sync "option parsing" `Quick parse_options;
+    Alcotest_lwt.test_case_sync "scripted selection" `Quick scripted_selection;
+    Alcotest_lwt.test_case_sync "non-tty sole option" `Quick non_tty_shortcut;
   ]

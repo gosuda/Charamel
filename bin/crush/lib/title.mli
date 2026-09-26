@@ -4,12 +4,12 @@
     exchange. *)
 
 val generate :
-  sw:Eio.Switch.t ->
-  clock:_ Eio.Time.clock ->
-  net:Eio_unix.Net.t ->
+  sw:Lwt_switch.t ->
+  clock:Charamel_os.Time.clock ->
   small:Models.resolved ->
   first_prompt:string ->
-  (string, [ `Provider of string ]) result
-(** [generate ~sw ~clock ~net ~small ~first_prompt] is a title generated from
-    [first_prompt]. The prompt is bounded to 2,000 characters, the model output to 40
-    tokens, and the cleaned result to 80 characters. *)
+  (string, [ `Provider of string ]) result Lwt.t
+(** [generate ~sw ~clock ~small ~first_prompt] is a title generated from [first_prompt].
+    The prompt is bounded to 2,000 characters, the model output to 40 tokens, and the
+    cleaned result to 80 characters. Turning [sw] off ends the stream early and is
+    reported as a provider failure. *)

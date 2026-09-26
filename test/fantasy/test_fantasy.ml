@@ -1,5 +1,5 @@
 let () =
-  Alcotest.run "charamel.fantasy"
+  Test_support.run_lwt "charamel.fantasy"
     [
       ("anthropic codec", Test_anthropic_codec.cases);
       ("google codec", Test_google_codec.cases);

@@ -32,6 +32,6 @@ let password_mode () =
 
 let cases =
   [
-    Alcotest.test_case "scripted input" `Quick scripted_input;
-    Alcotest.test_case "password mode" `Quick password_mode;
+    Alcotest_lwt.test_case_sync "scripted input" `Quick scripted_input;
+    Alcotest_lwt.test_case_sync "password mode" `Quick password_mode;
   ]

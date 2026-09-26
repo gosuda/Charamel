@@ -1,3 +1,5 @@
+module Env = Charamel_cli.Env
+
 type options = {
   path : string;
   cursor : string;
@@ -78,9 +80,9 @@ let apply_styles (options : options) picker =
   in
   Charamel_bubbles.Filepicker.set_styles styles picker
 
-let app ~env (options : options) ~padding ~directory =
+let app ~(env : Charamel_cli.Env.t) (options : options) ~padding ~directory =
   let picker =
-    Charamel_bubbles.Filepicker.v ~fs:env#fs ~current_directory:directory
+    Charamel_bubbles.Filepicker.v ~root:env.Env.fs_root ~current_directory:directory
       ~height:options.height ~auto_height:(options.height = 0) ~cursor:options.cursor
       ~dir_allowed:options.directory ~file_allowed:options.file
       ~show_permissions:options.permissions ~show_size:options.size
@@ -156,40 +158,58 @@ let absolute_directory path =
   let path =
     if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
   in
-  Eio_unix.run_in_systhread ~label:"realpath" (fun () -> Unix.realpath path)
+  Lwt_preemptive.detach (fun () -> Unix.realpath path) ()
+
+let is_directory path =
+  Lwt.map
+    (function Ok { Unix.st_kind = Unix.S_DIR; _ } -> true | Ok _ | Error _ -> false)
+    (Charamel_os.Fs.stat path)
 
 let run env (options : options) =
   if (not options.file) && not options.directory then
     Charamel_cli.error "at least one between --file and --directory must be set";
-  let directory =
-    try absolute_directory (if options.path = "" then "." else options.path)
-    with Unix.Unix_error (error, _, _) ->
-      Charamel_cli.error (Fmt.str "file not found: %s" (Unix.error_message error))
-  in
-  let is_directory =
-    try Eio.Path.is_directory Eio.Path.(env#fs / directory) with Eio.Io _ -> false
-  in
-  if not is_directory then Charamel_cli.error (Fmt.str "file not found: %s" directory);
-  let padding =
-    match Gum_flag.parse_padding options.padding with
-    | Ok value -> value
-    | Error (`Msg message) -> Charamel_cli.error message
-  in
-  let app, () = app ~env options ~padding ~directory in
-  let model =
-    try
-      Gum_run.run ?timeout:options.timeout env app ~finished:(fun model ->
-          match model.status with
-          | Selected _ -> Gum_run.Submitted
-          | Quit -> Gum_run.Quit
-          | Aborted -> Gum_run.Aborted
-          | Running -> Gum_run.Quit)
-    with Gum_io.No_tty -> Charamel_cli.error "file: requires a terminal"
-  in
-  match model.status with
-  | Selected path -> Gum_io.print_raw env path
-  | Quit | Running -> Charamel_cli.error "no file selected"
-  | Aborted -> Charamel_cli.exit 130
+  Lwt.bind
+    (Lwt.catch
+       (fun () ->
+         Lwt.map
+           (fun path -> Ok path)
+           (absolute_directory (if options.path = "" then "." else options.path)))
+       (function
+         | Unix.Unix_error (error, _, _) -> Lwt.return (Error error) | exn -> Lwt.fail exn))
+    (function
+      | Error error ->
+          Charamel_cli.error (Fmt.str "file not found: %s" (Unix.error_message error))
+      | Ok directory ->
+          Lwt.bind (is_directory directory) (fun directory_ok ->
+              if not directory_ok then
+                Charamel_cli.error (Fmt.str "file not found: %s" directory);
+              let padding =
+                match Gum_flag.parse_padding options.padding with
+                | Ok value -> value
+                | Error (`Msg message) -> Charamel_cli.error message
+              in
+              let app, () = app ~env options ~padding ~directory in
+              Lwt.bind
+                (Lwt.catch
+                   (fun () ->
+                     Lwt.map
+                       (fun model -> Ok model)
+                       (Gum_run.run ?timeout:options.timeout env app
+                          ~finished:(fun model ->
+                            match model.status with
+                            | Selected _ -> Gum_run.Submitted
+                            | Quit -> Gum_run.Quit
+                            | Aborted -> Gum_run.Aborted
+                            | Running -> Gum_run.Quit)))
+                   (function
+                     | Gum_io.No_tty -> Lwt.return (Error ()) | exn -> Lwt.fail exn))
+                (function
+                  | Error () -> Charamel_cli.error "file: requires a terminal"
+                  | Ok model -> (
+                      match model.status with
+                      | Selected path -> Gum_io.print_raw env path
+                      | Quit | Running -> Charamel_cli.error "no file selected"
+                      | Aborted -> Charamel_cli.exit 130))))
 
 let options path cursor all permissions size file directory show_help timeout header
     height padding cursor_style symlink_style directory_style file_style permissions_style

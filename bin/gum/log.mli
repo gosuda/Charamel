@@ -28,11 +28,11 @@ val emit :
   ?format:bool ->
   ?structured:bool ->
   ?styles:Charamel_log.Styles.t ->
-  Eio_unix.Stdenv.base ->
+  Charamel_cli.Env.t ->
   string list ->
-  unit
+  unit Lwt.t
 (** [emit ... env text] emits one log record. This is the command's execution function;
     invalid levels and output failures report through [Charamel_cli]. *)
 
-val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
+val cmd : Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t
 (** [cmd env] is the [log] subcommand evaluated with [env]. *)

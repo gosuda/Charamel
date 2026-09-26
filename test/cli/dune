@@ -2,10 +2,17 @@
  (name test_cli)
  (package charamel)
  (modules test_cli test_xdg)
- (libraries charamel.cli alcotest eio test_support))
+ (libraries charamel.cli alcotest alcotest-lwt lwt lwt.unix test_support))
 
 (test
  (name test_cli_behavior)
  (package charamel)
  (modules test_cli_behavior test_cli_nearest)
- (libraries charamel.cli alcotest eio cmdliner test_support))
+ (libraries
+  charamel.cli
+  alcotest
+  alcotest-lwt
+  cmdliner
+  lwt
+  lwt.unix
+  test_support))

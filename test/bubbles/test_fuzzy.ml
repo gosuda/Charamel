@@ -67,9 +67,10 @@ let unicode_decomposed_and_emoji () =
 
 let cases =
   [
-    Alcotest.test_case "basic vectors" `Quick basic_vectors;
-    Alcotest.test_case "unsorted order" `Quick unsorted_preserves_input_order;
-    Alcotest.test_case "upstream scoring" `Quick upstream_scoring_vectors;
-    Alcotest.test_case "empty and NUL" `Quick empty_and_nul;
-    Alcotest.test_case "decomposed accents and emoji" `Quick unicode_decomposed_and_emoji;
+    Alcotest_lwt.test_case_sync "basic vectors" `Quick basic_vectors;
+    Alcotest_lwt.test_case_sync "unsorted order" `Quick unsorted_preserves_input_order;
+    Alcotest_lwt.test_case_sync "upstream scoring" `Quick upstream_scoring_vectors;
+    Alcotest_lwt.test_case_sync "empty and NUL" `Quick empty_and_nul;
+    Alcotest_lwt.test_case_sync "decomposed accents and emoji" `Quick
+      unicode_decomposed_and_emoji;
   ]

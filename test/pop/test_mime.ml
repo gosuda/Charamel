@@ -143,11 +143,11 @@ let attachment_validation () =
 
 let cases =
   [
-    Alcotest.test_case "plain message" `Quick plain_message;
-    Alcotest.test_case "multipart alternative" `Quick alternative_message;
-    Alcotest.test_case "base64 attachment" `Quick attachment_message;
-    Alcotest.test_case "RFC2047 subject" `Quick encoded_subject;
-    Alcotest.test_case "envelope includes Bcc" `Quick envelope;
-    Alcotest.test_case "header injection rejection" `Quick injection_rejection;
-    Alcotest.test_case "attachment validation" `Quick attachment_validation;
+    Alcotest_lwt.test_case_sync "plain message" `Quick plain_message;
+    Alcotest_lwt.test_case_sync "multipart alternative" `Quick alternative_message;
+    Alcotest_lwt.test_case_sync "base64 attachment" `Quick attachment_message;
+    Alcotest_lwt.test_case_sync "RFC2047 subject" `Quick encoded_subject;
+    Alcotest_lwt.test_case_sync "envelope includes Bcc" `Quick envelope;
+    Alcotest_lwt.test_case_sync "header injection rejection" `Quick injection_rejection;
+    Alcotest_lwt.test_case_sync "attachment validation" `Quick attachment_validation;
   ]

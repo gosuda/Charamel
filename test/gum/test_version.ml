@@ -66,10 +66,11 @@ let malformed () =
 
 let cases =
   [
-    Alcotest.test_case "precedence" `Quick precedence;
-    Alcotest.test_case "wildcards and ranges" `Quick wildcards_and_ranges;
-    Alcotest.test_case "disjunction and prerelease" `Quick disjunction_and_prerelease;
-    Alcotest.test_case "version command" `Quick version_command;
-    Alcotest.test_case "version display" `Quick display_without_constraint;
-    Alcotest.test_case "malformed" `Quick malformed;
+    Alcotest_lwt.test_case_sync "precedence" `Quick precedence;
+    Alcotest_lwt.test_case_sync "wildcards and ranges" `Quick wildcards_and_ranges;
+    Alcotest_lwt.test_case_sync "disjunction and prerelease" `Quick
+      disjunction_and_prerelease;
+    Alcotest_lwt.test_case_sync "version command" `Quick version_command;
+    Alcotest_lwt.test_case_sync "version display" `Quick display_without_constraint;
+    Alcotest_lwt.test_case_sync "malformed" `Quick malformed;
   ]

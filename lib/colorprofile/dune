@@ -1,4 +1,4 @@
 (library
  (name charamel_colorprofile)
  (public_name charamel.colorprofile)
- (libraries charamel.ansi eio))
+ (libraries charamel.ansi lwt lwt.unix))

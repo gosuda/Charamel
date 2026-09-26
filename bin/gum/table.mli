@@ -44,8 +44,8 @@ val render_static :
 val error_message : error -> string
 (** [error_message error] formats a table error. *)
 
-val run : Eio_unix.Stdenv.base -> options -> unit
+val run : Charamel_cli.Env.t -> options -> unit Lwt.t
 (** [run env options] reads, selects, and writes one table row. *)
 
-val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
+val cmd : Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t
 (** [cmd env] is the [gum table] command. *)

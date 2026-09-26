@@ -1,2 +1,3 @@
 let () =
-  Alcotest.run "melt" [ ("mnemonic", Test_mnemonic.cases); ("cli", Test_melt_cli.cases) ]
+  Test_support.run_lwt "melt"
+    [ ("mnemonic", Test_mnemonic.cases); ("cli", Test_melt_cli.cases) ]

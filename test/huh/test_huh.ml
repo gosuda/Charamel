@@ -4,9 +4,12 @@ let key name =
   | Error (`Msg message) -> Alcotest.failf "invalid test key %s: %s" name message
 
 let with_env f =
-  Eio_main.run (fun env ->
-      let form_env = Charamel_huh.Form.Env.v ~fs:env#fs ~temp_dir:env#fs ~editor:[] in
-      f form_env)
+  let form_env =
+    Charamel_huh.Form.Env.v ~fs_root:(Sys.getcwd ())
+      ~temp_dir:(Filename.get_temp_dir_name ())
+      ~editor:None ~clock:Charamel_os.Time.lwt
+  in
+  f form_env
 
 let run_app form_env ?timeout form events =
   Charamel_tea.Test.run
@@ -143,19 +146,23 @@ let test_input_completion () =
 
 let tests =
   [
-    Alcotest.test_case "two-group completion" `Quick test_two_group_completion;
-    Alcotest.test_case "validation blocks navigation" `Quick
+    Alcotest_lwt.test_case_sync "two-group completion" `Quick test_two_group_completion;
+    Alcotest_lwt.test_case_sync "validation blocks navigation" `Quick
       test_validation_blocks_navigation;
-    Alcotest.test_case "ctrl-c abort" `Quick test_abort;
-    Alcotest.test_case "typed result isolation" `Quick test_typed_results_isolation;
-    Alcotest.test_case "timeout" `Quick test_timeout;
-    Alcotest.test_case "input completion" `Quick test_input_completion;
+    Alcotest_lwt.test_case_sync "ctrl-c abort" `Quick test_abort;
+    Alcotest_lwt.test_case_sync "typed result isolation" `Quick
+      test_typed_results_isolation;
+    Alcotest_lwt.test_case_sync "timeout" `Quick test_timeout;
+    Alcotest_lwt.test_case_sync "input completion" `Quick test_input_completion;
   ]
 
 let () =
-  Alcotest.run "huh"
-    [
-      ("form", tests);
-      ("accessible", Test_accessible.tests);
-      ("spinner", Test_spinner.tests);
-    ]
+  match Sys.getenv_opt "CHARM_TEST_HUH_SPINNER_CHILD" with
+  | Some _ -> Test_spinner.run_pty_child ()
+  | None ->
+      Test_support.run_lwt "huh"
+        [
+          ("form", tests);
+          ("accessible", Test_accessible.tests);
+          ("spinner", Test_spinner.tests);
+        ]

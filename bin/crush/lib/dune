@@ -5,8 +5,11 @@
   charamel.cli
   charamel.fantasy
   charamel.log
-  eio
-  eio.unix
+  lwt
+  lwt.unix
+  lwt_direct
+  charamel.os
+  charamel.net
   jsont
   jsont.bytesrw
   bytesrw
@@ -15,14 +18,14 @@
   logs
   digestif
   base64
-  cohttp-eio
-  cohttp
+  cohttp-lwt
+  cohttp-lwt-unix
   http
   uri
   mtime
   mtime.clock.os
   mirage-crypto-rng
-  tls-eio
+  tls-lwt
   tls
   ca-certs
   domain-name

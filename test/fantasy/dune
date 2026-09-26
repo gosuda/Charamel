@@ -3,7 +3,6 @@
  (package charamel)
  (modules
   test_fantasy
-  fixture_server
   test_anthropic_codec
   test_google_codec
   test_openai_compat_codec
@@ -15,19 +14,20 @@
   stream_test_support)
  (libraries
   alcotest
+  alcotest-lwt
+  base64
   charamel.fantasy
-  eio
-  eio.unix
-  eio_main
+  charamel.net
+  charamel.os
+  cohttp
+  digestif
   fmt
   jsont
   jsont.bytesrw
-  base64
-  digestif
-  uri
-  cohttp
-  cohttp-eio
-  http
-  test_support)
+  lwt
+  lwt.unix
+  net_test_support
+  test_support
+  uri)
  (deps
   (glob_files data/*)))

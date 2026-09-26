@@ -1,3 +1,4 @@
+open Lwt.Infix
 (* Behavior cases for the model catalog.
 
    The suite checks the embedded snapshot's pricing and provider
@@ -121,115 +122,108 @@ let test_roundtrip () =
 
 (* The refresh *)
 
-let fetch_over ~net ~clock server ?etag ?base_url () =
-  let providers, etag =
-    Charamel_fantasy.Catalog.fetch
-      ?base_url:
-        (match base_url with
-        | Some url -> Some url
-        | None -> Some (Fixture_server.base_url server))
-      ?etag ~net ~clock ()
-    |> Result.get_ok
-  in
-  (providers, etag)
+let base_url server = Uri.to_string (Fixture_http.uri server "")
 
-let test_fetch_modified () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let server = Fixture_server.start ~sw ~net:env#net () in
-  Fixture_server.respond_with server ~status:200
-    ~headers:[ ("etag", "\"6f1a2b3c4d5e6f70\"") ]
-    fixture;
-  let providers, etag = fetch_over ~net:env#net ~clock:env#clock server () in
-  Alcotest.(check int) "the fixture decodes" 4 (List.length providers);
-  Alcotest.(check string) "the etag comes back unquoted" "6f1a2b3c4d5e6f70" etag;
-  Alcotest.(check (option string))
-    "the request went to the catalog path" (Some "/v2/providers")
-    (Fixture_server.last_path server);
-  let headers = Fixture_server.last_headers server in
-  Alcotest.(check bool)
-    "no conditional request without a cached etag" false
-    (List.exists (fun (name, _) -> String.equal name "if-none-match") headers)
+let test_fetch_modified =
+  Alcotest_lwt.test_case "fetch modified" `Quick (fun _switch () ->
+      Fixture_http.with_server (fun server ->
+          Fixture_http.respond server
+            ~headers:[ ("etag", "\"6f1a2b3c4d5e6f70\"") ]
+            fixture;
+          Charamel_fantasy.Catalog.fetch ~base_url:(base_url server) () >>= fun result ->
+          let providers, etag = Result.get_ok result in
+          Alcotest.(check int) "the fixture decodes" 4 (List.length providers);
+          Alcotest.(check string) "the etag comes back unquoted" "6f1a2b3c4d5e6f70" etag;
+          Alcotest.(check (option string))
+            "the request went to the catalog path" (Some "/v2/providers")
+            (Fixture_http.last_path server);
+          Alcotest.(check bool)
+            "no conditional request without a cached etag" false
+            (List.exists
+               (fun (name, _) -> String.equal name "if-none-match")
+               (Fixture_http.last_headers server));
+          Lwt.return_unit))
 
-let test_fetch_not_modified () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let server = Fixture_server.start ~sw ~net:env#net () in
-  Fixture_server.respond_with server ~status:304
-    ~headers:[ ("etag", "\"6f1a2b3c4d5e6f70\"") ]
-    "";
-  let result =
-    Charamel_fantasy.Catalog.fetch
-      ~base_url:(Fixture_server.base_url server)
-      ~etag:"6f1a2b3c4d5e6f70" ~net:env#net ~clock:env#clock ()
-  in
-  (match result with
-  | Error `Not_modified -> ()
-  | Error e ->
-      Alcotest.failf "expected Not_modified, got %a" Charamel_fantasy.Catalog.pp_error e
-  | Ok (_, etag) ->
-      Alcotest.failf "expected Not_modified, got a catalog with etag %s" etag);
-  let headers = Fixture_server.last_headers server in
-  Alcotest.(check bool)
-    "the cached etag is offered with If-None-Match" true
-    (List.exists
-       (fun (name, value) ->
-         String.equal name "if-none-match" && String.equal value "\"6f1a2b3c4d5e6f70\"")
-       headers)
+let test_fetch_not_modified =
+  Alcotest_lwt.test_case "fetch not modified" `Quick (fun _switch () ->
+      Fixture_http.with_server (fun server ->
+          Fixture_http.respond server ~status:304
+            ~headers:[ ("etag", "\"6f1a2b3c4d5e6f70\"") ]
+            "";
+          Charamel_fantasy.Catalog.fetch ~base_url:(base_url server)
+            ~etag:"6f1a2b3c4d5e6f70" ()
+          >>= fun result ->
+          (match result with
+          | Error `Not_modified -> ()
+          | Error e ->
+              Alcotest.failf "expected Not_modified, got %a"
+                Charamel_fantasy.Catalog.pp_error e
+          | Ok (_, etag) ->
+              Alcotest.failf "expected Not_modified, got a catalog with etag %s" etag);
+          Alcotest.(check bool)
+            "the cached etag is offered with If-None-Match" true
+            (List.exists
+               (fun (name, value) ->
+                 String.equal name "if-none-match"
+                 && String.equal value "\"6f1a2b3c4d5e6f70\"")
+               (Fixture_http.last_headers server));
+          Lwt.return_unit))
 
-let test_fetch_http_error () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let server = Fixture_server.start ~sw ~net:env#net () in
-  Fixture_server.respond_with server ~status:500 ~headers:[] "boom";
-  match
-    Charamel_fantasy.Catalog.fetch
-      ~base_url:(Fixture_server.base_url server)
-      ~net:env#net ~clock:env#clock ()
-  with
-  | Error (`Http { status; title; message; retryable }) ->
-      Alcotest.(check int) "the status travels" 500 status;
-      Alcotest.(check string) "the title names the refresh" "catalog refresh failed" title;
-      Alcotest.(check string)
-        "the message names the endpoint" "unexpected status 500 from the catalog endpoint"
-        message;
-      Alcotest.(check bool) "a 5xx is retryable" true retryable
-  | Error e ->
-      Alcotest.failf "expected an HTTP failure, got %a" Charamel_fantasy.Catalog.pp_error
-        e
-  | Ok _ -> Alcotest.fail "expected an HTTP failure"
+let test_fetch_http_error =
+  Alcotest_lwt.test_case "fetch http error" `Quick (fun _switch () ->
+      Fixture_http.with_server (fun server ->
+          Fixture_http.respond server ~status:500 ~headers:[] "boom";
+          Charamel_fantasy.Catalog.fetch ~base_url:(base_url server) () >>= fun result ->
+          (match result with
+          | Error
+              (`Http
+                 ({ status; title; message; retryable } :
+                   Charamel_fantasy.Error.http_error)) ->
+              Alcotest.(check int) "the status travels" 500 status;
+              Alcotest.(check string)
+                "the title names the refresh" "catalog refresh failed" title;
+              Alcotest.(check string)
+                "the message names the endpoint"
+                "unexpected status 500 from the catalog endpoint" message;
+              Alcotest.(check bool) "a 5xx is retryable" true retryable
+          | Error e ->
+              Alcotest.failf "expected an HTTP failure, got %a"
+                Charamel_fantasy.Catalog.pp_error e
+          | Ok _ -> Alcotest.fail "expected an HTTP failure");
+          Lwt.return_unit))
 
-let test_fetch_unreadable_body () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let server = Fixture_server.start ~sw ~net:env#net () in
-  Fixture_server.respond_with server ~status:200
-    ~headers:[ ("etag", "\"6f1a2b3c4d5e6f70\"") ]
-    "{\"not\": a catalog";
-  match
-    Charamel_fantasy.Catalog.fetch
-      ~base_url:(Fixture_server.base_url server)
-      ~net:env#net ~clock:env#clock ()
-  with
-  | Error (`Http { status; message; retryable; _ }) ->
-      Alcotest.(check int) "the status is the response status" 200 status;
-      Alcotest.(check bool) "an unreadable body is not worth a retry" false retryable;
-      Alcotest.(check bool)
-        "the message carries the decoder report" true
-        (String.starts_with ~prefix:"catalog body did not decode: " message)
-  | Error e ->
-      Alcotest.failf "expected an HTTP failure, got %a" Charamel_fantasy.Catalog.pp_error
-        e
-  | Ok _ -> Alcotest.fail "expected an HTTP failure"
+let test_fetch_unreadable_body =
+  Alcotest_lwt.test_case "fetch unreadable body" `Quick (fun _switch () ->
+      Fixture_http.with_server (fun server ->
+          Fixture_http.respond server
+            ~headers:[ ("etag", "\"6f1a2b3c4d5e6f70\"") ]
+            "{\"not\": a catalog";
+          Charamel_fantasy.Catalog.fetch ~base_url:(base_url server) () >>= fun result ->
+          (match result with
+          | Error
+              (`Http ({ status; message; retryable } : Charamel_fantasy.Error.http_error))
+            ->
+              Alcotest.(check int) "the status is the response status" 200 status;
+              Alcotest.(check bool)
+                "an unreadable body is not worth a retry" false retryable;
+              Alcotest.(check bool)
+                "the message carries the decoder report" true
+                (String.starts_with ~prefix:"catalog body did not decode" message)
+          | Error e ->
+              Alcotest.failf "expected an HTTP failure, got %a"
+                Charamel_fantasy.Catalog.pp_error e
+          | Ok _ -> Alcotest.fail "expected an HTTP failure");
+          Lwt.return_unit))
 
 let cases =
   [
-    Alcotest.test_case "embedded shape" `Quick test_embedded_shape;
-    Alcotest.test_case "embedded costs" `Quick test_embedded_costs;
-    Alcotest.test_case "embedded provider stamping" `Quick test_embedded_provider_stamping;
-    Alcotest.test_case "codec roundtrip" `Quick test_roundtrip;
-    Alcotest.test_case "fetch modified" `Quick test_fetch_modified;
-    Alcotest.test_case "fetch not modified" `Quick test_fetch_not_modified;
-    Alcotest.test_case "fetch http error" `Quick test_fetch_http_error;
-    Alcotest.test_case "fetch unreadable body" `Quick test_fetch_unreadable_body;
+    Alcotest_lwt.test_case_sync "embedded shape" `Quick test_embedded_shape;
+    Alcotest_lwt.test_case_sync "embedded costs" `Quick test_embedded_costs;
+    Alcotest_lwt.test_case_sync "embedded provider stamping" `Quick
+      test_embedded_provider_stamping;
+    Alcotest_lwt.test_case_sync "codec roundtrip" `Quick test_roundtrip;
+    test_fetch_modified;
+    test_fetch_not_modified;
+    test_fetch_http_error;
+    test_fetch_unreadable_body;
   ]

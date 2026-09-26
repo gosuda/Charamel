@@ -1,5 +1,9 @@
 (** Shared application runtime and paths. *)
 
+module Env = Env
+(** [Env.t] is the working directory, filesystem root, channels and clock a command is
+    handed. *)
+
 module Xdg = Xdg
 (** [Xdg] computes per-application XDG base directories. *)
 
@@ -31,15 +35,17 @@ val run :
   name:string ->
   version:string ->
   doc:string ->
-  ?default:(Eio_unix.Stdenv.base -> unit Cmdliner.Term.t) ->
-  (Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t) list ->
+  ?default:(Env.t -> unit Lwt.t Cmdliner.Term.t) ->
+  (Env.t -> unit Lwt.t Cmdliner.Cmd.t) list ->
   unit
 (** [run ~name ~version ~doc ?default commands] runs an application.
 
     [commands] are grouped Cmdliner subcommands. [default], when present, supplies the
-    term for a single invocation with no subcommand. The standard [--help] and [--version]
-    exits are [0]. Command diagnostics use [1], usage errors use [2], timeouts use [124],
-    and interrupts use [130]. [ -v ] and [ -q ] are accepted as global verbosity controls
-    and are removed before Cmdliner evaluates the command. The runtime owns the one
-    [Eio_main.run] invocation, installs the colour-aware [Charamel_log] reporter for the
-    command lifetime, and exits only after Eio resources have unwound. *)
+    term for a single invocation with no subcommand. Every maker is handed the same
+    {!Env.t}, built once from the process's own directory, channels and clock. The
+    standard [--help] and [--version] exits are [0]. Command diagnostics use [1], usage
+    errors use [2], timeouts use [124], and interrupts use [130]. [ -v ] and [ -q ] are
+    accepted as global verbosity controls and are removed before Cmdliner evaluates the
+    command. The runtime owns the one [Lwt_main.run] invocation, installs the colour-aware
+    [Charamel_log] reporter for the command lifetime, and exits only after the command's
+    promise has resolved and its output has been flushed. *)

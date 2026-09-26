@@ -1,5 +1,6 @@
 open Charamel_fantasy
 open Stream_test_support
+open Lwt.Infix
 
 let sse_data data = Fmt.str "data: %s\n\n" data
 let sse_event name data = Fmt.str "event: %s\ndata: %s\n\n" name data
@@ -36,34 +37,28 @@ let model =
 
 let user s = Message.text Message.User s
 let default_body = finished {|"finishReason":"STOP"|}
+let base_url server = Uri.to_string (Fixture_http.uri server "")
 
 let call ?(body = default_body) ?(model = model) ?(reasoning = `Off) ?temperature
     ?max_tokens ?(system = []) ?(tools = []) ?trunc_bytes messages =
-  let stream, observed, path, body =
-    Eio_main.run @@ fun env ->
-    Eio.Switch.run @@ fun sw ->
-    let server = Fixture_server.start ~sw ~net:env#net () in
-    Fixture_server.respond server body;
-    Option.iter (Fixture_server.trunc server) trunc_bytes;
-    let provider =
-      Provider.google
-        ~base_url:(Fixture_server.base_url server)
-        ~auth:(Provider.Api_key "test-key") ()
-    in
-    let stream =
-      Provider.stream provider ~sw ~clock:env#clock ~net:env#net ~model ?temperature
-        ?max_tokens ~reasoning ~system ~tools messages
-    in
-    let observed = drain stream in
-    (stream, observed, Fixture_server.last_path server, Fixture_server.last_body server)
-  in
-  (observed @ Stream_test_support.drain_queued stream, path, body)
+  Stream_test_support.with_fixture (fun server ->
+      Fixture_http.respond server ?truncate:trunc_bytes body;
+      let provider =
+        Provider.google ~base_url:(base_url server) ~auth:(Provider.Api_key "test-key") ()
+      in
+      let stream =
+        Provider.stream provider ~clock:Charamel_os.Time.lwt ~model ?temperature
+          ?max_tokens ~reasoning ~system ~tools messages
+      in
+      Stream_test_support.drain stream >>= fun observed ->
+      Stream_test_support.drain_queued stream >|= fun tail ->
+      (observed @ tail, Fixture_http.last_path server, Fixture_http.last_body server))
 
 let expect_parts expected observed =
   Stream_test_support.expect_parts ~label:"stream parts" expected observed
 
 let test_fixture_stream () =
-  let observed, path, _ = call ~body:(read_fixture ()) [ user "hi" ] in
+  call ~body:(read_fixture ()) [ user "hi" ] >|= fun (observed, path, _) ->
   Alcotest.(check (option string))
     "posts to streamGenerateContent"
     (Some "/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse") path;
@@ -83,14 +78,13 @@ let test_fixture_stream () =
     observed
 
 let test_split_text_accumulation () =
-  let observed, _, _ =
-    call
-      ~body:
-        (candidate {|[{"text":"Hel"}]|}
-        ^ candidate {|[{"text":"lo, world"}]|}
-        ^ finished {|"finishReason":"STOP"|})
-      [ user "hi" ]
-  in
+  call
+    ~body:
+      (candidate {|[{"text":"Hel"}]|}
+      ^ candidate {|[{"text":"lo, world"}]|}
+      ^ finished {|"finishReason":"STOP"|})
+    [ user "hi" ]
+  >|= fun (observed, _, _) ->
   expect_parts
     [
       Stream_part.Text_delta "Hel";
@@ -101,14 +95,13 @@ let test_split_text_accumulation () =
     observed
 
 let test_thought_marks_reasoning () =
-  let observed, _, _ =
-    call
-      ~body:
-        (candidate {|[{"text":"thinking","thought":true}]|}
-        ^ candidate {|[{"text":"answer"}]|}
-        ^ finished {|"finishReason":"STOP"|})
-      [ user "hi" ]
-  in
+  call
+    ~body:
+      (candidate {|[{"text":"thinking","thought":true}]|}
+      ^ candidate {|[{"text":"answer"}]|}
+      ^ finished {|"finishReason":"STOP"|})
+    [ user "hi" ]
+  >|= fun (observed, _, _) ->
   expect_parts
     [
       Stream_part.Reasoning_delta "thinking";
@@ -119,13 +112,12 @@ let test_thought_marks_reasoning () =
     observed
 
 let test_tool_call_without_id () =
-  let observed, _, _ =
-    call
-      ~body:
-        (candidate {|[{"functionCall":{"name":"weather","args":{"a":1}}}]|}
-        ^ finished {|"finishReason":"STOP"|})
-      [ user "hi" ]
-  in
+  call
+    ~body:
+      (candidate {|[{"functionCall":{"name":"weather","args":{"a":1}}}]|}
+      ^ finished {|"finishReason":"STOP"|})
+    [ user "hi" ]
+  >|= fun (observed, _, _) ->
   expect_parts
     [
       Stream_part.Tool_call_start { id = "call_1"; name = "weather" };
@@ -137,14 +129,13 @@ let test_tool_call_without_id () =
     observed
 
 let test_multi_part_event () =
-  let observed, _, _ =
-    call
-      ~body:
-        (candidate
-           {|[{"text":"a"},{"text":"b"},{"functionCall":{"name":"t","id":"x","args":{}}}]|}
-        ^ finished {|"finishReason":"STOP"|})
-      [ user "hi" ]
-  in
+  call
+    ~body:
+      (candidate
+         {|[{"text":"a"},{"text":"b"},{"functionCall":{"name":"t","id":"x","args":{}}}]|}
+      ^ finished {|"finishReason":"STOP"|})
+    [ user "hi" ]
+  >|= fun (observed, _, _) ->
   expect_parts
     [
       Stream_part.Text_delta "a";
@@ -159,36 +150,38 @@ let test_multi_part_event () =
 
 let test_finish_reasons () =
   let finish reason =
-    let observed, _, _ =
-      call
-        ~body:(sse_data (Fmt.str {|{"candidates":[{"finishReason":"%s"}]}|} reason))
-        [ user "hi" ]
-    in
-    finish_name (single_finish observed)
+    call
+      ~body:(sse_data (Fmt.str {|{"candidates":[{"finishReason":"%s"}]}|} reason))
+      [ user "hi" ]
+    >|= fun (observed, _, _) -> finish_name (single_finish observed)
   in
-  Alcotest.check Alcotest.string "stop" "Stop" (finish "STOP");
-  Alcotest.check Alcotest.string "length" "Length" (finish "MAX_TOKENS");
-  Alcotest.check Alcotest.string "safety" "Content_filter" (finish "SAFETY");
-  Alcotest.check Alcotest.string "prohibited content" "Content_filter"
-    (finish "PROHIBITED_CONTENT");
+  finish "STOP" >>= fun stop ->
+  Alcotest.check Alcotest.string "stop" "Stop" stop;
+  finish "MAX_TOKENS" >>= fun length ->
+  Alcotest.check Alcotest.string "length" "Length" length;
+  finish "SAFETY" >>= fun safety ->
+  Alcotest.check Alcotest.string "safety" "Content_filter" safety;
+  finish "PROHIBITED_CONTENT" >>= fun prohibited ->
+  Alcotest.check Alcotest.string "prohibited content" "Content_filter" prohibited;
+  finish "MALFORMED_FUNCTION_CALL" >>= fun malformed ->
   Alcotest.(check bool)
     "malformed function call is an error" true
-    (String.starts_with ~prefix:"Error" (finish "MALFORMED_FUNCTION_CALL"))
+    (String.starts_with ~prefix:"Error" malformed);
+  Lwt.return_unit
 
 let test_usage_kept_with_finish () =
-  let observed, _, _ =
-    call
-      ~body:
-        (finished {|"content":{"parts":[{"text":"x"}]}|}
-        ^ finished {|"finishReason":"STOP"|})
-      [ user "hi" ]
-  in
+  call
+    ~body:
+      (finished {|"content":{"parts":[{"text":"x"}]}|}
+      ^ finished {|"finishReason":"STOP"|})
+    [ user "hi" ]
+  >|= fun (observed, _, _) ->
   expect_parts
     [ Stream_part.Text_delta "x"; Stream_part.Usage test_usage; Stream_part.Finish `Stop ]
     observed
 
 let test_malformed_event () =
-  let observed, _, _ = call ~body:(sse_data "not json at all") [ user "hi" ] in
+  call ~body:(sse_data "not json at all") [ user "hi" ] >|= fun (observed, _, _) ->
   match single_finish observed with
   | `Error m ->
       Alcotest.(check bool)
@@ -197,14 +190,13 @@ let test_malformed_event () =
   | other -> Alcotest.failf "expected an error finish, got %s" (finish_name other)
 
 let test_named_events_ignored () =
-  let observed, _, _ =
-    call
-      ~body:
-        (sse_event "ping" {|{"candidates":[]}|}
-        ^ candidate {|[{"text":"kept"}]|}
-        ^ finished {|"finishReason":"STOP"|})
-      [ user "hi" ]
-  in
+  call
+    ~body:
+      (sse_event "ping" {|{"candidates":[]}|}
+      ^ candidate {|[{"text":"kept"}]|}
+      ^ finished {|"finishReason":"STOP"|})
+    [ user "hi" ]
+  >|= fun (observed, _, _) ->
   expect_parts
     [
       Stream_part.Text_delta "kept";
@@ -223,15 +215,15 @@ let test_silence_after_finish () =
   let error =
     {|{"error":{"code":400,"message":"Cannot fetch content from the provided URL","status":"INVALID_ARGUMENT"}}|}
   in
-  let observed, _, _ =
-    call ~body:(sse_data error ^ candidate {|[{"text":"late"}]|}) [ user "hi" ]
-  in
+  call ~body:(sse_data error ^ candidate {|[{"text":"late"}]|}) [ user "hi" ]
+  >|= fun (observed, _, _) ->
   expect_parts
     [ Stream_part.Finish (`Error "Cannot fetch content from the provided URL") ]
     observed
 
 let test_premature_eof () =
-  let observed, _, _ = call ~body:(candidate {|[{"text":"partial"}]|}) [ user "hi" ] in
+  call ~body:(candidate {|[{"text":"partial"}]|}) [ user "hi" ]
+  >|= fun (observed, _, _) ->
   (match single_finish observed with
   | `Error m ->
       Alcotest.(check bool)
@@ -246,7 +238,7 @@ let test_prompt_blocked () =
   let blocked =
     {|{"promptFeedback":{"blockReason":"SAFETY","safetyRatings":[{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","probability":"HIGH"}]},"usageMetadata":{"promptTokenCount":9}}|}
   in
-  let observed, _, _ = call ~body:(sse_data blocked) [ user "hi" ] in
+  call ~body:(sse_data blocked) [ user "hi" ] >|= fun (observed, _, _) ->
   expect_parts
     [
       Stream_part.Usage
@@ -256,22 +248,20 @@ let test_prompt_blocked () =
     observed
 
 let test_prompt_blocked_unknown_reason () =
-  let observed, _, _ =
-    call ~body:(sse_data {|{"promptFeedback":{"blockReason":"OTHER"}}|}) [ user "hi" ]
-  in
+  call ~body:(sse_data {|{"promptFeedback":{"blockReason":"OTHER"}}|}) [ user "hi" ]
+  >|= fun (observed, _, _) ->
   Alcotest.(check string)
     "an unknown block reason is still a filter" "Content_filter"
     (finish_name (single_finish observed))
 
 let test_prompt_feedback_without_block () =
-  let observed, _, _ =
-    call
-      ~body:
-        (sse_data {|{"promptFeedback":{"blockReason":"BLOCK_REASON_UNSPECIFIED"}}|}
-        ^ candidate {|[{"text":"ok"}]|}
-        ^ finished {|"finishReason":"STOP"|})
-      [ user "hi" ]
-  in
+  call
+    ~body:
+      (sse_data {|{"promptFeedback":{"blockReason":"BLOCK_REASON_UNSPECIFIED"}}|}
+      ^ candidate {|[{"text":"ok"}]|}
+      ^ finished {|"finishReason":"STOP"|})
+    [ user "hi" ]
+  >|= fun (observed, _, _) ->
   expect_parts
     [
       Stream_part.Text_delta "ok"; Stream_part.Usage test_usage; Stream_part.Finish `Stop;
@@ -303,10 +293,9 @@ let tool =
          ])
 
 let test_encode_system_tools_and_config () =
-  let _, _, body =
-    call ~system:[ "be terse" ] ~tools:[ tool ] ~reasoning:`High ~temperature:0.25
-      [ user "hi" ]
-  in
+  call ~system:[ "be terse" ] ~tools:[ tool ] ~reasoning:`High ~temperature:0.25
+    [ user "hi" ]
+  >|= fun (_, _, body) ->
   let json = parse_body body in
   let instruction = object_value "systemInstruction" json in
   check_member_string "system role" "role" "user" instruction;
@@ -369,7 +358,7 @@ let test_encode_conversation () =
         [ Message.Tool_result { id = "c1"; name = "weather"; output = `Text "40 C" } ];
     }
   in
-  let _, _, body = call [ user "what is the weather"; assistant; tool_result ] in
+  call [ user "what is the weather"; assistant; tool_result ] >|= fun (_, _, body) ->
   let contents = array "contents" (parse_body body) in
   let assistant_content = List.nth contents 1 in
   let function_call =
@@ -396,7 +385,7 @@ let test_encode_file_part () =
         [ Message.File { mime = "image/png"; data = "aGVsbG8="; name = Some "shot.png" } ];
     }
   in
-  let _, _, body = call [ message ] in
+  call [ message ] >|= fun (_, _, body) ->
   let image =
     object_value "inlineData"
       (List.hd (array "parts" (List.hd (array "contents" (parse_body body)))))
@@ -405,7 +394,7 @@ let test_encode_file_part () =
   check_member_string "file data" "data" "aGVsbG8=" image
 
 let test_encode_without_system_or_tools () =
-  let _, _, body = call [ user "hi" ] in
+  call [ user "hi" ] >|= fun (_, _, body) ->
   let json = parse_body body in
   Alcotest.(check bool)
     "no systemInstruction" false
@@ -417,7 +406,7 @@ let test_encode_without_system_or_tools () =
     (Option.is_some (member "thinkingConfig" config))
 
 let test_provider_posts_encoded_body () =
-  let _, path, body = call ~system:[ "be terse" ] [ user "hi" ] in
+  call ~system:[ "be terse" ] [ user "hi" ] >|= fun (_, path, body) ->
   Alcotest.(check (option string))
     "the endpoint is streamGenerateContent"
     (Some "/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse") path;
@@ -428,31 +417,52 @@ let test_provider_posts_encoded_body () =
 let test_provider_premature_eof () =
   let first = candidate {|[{"text":"partial"}]|} in
   let body = first ^ finished {|"finishReason":"STOP"|} in
-  let observed, _, _ = call ~body ~trunc_bytes:(String.length first + 8) [ user "hi" ] in
+  call ~body ~trunc_bytes:(String.length first + 8) [ user "hi" ]
+  >|= fun (observed, _, _) ->
   match single_finish observed with
   | `Error _ -> ()
   | other -> Alcotest.failf "expected an error finish, got %s" (finish_name other)
 
 let cases =
   [
-    ("fixture stream", `Quick, test_fixture_stream);
-    ("split text accumulation", `Quick, test_split_text_accumulation);
-    ("thought marks reasoning", `Quick, test_thought_marks_reasoning);
-    ("tool call without id", `Quick, test_tool_call_without_id);
-    ("multi part event", `Quick, test_multi_part_event);
-    ("finish reasons", `Quick, test_finish_reasons);
-    ("usage kept with finish", `Quick, test_usage_kept_with_finish);
-    ("malformed event", `Quick, test_malformed_event);
-    ("named events ignored", `Quick, test_named_events_ignored);
-    ("silence after finish", `Quick, test_silence_after_finish);
-    ("premature eof", `Quick, test_premature_eof);
-    ("prompt blocked", `Quick, test_prompt_blocked);
-    ("prompt blocked unknown reason", `Quick, test_prompt_blocked_unknown_reason);
-    ("prompt feedback without block", `Quick, test_prompt_feedback_without_block);
-    ("encode system tools config", `Quick, test_encode_system_tools_and_config);
-    ("encode conversation", `Quick, test_encode_conversation);
-    ("encode file part", `Quick, test_encode_file_part);
-    ("encode minimal request", `Quick, test_encode_without_system_or_tools);
-    ("provider posts encoded body", `Quick, test_provider_posts_encoded_body);
-    ("provider premature eof", `Quick, test_provider_premature_eof);
+    Alcotest_lwt.test_case "fixture stream" `Quick (fun _switch () ->
+        test_fixture_stream ());
+    Alcotest_lwt.test_case "split text accumulation" `Quick (fun _switch () ->
+        test_split_text_accumulation ());
+    Alcotest_lwt.test_case "thought marks reasoning" `Quick (fun _switch () ->
+        test_thought_marks_reasoning ());
+    Alcotest_lwt.test_case "tool call without id" `Quick (fun _switch () ->
+        test_tool_call_without_id ());
+    Alcotest_lwt.test_case "multi part event" `Quick (fun _switch () ->
+        test_multi_part_event ());
+    Alcotest_lwt.test_case "finish reasons" `Quick (fun _switch () ->
+        test_finish_reasons ());
+    Alcotest_lwt.test_case "usage kept with finish" `Quick (fun _switch () ->
+        test_usage_kept_with_finish ());
+    Alcotest_lwt.test_case "malformed event" `Quick (fun _switch () ->
+        test_malformed_event ());
+    Alcotest_lwt.test_case "named events ignored" `Quick (fun _switch () ->
+        test_named_events_ignored ());
+    Alcotest_lwt.test_case "silence after finish" `Quick (fun _switch () ->
+        test_silence_after_finish ());
+    Alcotest_lwt.test_case "premature eof" `Quick (fun _switch () ->
+        test_premature_eof ());
+    Alcotest_lwt.test_case "prompt blocked" `Quick (fun _switch () ->
+        test_prompt_blocked ());
+    Alcotest_lwt.test_case "prompt blocked unknown reason" `Quick (fun _switch () ->
+        test_prompt_blocked_unknown_reason ());
+    Alcotest_lwt.test_case "prompt feedback without block" `Quick (fun _switch () ->
+        test_prompt_feedback_without_block ());
+    Alcotest_lwt.test_case "encode system tools config" `Quick (fun _switch () ->
+        test_encode_system_tools_and_config ());
+    Alcotest_lwt.test_case "encode conversation" `Quick (fun _switch () ->
+        test_encode_conversation ());
+    Alcotest_lwt.test_case "encode file part" `Quick (fun _switch () ->
+        test_encode_file_part ());
+    Alcotest_lwt.test_case "encode minimal request" `Quick (fun _switch () ->
+        test_encode_without_system_or_tools ());
+    Alcotest_lwt.test_case "provider posts encoded body" `Quick (fun _switch () ->
+        test_provider_posts_encoded_body ());
+    Alcotest_lwt.test_case "provider premature eof" `Quick (fun _switch () ->
+        test_provider_premature_eof ());
   ]

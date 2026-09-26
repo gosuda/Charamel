@@ -37,6 +37,6 @@ let schemas () =
 
 let cases =
   [
-    Alcotest.test_case "metadata names and modes" `Quick names_and_modes;
-    Alcotest.test_case "metadata schemas" `Quick schemas;
+    Test_tools_test_support.case "metadata names and modes" `Quick names_and_modes;
+    Test_tools_test_support.case "metadata schemas" `Quick schemas;
   ]

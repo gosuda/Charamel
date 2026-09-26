@@ -6,14 +6,15 @@
   charamel.cli
   charamel.highlight
   charamel.lipgloss
-  eio
-  eio.unix
+  charamel.os
   cmdliner
   jsont
   jsont.bytesrw
   cstruct
   base64
   fmt
+  lwt
+  lwt.unix
   unix))
 
 (executable
@@ -21,4 +22,12 @@
  (public_name freeze)
  (package freeze)
  (modules main)
- (libraries freeze_core charamel.cli eio eio.unix eio_main cmdliner fmt unix))
+ (libraries
+  freeze_core
+  charamel.cli
+  charamel.os
+  cmdliner
+  fmt
+  lwt
+  lwt.unix
+  unix))

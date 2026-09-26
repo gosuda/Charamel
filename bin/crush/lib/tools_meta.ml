@@ -1,4 +1,5 @@
 open Result.Syntax
+open Lwt_direct
 
 type todo_args = { todos : Todos.item list }
 type option_arg = { label : string; description : string option }
@@ -105,7 +106,7 @@ let logs_schema = Tool.schema_object [ ("lines", Tool.s_int ~default:50 ()) ]
 
 let truncate_output (ctx : Tool.ctx) text =
   let content, artifact =
-    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
+    await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text)
   in
   Tool.ok ?artifact content
 
@@ -257,7 +258,7 @@ let lsp_lines (ctx : Tool.ctx) =
             | Lsp.Disabled -> "disabled"
           in
           Fmt.str "  %s: %s" name state)
-        (Lsp.servers lsp)
+        (await (Lsp.servers lsp))
 
 let mcp_lines (ctx : Tool.ctx) =
   List.map
@@ -326,9 +327,11 @@ let run_info (ctx : Tool.ctx) input =
        (String.concat "\n" (List.filter (fun line -> line <> "") lines)))
 
 let read_log (ctx : Tool.ctx) =
-  try Ok (Eio.Path.load Eio.Path.(ctx.Tool.fs / ctx.Tool.log_path)) with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found ctx.Tool.log_path)
-  | Eio.Io _ -> Error (`Io (ctx.Tool.log_path, "could not read log"))
+  try Ok (await (Lwt_io.with_file ~mode:Lwt_io.Input ctx.Tool.log_path Lwt_io.read)) with
+  | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) ->
+      Error (`Not_found ctx.Tool.log_path)
+  | Unix.Unix_error _ | Sys_error _ ->
+      Error (`Io (ctx.Tool.log_path, "could not read log"))
 
 let tail_lines ~count body =
   let lines = Array.of_list (String.split_on_char '\n' body) in

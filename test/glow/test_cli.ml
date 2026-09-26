@@ -1,3 +1,5 @@
+open Lwt.Syntax
+
 let executable () =
   let test_path = Unix.realpath Sys.executable_name in
   let test_dir = Filename.dirname test_path in
@@ -27,54 +29,55 @@ let write_markdown root =
   path
 
 let stdout_render () =
-  Test_support.with_temp_dir (fun dir ->
-      let root = Eio.Path.native_exn dir in
+  Test_support.with_temp_dir (fun root ->
       let path = write_markdown root in
-      let status, output, _ =
+      let* status, output, _ =
         Test_support.run_cli ~exe:(executable ()) ~env:(env_for root) ~cwd:root
           ~timeout:10. [ path ]
       in
       Alcotest.(check int) "status" 0 status;
-      Alcotest.(check bool) "heading" true (String.contains output 'H'))
+      Alcotest.(check bool) "heading" true (String.contains output 'H');
+      Lwt.return_unit)
 
 let pager_pipe () =
-  Test_support.with_temp_dir (fun dir ->
-      let root = Eio.Path.native_exn dir in
+  Test_support.with_temp_dir (fun root ->
       let path = write_markdown root in
-      let status, output, _ =
+      let* status, output, _ =
         Test_support.run_cli ~exe:(executable ()) ~env:(env_for root) ~cwd:root
           ~timeout:10. [ "--pager"; path ]
       in
       Alcotest.(check int) "status" 0 status;
-      Alcotest.(check bool) "pager output" true (String.contains output 'H'))
+      Alcotest.(check bool) "pager output" true (String.contains output 'H');
+      Lwt.return_unit)
 
 let tui_requires_terminal () =
-  Test_support.with_temp_dir (fun dir ->
-      let root = Eio.Path.native_exn dir in
+  Test_support.with_temp_dir (fun root ->
       let path = write_markdown root in
-      let status, _, errors =
+      let* status, _, errors =
         Test_support.run_cli ~exe:(executable ()) ~env:(env_for root) ~cwd:root
           ~timeout:10. [ "--tui"; path ]
       in
       Alcotest.(check bool) "non-tty failure" true (status <> 0);
-      Alcotest.(check bool) "diagnostic" true (String.length errors > 0))
+      Alcotest.(check bool) "diagnostic" true (String.length errors > 0);
+      Lwt.return_unit)
 
 let config_command () =
-  Test_support.with_temp_dir (fun dir ->
-      let root = Eio.Path.native_exn dir in
-      let status, _, _ =
+  Test_support.with_temp_dir (fun root ->
+      let* status, _, _ =
         Test_support.run_cli ~exe:(executable ()) ~env:(env_for root) ~cwd:root
           ~timeout:10. [ "config" ]
       in
       let path = Filename.concat root "xdg-config/glow/config.json" in
       Alcotest.(check int) "status" 0 status;
-      Alcotest.(check bool) "created" true (Sys.file_exists path))
+      Alcotest.(check bool) "created" true (Sys.file_exists path);
+      Lwt.return_unit)
 
 let suite =
   ( "cli",
     [
-      Alcotest.test_case "stdout render" `Quick stdout_render;
-      Alcotest.test_case "pager" `Quick pager_pipe;
-      Alcotest.test_case "tui non-tty" `Quick tui_requires_terminal;
-      Alcotest.test_case "config" `Quick config_command;
+      Alcotest_lwt.test_case "stdout render" `Quick (fun _switch () -> stdout_render ());
+      Alcotest_lwt.test_case "pager" `Quick (fun _switch () -> pager_pipe ());
+      Alcotest_lwt.test_case "tui non-tty" `Quick (fun _switch () ->
+          tui_requires_terminal ());
+      Alcotest_lwt.test_case "config" `Quick (fun _switch () -> config_command ());
     ] )

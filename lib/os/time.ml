@@ -7,6 +7,7 @@ type virtual_clock = virtual_state
 let lwt = Real
 let monotonic () = Int64.to_float (Mtime.to_uint64_ns (Mtime_clock.now ())) /. 1e9
 let now = function Real -> monotonic () | Simulated state -> state.now
+let wall = function Real -> Unix.gettimeofday () | Simulated state -> state.now
 
 let insert sleeper =
   let rec place already = function
@@ -17,11 +18,11 @@ let insert sleeper =
   place []
 
 let sleep clock seconds =
-  match clock with
-  | Real -> Lwt_unix.sleep seconds
-  | Simulated state ->
-      if seconds <= 0. then Lwt.return_unit
-      else
+  if seconds <= 0. then Lwt.pause ()
+  else
+    match clock with
+    | Real -> Lwt_unix.sleep seconds
+    | Simulated state ->
         (* [Lwt.task], not [Lwt.wait]: a promise from [wait] cannot be cancelled, and a
            sleeper that outlives its cancellation would wake later on its own deadline. *)
         let task, wake = Lwt.task () in

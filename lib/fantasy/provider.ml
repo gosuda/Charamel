@@ -1,3 +1,5 @@
+open Lwt.Infix
+
 type auth = Api_key of string | Oauth of Oauth.Credential.t
 
 type t = {
@@ -142,13 +144,13 @@ let caller_stream_part mapping = function
 
 let request_auth = function Api_key _ -> Request.Api_key | Oauth _ -> Request.Oauth
 
-let fresh_auth t ~sw ~clock ~net : (auth, Error.t) result =
+let fresh_auth t ~clock : (auth, Error.t) result Lwt.t =
   match (t.kind, t.auth) with
   | `Anthropic, Oauth credential ->
-      Result.map
+      Lwt_result.map
         (fun credential -> Oauth credential)
-        (Oauth.Anthropic.ensure_fresh ~sw ~clock ~net credential)
-  | _ -> Ok t.auth
+        (Oauth.Anthropic.ensure_fresh ~clock credential)
+  | _ -> Lwt.return (Ok t.auth)
 
 let auth_headers ~kind ~auth =
   match (kind, auth) with
@@ -180,10 +182,12 @@ let url_and_headers t auth model =
           model.Model.id,
         auth_headers ~kind:t.kind ~auth )
 
-let stream t ~sw ~clock ~net ~model ?(system = []) ?(tools = []) ?max_tokens ?temperature
+(* [Lwt_stream] has no blocking push, so the queue a consumer drains is unbounded: a slow
+   consumer buffers the response rather than throttling the connection, and [?stop] — not
+   back-pressure — is what ends a stream nobody reads any more. *)
+let stream t ?stop ~clock ~model ?(system = []) ?(tools = []) ?max_tokens ?temperature
     ?(reasoning = `Off) ?(on_error = fun (_ : Error.t) -> ()) messages =
-  Eio.Switch.check sw;
-  let output = Eio.Stream.create 64 in
+  let output, push = Lwt_stream.create () in
   let finished = ref false in
   let reported = ref false in
   let emit parts =
@@ -191,60 +195,72 @@ let stream t ~sw ~clock ~net ~model ?(system = []) ?(tools = []) ?max_tokens ?te
       (fun part ->
         if not !finished then (
           (match part with Stream_part.Finish _ -> finished := true | _ -> ());
-          Eio.Stream.add output part))
+          push (Some part)))
       parts
   in
-  let report_error error =
+  let finish_error error =
     if not !reported then (
       reported := true;
-      on_error error)
-  in
-  let finish_error error =
-    report_error error;
+      on_error error);
     if not !finished then emit [ Stream_part.Finish (`Error (Error.message error)) ]
   in
-  let () =
-    Eio.Fiber.fork ~sw (fun () ->
-        match fresh_auth t ~sw ~clock ~net with
-        | Error error -> finish_error error
-        | Ok auth -> (
-            let module Codec = (val codec_for t.kind : CODEC) in
-            let mapping = build_tool_mapping ~kind:t.kind ~auth ~tools ~messages in
-            let request =
-              Request.of_call ~model ~auth:(request_auth auth) ~system
-                ~tools:(wire_tools mapping tools) ?max_tokens ?temperature
-                ~reasoning:
-                  (match reasoning with
-                  | `Off -> Request.Off
-                  | `Low -> Request.Low
-                  | `Medium -> Request.Medium
-                  | `High -> Request.High)
-                (wire_messages mapping messages)
-            in
-            let codec = Codec.create () in
-            let body = Json.string_of_json (Codec.encode request) in
-            let url, headers = url_and_headers t auth model in
-            let transport = Transport.make ~clock ~net () in
-            let consume =
-              Transport.Sse
-                (fun ~event ~data ->
-                  emit
-                    (List.map (caller_stream_part mapping)
-                       (Codec.feed codec ~event ~data)))
-            in
-            let result =
-              Transport.call transport ~sw ~url ~meth:`POST ~headers ~body ~consume ()
-            in
-            match result with
-            | Ok _ ->
-                emit (List.map (caller_stream_part mapping) (Codec.finish codec));
-                if not !finished then
-                  emit
-                    [
-                      Stream_part.Finish (`Error "stream ended without a terminal event");
-                    ]
-            | Error (`Http _ as error) -> finish_error error
-            | Error ((`Transport _ | `Oauth _) as error) -> finish_error error
-            | Error (`Oauth_invalid_grant _ as error) -> finish_error error))
+  let call auth =
+    let module Codec = (val codec_for t.kind : CODEC) in
+    let mapping = build_tool_mapping ~kind:t.kind ~auth ~tools ~messages in
+    let caller_parts parts = List.map (caller_stream_part mapping) parts in
+    let request =
+      Request.of_call ~model ~auth:(request_auth auth) ~system
+        ~tools:(wire_tools mapping tools) ?max_tokens ?temperature
+        ~reasoning:
+          (match reasoning with
+          | `Off -> Request.Off
+          | `Low -> Request.Low
+          | `Medium -> Request.Medium
+          | `High -> Request.High)
+        (wire_messages mapping messages)
+    in
+    let codec = Codec.create () in
+    let body = Json.string_of_json (Codec.encode request) in
+    let url, headers = url_and_headers t auth model in
+    let transport = Transport.make () in
+    let consume =
+      Transport.Sse
+        (fun ~event ~data -> emit (caller_parts (Codec.feed codec ~event ~data)))
+    in
+    Transport.call transport ~url ~meth:`POST ~headers ~body ~consume () >>= function
+    | Ok _ ->
+        emit (caller_parts (Codec.finish codec));
+        emit [ Stream_part.Finish (`Error "stream ended without a terminal event") ];
+        Lwt.return_unit
+    | Error error ->
+        finish_error error;
+        Lwt.return_unit
   in
+  let work () =
+    Lwt.finalize
+      (fun () ->
+        fresh_auth t ~clock >>= function
+        | Error error ->
+            finish_error error;
+            Lwt.return_unit
+        | Ok auth -> call auth)
+      (fun () ->
+        push None;
+        Lwt.return_unit)
+  in
+  let worker = work () in
+  (match stop with
+  | None -> ()
+  | Some stop ->
+      Lwt_switch.add_hook (Some stop) (fun () ->
+          Lwt.cancel worker;
+          Lwt.return_unit));
+  (* Lwt reports a promise rejected by cancellation through the async exception hook,
+     which aborts the process; an abandoned turn is the normal case here, so only the
+     cancellation is absorbed and every other failure still surfaces. The worker's own
+     Lwt.finalize closes the stream and releases the connection either way. *)
+  Lwt.async (fun () ->
+      Lwt.catch
+        (fun () -> worker)
+        (function Lwt.Canceled -> Lwt.return_unit | exn -> Lwt.fail exn));
   output

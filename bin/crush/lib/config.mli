@@ -139,11 +139,11 @@ val merge : t -> t -> t
     order-preserving deduplication. *)
 
 val load :
-  fs:Eio.Fs.dir_ty Eio.Path.t ->
+  fs_root:string ->
   env:(string -> string option) ->
   cwd:string ->
-  (t * string list, error) result
-(** [load ~fs ~env ~cwd] discovers and folds existing configuration files. *)
+  (t * string list, error) result Lwt.t
+(** [load ~fs_root ~env ~cwd] discovers and folds existing configuration files. *)
 
 val schema : Jsont.json
 (** [schema] is a JSON Schema 2020-12 description of [jsont]. *)

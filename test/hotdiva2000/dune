@@ -2,5 +2,13 @@
  (name test_hotdiva2000)
  (package hotdiva2000)
  (modules test_hotdiva2000 test_name test_cli)
- (libraries hotdiva_core alcotest fmt unix eio test_support)
+ (libraries
+  hotdiva_core
+  alcotest
+  alcotest-lwt
+  lwt
+  lwt.unix
+  fmt
+  unix
+  test_support)
  (deps %{exe:../../bin/hotdiva2000/main.exe}))

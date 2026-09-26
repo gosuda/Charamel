@@ -28,14 +28,14 @@ val default_path : Charamel_ssh_keygen.algorithm -> (string, error) result
     [$HOME/.ssh]. *)
 
 val generate :
-  fs:_ Eio.Fs.dir ->
+  fs_root:string ->
   path:string ->
   algorithm:Charamel_ssh_keygen.algorithm ->
   ?comment:string ->
   force:bool ->
   unit ->
-  (string, error) result
-(** [generate ~fs ~path ~algorithm ?comment ~force ()] is the result containing the
+  (string, error) result Lwt.t
+(** [generate ~fs_root ~path ~algorithm ?comment ~force ()] is the result containing the
     SHA-256 fingerprint of the generated public key. It creates a key pair.
 
     [comment] defaults to the empty string. [path] may be absolute, relative, or begin

@@ -25,6 +25,7 @@
   spin)
  (libraries
   charamel.cli
+  charamel.os
   charamel.ansi
   charamel.colorprofile
   charamel.lipgloss
@@ -34,18 +35,17 @@
   charamel.highlight
   charamel.glamour
   cmdliner
-  eio
-  eio.unix
+  lwt
+  lwt.unix
   fmt
   logs
   re
   ptime
-  unix
-  cstruct))
+  unix))
 
 (executable
  (name main)
  (public_name gum)
  (package gum)
  (modules main)
- (libraries gum_core charamel.cli cmdliner eio.unix))
+ (libraries gum_core charamel.cli cmdliner lwt lwt.unix unix))

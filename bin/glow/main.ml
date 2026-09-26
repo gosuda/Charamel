@@ -1,4 +1,4 @@
-open Result.Syntax
+open Charamel_cli
 
 type options = {
   source : string option;
@@ -13,20 +13,31 @@ type options = {
   mouse : bool option;
 }
 
-let is_tty flow =
-  try Eio_unix.Fd.use_exn "isatty" (Eio_unix.Resource.fd flow) Unix.isatty
-  with Eio.Io _ | Unix.Unix_error (_, _, _) -> false
+let path_for ~cwd path =
+  if Filename.is_relative path then Filename.concat cwd path else path
 
-let root_for_path env path = if Filename.is_relative path then env#cwd else env#fs
-let path_for env path = Eio.Path.(root_for_path env path / path)
+let read_file_sync path =
+  let fd = Unix.openfile path [ Unix.O_RDONLY ] 0 in
+  Fun.protect
+    ~finally:(fun () -> try Unix.close fd with Unix.Unix_error _ -> ())
+    (fun () ->
+      let length = (Unix.fstat fd).Unix.st_size in
+      let bytes = Bytes.create length in
+      let rec read_all offset =
+        if offset >= length then ()
+        else
+          let count = Unix.read fd bytes offset (length - offset) in
+          if count = 0 then () else read_all (offset + count)
+      in
+      read_all 0;
+      Bytes.unsafe_to_string bytes)
 
-let config_read env path =
-  try Some (Ok (Eio.Path.load (path_for env path))) with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> None
-  | Eio.Io _ as exception_ -> Some (Error (Fmt.str "%a" Eio.Exn.pp exception_))
+let config_read ~cwd path =
+  let resolved = path_for ~cwd path in
+  try Some (Ok (read_file_sync resolved)) with
+  | Unix.Unix_error (Unix.ENOENT, _, _) -> None
   | Unix.Unix_error (error, operation, argument) ->
       Some (Error (Fmt.str "%s: %s (%s)" operation (Unix.error_message error) argument))
-  | Sys_error message -> Some (Error message)
 
 let config_error = function
   | `Io (path, message) -> Fmt.str "glow: unable to read config %s: %s" path message
@@ -99,10 +110,10 @@ let options_term =
     mouse;
   }
 
-let resolved_config env options =
-  let cwd = Eio.Path.native_exn env#cwd in
+let resolved_config (env : Env.t) options =
   match
-    Config.load ~explicit:options.config ~cwd ~env:Sys.getenv_opt ~read:(config_read env)
+    Config.load ~explicit:options.config ~cwd:env.Env.cwd ~env:Sys.getenv_opt
+      ~read:(config_read ~cwd:env.Env.cwd)
   with
   | Error error -> Error (config_error error)
   | Ok (config, path) ->
@@ -126,16 +137,15 @@ let source_error = function
   | `Io (path, message) -> Fmt.str "glow: %s: %s" path message
   | `Http message -> Fmt.str "glow: %s" message
 
-let terminal_width _env =
-  try
-    let size : Eio_unix.Pty.winsize = Eio_unix.Pty.get_window_size Eio_unix.Fd.stdout in
-    min 120 (max 1 size.Eio_unix.Pty.cols)
-  with Unix.Unix_error _ | Eio.Io _ -> 80
+let terminal_width () =
+  match Charamel_os.Tty.size_stdout () with
+  | Some (_, cols) -> min 120 (max 1 cols)
+  | None -> 80
 
-let render_document ~env ~is_tty:stdout_is_tty (config : Config.t) document =
+let render_document ~is_tty:stdout_is_tty (config : Config.t) document =
   let width =
     if config.Config.width > 0 then config.Config.width
-    else if stdout_is_tty then terminal_width env
+    else if stdout_is_tty then terminal_width ()
     else 80
   in
   let body =
@@ -158,137 +168,108 @@ let render_document ~env ~is_tty:stdout_is_tty (config : Config.t) document =
   Charamel_glamour.render ~width ~theme ?base_url:document.Source.base_url
     ~preserve_newlines:config.Config.preserve_new_lines body
 
-let executable program =
-  if String.contains program '/' then program
-  else
-    let path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
-    let rec find = function
-      | [] -> program
-      | directory :: rest -> (
-          let candidate =
-            Filename.concat (if directory = "" then "." else directory) program
-          in
-          try
-            Unix.access candidate [ Unix.X_OK ];
-            candidate
-          with Unix.Unix_error _ -> find rest)
-    in
-    find (String.split_on_char ':' path)
-
 let pager_words () =
   match Sys.getenv_opt "PAGER" with
-  | Some value when String.trim value <> "" -> Ui.split_words value
+  | Some value when String.trim value <> "" -> Charamel_os.Shell.split_words value
   | _ -> [ "less"; "-r" ]
 
+let exit_message ~label code =
+  if code > 128 then Fmt.str "glow: %s terminated by signal %d" label (code - 128)
+  else Fmt.str "glow: %s exited with status %d" label code
+
 let run_pager text =
-  let argv = pager_words () in
-  match argv with
-  | [] -> Error "glow: PAGER is empty"
-  | program :: _ -> (
-      try
-        let status =
-          Eio_unix.run_in_systhread (fun () ->
-              let input_r, input_w = Unix.pipe ~cloexec:true () in
-              let argv_array = Array.of_list argv in
-              let pid =
-                Unix.create_process (executable program) argv_array input_r Unix.stdout
-                  Unix.stderr
-              in
-              Unix.close input_r;
-              let channel = Unix.out_channel_of_descr input_w in
-              output_string channel text;
-              flush channel;
-              close_out_noerr channel;
-              snd (Unix.waitpid [] pid))
-        in
-        match status with
-        | Unix.WEXITED 0 -> Ok ()
-        | Unix.WEXITED code -> Error (Fmt.str "glow: pager exited with status %d" code)
-        | Unix.WSIGNALED signal ->
-            Error (Fmt.str "glow: pager terminated by signal %d" signal)
-        | Unix.WSTOPPED signal ->
-            Error (Fmt.str "glow: pager stopped by signal %d" signal)
-      with
-      | Unix.Unix_error (error, operation, argument) ->
-          Error
-            (Fmt.str "glow: unable to run pager: %s (%s %s)" (Unix.error_message error)
-               operation argument)
-      | Sys_error message -> Error (Fmt.str "glow: unable to run pager: %s" message))
+  match pager_words () with
+  | [] -> Lwt.return (Error "glow: PAGER is empty")
+  | argv ->
+      Lwt.catch
+        (fun () ->
+          let process = Charamel_os.Process.spawn ~stdin:`Pipe argv in
+          let stdin_w = Charamel_os.Process.stdin_w process in
+          Lwt.bind (Lwt_io.write stdin_w text) (fun () ->
+              Lwt.bind (Lwt_io.close stdin_w) (fun () ->
+                  Lwt.bind (Charamel_os.Process.await process) (fun code ->
+                      if code = 0 then Lwt.return (Ok ())
+                      else Lwt.return (Error (exit_message ~label:"pager" code))))))
+        (function
+          | Unix.Unix_error (error, operation, argument) ->
+              Lwt.return
+                (Error
+                   (Fmt.str "glow: unable to run pager: %s (%s %s)"
+                      (Unix.error_message error) operation argument))
+          | exn -> Lwt.fail exn)
 
 let run_editor path =
   let command =
     match Sys.getenv_opt "EDITOR" with
-    | Some value when String.trim value <> "" -> Ui.split_words value
+    | Some value when String.trim value <> "" -> Charamel_os.Shell.split_words value
     | _ -> [ "vi" ]
   in
   match command with
-  | [] -> Error "glow: EDITOR is empty"
-  | program :: _ -> (
-      try
-        let status =
-          Eio_unix.run_in_systhread (fun () ->
-              let argv = Array.of_list (command @ [ path ]) in
-              let pid =
-                Unix.create_process (executable program) argv Unix.stdin Unix.stdout
-                  Unix.stderr
-              in
-              snd (Unix.waitpid [] pid))
-        in
-        match status with
-        | Unix.WEXITED 0 -> Ok ()
-        | Unix.WEXITED code -> Error (Fmt.str "glow: editor exited with status %d" code)
-        | Unix.WSIGNALED signal ->
-            Error (Fmt.str "glow: editor terminated by signal %d" signal)
-        | Unix.WSTOPPED signal ->
-            Error (Fmt.str "glow: editor stopped by signal %d" signal)
-      with
-      | Unix.Unix_error (error, operation, argument) ->
-          Error
-            (Fmt.str "glow: unable to run editor: %s (%s %s)" (Unix.error_message error)
-               operation argument)
-      | Sys_error message -> Error (Fmt.str "glow: unable to run editor: %s" message))
+  | [] -> Lwt.return (Error "glow: EDITOR is empty")
+  | command ->
+      Lwt.catch
+        (fun () ->
+          let process = Charamel_os.Process.spawn (command @ [ path ]) in
+          Lwt.bind (Charamel_os.Process.await process) (fun code ->
+              if code = 0 then Lwt.return (Ok ())
+              else Lwt.return (Error (exit_message ~label:"editor" code))))
+        (function
+          | Unix.Unix_error (error, operation, argument) ->
+              Lwt.return
+                (Error
+                   (Fmt.str "glow: unable to run editor: %s (%s %s)"
+                      (Unix.error_message error) operation argument))
+          | exn -> Lwt.fail exn)
 
-let write_config env options =
+let write_config (env : Env.t) options =
   match
-    Config.config_path ~explicit:options.config ~cwd:(Eio.Path.native_exn env#cwd)
-      ~env:Sys.getenv_opt
+    Config.config_path ~explicit:options.config ~cwd:env.Env.cwd ~env:Sys.getenv_opt
   with
-  | None -> Error "glow: HOME or XDG_CONFIG_HOME is not set"
-  | Some path -> (
-      let directory = Filename.dirname path in
-      try
-        Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 (path_for env directory);
-        if not (Sys.file_exists path) then
-          Eio.Cancel.protect (fun () ->
-              Eio.Path.save ~create:(`Or_truncate 0o600) (path_for env path)
-                Config.default_json);
-        let* () = run_editor path in
-        Ok (Fmt.str "Wrote config file to: %s" path)
-      with
-      | Eio.Io _ as exception_ ->
-          Error (Fmt.str "glow: unable to write config: %a" Eio.Exn.pp exception_)
-      | Unix.Unix_error (error, operation, argument) ->
-          Error
-            (Fmt.str "glow: unable to write config: %s (%s %s)" (Unix.error_message error)
-               operation argument))
+  | None -> Lwt.return (Error "glow: HOME or XDG_CONFIG_HOME is not set")
+  | Some path ->
+      let resolved = path_for ~cwd:env.Env.cwd path in
+      let directory = Filename.dirname resolved in
+      Lwt.catch
+        (fun () ->
+          Lwt.bind (Charamel_os.Fs.mkdir_p directory) (function
+            | Error _ -> Lwt.return (Error "glow: unable to write config")
+            | Ok () ->
+                let write_default () =
+                  if Sys.file_exists resolved then Lwt.return_unit
+                  else
+                    Charamel_os.Fs.with_open_out ~perm:0o600 resolved (fun channel ->
+                        Lwt_io.write channel Config.default_json)
+                in
+                Lwt.bind (write_default ()) (fun () ->
+                    Lwt.bind (run_editor resolved) (function
+                      | Error _ as error -> Lwt.return error
+                      | Ok () -> Lwt.return (Ok (Fmt.str "Wrote config file to: %s" path))))))
+        (function
+          | Charamel_os.Fs.E _ -> Lwt.return (Error "glow: unable to write config")
+          | Unix.Unix_error (error, operation, argument) ->
+              Lwt.return
+                (Error
+                   (Fmt.str "glow: unable to write config: %s (%s %s)"
+                      (Unix.error_message error) operation argument))
+          | exn -> Lwt.fail exn)
 
-let run_config env options =
-  match write_config env options with
-  | Ok message -> Eio.Flow.copy_string (message ^ "\n") env#stdout
-  | Error message -> Charamel_cli.error message
+let run_config (env : Env.t) options =
+  Lwt.bind (write_config env options) (function
+    | Ok message -> Lwt_io.write env.Env.stdout (message ^ "\n")
+    | Error message -> Charamel_cli.error message)
 
-let run_default env options =
+let run_default (env : Env.t) options =
   match resolved_config env options with
   | Error message -> Charamel_cli.error message
   | Ok (config, _) -> (
       if config.Config.pager && config.Config.tui then
         Charamel_cli.error "glow: cannot use both --pager and --tui";
-      let stdout_is_tty = is_tty env#stdout in
-      let stdin_is_tty = is_tty env#stdin in
-      let cwd = Eio.Path.native_exn env#cwd in
+      let stdout_is_tty = Charamel_os.Tty.is_tty_stdout in
+      let stdin_is_tty = Charamel_os.Tty.is_tty_stdin in
+      let cwd = env.Env.cwd in
       match Source.classify ~argument:options.source ~cwd ~stdin_is_tty with
       | Error error -> Charamel_cli.error (source_error error)
-      | Ok location -> (
+      | Ok location ->
           let ui_required =
             config.Config.tui
             || match location with Source.Directory _ -> true | _ -> false
@@ -296,25 +277,26 @@ let run_default env options =
           if ui_required then
             if not stdout_is_tty then Charamel_cli.error "glow: --tui needs a terminal"
             else
-              match Ui.run env ~config ~location with
-              | Ok () -> ()
-              | Error message -> Charamel_cli.error (Fmt.str "glow: %s" message)
+              Lwt.bind (Ui.run env ~config ~location) (function
+                | Ok () -> Lwt.return_unit
+                | Error message -> Charamel_cli.error (Fmt.str "glow: %s" message))
           else
-            match Source.read ~env ~clock:env#clock ~net:env#net location with
-            | Error error -> Charamel_cli.error (source_error error)
-            | Ok document ->
-                let output = render_document ~env ~is_tty:stdout_is_tty config document in
-                if config.Config.pager then
-                  match run_pager output with
-                  | Ok () -> ()
-                  | Error message -> Charamel_cli.error message
-                else Eio.Flow.copy_string output env#stdout))
+            Lwt.bind (Source.read ~cwd:env.Env.cwd ~stdin:env.Env.stdin location)
+              (function
+              | Error error -> Charamel_cli.error (source_error error)
+              | Ok document ->
+                  let output = render_document ~is_tty:stdout_is_tty config document in
+                  if config.Config.pager then
+                    Lwt.bind (run_pager output) (function
+                      | Ok () -> Lwt.return_unit
+                      | Error message -> Charamel_cli.error message)
+                  else Lwt_io.write env.Env.stdout output))
 
 let default env =
   let action = run_default env in
   Cmdliner.Term.(const action $ options_term)
 
-let config_command env =
+let config_command (env : Env.t) =
   let open Cmdliner in
   let config_arg =
     Arg.(

@@ -99,12 +99,14 @@ let normalize_lines ~max_lines text =
   else String.concat "\n" (take max_lines (String.split_on_char '\n' text))
 
 let initial_value env (options : options) =
-  if options.value <> "" then remove_carriage_returns options.value
+  if options.value <> "" then Lwt.return (remove_carriage_returns options.value)
   else
-    match Gum_io.read_stdin ~strip_ansi:options.strip_ansi env with
-    | Ok value -> remove_carriage_returns value
-    | Error `Empty -> ""
-    | Error (`Read value) -> remove_carriage_returns value
+    Lwt.map
+      (function
+        | Ok value -> remove_carriage_returns value
+        | Error `Empty -> ""
+        | Error (`Read value) -> remove_carriage_returns value)
+      (Gum_io.read_stdin ~strip_ansi:options.strip_ansi env)
 
 let textarea_styles (options : options) : Textarea.styles =
   let styles = Textarea.default_styles ~is_dark:true in
@@ -262,18 +264,17 @@ let app options : (model, msg) Charamel_tea.app =
   }
 
 let run env (options : options) =
-  let options =
-    {
-      options with
-      value = normalize_lines ~max_lines:options.max_lines (initial_value env options);
-    }
-  in
-  let model =
-    Gum_run.run_tui ~name:"write" ?timeout:options.timeout env (app options)
-      ~finished:(fun model -> if submitted model then Gum_run.Submitted else Gum_run.Quit)
-  in
-  if not (submitted model) then Charamel_cli.error "not submitted";
-  Gum_io.print_raw env (value model)
+  Lwt.bind (initial_value env options) (fun initial ->
+      let options =
+        { options with value = normalize_lines ~max_lines:options.max_lines initial }
+      in
+      Lwt.bind
+        (Gum_run.run_tui ~name:"write" ?timeout:options.timeout env (app options)
+           ~finished:(fun model ->
+             if submitted model then Gum_run.Submitted else Gum_run.Quit))
+        (fun model ->
+          if not (submitted model) then Charamel_cli.error "not submitted";
+          Gum_io.print_raw env (value model)))
 
 let cmd env =
   let open Cmdliner in

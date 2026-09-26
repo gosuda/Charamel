@@ -1,3 +1,5 @@
+open Lwt.Syntax
+
 type position = { is_first : bool; is_last : bool }
 
 type ctx = {
@@ -32,7 +34,12 @@ type ('value, 'state, 'message) impl = {
   zoom : 'state -> bool;
   key_binds : ctx -> 'state -> Charamel_bubbles.Key_binding.t list;
   run_accessible :
-    name:string -> ctx -> out:(string -> unit) -> Accessible.reader -> 'state -> 'state;
+    name:string ->
+    ctx ->
+    out:(string -> unit Lwt.t) ->
+    Accessible.reader ->
+    'state ->
+    'state Lwt.t;
 }
 
 type t = Field : ('value, 'state, 'message) impl * 'state -> t
@@ -278,17 +285,17 @@ let input_accessible ~name ctx ~out reader state =
   let title = Dyn.eval state.title ctx.results in
   let prompt = (if title = "" then field_label name else title) ^ " " in
   let validate value = input_validate state value in
-  let value =
+  let* value =
     match state.echo with
     | Charamel_bubbles.Textinput.Password ->
-        Accessible.prompt_password out reader ~prompt ~validate
+        Accessible.prompt_password ~out reader ~prompt ~validate
     | Charamel_bubbles.Textinput.No_echo | Charamel_bubbles.Textinput.Normal ->
         Accessible.prompt_string ~out reader ~prompt
           ~default:(Charamel_bubbles.Textinput.value state.textinput)
           ~validate
   in
   let textinput = Charamel_bubbles.Textinput.set_value value state.textinput in
-  { state with textinput; err = None }
+  Lwt.return { state with textinput; err = None }
 
 let input_impl key title description placeholder prompt char_limit suggestions echo inline
     default validate =
@@ -394,6 +401,19 @@ let text_init ctx state =
   let state = text_reevaluate ctx state in
   (state, Charamel_tea.Cmd.none)
 
+let read_whole_file path =
+  match Stdlib.open_in path with
+  | exception Sys_error _ -> None
+  | channel -> (
+      match
+        Fun.protect
+          ~finally:(fun () -> Stdlib.close_in channel)
+          (fun () ->
+            Stdlib.really_input_string channel (Stdlib.in_channel_length channel))
+      with
+      | text -> Some text
+      | exception Sys_error _ -> None)
+
 let text_update ctx message state =
   match message with
   | Text_edit child_message ->
@@ -404,12 +424,8 @@ let text_update ctx message state =
       ({ state with textarea; err = None }, command)
   | Editor_done (path, code) ->
       let state = { state with editor_path = None } in
-      let read_result =
-        if code = 0 then
-          try Some (Eio.Path.load Eio.Path.(ctx.env.Env.temp_dir / path))
-          with Eio.Io (Eio.Fs.E _, _) -> None
-        else None
-      in
+      let file = Filename.concat ctx.env.Env.temp_dir path in
+      let read_result = if code = 0 then read_whole_file file else None in
       let state =
         match read_result with
         | Some value ->
@@ -420,9 +436,29 @@ let text_update ctx message state =
         | None when code = 0 -> { state with err = Some "cannot read editor file" }
         | None -> state
       in
-      Eio.Cancel.protect (fun () ->
-          Eio.Path.unlink ~missing_ok:true Eio.Path.(ctx.env.Env.temp_dir / path));
+      (match Stdlib.Sys.remove file with () -> () | exception Sys_error _ -> ());
       (state, Charamel_tea.Cmd.none)
+
+let editor_words env = match env.Env.editor with Some argv -> argv | None -> []
+let editor_enabled env = editor_words env <> []
+
+let write_new_file path text =
+  let flags = [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] in
+  let buffer = Bytes.of_string text in
+  match Unix.openfile path flags 0o600 with
+  | exception Unix.Unix_error (Unix.EEXIST, _, _) -> `Exists
+  | exception Unix.Unix_error _ -> `Failed
+  | fd ->
+      let length = Bytes.length buffer in
+      let rec write offset =
+        if offset >= length then `Written
+        else
+          match Unix.write fd buffer offset (length - offset) with
+          | 0 -> `Failed
+          | written -> write (offset + written)
+          | exception Unix.Unix_error _ -> `Failed
+      in
+      Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> write 0)
 
 let text_make_editor_file ctx state =
   let rec attempt counter =
@@ -431,14 +467,11 @@ let text_make_editor_file ctx state =
       let filename =
         Fmt.str "huh-%d-%d.%s" (Unix.getpid ()) counter state.editor_extension
       in
-      let path = Eio.Path.(ctx.env.Env.temp_dir / filename) in
-      try
-        Eio.Path.save ~create:(`Exclusive 0o600) path
-          (Charamel_bubbles.Textarea.value state.textarea);
-        Ok (filename, counter + 1)
-      with
-      | Eio.Io (Eio.Fs.E (Eio.Fs.Already_exists _), _) -> attempt (counter + 1)
-      | Eio.Io (Eio.Fs.E _, _) -> Error "cannot create editor file"
+      let path = Filename.concat ctx.env.Env.temp_dir filename in
+      match write_new_file path (Charamel_bubbles.Textarea.value state.textarea) with
+      | `Exists -> attempt (counter + 1)
+      | `Failed -> Error "cannot create editor file"
+      | `Written -> Ok (filename, counter + 1)
   in
   attempt state.counter
 
@@ -460,16 +493,14 @@ let text_on_key ctx key state =
     ({ state with textarea }, Charamel_tea.Cmd.none, Stay)
   else if
     raw_matches key km.Keymap.editor
-    && state.editor && state.editor_path = None && ctx.env.Env.editor <> []
+    && state.editor && state.editor_path = None && editor_enabled ctx.env
   then
     match text_make_editor_file ctx state with
     | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
     | Ok (path, counter) ->
         let command =
           Charamel_tea.Cmd.exec
-            ~argv:
-              (ctx.env.Env.editor
-              @ [ Eio.Path.native_exn Eio.Path.(ctx.env.Env.temp_dir / path) ])
+            ~argv:(editor_words ctx.env @ [ Filename.concat ctx.env.Env.temp_dir path ])
             (fun code -> Editor_done (path, code))
         in
         ({ state with counter; editor_path = Some path }, command, Stay)
@@ -532,16 +563,17 @@ let text_key_binds ctx _state =
 let text_accessible ~name ctx ~out reader state =
   let title = Dyn.eval state.title ctx.results in
   let prompt = (if title = "" then field_label name else title) ^ " " in
-  let value =
+  let* value =
     Accessible.prompt_string ~out reader ~prompt
       ~default:(Charamel_bubbles.Textarea.value state.textarea)
       ~validate:(text_validate state)
   in
-  {
-    state with
-    textarea = Charamel_bubbles.Textarea.set_value value state.textarea;
-    err = None;
-  }
+  Lwt.return
+    {
+      state with
+      textarea = Charamel_bubbles.Textarea.set_value value state.textarea;
+      err = None;
+    }
 
 let text_impl key title description placeholder lines char_limit show_line_numbers editor
     editor_extension default validate =
@@ -921,12 +953,14 @@ let select_accessible ~name ctx ~out reader state =
   let options = Dyn.eval state.options ctx.results in
   check_unique_options options;
   let heading = (if title = "" then field_label name else title) ^ " \n" in
-  out heading;
-  Stdlib.List.iteri
-    (fun index option_ -> out (Fmt.str "%d. %s\n" (index + 1) option_.key))
-    options;
+  let* () = out heading in
+  let* () =
+    Lwt_list.iteri_s
+      (fun index option_ -> out (Fmt.str "%d. %s\n" (index + 1) option_.key))
+      options
+  in
   match options with
-  | [] -> { state with err = Some "no options available" }
+  | [] -> Lwt.return { state with err = Some "no options available" }
   | _ ->
       let prompt =
         if Stdlib.List.length options = 1 then
@@ -934,16 +968,16 @@ let select_accessible ~name ctx ~out reader state =
         else Fmt.str "Enter a number between 1 and %d: " (Stdlib.List.length options)
       in
       let rec loop state =
-        let choice =
+        let* choice =
           Accessible.prompt_int out reader ~prompt ~low:1
             ~high:(Stdlib.List.length options)
             ~default:(Some (state.cursor + 1))
         in
         let state = { state with cursor = choice - 1; filtered = options } in
         match select_validate_current state with
-        | Ok () -> { state with err = None }
+        | Ok () -> Lwt.return { state with err = None }
         | Error error ->
-            out (error ^ "\n");
+            let* () = out (error ^ "\n") in
             loop { state with err = Some error }
       in
       loop state
@@ -1338,8 +1372,8 @@ let multi_accessible ~name ctx ~out reader state =
   let title = Dyn.eval state.title ctx.results in
   let options = Dyn.eval state.options ctx.results in
   check_unique_options options;
-  out ((if title = "" then field_label name else title) ^ " \n");
-  if options = [] then { state with err = Some "no options available" }
+  let* () = out ((if title = "" then field_label name else title) ^ " \n") in
+  if options = [] then Lwt.return { state with err = Some "no options available" }
   else
     let limit = if state.limit > 0 then state.limit else List.length options in
     let state =
@@ -1351,7 +1385,7 @@ let multi_accessible ~name ctx ~out reader state =
       }
     in
     let print_options state =
-      Stdlib.List.iteri
+      Lwt_list.iteri_s
         (fun index option_ ->
           let selected =
             match index_of_key option_.key state.all with
@@ -1364,39 +1398,42 @@ let multi_accessible ~name ctx ~out reader state =
                option_.key))
         options
     in
-    out (Fmt.str "Select up to %d options.\n" limit);
-    print_options state;
-    out "0. Confirm selection\n";
+    let* () = out (Fmt.str "Select up to %d options.\n" limit) in
+    let* () = print_options state in
+    let* () = out "0. Confirm selection\n" in
     let rec loop state =
-      let choice =
+      let* choice =
         Accessible.prompt_int out reader
           ~prompt:(Fmt.str "Enter a number between 0 and %d: " (List.length options))
           ~low:0 ~high:(List.length options) ~default:(Some 0)
       in
-      if choice = 0 then (
+      if choice = 0 then
         match multi_validate state with
-        | Ok () -> { state with err = None }
+        | Ok () -> Lwt.return { state with err = None }
         | Error error ->
-            out (error ^ "\n");
-            loop { state with err = Some error })
+            let* () = out (error ^ "\n") in
+            loop { state with err = Some error }
       else
         let index = choice - 1 in
         let selected = multi_selected_at index state in
         if
           (not selected) && state.limit > 0
           && List.length (selected_values state) >= state.limit
-        then (
-          out (Fmt.str "You can't select more than %d options.\n" state.limit);
-          loop state)
+        then begin
+          let* () =
+            out (Fmt.str "You can't select more than %d options.\n" state.limit)
+          in
+          loop state
+        end
         else
           let option_ = List.nth options index in
           let state = multi_set_selected_key option_.key (not selected) state in
-          print_options state;
-          out "0. Confirm selection\n";
+          let* () = print_options state in
+          let* () = out "0. Confirm selection\n" in
           match multi_validate state with
           | Ok () -> loop { state with err = None }
           | Error error ->
-              out (error ^ "\n");
+              let* () = out (error ^ "\n") in
               loop { state with err = Some error }
     in
     loop state
@@ -1558,11 +1595,11 @@ let confirm_accessible ~name ctx ~out reader state =
     ^ if state.value then "[Y/n] " else "[y/N] "
   in
   let rec loop state =
-    let value = Accessible.prompt_bool out reader ~prompt ~default:state.value in
+    let* value = Accessible.prompt_bool out reader ~prompt ~default:state.value in
     match confirm_validate state value with
-    | Ok () -> { state with value; err = None }
+    | Ok () -> Lwt.return { state with value; err = None }
     | Error error ->
-        out (error ^ "\n");
+        let* () = out (error ^ "\n") in
         loop { state with value; err = Some error }
   in
   loop state
@@ -1700,9 +1737,9 @@ let note_key_binds ctx _state =
 let note_accessible ~name:_ ctx ~out _reader state =
   let title = Dyn.eval state.title ctx.results in
   let description = Dyn.eval state.description ctx.results in
-  if title <> "" then out (title ^ "\n");
-  if description <> "" then out (description ^ "\n");
-  state
+  let* () = if title = "" then Lwt.return_unit else out (title ^ "\n") in
+  let* () = if description = "" then Lwt.return_unit else out (description ^ "\n") in
+  Lwt.return state
 
 let note_impl title description height next =
   let state = { title; description; height; next } in
@@ -1753,7 +1790,7 @@ type file_state = {
 let file_msg_id : file_message Type.Id.t = Type.Id.make ()
 
 let make_picker ctx state =
-  Charamel_bubbles.Filepicker.v ~fs:ctx.env.Env.fs ~current_directory:state.dir
+  Charamel_bubbles.Filepicker.v ~root:ctx.env.Env.fs_root ~current_directory:state.dir
     ~allowed_types:state.allowed ~show_permissions:state.show_permissions
     ~show_size:state.show_size ~show_hidden:state.show_hidden ~dir_allowed:state.dirs
     ~file_allowed:state.files ~height:(max 1 state.height) ()
@@ -1783,9 +1820,12 @@ let file_validate ctx state input =
       then Filename.concat state.dir input
       else input
     in
-    let path = Eio.Path.(ctx.env.Env.fs / relative) in
-    match Eio.Path.kind ~follow:true path with
-    | `Regular_file ->
+    let path =
+      if Filename.is_relative relative then Filename.concat ctx.env.Env.fs_root relative
+      else relative
+    in
+    match Unix.stat path with
+    | { Unix.st_kind = Unix.S_REG; _ } ->
         if
           state.allowed <> []
           && not
@@ -1794,7 +1834,8 @@ let file_validate ctx state input =
                   state.allowed)
         then Error (Fmt.str "cannot select: %s" input)
         else state.validate input
-    | _ -> Error "not a file"
+    | { Unix.st_kind = _; _ } -> Error "not a file"
+    | exception Unix.Unix_error _ -> Error "not a file"
 
 let file_on_key ctx key state =
   let state = { state with err = None } in
@@ -1940,11 +1981,11 @@ let file_key_binds ctx state =
 let file_accessible ~name ctx ~out reader state =
   let title = Dyn.eval state.title ctx.results in
   let prompt = (if title = "" then field_label name else title) ^ " " in
-  let value =
+  let* value =
     Accessible.prompt_string ~out reader ~prompt ~default:state.selected
       ~validate:(file_validate ctx state)
   in
-  { state with selected = value; err = None }
+  Lwt.return { state with selected = value; err = None }
 
 let file_blur ctx state =
   match file_validate ctx state state.selected with
@@ -2034,7 +2075,8 @@ let key_name (Field (impl, _)) = Option.map Key.name impl.key
 let key_binds (Field (impl, state)) ctx = impl.key_binds ctx state
 
 let run_accessible (Field (impl, state)) ctx ~out reader =
-  Field (impl, impl.run_accessible ~name:impl.name ctx ~out reader state)
+  let* state = impl.run_accessible ~name:impl.name ctx ~out reader state in
+  Lwt.return (Field (impl, state))
 
 let commit (Field (impl, state)) results =
   match impl.key with

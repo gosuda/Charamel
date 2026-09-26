@@ -1,4 +1,5 @@
 open Result.Syntax
+open Lwt_direct
 
 let max_file_bytes = 10 * 1024 * 1024
 let max_line_bytes = 2000
@@ -256,15 +257,27 @@ module Patch = struct
             removed )
 end
 
+let fs_error_text : Charamel_os.Fs.error -> string = function
+  | `Already_exists -> "already exists"
+  | `Is_directory -> "is a directory"
+  | `Not_found -> "not found"
+  | `Permission_denied -> "permission denied"
+
 let protect_io path f =
-  try Ok (f ()) with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found path)
-  | Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (path, Fmt.str "%a" Eio.Exn.pp exn))
+  try Ok (await (f ())) with
+  | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Error (`Not_found path)
   | Unix.Unix_error (error, function_name, argument) ->
       Error
         (`Io (path, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
+  | Sys_error message -> Error (`Io (path, message))
 
-let path ctx path = Eio.Path.(ctx.Tool.fs / path)
+let lstat_kind_opt path =
+  let open Lwt.Infix in
+  Lwt.catch
+    (fun () -> Lwt_unix.lstat path >|= fun stat -> Some stat.Unix.st_kind)
+    (function
+      | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Lwt.return None
+      | exn -> Lwt.fail exn)
 
 type write_target = Existing of string | New of string
 
@@ -281,11 +294,10 @@ let rec canonical_new_target ctx current components =
       Ok (New (append_components parent components))
 
 let resolve_write_target ctx absolute =
-  let target_path = path ctx absolute in
-  let* kind = protect_io absolute (fun () -> Eio.Path.kind ~follow:false target_path) in
+  let* kind = protect_io absolute (fun () -> lstat_kind_opt absolute) in
   match kind with
-  | `Not_found -> canonical_new_target ctx absolute []
-  | _ ->
+  | None -> canonical_new_target ctx absolute []
+  | Some _ ->
       let* target = Tool.canonical ctx absolute in
       Ok (Existing target)
 
@@ -296,7 +308,7 @@ let canonical_for_read ctx absolute =
 
 let output ctx ?(diagnostics = []) text =
   let content, artifact =
-    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
+    await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text)
   in
   Tool.ok ?artifact ~diagnostics content
 
@@ -306,7 +318,8 @@ let diagnostics ctx target =
   | Some lsp ->
       begin match
         protect_io target (fun () ->
-            Lsp.touch lsp ~path:target;
+            let open Lwt.Infix in
+            Lsp.touch lsp ~path:target >>= fun () ->
             Lsp.diagnostics lsp ~path:target ~wait:0.5)
       with
       | Ok values -> values
@@ -455,6 +468,8 @@ let edit_schema =
   Tool.schema_object ~required:[ "patch" ]
     [ ("patch", Tool.s_string ~desc:"Hashline patch text." ()) ]
 
+let load_file path = Lwt_io.with_file ~mode:Lwt_io.Input path Lwt_io.read
+
 let run_read ctx json =
   let* raw_path = Tool.decode read_params_jsont json in
   let base, selector = parse_selector raw_path in
@@ -467,7 +482,7 @@ let run_read ctx json =
           Tool.request ctx ~read_only:true ~tool:"read" ~action:"read" ~path:base
             ~description:base
         in
-        begin match Artifact.load ctx.Tool.artifacts ~id with
+        begin match await (Artifact.load ctx.Tool.artifacts ~id) with
         | Error (`Not_found missing) -> Error (`Not_found missing)
         | Error (`Io (path, message)) -> Error (`Io (path, message))
         | Ok content ->
@@ -484,7 +499,9 @@ let run_read ctx json =
           Tool.request ctx ~read_only:true ~tool:"read" ~action:"read" ~path:base
             ~description:base
         in
-        begin match Skills.resolve_uri ctx.Tool.skills ~fs:ctx.Tool.fs base with
+        begin match
+          await (Skills.resolve_uri ctx.Tool.skills ~fs_root:ctx.Tool.fs_root base)
+        with
         | Error (`Not_found missing) -> Error (`Not_found missing)
         | Ok content ->
             if (not (String.is_valid_utf_8 content)) || binary_content content then
@@ -508,27 +525,21 @@ let run_read ctx json =
           in
           begin
             let* target = target_result in
-            let target_path = path ctx target in
-            let* kind =
-              protect_io target (fun () -> Eio.Path.kind ~follow:true target_path)
-            in
-            match kind with
-            | `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory; use ls" target))
-            | `Regular_file ->
-                let* stat =
-                  protect_io target (fun () -> Eio.Path.stat ~follow:true target_path)
-                in
-                if Optint.Int63.to_int stat.Eio.File.Stat.size > max_file_bytes then
+            let* stat = protect_io target (fun () -> Lwt_unix.stat target) in
+            match stat.Unix.st_kind with
+            | Unix.S_DIR -> Ok (Tool.fail (Fmt.str "%s is a directory; use ls" target))
+            | Unix.S_REG ->
+                if stat.Unix.st_size > max_file_bytes then
                   Ok (Tool.fail (Fmt.str "%s is too large (maximum is 10 MiB)" target))
                 else
-                  let* content =
-                    protect_io target (fun () -> Eio.Path.load target_path)
-                  in
+                  let* content = protect_io target (fun () -> load_file target) in
                   if (not (String.is_valid_utf_8 content)) || binary_content content then
                     Ok (Tool.fail "not valid UTF-8")
                   else begin
                     touch_lsp ctx target;
-                    let now = int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.) in
+                    let now =
+                      int_of_float (Charamel_os.Time.now ctx.Tool.clock *. 1000.)
+                    in
                     Hashtbl.replace ctx.Tool.read_tracker target now;
                     Ok
                       (output ctx
@@ -540,24 +551,25 @@ let run_read ctx json =
         end
   end
 
-let save_file ctx target content =
-  let target_path = path ctx target in
-  let parent = Option.map fst (Eio.Path.split target_path) in
-  try
-    Eio.Cancel.protect (fun () ->
-        begin match parent with
-        | Some parent -> Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 parent
-        | None -> ()
-        end;
-        Eio.Path.save ~create:(`Or_truncate 0o644) target_path content);
-    Ok ()
-  with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found target)
-  | Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (target, Fmt.str "%a" Eio.Exn.pp exn))
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (`Io
-           (target, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
+let save_file target content =
+  match await (Charamel_os.Fs.mkdir_p (Filename.dirname target)) with
+  | Error `Not_found -> Error (`Not_found target)
+  | Error error -> Error (`Io (target, fs_error_text error))
+  | Ok () -> (
+      try
+        await
+          (Charamel_os.Fs.with_open_out ~perm:0o644 target (fun channel ->
+               Lwt_io.write channel content));
+        Ok ()
+      with
+      | Charamel_os.Fs.E (`Not_found, path) -> Error (`Not_found path)
+      | Charamel_os.Fs.E (error, path) -> Error (`Io (path, fs_error_text error))
+      | Unix.Unix_error (error, function_name, argument) ->
+          Error
+            (`Io
+               ( target,
+                 Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument ))
+      | Sys_error message -> Error (`Io (target, message)))
 
 let run_write ctx json =
   let* target_name, content = Tool.decode write_params_jsont json in
@@ -576,9 +588,9 @@ let run_write ctx json =
     let* resolved = target_result in
     match resolved with
     | New target -> begin
-        let* () = save_file ctx target content in
+        let* () = save_file target content in
         Hashtbl.replace ctx.Tool.read_tracker target
-          (int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.));
+          (int_of_float (Charamel_os.Time.now ctx.Tool.clock *. 1000.));
         let tag = Hashline.tag content in
         Ok
           (output ctx ~diagnostics:(diagnostics ctx target)
@@ -586,12 +598,9 @@ let run_write ctx json =
                 tag))
       end
     | Existing target ->
-        let target_path = path ctx target in
-        let* kind =
-          protect_io target (fun () -> Eio.Path.kind ~follow:true target_path)
-        in
-        begin match kind with
-        | `Regular_file ->
+        let* stat = protect_io target (fun () -> Lwt_unix.stat target) in
+        begin match stat.Unix.st_kind with
+        | Unix.S_REG ->
             if
               not
                 (Hashtbl.mem ctx.Tool.read_tracker target
@@ -603,16 +612,16 @@ let run_write ctx json =
                       "%s exists and was not read this session; read it first or use edit"
                       target))
             else begin
-              let* () = save_file ctx target content in
+              let* () = save_file target content in
               Hashtbl.replace ctx.Tool.read_tracker target
-                (int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.));
+                (int_of_float (Charamel_os.Time.now ctx.Tool.clock *. 1000.));
               let tag = Hashline.tag content in
               Ok
                 (output ctx ~diagnostics:(diagnostics ctx target)
                    (Fmt.str "wrote %s (%d bytes) [%s#%s]" target (String.length content)
                       target tag))
             end
-        | `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
+        | Unix.S_DIR -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
         | _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
         end
   end
@@ -679,13 +688,10 @@ let run_edit ctx json =
         in
         begin
           let* target = target_result in
-          let target_path = path ctx target in
-          let* kind =
-            protect_io target (fun () -> Eio.Path.kind ~follow:true target_path)
-          in
-          match kind with
-          | `Regular_file ->
-              let* content = protect_io target (fun () -> Eio.Path.load target_path) in
+          let* stat = protect_io target (fun () -> Lwt_unix.stat target) in
+          match stat.Unix.st_kind with
+          | Unix.S_REG ->
+              let* content = protect_io target (fun () -> load_file target) in
               if Hashline.tag content <> patch.Patch.tag then begin
                 let anchor =
                   match patch.Patch.ops with [] -> 1 | op :: _ -> first_patch_line op
@@ -701,16 +707,16 @@ let run_edit ctx json =
                 begin match Patch.apply content patch with
                 | Error message -> Error (`Invalid_input message)
                 | Ok (updated, added, removed) -> begin
-                    let* () = save_file ctx target updated in
+                    let* () = save_file target updated in
                     Hashtbl.replace ctx.Tool.read_tracker target
-                      (int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.));
+                      (int_of_float (Charamel_os.Time.now ctx.Tool.clock *. 1000.));
                     let tag = Hashline.tag updated in
                     Ok
                       (output ctx ~diagnostics:(diagnostics ctx target)
                          (edit_output patch target added removed tag))
                   end
                 end
-          | `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
+          | Unix.S_DIR -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
           | _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
         end
       end

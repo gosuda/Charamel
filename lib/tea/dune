@@ -19,12 +19,13 @@
  (libraries
   charamel.ansi
   charamel.colorprofile
-  eio
-  eio.unix
-  eio.mock
+  charamel.os
   cstruct
   fmt
+  lwt
+  lwt.unix
   mtime
+  mtime.clock
   logs
   unix
   uucp))

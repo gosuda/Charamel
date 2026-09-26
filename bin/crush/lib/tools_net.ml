@@ -1,4 +1,5 @@
 open Result.Syntax
+open Lwt_direct
 
 type output_format = Text | Markdown | Html
 type render_mode = Plain | Markdown
@@ -322,25 +323,33 @@ let render_html (format : render_mode) html =
   scan 0;
   Buffer.contents output |> String.trim
 
-let read_body body =
-  let limit = 5 * 1024 * 1024 in
-  let output = Buffer.create 4096 in
+let read_body_bounded ~limit stream =
+  let open Lwt.Infix in
+  let buffer = Buffer.create 4096 in
   let count = ref 0 in
-  let chunk = Cstruct.create 65_536 in
   let rec loop () =
-    match Eio.Flow.single_read body chunk with
-    | bytes when bytes > 0 ->
+    Lwt_stream.get stream >>= function
+    | None -> Lwt.return (Ok (Buffer.contents buffer))
+    | Some chunk ->
         let available = limit - !count in
-        let keep = min available bytes in
-        if keep < bytes then Error `Too_large
+        let keep = min available (String.length chunk) in
+        if keep < String.length chunk then Lwt.return (Error `Too_large)
         else (
-          Buffer.add_substring output
-            (Cstruct.to_string (Cstruct.sub chunk 0 keep))
-            0 keep;
+          Buffer.add_substring buffer chunk 0 keep;
           count := !count + keep;
           loop ())
-    | _ -> loop ()
-    | exception End_of_file -> Ok (Buffer.contents output)
+  in
+  loop ()
+
+let discard_body_bounded ~limit stream =
+  let open Lwt.Infix in
+  let count = ref 0 in
+  let rec loop () =
+    Lwt_stream.get stream >>= function
+    | None -> Lwt.return (Ok ())
+    | Some chunk ->
+        count := !count + String.length chunk;
+        if !count > limit then Lwt.return (Error `Too_large) else loop ()
   in
   loop ()
 
@@ -359,90 +368,85 @@ let parse_http_uri raw =
   | Some scheme, _ -> Error (`Invalid_input (Fmt.str "unsupported URL scheme: %s" scheme))
   | None, _ -> Error (`Invalid_input "URL must include http or https scheme")
 
-let make_client (ctx : Tool.ctx) =
-  match Ca_certs.authenticator () with
-  | Error (`Msg message) ->
-      Error (`Unavailable (Fmt.str "TLS trust store unavailable: %s" message))
-  | Ok authenticator -> (
-      match Tls.Config.client ~authenticator () with
-      | Error (`Msg message) ->
-          Error (`Unavailable (Fmt.str "TLS configuration failed: %s" message))
-      | Ok tls_config ->
-          let https uri flow =
-            let host =
-              match Uri.host uri with
-              | Some host -> host
-              | None -> invalid_arg "HTTP URL has no host"
+let body_limit = 5 * 1024 * 1024
+
+let rec fetch_uri ~headers ~(format : output_format) ~redirects uri :
+    (string, Tool.error) result Lwt.t =
+  let open Lwt.Infix in
+  Lwt.catch
+    (fun () ->
+      Cohttp_lwt_unix.Client.get ~headers uri >>= fun (response, body) ->
+      let status = status_code response in
+      if is_redirect status then
+        discard_body_bounded ~limit:body_limit (Cohttp_lwt.Body.to_stream body)
+        >>= function
+        | Error `Too_large ->
+            Lwt.return
+              (Error (`Unavailable (Fmt.str "HTTP %d redirect body exceeds 5 MiB" status)))
+        | Ok () ->
+            if redirects >= 5 then
+              Lwt.return (Error (`Unavailable "too many HTTP redirects"))
+            else
+              begin match Http.Header.get (Http.Response.headers response) "location" with
+              | None ->
+                  Lwt.return
+                    (Error
+                       (`Unavailable
+                          (Fmt.str "HTTP %d redirect has no Location header" status)))
+              | Some location -> (
+                  let target = Uri.resolve "" uri (Uri.of_string location) in
+                  match parse_http_uri (Uri.to_string target) with
+                  | Error _ as error -> Lwt.return error
+                  | Ok target ->
+                      fetch_uri ~headers ~format ~redirects:(redirects + 1) target)
+              end
+      else
+        read_body_bounded ~limit:body_limit (Cohttp_lwt.Body.to_stream body) >>= function
+        | Error `Too_large ->
+            Lwt.return
+              (Error (`Unavailable (Fmt.str "HTTP %d response body exceeds 5 MiB" status)))
+        | Ok body_text when status < 200 || status >= 300 ->
+            let detail =
+              if body_text = "" then ""
+              else
+                let length = min 4096 (String.length body_text) in
+                ": " ^ String.trim (String.sub body_text 0 length)
             in
-            match Ipaddr.of_string host with
-            | Ok ip -> Tls_eio.client_of_flow tls_config ~ip flow
-            | Error _ ->
-                let domain = Domain_name.of_string_exn host |> Domain_name.host_exn in
-                Tls_eio.client_of_flow tls_config ~host:domain flow
-          in
-          Ok (Cohttp_eio.Client.make ~https:(Some https) ctx.Tool.net))
-
-let response_body body = read_body body
-
-let discard_body body =
-  let limit = 5 * 1024 * 1024 in
-  let count = ref 0 in
-  let chunk = Cstruct.create 65_536 in
-  let rec loop () =
-    match Eio.Flow.single_read body chunk with
-    | bytes when bytes > 0 ->
-        if !count + bytes > limit then Error `Too_large
-        else (
-          count := !count + bytes;
-          loop ())
-    | _ -> loop ()
-    | exception End_of_file -> Ok ()
-  in
-  loop ()
-
-let rec fetch_uri (ctx : Tool.ctx) client ~headers ~sw ~(format : output_format)
-    ~redirects uri =
-  let response, body = Cohttp_eio.Client.get client ~headers ~sw uri in
-  let status = status_code response in
-  if is_redirect status then
-    match discard_body body with
-    | Error `Too_large ->
-        Error (`Unavailable (Fmt.str "HTTP %d redirect body exceeds 5 MiB" status))
-    | Ok () -> (
-        if redirects >= 5 then Error (`Unavailable "too many HTTP redirects")
-        else
-          match Http.Header.get (Http.Response.headers response) "location" with
-          | None ->
-              Error
-                (`Unavailable (Fmt.str "HTTP %d redirect has no Location header" status))
-          | Some location ->
-              let target = Uri.resolve "" uri (Uri.of_string location) in
-              let* target = parse_http_uri (Uri.to_string target) in
-              fetch_uri ctx client ~headers ~sw ~format ~redirects:(redirects + 1) target)
-  else
-    match response_body body with
-    | Error `Too_large ->
-        Error (`Unavailable (Fmt.str "HTTP %d response body exceeds 5 MiB" status))
-    | Ok body_text when status < 200 || status >= 300 ->
-        let detail =
-          if body_text = "" then ""
-          else
-            let length = min 4096 (String.length body_text) in
-            ": " ^ String.trim (String.sub body_text 0 length)
-        in
-        Error (`Unavailable (Fmt.str "HTTP %d%s" status detail))
-    | Ok body_text ->
-        let rendered =
-          match format with
-          | Html -> body_text
-          | Text -> render_html Plain body_text
-          | Markdown -> render_html Markdown body_text
-        in
-        Ok rendered
+            Lwt.return (Error (`Unavailable (Fmt.str "HTTP %d%s" status detail)))
+        | Ok body_text ->
+            let rendered =
+              match format with
+              | Html -> body_text
+              | Text -> render_html Plain body_text
+              | Markdown -> render_html Markdown body_text
+            in
+            Lwt.return (Ok rendered))
+    (function
+      | Tls_lwt.Tls_alert alert ->
+          Lwt.return
+            (Error
+               (`Unavailable
+                  (Fmt.str "TLS alert while fetching %s: %s" (Uri.to_string uri)
+                     (Tls.Packet.alert_type_to_string alert))))
+      | Tls_lwt.Tls_failure failure ->
+          Lwt.return
+            (Error
+               (`Unavailable
+                  (Fmt.str "TLS failure while fetching %s: %a" (Uri.to_string uri)
+                     Tls.Engine.pp_failure failure)))
+      | Unix.Unix_error (error, operation, argument) ->
+          Lwt.return
+            (Error
+               (`Io
+                  ( Uri.to_string uri,
+                    Fmt.str "%s: %s (%s)" operation (Unix.error_message error) argument )))
+      | Invalid_argument message -> Lwt.return (Error (`Invalid_input message))
+      | Failure message -> Lwt.return (Error (`Unavailable message))
+      | exn -> Lwt.fail exn)
 
 let output_with_artifact (ctx : Tool.ctx) content =
   let content, artifact =
-    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random content
+    await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random content)
   in
   Tool.ok ?artifact content
 
@@ -477,42 +481,18 @@ let fetch =
             Tool.request ctx ~read_only:true ~tool:"fetch" ~action:params.url ~path:""
               ~description:(Fmt.str "Fetch %s" params.url)
           in
-          let operation () =
-            Eio.Switch.run @@ fun fetch_sw ->
-            let headers =
-              Http.Header.of_list
-                [
-                  ("user-agent", "crush/" ^ Charamel_cli.Version.current);
-                  ("accept", "text/html, text/plain, text/markdown, */*");
-                ]
-            in
-            let* client = make_client ctx in
-            fetch_uri ctx client ~headers ~sw:fetch_sw ~format ~redirects:0 uri
+          let headers =
+            Http.Header.of_list
+              [
+                ("user-agent", "crush/" ^ Charamel_cli.Version.current);
+                ("accept", "text/html, text/plain, text/markdown, */*");
+              ]
           in
-          try
-            match Tool.with_timeout ctx (float_of_int timeout_s) operation with
-            | Ok (Ok content) -> Ok (output_with_artifact ctx content)
-            | Ok (Error error) -> Error error
-            | Error error -> Error error
+          let work = fetch_uri ~headers ~format ~redirects:0 uri in
+          match
+            try await (Lwt_unix.with_timeout (float_of_int timeout_s) (fun () -> work))
+            with Lwt_unix.Timeout -> Error (`Timeout (float_of_int timeout_s))
           with
-          | Eio.Io _ as exception_ ->
-              Error (`Io (params.url, Fmt.str "%a" Eio.Exn.pp exception_))
-          | Tls_eio.Tls_alert alert ->
-              Error
-                (`Unavailable
-                   (Fmt.str "TLS alert while fetching %s: %s" params.url
-                      (Tls.Packet.alert_type_to_string alert)))
-          | Tls_eio.Tls_failure failure ->
-              Error
-                (`Unavailable
-                   (Fmt.str "TLS failure while fetching %s: %a" params.url
-                      Tls.Engine.pp_failure failure))
-          | Unix.Unix_error (error, operation, argument) ->
-              Error
-                (`Io
-                   ( params.url,
-                     Fmt.str "%s: %s (%s)" operation (Unix.error_message error) argument
-                   ))
-          | Invalid_argument message -> Error (`Invalid_input message)
-          | Failure message -> Error (`Unavailable message));
+          | Ok content -> Ok (output_with_artifact ctx content)
+          | Error error -> Error error);
   }

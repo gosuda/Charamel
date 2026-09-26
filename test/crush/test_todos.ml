@@ -83,10 +83,10 @@ let invalid_status_case () =
 
 let cases =
   [
-    Alcotest.test_case "render" `Quick render_case;
-    Alcotest.test_case "set and get" `Quick set_get_case;
-    Alcotest.test_case "lifecycle transitions" `Quick transitions_case;
-    Alcotest.test_case "invalid index" `Quick invalid_index_case;
-    Alcotest.test_case "JSON round trip" `Quick codec_case;
-    Alcotest.test_case "invalid status" `Quick invalid_status_case;
+    Test_tools_test_support.case "render" `Quick render_case;
+    Test_tools_test_support.case "set and get" `Quick set_get_case;
+    Test_tools_test_support.case "lifecycle transitions" `Quick transitions_case;
+    Test_tools_test_support.case "invalid index" `Quick invalid_index_case;
+    Test_tools_test_support.case "JSON round trip" `Quick codec_case;
+    Test_tools_test_support.case "invalid status" `Quick invalid_status_case;
   ]

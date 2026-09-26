@@ -77,8 +77,8 @@ let test_expiry_skew () =
 
 let cases =
   [
-    ("pkce s256", `Quick, test_pkce_s256);
-    ("begin_login params", `Quick, test_begin_login_params);
-    ("extract code forms", `Quick, test_extract_code_forms);
-    ("expiry skew", `Quick, test_expiry_skew);
+    Alcotest_lwt.test_case_sync "pkce s256" `Quick test_pkce_s256;
+    Alcotest_lwt.test_case_sync "begin_login params" `Quick test_begin_login_params;
+    Alcotest_lwt.test_case_sync "extract code forms" `Quick test_extract_code_forms;
+    Alcotest_lwt.test_case_sync "expiry skew" `Quick test_expiry_skew;
   ]

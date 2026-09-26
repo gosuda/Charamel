@@ -1,4 +1,4 @@
 (** A tiny confetti animation served over SSH. *)
 
-val run : Eio_unix.Stdenv.base -> unit
-(** [run env] serves the confetti animation on TCP port 2222. *)
+val run : unit -> unit Lwt.t
+(** [run ()] serves the confetti animation on TCP port 2222. *)

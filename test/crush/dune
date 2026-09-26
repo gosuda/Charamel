@@ -38,15 +38,15 @@
   charamel.fantasy
   charamel.huh
   charamel.tea
+  charamel.os
   alcotest
-  eio
-  eio.unix
-  eio_main
+  alcotest-lwt
+  lwt
+  lwt.unix
+  lwt_direct
   fmt
   jsont
   jsont.bytesrw
-  cohttp-eio
-  http
   test_support
   unix)
  (deps %{exe:../../bin/crush/main.exe}))

@@ -23,13 +23,12 @@ val run :
   ?timeout:float ->
   ?accessible:bool ->
   ?env:Form.Env.t ->
-  clock:_ Eio.Time.clock ->
+  clock:Charamel_os.Time.clock ->
   Form.t ->
-  Eio_unix.Stdenv.base ->
-  (Results.t, error) result
-(** [run ?timeout ?accessible ?env ~clock form base] runs [form] against the supplied
-    process environment. [env] defaults to explicit capabilities rooted at [base]'s
-    current working directory, a temporary directory selected from [TMPDIR] or
+  (Results.t, error) result Lwt.t
+(** [run ?timeout ?accessible ?env ~clock form] runs [form] against the process's own
+    standard channels. [env] defaults to explicit capabilities rooted at the working
+    directory, a temporary directory selected from [TMPDIR] or
     [Filename.get_temp_dir_name ()], and the editor parsed from [$EDITOR] (falling back to
     [nano]). [timeout], when positive, applies to both accessible prompts and the terminal
-    application. *)
+    application; an expired timeout fails the returned promise with [Lwt_unix.Timeout]. *)

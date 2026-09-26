@@ -1,3 +1,5 @@
+open Lwt_direct
+
 type request = {
   session : string;
   tool : string;
@@ -21,8 +23,7 @@ type t = {
   asker : asker;
   hook : hook;
   on_decision : request -> outcome -> unit;
-  policy_mutex : Eio.Mutex.t;
-  ask_mutex : Eio.Mutex.t;
+  ask_mutex : Lwt_mutex.t;
   mutable plan_mode : bool;
   mutable grants : grant list;
   mutable auto_approved_sessions : string list;
@@ -77,13 +78,8 @@ let default_asker _ = Deny
 let default_hook _ = `Pass
 let default_on_decision _ _ = ()
 
-let with_policy_lock t operation =
-  Eio.Mutex.lock t.policy_mutex;
-  Fun.protect operation ~finally:(fun () -> Eio.Mutex.unlock t.policy_mutex)
-
 let with_ask_lock t operation =
-  Eio.Mutex.lock t.ask_mutex;
-  Fun.protect operation ~finally:(fun () -> Eio.Mutex.unlock t.ask_mutex)
+  await (Lwt_mutex.with_lock t.ask_mutex (fun () -> Lwt.return (operation ())))
 
 let create ~config ~yolo ?(asker = default_asker) ?(hook = default_hook)
     ?(on_decision = default_on_decision) ~cwd ~plans_dir () =
@@ -97,8 +93,7 @@ let create ~config ~yolo ?(asker = default_asker) ?(hook = default_hook)
     asker;
     hook;
     on_decision;
-    policy_mutex = Eio.Mutex.create ();
-    ask_mutex = Eio.Mutex.create ();
+    ask_mutex = Lwt_mutex.create ();
     plan_mode = false;
     grants = [];
     auto_approved_sessions = [];
@@ -114,8 +109,8 @@ let matches ~entry request =
       in
       String.equal tool request.tool && String.equal action request.action
 
-let plan_mode t = with_policy_lock t (fun () -> t.plan_mode)
-let set_plan_mode t enabled = with_policy_lock t (fun () -> t.plan_mode <- enabled)
+let plan_mode t = t.plan_mode
+let set_plan_mode t enabled = t.plan_mode <- enabled
 let plans_dir t = t.plans_dir
 
 let normalized_request request =
@@ -137,14 +132,11 @@ let grant_session_locked t request =
   let key = request_key request in
   if not (List.exists (key_equal key) t.grants) then t.grants <- key :: t.grants
 
-let grant_session t request =
-  let request = normalized_request request in
-  with_policy_lock t (fun () -> grant_session_locked t request)
+let grant_session t request = grant_session_locked t (normalized_request request)
 
 let auto_approve_session t ~session =
-  with_policy_lock t (fun () ->
-      if not (List.exists (String.equal session) t.auto_approved_sessions) then
-        t.auto_approved_sessions <- session :: t.auto_approved_sessions)
+  if not (List.exists (String.equal session) t.auto_approved_sessions) then
+    t.auto_approved_sessions <- session :: t.auto_approved_sessions
 
 let session_granted t request =
   List.exists (String.equal request.session) t.auto_approved_sessions
@@ -206,13 +198,11 @@ let outcome_after_hook_locked t request hook_outcome =
 let resolve t request =
   let request = normalized_request request in
   let result =
-    match with_policy_lock t (fun () -> policy_outcome_locked t request) with
+    match policy_outcome_locked t request with
     | Some outcome -> outcome
     | None -> (
         let hook_outcome = t.hook request in
-        match
-          with_policy_lock t (fun () -> outcome_after_hook_locked t request hook_outcome)
-        with
+        match outcome_after_hook_locked t request hook_outcome with
         | Hook_resolved outcome -> outcome
         | Hook_continue ->
             if
@@ -222,8 +212,7 @@ let resolve t request =
             then Allowed
             else
               let decision = with_ask_lock t (fun () -> t.asker request) in
-              with_policy_lock t (fun () ->
-                  outcome_after_answer_locked t request decision))
+              outcome_after_answer_locked t request decision)
   in
   t.on_decision request result;
   result

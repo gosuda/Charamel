@@ -6,9 +6,10 @@
   keygen_core
   charamel-ssh.keygen
   alcotest
-  eio
-  eio.unix
-  eio_main
+  alcotest-lwt
   fmt
+  lwt
+  lwt.unix
   mirage-crypto-rng.unix
-  test_support))
+  test_support
+  unix))

@@ -1,28 +1,22 @@
 type mode = Explain | Raw | Width
 
-let ( / ) = Eio.Path.( / )
-
-let read_all source =
-  let contents = Buffer.create 4096 in
-  Eio.Flow.copy source (Eio.Flow.buffer_sink contents);
-  Buffer.contents contents
+module Env = Charamel_cli.Env
+open Lwt.Syntax
 
 let read_input env = function
-  | None -> read_all env#stdin
-  | Some "-" -> read_all env#stdin
-  | Some path -> (
-      (* [env#fs] handles both relative and absolute [path]s and reports real
-         kernel errors, unlike [env#cwd]'s sandboxed resolution, which treats
-         any absolute argument as escaping the sandbox and refuses it with
-         [Permission_denied] before the filesystem is even consulted. *)
-      try Eio.Path.load (env#fs / path) with
-      | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) ->
-          Charamel_cli.error (Fmt.str "sequin: %s: no such file or directory" path)
-      | Eio.Io (Eio.Fs.E (Eio.Fs.Permission_denied _), _) ->
-          Charamel_cli.error (Fmt.str "sequin: %s: permission denied" path)
-      | Eio.Io _ as exn ->
-          Charamel_cli.error
-            (Fmt.str "sequin: cannot read %s: %s" path (Printexc.to_string exn)))
+  | None | Some "-" -> Lwt_io.read env.Env.stdin
+  | Some path ->
+      Lwt.catch
+        (fun () ->
+          Lwt_io.with_file ~mode:Lwt_io.input path (fun channel -> Lwt_io.read channel))
+        (function
+          | Unix.Unix_error (Unix.ENOENT, _, _) ->
+              Charamel_cli.error (Fmt.str "sequin: %s: no such file or directory" path)
+          | Unix.Unix_error ((Unix.EACCES | Unix.EPERM), _, _) ->
+              Charamel_cli.error (Fmt.str "sequin: %s: permission denied" path)
+          | exn ->
+              Charamel_cli.error
+                (Fmt.str "sequin: cannot read %s: %s" path (Printexc.to_string exn)))
 
 let render mode input =
   match mode with
@@ -38,8 +32,8 @@ let run env file raw width =
     else if width then Width
     else Explain
   in
-  let input = read_input env file in
-  Eio.Flow.copy_string (render mode input) env#stdout
+  let* input = read_input env file in
+  Lwt_io.write env.Env.stdout (render mode input)
 
 let file_arg =
   let doc =

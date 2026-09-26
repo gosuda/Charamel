@@ -1,16 +1,30 @@
-let run_form form make_env_actions =
-  Eio_main.run (fun env ->
-      let form_env = Charamel_huh.Form.Env.v ~fs:env#fs ~temp_dir:env#fs ~editor:[] in
-      let stdin = Eio_mock.Flow.make "huh-stdin" in
-      Eio_mock.Flow.on_read stdin make_env_actions;
-      let output = Buffer.create 256 in
-      let reader = Charamel_huh.Accessible.reader_of_flow ~stdin ~echo_off:None in
-      let results =
-        Charamel_huh.Form.run_accessible form_env
-          ~out:(fun text -> Buffer.add_string output text)
-          reader form
-      in
-      (results, Buffer.contents output))
+open Lwt.Syntax
+
+let scripted_reader lines =
+  let queue = ref lines in
+  let read_line () =
+    match !queue with
+    | [] -> Lwt.return_none
+    | line :: rest ->
+        queue := rest;
+        Lwt.return (Some line)
+  in
+  Charamel_huh.Accessible.{ read_line; read_password = read_line }
+
+let run_form form lines =
+  let form_env =
+    Charamel_huh.Form.Env.v ~fs_root:(Sys.getcwd ())
+      ~temp_dir:(Filename.get_temp_dir_name ())
+      ~editor:None ~clock:Charamel_os.Time.lwt
+  in
+  let output = Buffer.create 256 in
+  let reader = scripted_reader lines in
+  let write text =
+    Buffer.add_string output text;
+    Lwt.return_unit
+  in
+  let* results = Charamel_huh.Form.run_accessible form_env ~out:write reader form in
+  Lwt.return (results, Buffer.contents output)
 
 let test_validation_and_defaults () =
   let name = Charamel_huh.Key.v "name" in
@@ -37,10 +51,7 @@ let test_validation_and_defaults () =
           ];
       ]
   in
-  let results, transcript =
-    run_form form
-      [ `Return "\n"; `Return "bad\n"; `Return "2\n"; `Return "y\n"; `Raise End_of_file ]
-  in
+  let* results, transcript = run_form form [ "\n"; "bad\n"; "2\n"; "y\n" ] in
   Alcotest.(check (option string))
     "default input" (Some "d")
     (Charamel_huh.Results.get name results);
@@ -52,7 +63,8 @@ let test_validation_and_defaults () =
     (Charamel_huh.Results.get confirmed results);
   Alcotest.(check bool)
     "validation transcript" true
-    (String.length transcript > 0 && String.contains transcript 'I')
+    (String.length transcript > 0 && String.contains transcript 'I');
+  Lwt.return_unit
 
 let test_eof_keeps_defaults () =
   let value = Charamel_huh.Key.v "value" in
@@ -67,13 +79,16 @@ let test_eof_keeps_defaults () =
           ];
       ]
   in
-  let results, _ = run_form form [ `Raise End_of_file ] in
+  let* results, _ = run_form form [] in
   Alcotest.(check (option string))
     "EOF default" (Some "fallback")
-    (Charamel_huh.Results.get value results)
+    (Charamel_huh.Results.get value results);
+  Lwt.return_unit
 
 let tests =
   [
-    Alcotest.test_case "validation and defaults" `Quick test_validation_and_defaults;
-    Alcotest.test_case "EOF defaults" `Quick test_eof_keeps_defaults;
+    Alcotest_lwt.test_case "validation and defaults" `Quick (fun _switch () ->
+        test_validation_and_defaults ());
+    Alcotest_lwt.test_case "EOF defaults" `Quick (fun _switch () ->
+        test_eof_keeps_defaults ());
   ]

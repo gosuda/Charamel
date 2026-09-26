@@ -56,16 +56,17 @@ let check_line ~separator ~tokens index line =
       (count_occurrences ~needle:separator line >= tokens - 1)
 
 let expect_success name args check =
-  Alcotest.test_case name `Quick (fun () ->
-      Test_support.with_temp_dir (fun dir ->
-          let root = Eio.Path.native_exn dir in
-          let status, output, error =
+  Alcotest_lwt.test_case name `Quick (fun _switch () ->
+      Test_support.with_temp_dir (fun root ->
+          let open Lwt.Syntax in
+          let* status, output, error =
             Test_support.run_cli ~exe:(executable ()) ~env:(minimal_environment ~root)
               ~timeout:5. args
           in
           Alcotest.(check int) "exit status" 0 status;
           Alcotest.(check string) "stderr" "" error;
-          check output))
+          check output;
+          Lwt.return_unit))
 
 let default_generation =
   expect_success "default generates one name" [] (fun output ->
@@ -91,10 +92,10 @@ let many_lines =
       List.iteri (check_line ~separator:"-" ~tokens:2) lines)
 
 let invalid_tokens =
-  Alcotest.test_case "tokens lower bound" `Quick (fun () ->
-      Test_support.with_temp_dir (fun dir ->
-          let root = Eio.Path.native_exn dir in
-          let status, output, error =
+  Alcotest_lwt.test_case "tokens lower bound" `Quick (fun _switch () ->
+      Test_support.with_temp_dir (fun root ->
+          let open Lwt.Syntax in
+          let* status, output, error =
             Test_support.run_cli ~exe:(executable ()) ~env:(minimal_environment ~root)
               ~timeout:5. [ "--tokens"; "0" ]
           in
@@ -102,13 +103,14 @@ let invalid_tokens =
           Alcotest.(check string) "output" "" output;
           Alcotest.(check bool)
             "diagnostic" true
-            (Test_support.contains ~needle:"must be >= 1" ~haystack:error)))
+            (Test_support.contains ~needle:"must be >= 1" ~haystack:error);
+          Lwt.return_unit))
 
 let invalid_count =
-  Alcotest.test_case "count lower bound" `Quick (fun () ->
-      Test_support.with_temp_dir (fun dir ->
-          let root = Eio.Path.native_exn dir in
-          let status, output, error =
+  Alcotest_lwt.test_case "count lower bound" `Quick (fun _switch () ->
+      Test_support.with_temp_dir (fun root ->
+          let open Lwt.Syntax in
+          let* status, output, error =
             Test_support.run_cli ~exe:(executable ()) ~env:(minimal_environment ~root)
               ~timeout:5. [ "-n-1" ]
           in
@@ -116,20 +118,22 @@ let invalid_count =
           Alcotest.(check string) "output" "" output;
           Alcotest.(check bool)
             "diagnostic" true
-            (Test_support.contains ~needle:"must be >= 0" ~haystack:error)))
+            (Test_support.contains ~needle:"must be >= 0" ~haystack:error);
+          Lwt.return_unit))
 
 let invalid_syntax =
-  Alcotest.test_case "invalid integer is a usage error" `Quick (fun () ->
-      Test_support.with_temp_dir (fun dir ->
-          let root = Eio.Path.native_exn dir in
-          let status, output, error =
+  Alcotest_lwt.test_case "invalid integer is a usage error" `Quick (fun _switch () ->
+      Test_support.with_temp_dir (fun root ->
+          let open Lwt.Syntax in
+          let* status, output, error =
             Test_support.run_cli ~exe:(executable ()) ~env:(minimal_environment ~root)
               ~timeout:5.
               [ "--tokens"; "not-an-integer" ]
           in
           Alcotest.(check int) "exit status" 2 status;
           Alcotest.(check string) "output" "" output;
-          Alcotest.(check bool) "diagnostic" true (String.length error > 0)))
+          Alcotest.(check bool) "diagnostic" true (String.length error > 0);
+          Lwt.return_unit))
 
 let suites =
   [

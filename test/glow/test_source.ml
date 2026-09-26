@@ -9,8 +9,7 @@ let classify_directory () =
   | _ -> Alcotest.fail "a tty should select the current directory"
 
 let discover_hidden () =
-  Test_support.with_temp_dir (fun dir ->
-      let root = Eio.Path.native_exn dir in
+  Test_support.with_temp_dir (fun root ->
       let visible = Filename.concat root "README.md" in
       let hidden_dir = Filename.concat root ".hidden" in
       let ignored_dir = Filename.concat root "node_modules" in
@@ -30,7 +29,8 @@ let discover_hidden () =
       let normal = Source.discover_markdown ~root ~show_hidden:false in
       Alcotest.(check (list string)) "normal" [ visible ] normal;
       let all = Source.discover_markdown ~root ~show_hidden:true in
-      Alcotest.(check int) "all count" 2 (List.length all))
+      Alcotest.(check int) "all count" 2 (List.length all);
+      Lwt.return_unit)
 
 let readme_urls () =
   let urls = Source.readme_candidates ~host:"github.com" ~owner:"owner" ~repo:"repo" in
@@ -64,11 +64,11 @@ let frontmatter () =
 let suite =
   ( "source",
     [
-      Alcotest.test_case "pipe" `Quick classify_pipe;
-      Alcotest.test_case "directory" `Quick classify_directory;
-      Alcotest.test_case "discovery" `Quick discover_hidden;
-      Alcotest.test_case "readme URLs" `Quick readme_urls;
-      Alcotest.test_case "url" `Quick url_classification;
-      Alcotest.test_case "unsupported scheme" `Quick unsupported_scheme;
-      Alcotest.test_case "frontmatter" `Quick frontmatter;
+      Alcotest_lwt.test_case_sync "pipe" `Quick classify_pipe;
+      Alcotest_lwt.test_case_sync "directory" `Quick classify_directory;
+      Alcotest_lwt.test_case "discovery" `Quick (fun _switch () -> discover_hidden ());
+      Alcotest_lwt.test_case_sync "readme URLs" `Quick readme_urls;
+      Alcotest_lwt.test_case_sync "url" `Quick url_classification;
+      Alcotest_lwt.test_case_sync "unsupported scheme" `Quick unsupported_scheme;
+      Alcotest_lwt.test_case_sync "frontmatter" `Quick frontmatter;
     ] )

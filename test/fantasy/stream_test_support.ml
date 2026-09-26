@@ -1,3 +1,4 @@
+open Lwt.Infix
 open Charamel_fantasy
 
 let finish_name = function
@@ -17,21 +18,27 @@ let single_finish events =
   | [ Stream_part.Finish reason ] -> reason
   | _ -> Alcotest.failf "expected exactly one finish: %a" Fmt.(list Stream_part.pp) events
 
-let drain stream =
-  let rec loop acc =
-    match Eio.Stream.take stream with
-    | Stream_part.Finish _ as event -> List.rev (event :: acc)
-    | event -> loop (event :: acc)
-  in
-  loop []
+let rec drain stream acc =
+  Lwt_stream.get stream >>= function
+  | None -> Lwt.return (List.rev acc)
+  | Some (Stream_part.Finish _ as event) -> Lwt.return (List.rev (event :: acc))
+  | Some event -> drain stream (event :: acc)
 
-let drain_queued stream =
-  let rec loop acc =
-    match Eio.Stream.take_nonblocking stream with
-    | None -> List.rev acc
-    | Some event -> loop (event :: acc)
-  in
-  loop []
+let drain stream = drain stream []
+
+(* [Fixture_http.with_server] answers [unit], so a case that observes the fixture's
+   response captures its result here before the listener shuts down. *)
+let with_fixture body =
+  let cell = ref None in
+  let capture server = body server >|= fun value -> cell := Some value in
+  Fixture_http.with_server capture >|= fun () ->
+  match !cell with
+  | Some value -> value
+  | None -> Alcotest.fail "the fixture case answered nothing"
+
+(* [drain_queued] answers what the producer has already delivered, without waiting for
+   more: the tail an interrupted stream left behind. *)
+let drain_queued stream = Lwt.return (Lwt_stream.get_available stream)
 
 let parse_body = function
   | None -> Alcotest.fail "no request body was posted"

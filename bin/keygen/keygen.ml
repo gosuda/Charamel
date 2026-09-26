@@ -1,5 +1,6 @@
 module Key = Charamel_ssh_keygen
 open Result.Syntax
+open Lwt.Infix
 
 type error =
   [ `No_home
@@ -35,43 +36,79 @@ let default_path algorithm =
   Ok
     (Filename.concat home (Filename.concat ".ssh" ("id_" ^ Key.algorithm_name algorithm)))
 
-let io_result fn =
-  try Ok (fn ())
-  with Eio.Io (Eio.Fs.E _, _) as exn ->
-    Eio.Fiber.check ();
-    Error (`Io (Fmt.str "%a" Eio.Exn.pp exn))
+let fs_text = function
+  | `Already_exists -> "already exists"
+  | `Is_directory -> "is a directory"
+  | `Not_found -> "no such file or directory"
+  | `Permission_denied -> "permission denied"
 
-let path_of fs path = Eio.Path.(Eio.Path.of_dir fs / path)
+let io_text exn =
+  match exn with
+  | Unix.Unix_error (kind, _, _) -> Unix.error_message kind
+  | Charamel_os.Fs.E (error, path) -> Fmt.str "%s: %s" path (fs_text error)
+  | exn -> Printexc.to_string exn
 
 type target_state = Missing | Existing | Directory
 
 let target_state path =
-  match io_result (fun () -> Eio.Path.kind ~follow:false path) with
-  | Error error -> Error error
-  | Ok `Not_found -> Ok Missing
-  | Ok `Directory -> Ok Directory
-  | Ok _ -> Ok Existing
+  Lwt.catch
+    (fun () ->
+      Lwt_unix.lstat path >|= fun stats ->
+      Ok (if stats.Unix.st_kind = Unix.S_DIR then Directory else Existing))
+    (function
+      | Unix.Unix_error (Unix.ENOENT, _, _) -> Lwt.return (Ok Missing)
+      | Lwt.Canceled as exn -> Lwt.fail exn
+      | exn -> Lwt.return (Error (`Io (io_text exn))))
 
 let check_target ~force ~name path =
-  let* state = target_state path in
-  match state with
-  | Missing -> Ok ()
-  | Existing -> if force then Ok () else Error (`Already_exists name)
-  | Directory ->
+  target_state path >|= function
+  | Error _ as e -> e
+  | Ok Missing -> Ok ()
+  | Ok Existing -> if force then Ok () else Error (`Already_exists name)
+  | Ok Directory ->
       if force then Error (`Target_is_directory name) else Error (`Already_exists name)
 
-let check_targets ~fs ~path ~force =
-  let private_path = path_of fs path in
+let check_targets ~path ~force =
   let public_name = path ^ ".pub" in
-  let public_path = path_of fs public_name in
-  let* () = check_target ~force ~name:path private_path in
-  check_target ~force ~name:public_name public_path
+  check_target ~force ~name:path path >>= function
+  | Error _ as e -> Lwt.return e
+  | Ok () -> check_target ~force ~name:public_name public_name
 
-let ensure_parent ~fs path =
-  match Eio.Path.split (path_of fs path) with
-  | None -> Ok ()
-  | Some (parent, _) ->
-      io_result (fun () -> Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 parent)
+let mkdir_exists perm path =
+  Lwt.catch
+    (fun () -> Lwt_unix.mkdir path perm >|= fun () -> Ok ())
+    (function
+      | Unix.Unix_error (Unix.EEXIST, _, _) ->
+          Lwt.catch
+            (fun () ->
+              Lwt_unix.stat path >|= fun stats ->
+              if stats.Unix.st_kind = Unix.S_DIR then Ok () else Error Unix.ENOTDIR)
+            (fun _ -> Lwt.return (Error Unix.ENOTDIR))
+      | Unix.Unix_error (code, _, _) -> Lwt.return (Error code)
+      | Lwt.Canceled as exn -> Lwt.fail exn
+      | exn -> Lwt.fail exn)
+
+let ensure_dir ~perm path =
+  let rec up path =
+    if path = Filename.dir_sep || path = "." then Lwt.return (Ok ())
+    else
+      mkdir_exists perm path >>= function
+      | Ok () -> Lwt.return (Ok ())
+      | Error Unix.ENOENT when not (String.equal (Filename.dirname path) path) -> (
+          up (Filename.dirname path) >>= function
+          | Ok () -> mkdir_exists perm path
+          | Error _ as e -> Lwt.return e)
+      | Error code -> Lwt.return (Error code)
+  in
+  up path
+
+let ensure_parent path =
+  match Filename.dirname path with
+  | parent when String.equal parent path -> Lwt.return (Ok ())
+  | parent -> (
+      ensure_dir ~perm:0o700 parent >|= function
+      | Ok () -> Ok ()
+      | Error code -> Error (`Io (Unix.error_message code)))
 
 let generated_error = function
   | `Already_exists path -> Error (`Already_exists path)
@@ -80,8 +117,8 @@ let generated_error = function
   | `Unsupported_type -> Error (`Io "generated key type is unsupported")
   | `Encrypted_key -> Error (`Io "generated key is encrypted")
 
-let write_nonforce ~fs ~path ~comment key =
-  match Key.write ~fs ~path ~comment key with
+let write_nonforce ~fs_root ~path ~comment key =
+  Key.write ~fs_root ~path ~comment key >|= function
   | Ok () -> Ok (Key.fingerprint_sha256 key)
   | Error error -> generated_error error
 
@@ -94,51 +131,55 @@ let temporary_suffix fingerprint =
     (fun character -> if is_ascii_alphanumeric character then character else '_')
     fingerprint
 
-let force_write ~fs ~path ~comment key =
+let force_write ~path ~comment key =
   let private_name = path in
   let public_name = path ^ ".pub" in
-  let private_path = path_of fs private_name in
-  let public_path = path_of fs public_name in
   let fingerprint = Key.fingerprint_sha256 key in
   let suffix = temporary_suffix fingerprint in
-  let private_tmp = path_of fs (private_name ^ ".charamel-keygen-" ^ suffix) in
-  let public_tmp = path_of fs (public_name ^ ".charamel-keygen-" ^ suffix) in
+  let private_tmp = private_name ^ ".charamel-keygen-" ^ suffix in
+  let public_tmp = public_name ^ ".charamel-keygen-" ^ suffix in
   let private_body = Key.to_openssh_private ~comment key in
   let public_body = Key.authorized_key ~comment key in
   let created = ref [] in
   let cleanup () =
-    List.iter
+    Lwt_list.iter_s
       (fun path ->
-        try Eio.Path.unlink ~missing_ok:true path with Eio.Io (Eio.Fs.E _, _) -> ())
+        Lwt.catch (fun () -> Lwt_unix.unlink path) (fun _exn -> Lwt.return_unit))
       !created
   in
   let save path perm body =
-    Eio.Path.with_open_out ~create:(`Exclusive perm) path (fun flow ->
-        created := path :: !created;
-        Eio.Flow.copy_string body flow);
-    Eio.Path.chmod ~follow:false ~perm path
+    Lwt_unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] perm >>= fun fd ->
+    created := path :: !created;
+    let channel = Lwt_io.of_fd ~mode:Lwt_io.output fd in
+    Lwt.finalize
+      (fun () -> Lwt_io.write channel body >>= fun () -> Lwt_unix.fchmod fd perm)
+      (fun () -> Lwt_io.close channel)
   in
-  let result =
-    Eio.Cancel.protect (fun () ->
-        try
-          save private_tmp 0o600 private_body;
-          save public_tmp 0o644 public_body;
-          Eio.Path.rename private_tmp private_path;
-          Eio.Path.rename public_tmp public_path;
-          created := [];
-          Ok ()
-        with Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (Fmt.str "%a" Eio.Exn.pp exn)))
-  in
-  match result with
-  | Ok () -> Ok fingerprint
-  | Error error ->
-      Eio.Cancel.protect (fun () -> cleanup ());
-      Error error
+  Lwt.catch
+    (fun () ->
+      save private_tmp 0o600 private_body >>= fun () ->
+      save public_tmp 0o644 public_body >>= fun () ->
+      Lwt_unix.rename private_tmp private_name >>= fun () ->
+      Lwt_unix.rename public_tmp public_name >>= fun () ->
+      created := [];
+      Lwt.return (Ok fingerprint))
+    (function
+      | Lwt.Canceled as exn -> Lwt.fail exn
+      | exn -> Lwt.return (Error (`Io (io_text exn))))
+  >>= function
+  | Ok _ as ok -> Lwt.return ok
+  | Error _ as e -> cleanup () >>= fun () -> Lwt.return e
 
-let generate ~fs ~path ~algorithm ?(comment = "") ~force () =
-  let* path = resolve_path path in
-  let* () = check_targets ~fs ~path ~force in
-  let* () = ensure_parent ~fs path in
-  let key = Key.generate algorithm in
-  if force then force_write ~fs ~path ~comment key
-  else write_nonforce ~fs ~path ~comment key
+let generate ~fs_root ~path ~algorithm ?(comment = "") ~force () =
+  match resolve_path path with
+  | Error _ as e -> Lwt.return e
+  | Ok path -> (
+      check_targets ~path ~force >>= function
+      | Error _ as e -> Lwt.return e
+      | Ok () -> (
+          ensure_parent path >>= function
+          | Error _ as e -> Lwt.return e
+          | Ok () ->
+              let key = Key.generate algorithm in
+              if force then force_write ~path ~comment key
+              else write_nonforce ~fs_root ~path ~comment key))

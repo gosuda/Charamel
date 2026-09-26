@@ -8,10 +8,11 @@
   charamel.bubbles
   charamel.lipgloss
   charamel.ansi
-  eio
-  eio.unix
+  charamel.os
+  lwt
+  lwt.unix
   unix
-  eio_main
-  eio.mock
   alcotest
-  fmt))
+  alcotest-lwt
+  fmt
+  test_support))

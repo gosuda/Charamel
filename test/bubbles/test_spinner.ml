@@ -55,7 +55,7 @@ let custom_frames () =
 
 let cases =
   [
-    Alcotest.test_case "frame tables" `Quick check_frames;
-    Alcotest.test_case "tick wrap" `Quick tick_wraps;
-    Alcotest.test_case "custom frames" `Quick custom_frames;
+    Alcotest_lwt.test_case_sync "frame tables" `Quick check_frames;
+    Alcotest_lwt.test_case_sync "tick wrap" `Quick tick_wraps;
+    Alcotest_lwt.test_case_sync "custom frames" `Quick custom_frames;
   ]

@@ -58,12 +58,12 @@ let test_static_rejects_malformed_padding () =
 
 let cases =
   [
-    Alcotest.test_case "headers and rows" `Quick test_header_and_rows;
-    Alcotest.test_case "explicit columns and padding" `Quick
+    Alcotest_lwt.test_case_sync "headers and rows" `Quick test_header_and_rows;
+    Alcotest_lwt.test_case_sync "explicit columns and padding" `Quick
       test_explicit_columns_and_padding;
-    Alcotest.test_case "wide row" `Quick test_wider_row_rejected;
-    Alcotest.test_case "custom separator" `Quick test_custom_separator;
-    Alcotest.test_case "static render" `Quick test_static_render;
-    Alcotest.test_case "static malformed padding" `Quick
+    Alcotest_lwt.test_case_sync "wide row" `Quick test_wider_row_rejected;
+    Alcotest_lwt.test_case_sync "custom separator" `Quick test_custom_separator;
+    Alcotest_lwt.test_case_sync "static render" `Quick test_static_render;
+    Alcotest_lwt.test_case_sync "static malformed padding" `Quick
       test_static_rejects_malformed_padding;
   ]

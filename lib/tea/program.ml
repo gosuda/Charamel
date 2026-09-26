@@ -1,4 +1,4 @@
-open Result.Syntax
+open Lwt.Syntax
 
 type error = [ `Interrupted | `Killed | `Exn of exn * Printexc.raw_backtrace ]
 
@@ -11,7 +11,7 @@ type 'msg script_event =
 
 type stop_reason = [ `Normal | `Interrupted | `Killed ]
 
-exception Program_stopped
+exception Daemon_failed of exn * Printexc.raw_backtrace
 
 type 'msg action =
   | Effect_quit
@@ -46,8 +46,8 @@ let map_effect : type a b. (a -> b) -> a action -> b action =
 type 'msg queued =
   | Queued_event of Event.t
   | Queued_initial of Event.t
-  | Queued_message of 'msg * unit Eio.Promise.u option
-  | Queued_effect of 'msg action * unit Eio.Promise.u
+  | Queued_message of 'msg * unit Lwt.u option
+  | Queued_effect of 'msg action * unit Lwt.u
   | Queued_stop of stop_reason
   | Queued_script_done
 
@@ -65,20 +65,23 @@ type 'msg handlers = {
 type 'msg timer = {
   interval : float;
   mutable callbacks : (Mtime.t -> 'msg) list;
-  cancel : Eio.Cancel.t option ref;
+  cancel : unit Lwt.t option ref;
 }
 
 type anchor = Fresh_line | Column_start | No_anchor
 
 type output_effect =
-  | Output_bytes of string * unit Eio.Promise.u
-  | Output_print of string * unit Eio.Promise.u
+  | Output_bytes of string * unit Lwt.u
+  | Output_print of string * unit Lwt.u
 
 type ('model, 'msg) runtime_state = {
-  queue : 'msg queued Eio.Stream.t;
+  queue : 'msg queued Lwt_stream.t;
+  push : 'msg queued -> unit Lwt.t;
+  push_mutex : Lwt_mutex.t;
+  mutable queued_count : int;
   effects : output_effect Queue.t;
-  mutex : Eio.Mutex.t;
-  condition : Eio.Condition.t;
+  mutex : Lwt_mutex.t;
+  condition : unit Lwt_condition.t;
   mutable model : 'model;
   mutable view : View.t;
   mutable handlers : 'msg handlers;
@@ -87,7 +90,7 @@ type ('model, 'msg) runtime_state = {
   mutable stop_reason : stop_reason;
   mutable script_finished : bool;
   mutable active_commands : int;
-  command_cancels : (int * Eio.Cancel.t) list ref;
+  command_cancels : (int * unit Lwt.t) list ref;
   mutable next_command_id : int;
   mutable initial_events_left : int;
   mutable dirty : bool;
@@ -171,49 +174,54 @@ let valid_delay name value =
   if value < 0. || Float.is_nan value then invalid_arg (name ^ " must be non-negative");
   value
 
+let mutate_state state mutate =
+  Lwt_mutex.with_lock state.mutex (fun () ->
+      mutate ();
+      Lwt_condition.broadcast state.condition ();
+      Lwt.return_unit)
+
+let mutate_state_result state mutate =
+  Lwt_mutex.with_lock state.mutex (fun () ->
+      let value = mutate () in
+      Lwt_condition.broadcast state.condition ();
+      Lwt.return value)
+
+let peek_state state read =
+  Lwt_mutex.with_lock state.mutex (fun () -> Lwt.return (read ()))
+
 let queue_external state item =
-  Eio.Stream.add state.queue item;
-  Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-      Eio.Condition.broadcast state.condition)
+  state.queued_count <- state.queued_count + 1;
+  Lwt_mutex.with_lock state.push_mutex (fun () ->
+      let* () = state.push item in
+      mutate_state state (fun () -> ()))
 
 let wait_for_item state =
-  let has_item =
-    Eio.Mutex.use_ro state.mutex (fun () ->
-        while
-          Eio.Stream.is_empty state.queue
-          && (not (state.script_finished && state.active_commands = 0))
-          && not (state.stop_requested && state.active_commands = 0)
-        do
-          Eio.Condition.await state.condition state.mutex
-        done;
-        not (Eio.Stream.is_empty state.queue))
+  let rec wait () =
+    if state.queued_count > 0 then (
+      let* item = Lwt_stream.get state.queue in
+      state.queued_count <- state.queued_count - 1;
+      Lwt.return item)
+    else if (state.script_finished || state.stop_requested) && state.active_commands = 0
+    then Lwt.return_none
+    else
+      let* () = Lwt_condition.wait ~mutex:state.mutex state.condition in
+      wait ()
   in
-  if has_item then Some (Eio.Stream.take state.queue) else None
+  Lwt_mutex.with_lock state.mutex wait
 
 let queue_effect state action =
-  let promise, resolver = Eio.Promise.create () in
-  queue_external state (Queued_effect (action, resolver));
-  Eio.Promise.await promise
+  let promise, resolver = Lwt.wait () in
+  let* () = queue_external state (Queued_effect (action, resolver)) in
+  promise
 
 let normalize_print text =
   if String.length text = 0 then "\n"
   else if String.get text (String.length text - 1) = '\n' then text
   else text ^ "\n"
 
-let set_dirty state =
-  Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-      state.dirty <- true;
-      Eio.Condition.broadcast state.condition)
-
-let update_anchor state anchor =
-  Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-      state.anchor <- anchor;
-      Eio.Condition.broadcast state.condition)
-
-let set_paused state paused =
-  Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-      state.paused <- paused;
-      Eio.Condition.broadcast state.condition)
+let set_dirty state = mutate_state state (fun () -> state.dirty <- true)
+let update_anchor state anchor = mutate_state state (fun () -> state.anchor <- anchor)
+let set_paused state paused = mutate_state state (fun () -> state.paused <- paused)
 
 let drain_queue queue =
   let rec loop acc =
@@ -222,19 +230,25 @@ let drain_queue queue =
   loop []
 
 let take_render_batch state =
-  Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-      while
-        (not state.renderer_stop)
-        && (state.paused || ((not state.dirty) && Queue.is_empty state.effects))
-      do
-        Eio.Condition.await state.condition state.mutex
-      done;
+  let rec wait () =
+    if
+      (not state.renderer_stop)
+      && (state.paused || ((not state.dirty) && Queue.is_empty state.effects))
+    then
+      let* () = Lwt_condition.wait ~mutex:state.mutex state.condition in
+      wait ()
+    else Lwt.return_unit
+  in
+  Lwt_mutex.with_lock state.mutex (fun () ->
+      let* () = wait () in
       let effects =
         if state.paused && not state.renderer_stop then [] else drain_queue state.effects
       in
       let should_render = state.dirty && ((not state.paused) || state.renderer_stop) in
       if should_render then state.dirty <- false;
-      (effects, should_render, state.renderer_stop))
+      Lwt.return (effects, should_render, state.renderer_stop))
+
+let queue_size = 256
 
 let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~signals
     ?script (app : ('model, 'msg) App.t) =
@@ -243,7 +257,7 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
   let rows, cols = terminal.Terminal.size () in
   if rows <= 0 || cols <= 0 then invalid_arg "terminal size must be positive";
   let screen = Screen.create ~rows ~cols in
-  let output_mutex = Eio.Mutex.create () in
+  let output_mutex = Lwt_mutex.create () in
   let profile =
     Charamel_colorprofile.detect ~is_tty:terminal.Terminal.is_tty
       ~env:terminal.Terminal.env
@@ -251,742 +265,820 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
   let writer = Charamel_colorprofile.Writer.create ~profile terminal.Terminal.output in
   let entered = ref false in
   let old_handlers : (Sys.signal * Sys.signal_behavior) list ref = ref [] in
+  let signal_watchers : Lwt_unix.signal_handler_id list ref = ref [] in
   let state_ref : ('model, 'msg) runtime_state option ref = ref None in
   let write_output_locked text =
-    if text <> "" then Charamel_colorprofile.Writer.write writer text
+    if text = "" then Lwt.return_unit else Charamel_colorprofile.Writer.write writer text
   in
-  let with_output f =
-    Eio.Mutex.lock output_mutex;
-    Fun.protect
-      ~finally:(fun () -> Eio.Cancel.protect (fun () -> Eio.Mutex.unlock output_mutex))
-      f
-  in
+  let with_output f = Lwt_mutex.with_lock output_mutex f in
   let restore_handlers () =
+    List.iter Lwt_unix.disable_signal_handler !signal_watchers;
+    signal_watchers := [];
     List.iter (fun (signal, behavior) -> Sys.set_signal signal behavior) !old_handlers;
     old_handlers := []
   in
-  let cleanup () =
-    Fun.protect
-      ~finally:(fun () -> Eio.Cancel.protect restore_handlers)
-      (fun () ->
-        Eio.Cancel.protect (fun () ->
-            Fun.protect
-              ~finally:(fun () -> if !entered then terminal.Terminal.leave ())
-              (fun () ->
-                match !state_ref with
-                | None -> ()
-                | Some state ->
-                    with_output (fun () ->
-                        let bytes = Screen.restore screen in
-                        write_output_locked bytes;
-                        Queue.iter (fun text -> write_output_locked text) state.backlog;
-                        Queue.clear state.backlog))))
+  let failure, fail_waker = Lwt.task () in
+  let fail_run exn backtrace =
+    try Lwt.wakeup_exn fail_waker (Daemon_failed (exn, backtrace))
+    with Invalid_argument _ -> ()
   in
-  try
-    Fun.protect ~finally:cleanup (fun () ->
-        entered := true;
-        terminal.Terminal.enter ();
-        Eio.Switch.run (fun sw ->
-            let fork_daemon f =
-              Eio.Fiber.fork_daemon ~sw (fun () ->
-                  f ();
-                  `Stop_daemon)
-            in
-            let initial_model, initial_cmd = app.App.init () in
-            let initial_view = app.App.view initial_model in
-            let state =
-              {
-                queue = Eio.Stream.create 256;
-                effects = Queue.create ();
-                mutex = Eio.Mutex.create ();
-                condition = Eio.Condition.create ();
-                model = initial_model;
-                view = initial_view;
-                handlers = empty_handlers;
-                desired_size = (rows, cols);
-                stop_requested = false;
-                stop_reason = `Normal;
-                script_finished = false;
-                active_commands = 0;
-                command_cancels = ref [];
-                next_command_id = 0;
-                initial_events_left = 2;
-                dirty = false;
-                paused = false;
-                anchor = Fresh_line;
-                last_frame = Charamel_ansi.Text.strip initial_view.View.content;
-                timers = [];
-                renderer_stop = false;
-                backlog = Queue.create ();
-              }
-            in
-            state_ref := Some state;
-            let renderer_promise, renderer_resolver = Eio.Promise.create () in
-            let screen_size = ref (rows, cols) in
-            let last_render_time = ref None in
-            let last_rendered_alt = ref false in
-            let reader_cancel : Eio.Cancel.t option ref = ref None in
-            let reader_generation = ref 0 in
-            let escape_generation = ref 0 in
-            let stop_timers () =
-              List.iter
-                (fun timer ->
-                  match !(timer.cancel) with
-                  | None -> ()
-                  | Some cancel ->
-                      Eio.Cancel.cancel cancel (Failure "subscription stopped"))
-                state.timers;
-              state.timers <- []
-            in
-            let stop_reader () =
-              incr reader_generation;
-              incr escape_generation;
-              match !reader_cancel with
-              | None -> ()
-              | Some cancel ->
-                  reader_cancel := None;
-                  Eio.Cancel.cancel cancel (Failure "terminal input paused")
-            in
-            let render_locked () =
-              let view, desired_size, anchor =
-                Eio.Mutex.use_ro state.mutex (fun () ->
-                    (state.view, state.desired_size, state.anchor))
-              in
-              let desired_rows, desired_cols = desired_size in
-              if desired_rows <= 0 || desired_cols <= 0 then
-                invalid_arg "terminal size must be positive";
-              if desired_size <> !screen_size then begin
-                Screen.resize screen ~rows:desired_rows ~cols:desired_cols;
-                screen_size := desired_size;
-                if (not view.View.alt_screen) && anchor = No_anchor then
-                  update_anchor state Column_start
-              end;
-              if
-                (not !last_rendered_alt) && (not view.View.alt_screen)
-                && anchor = No_anchor
-              then update_anchor state Column_start;
-              let current_anchor =
-                Eio.Mutex.use_ro state.mutex (fun () -> state.anchor)
-              in
-              if not view.View.alt_screen then begin
-                (match current_anchor with
-                | Fresh_line -> write_output_locked "\r\n"
-                | Column_start -> write_output_locked "\r"
-                | No_anchor -> ());
-                if current_anchor <> No_anchor then
-                  Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                      state.anchor <- No_anchor)
-              end;
-              let bytes = Screen.render screen view in
-              write_output_locked bytes;
-              last_rendered_alt := view.View.alt_screen;
-              Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                  state.last_frame <- Charamel_ansi.Text.strip view.View.content)
-            in
-            let render_with_rate ~immediate =
-              (match (immediate, !last_render_time) with
-              | false, Some before ->
-                  let remaining = (1. /. float fps) -. (Eio.Time.now clock -. before) in
-                  if remaining > 0. then Eio.Time.sleep clock remaining
-              | _ -> ());
-              render_locked ();
-              last_render_time := Some (Eio.Time.now clock)
-            in
-            let enqueue_output action =
-              Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                  Queue.add action state.effects;
-                  Eio.Condition.broadcast state.condition)
-            in
-            let process_output_effect = function
-              | Output_bytes (bytes, resolver) ->
-                  write_output_locked bytes;
-                  Eio.Promise.resolve resolver ()
-              | Output_print (text, resolver) ->
-                  let view = Eio.Mutex.use_ro state.mutex (fun () -> state.view) in
-                  if not view.View.alt_screen then begin
-                    let anchor = Eio.Mutex.use_ro state.mutex (fun () -> state.anchor) in
-                    (match anchor with
-                    | Fresh_line -> write_output_locked "\r\n"
-                    | Column_start -> write_output_locked "\r"
-                    | No_anchor -> ());
-                    if anchor <> No_anchor then
-                      Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                          state.anchor <- No_anchor);
-                    let clear = Screen.clear screen in
-                    write_output_locked clear;
-                    write_output_locked text;
-                    render_locked ()
-                  end;
-                  Eio.Promise.resolve resolver ()
-            in
-            let renderer_loop () =
-              let rec loop () =
-                let effects, should_render, finishing = take_render_batch state in
-                if finishing && effects = [] && not should_render then ()
-                else begin
-                  with_output (fun () ->
-                      List.iter process_output_effect effects;
-                      if should_render then render_with_rate ~immediate:finishing);
-                  loop ()
-                end
-              in
-              Fun.protect
-                ~finally:(fun () -> ignore (Eio.Promise.try_resolve renderer_resolver ()))
-                loop
-            in
-            fork_daemon (fun () ->
-                try renderer_loop () with
-                | Eio.Cancel.Cancelled _ -> ()
-                | ex ->
-                    let bt = Printexc.get_raw_backtrace () in
-                    Eio.Switch.fail ~bt sw ex);
-            let feed_bytes decoder bytes =
-              let events = Input.feed decoder bytes in
-              incr escape_generation;
-              List.iter (fun event -> queue_external state (Queued_event event)) events;
-              if Input.pending_escape decoder then begin
-                let generation = !escape_generation in
-                fork_daemon (fun () ->
-                    try
-                      Eio.Time.sleep clock 0.05;
-                      if generation = !escape_generation && Input.pending_escape decoder
-                      then
-                        List.iter
-                          (fun event -> queue_external state (Queued_event event))
-                          (Input.flush decoder)
-                    with Eio.Cancel.Cancelled _ -> ())
-              end
-            in
-            let rec read_input ~generation ~decoder ~buffer ~finish_input =
-              if generation <> !reader_generation || state.stop_requested then ()
-              else begin
-                let count = Eio.Flow.single_read terminal.Terminal.input buffer in
-                if count <= 0 then finish_input ()
-                else begin
-                  feed_bytes decoder (Cstruct.to_string (Cstruct.sub buffer 0 count));
-                  read_input ~generation ~decoder ~buffer ~finish_input
-                end
-              end
-            in
-            let start_reader () =
-              incr reader_generation;
-              let generation = !reader_generation in
-              fork_daemon (fun () ->
-                  try
-                    Eio.Cancel.sub (fun cancel ->
-                        if generation = !reader_generation then
-                          reader_cancel := Some cancel;
-                        let decoder = Input.create () in
-                        let buffer = Cstruct.create 4096 in
-                        let finish_input () =
-                          List.iter
-                            (fun event -> queue_external state (Queued_event event))
-                            (Input.flush decoder);
-                          queue_external state (Queued_stop `Normal)
-                        in
-                        Fun.protect
-                          ~finally:(fun () ->
-                            if generation = !reader_generation then reader_cancel := None)
-                          (fun () ->
-                            try read_input ~generation ~decoder ~buffer ~finish_input
-                            with End_of_file -> finish_input ()))
-                  with
-                  | Eio.Cancel.Cancelled _ -> ()
-                  | ex ->
-                      let bt = Printexc.get_raw_backtrace () in
-                      Eio.Switch.fail ~bt sw ex)
-            in
-            let cancel_timer timer =
-              match !(timer.cancel) with
-              | None -> ()
-              | Some cancel -> Eio.Cancel.cancel cancel (Failure "subscription removed")
-            in
-            let start_timer timer =
-              fork_daemon (fun () ->
-                  try
-                    Eio.Cancel.sub (fun cancel ->
-                        timer.cancel := Some cancel;
-                        let rec loop () =
-                          if state.stop_requested || state.script_finished then ()
-                          else begin
-                            Eio.Time.sleep clock timer.interval;
-                            if (not state.stop_requested) && not state.script_finished
-                            then begin
-                              let callbacks = timer.callbacks in
-                              List.iter
-                                (fun callback ->
-                                  queue_external state
-                                    (Queued_message (callback (now ()), None)))
-                                callbacks;
-                              loop ()
-                            end
-                          end
-                        in
-                        loop ())
-                  with Eio.Cancel.Cancelled _ -> ())
-            in
-            let sync_subscriptions () =
-              let handlers = collect_sub (app.App.subscriptions state.model) in
-              List.iter
-                (fun (interval, _) ->
-                  ignore (valid_delay "subscription interval" interval))
-                handlers.every;
-              state.handlers <- handlers;
-              let groups = group_every handlers.every in
-              let old_timers = state.timers in
-              let new_timers =
-                List.map
-                  (fun (interval, callbacks) ->
-                    match
-                      List.find_opt (fun timer -> timer.interval = interval) old_timers
-                    with
-                    | Some timer ->
-                        timer.callbacks <- callbacks;
-                        timer
-                    | None ->
-                        let timer = { interval; callbacks; cancel = ref None } in
-                        if (not state.stop_requested) && not state.script_finished then
-                          start_timer timer;
-                        timer)
-                  groups
-              in
-              List.iter
-                (fun timer ->
-                  if not (List.exists (fun candidate -> candidate == timer) new_timers)
-                  then cancel_timer timer)
-                old_timers;
-              state.timers <- new_timers
-            in
-            let mark_initial_event () =
-              if state.initial_events_left > 0 then begin
-                state.initial_events_left <- state.initial_events_left - 1;
-                if state.initial_events_left = 0 then set_dirty state
-              end
-            in
-            let set_view model =
-              let view = app.App.view model in
-              Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                  state.view <- view;
-                  state.last_frame <- Charamel_ansi.Text.strip view.View.content;
-                  if state.initial_events_left = 0 then state.dirty <- true;
-                  Eio.Condition.broadcast state.condition)
-            in
-            let start_command : 'msg Cmd.t -> unit =
-             fun command ->
-              let command_id =
-                Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                    let id = state.next_command_id in
-                    state.next_command_id <- state.next_command_id + 1;
-                    state.active_commands <- state.active_commands + 1;
-                    Eio.Condition.broadcast state.condition;
-                    id)
-              in
-              let remove_command () =
-                Eio.Cancel.protect (fun () ->
-                    Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                        state.command_cancels :=
-                          List.filter
-                            (fun (id, _) -> id <> command_id)
-                            !(state.command_cancels)))
-              in
-              let rec run_cmd : type a.
-                  a Cmd.t -> emit:(a -> unit) -> emit_effect:(a action -> unit) -> unit =
-               fun command ~emit ~emit_effect ->
-                match command with
-                | Cmd.None_ -> ()
-                | Cmd.Batch commands ->
-                    Eio.Fiber.List.iter
-                      (fun child -> run_cmd child ~emit ~emit_effect)
-                      commands
-                | Cmd.Seq commands ->
-                    List.iter (fun child -> run_cmd child ~emit ~emit_effect) commands
-                | Cmd.Map (mapping, child) ->
-                    run_cmd child
-                      ~emit:(fun value -> emit (mapping value))
-                      ~emit_effect:(fun action -> emit_effect (map_effect mapping action))
-                | Cmd.Msg message -> emit message
-                | Cmd.Perform thunk -> emit (thunk ())
-                | Cmd.After (delay, thunk) ->
-                    Eio.Time.sleep clock (valid_delay "command delay" delay);
-                    emit (thunk ())
-                | Cmd.Quit -> emit_effect Effect_quit
-                | Cmd.Interrupt -> emit_effect Effect_interrupt
-                | Cmd.Suspend -> emit_effect Effect_suspend
-                | Cmd.Exec { argv; on_exit } ->
-                    if argv = [] then invalid_arg "exec requires a command";
-                    emit_effect (Effect_exec (argv, on_exit))
-                | Cmd.Print text -> emit_effect (Effect_print (normalize_print text))
-                | Cmd.Set_clipboard text -> emit_effect (Effect_clipboard text)
-                | Cmd.Query query -> emit_effect (Effect_query query)
-                | Cmd.Window_size -> emit_effect Effect_window_size
-              in
-              fork_daemon (fun () ->
-                  Fun.protect
-                    ~finally:(fun () ->
-                      remove_command ();
-                      Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                          state.active_commands <- state.active_commands - 1;
-                          Eio.Condition.broadcast state.condition))
-                    (fun () ->
-                      try
-                        Eio.Cancel.sub (fun cancel ->
-                            Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                                state.command_cancels :=
-                                  (command_id, cancel) :: !(state.command_cancels));
-                            Fun.protect ~finally:remove_command (fun () ->
-                                let stopping =
-                                  Eio.Mutex.use_ro state.mutex (fun () ->
-                                      state.stop_requested)
-                                in
-                                if not stopping then begin
-                                  let emit message =
-                                    let promise, resolver = Eio.Promise.create () in
-                                    queue_external state
-                                      (Queued_message (message, Some resolver));
-                                    Eio.Promise.await promise
-                                  in
-                                  let emit_effect action = queue_effect state action in
-                                  run_cmd command ~emit ~emit_effect
-                                end))
-                      with
-                      | Eio.Cancel.Cancelled Program_stopped -> ()
-                      | Eio.Cancel.Cancelled _ as ex -> raise ex
-                      | ex ->
-                          let bt = Printexc.get_raw_backtrace () in
-                          Eio.Switch.fail ~bt sw ex))
-            in
-            let apply_message message =
-              match filter state.model message with
-              | None -> ()
-              | Some message ->
-                  let model, command = app.App.update message state.model in
-                  state.model <- model;
-                  set_view model;
-                  sync_subscriptions ();
-                  start_command command
-            in
-            let dispatch_event event =
-              let handlers = state.handlers in
-              let messages =
-                match event with
-                | Event.Key key -> (
-                    match key.Key.event with
-                    | Key.Release ->
-                        List.map (fun handler -> handler key) handlers.key_release
-                    | Key.Press | Key.Repeat ->
-                        List.map (fun handler -> handler key) handlers.key)
-                | Event.Mouse mouse ->
-                    let enabled =
-                      Eio.Mutex.use_ro state.mutex (fun () ->
-                          match state.view.View.mouse with
-                          | View.Mouse_off -> false
-                          | _ -> true)
-                    in
-                    if enabled then List.map (fun handler -> handler mouse) handlers.mouse
-                    else []
-                | Event.Paste text ->
-                    let enabled =
-                      Eio.Mutex.use_ro state.mutex (fun () ->
-                          state.view.View.bracketed_paste)
-                    in
-                    if enabled then List.map (fun handler -> handler text) handlers.paste
-                    else []
-                | Event.Focus ->
-                    let enabled =
-                      Eio.Mutex.use_ro state.mutex (fun () ->
-                          state.view.View.report_focus)
-                    in
-                    if enabled then
-                      List.map (fun handler -> handler `Focused) handlers.focus
-                    else []
-                | Event.Blur ->
-                    let enabled =
-                      Eio.Mutex.use_ro state.mutex (fun () ->
-                          state.view.View.report_focus)
-                    in
-                    if enabled then
-                      List.map (fun handler -> handler `Blurred) handlers.focus
-                    else []
-                | Event.Resize { rows; cols } ->
-                    if rows <= 0 || cols <= 0 then
-                      invalid_arg "terminal size must be positive";
-                    Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                        state.desired_size <- (rows, cols));
-                    set_dirty state;
-                    List.map (fun handler -> handler ~rows ~cols) handlers.resize
-                | Event.Profile _ | Event.Cursor_position _ | Event.Background_color _
-                | Event.Foreground_color _ | Event.Cursor_color _
-                | Event.Terminal_version _ | Event.Kitty_flags _ | Event.Mode_report _
-                | Event.Unknown _ ->
-                    List.map (fun handler -> handler event) handlers.terminal
-              in
-              List.iter apply_message messages
-            in
-            let query_bytes = function
-              | `Background -> Charamel_ansi.Seq.bg_query
-              | `Foreground -> Charamel_ansi.Seq.fg_query
-              | `Cursor_color -> Charamel_ansi.Seq.cursor_color_query
-              | `Terminal_version -> Charamel_ansi.Seq.xtversion
-              | `Kitty_flags -> "\x1b[?u"
-              | `Cursor_position -> "\x1b[6n"
-            in
-            let request_stop reason =
-              if not state.stop_requested then begin
-                state.stop_requested <- true;
-                state.stop_reason <- reason;
-                stop_reader ();
-                stop_timers ();
-                let cancels =
-                  Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                      let cancels = List.map snd !(state.command_cancels) in
-                      Eio.Condition.broadcast state.condition;
-                      cancels)
+  let cleanup () =
+    let restore_output () =
+      match !state_ref with
+      | None -> Lwt.return_unit
+      | Some state ->
+          with_output (fun () ->
+              let* () = write_output_locked (Screen.restore screen) in
+              Lwt_list.iter_s write_output_locked (drain_queue state.backlog))
+    in
+    let leave_terminal () =
+      if !entered then terminal.Terminal.leave ();
+      Lwt.return_unit
+    in
+    Lwt.finalize
+      (fun () -> Lwt.finalize restore_output leave_terminal)
+      (fun () ->
+        restore_handlers ();
+        Lwt.return_unit)
+  in
+  Lwt.catch
+    (fun () ->
+      Lwt.finalize
+        (fun () ->
+          entered := true;
+          terminal.Terminal.enter ();
+          Lwt_switch.with_switch (fun sw ->
+              let daemons : unit Lwt.t list ref = ref [] in
+              Lwt_switch.add_hook (Some sw) (fun () ->
+                  let handles = !daemons in
+                  daemons := [];
+                  List.iter Lwt.cancel handles;
+                  Lwt.return_unit);
+              let spawn_daemon body =
+                let stop = fst (Lwt.task ()) in
+                let task =
+                  Lwt.catch
+                    (fun () -> Lwt.pick [ body stop (); stop ])
+                    (function
+                      | Lwt.Canceled -> Lwt.return_unit
+                      | exn ->
+                          let backtrace = Printexc.get_raw_backtrace () in
+                          fail_run exn backtrace;
+                          Lwt.return_unit)
                 in
-                List.iter (fun cancel -> Eio.Cancel.cancel cancel Program_stopped) cancels
-              end
-            in
-            let resume_after_foreign () =
-              Eio.Cancel.protect (fun () ->
-                  with_output (fun () ->
-                      terminal.Terminal.enter ();
-                      Screen.reset screen;
-                      update_anchor state Fresh_line;
-                      set_paused state false;
-                      if script = None && not state.stop_requested then start_reader ();
-                      set_dirty state))
-            in
-            let with_foreign fn =
-              set_paused state true;
-              stop_reader ();
-              Fun.protect ~finally:resume_after_foreign (fun () ->
-                  with_output (fun () ->
-                      let bytes = Screen.restore screen in
-                      write_output_locked bytes;
-                      terminal.Terminal.leave ();
-                      fn ()))
-            in
-            let handle_effect action resolver =
-              match action with
-              | Effect_quit ->
-                  request_stop `Normal;
-                  Eio.Promise.resolve resolver ()
-              | Effect_interrupt ->
-                  request_stop `Interrupted;
-                  Eio.Promise.resolve resolver ()
-              | Effect_suspend ->
-                  if not state.stop_requested then begin
-                    with_foreign (fun () -> suspend ());
-                    Eio.Promise.resolve resolver ()
+                daemons := task :: !daemons;
+                Lwt.async (fun () ->
+                    Lwt.finalize
+                      (fun () -> task)
+                      (fun () ->
+                        daemons := List.filter (fun other -> other != task) !daemons;
+                        Lwt.return_unit));
+                stop
+              in
+              let fork_daemon body = ignore (spawn_daemon body) in
+              let initial_model, initial_cmd = app.App.init () in
+              let initial_view = app.App.view initial_model in
+              let queue, source = Lwt_stream.create_bounded queue_size in
+              let push = source#push in
+              let state =
+                {
+                  queue;
+                  push;
+                  push_mutex = Lwt_mutex.create ();
+                  queued_count = 0;
+                  effects = Queue.create ();
+                  mutex = Lwt_mutex.create ();
+                  condition = Lwt_condition.create ();
+                  model = initial_model;
+                  view = initial_view;
+                  handlers = empty_handlers;
+                  desired_size = (rows, cols);
+                  stop_requested = false;
+                  stop_reason = `Normal;
+                  script_finished = false;
+                  active_commands = 0;
+                  command_cancels = ref [];
+                  next_command_id = 0;
+                  initial_events_left = 2;
+                  dirty = false;
+                  paused = false;
+                  anchor = Fresh_line;
+                  last_frame = Charamel_ansi.Text.strip initial_view.View.content;
+                  timers = [];
+                  renderer_stop = false;
+                  backlog = Queue.create ();
+                }
+              in
+              state_ref := Some state;
+              let renderer_promise, renderer_resolver = Lwt.wait () in
+              let screen_size = ref (rows, cols) in
+              let last_render_time = ref None in
+              let last_rendered_alt = ref false in
+              let reader_cancel : unit Lwt.t option ref = ref None in
+              let reader_generation = ref 0 in
+              let escape_generation = ref 0 in
+              let stop_timers () =
+                List.iter
+                  (fun timer ->
+                    match !(timer.cancel) with
+                    | None -> ()
+                    | Some cancel -> Lwt.cancel cancel)
+                  state.timers;
+                state.timers <- []
+              in
+              let stop_reader () =
+                incr reader_generation;
+                incr escape_generation;
+                match !reader_cancel with
+                | None -> ()
+                | Some cancel ->
+                    reader_cancel := None;
+                    Lwt.cancel cancel
+              in
+              let render_locked () =
+                let* view, desired_size, anchor =
+                  peek_state state (fun () ->
+                      (state.view, state.desired_size, state.anchor))
+                in
+                let desired_rows, desired_cols = desired_size in
+                if desired_rows <= 0 || desired_cols <= 0 then
+                  invalid_arg "terminal size must be positive";
+                let* () =
+                  if desired_size <> !screen_size then begin
+                    Screen.resize screen ~rows:desired_rows ~cols:desired_cols;
+                    screen_size := desired_size;
+                    if (not view.View.alt_screen) && anchor = No_anchor then
+                      update_anchor state Column_start
+                    else Lwt.return_unit
                   end
-                  else Eio.Promise.resolve resolver ()
-              | Effect_resume ->
-                  if state.paused then resume_after_foreign ();
-                  Eio.Promise.resolve resolver ()
-              | Effect_exec (argv, callback) ->
-                  let code = with_foreign (fun () -> exec argv) in
-                  apply_message (callback code);
-                  Eio.Promise.resolve resolver ()
-              | Effect_print text ->
-                  let alt_screen =
-                    Eio.Mutex.use_ro state.mutex (fun () -> state.view.View.alt_screen)
+                  else Lwt.return_unit
+                in
+                let* () =
+                  if
+                    (not !last_rendered_alt) && (not view.View.alt_screen)
+                    && anchor = No_anchor
+                  then update_anchor state Column_start
+                  else Lwt.return_unit
+                in
+                let* current_anchor = peek_state state (fun () -> state.anchor) in
+                let* () =
+                  if not view.View.alt_screen then begin
+                    let* () =
+                      match current_anchor with
+                      | Fresh_line -> write_output_locked "\r\n"
+                      | Column_start -> write_output_locked "\r"
+                      | No_anchor -> Lwt.return_unit
+                    in
+                    if current_anchor <> No_anchor then
+                      mutate_state state (fun () -> state.anchor <- No_anchor)
+                    else Lwt.return_unit
+                  end
+                  else Lwt.return_unit
+                in
+                let bytes = Screen.render screen view in
+                let* () = write_output_locked bytes in
+                last_rendered_alt := view.View.alt_screen;
+                mutate_state state (fun () ->
+                    state.last_frame <- Charamel_ansi.Text.strip view.View.content)
+              in
+              let render_with_rate ~immediate =
+                let* () =
+                  match (immediate, !last_render_time) with
+                  | false, Some before ->
+                      let remaining =
+                        (1. /. float fps) -. (Charamel_os.Time.now clock -. before)
+                      in
+                      if remaining > 0. then Charamel_os.Time.sleep clock remaining
+                      else Lwt.return_unit
+                  | true, Some _ | _, None -> Lwt.return_unit
+                in
+                let* () = render_locked () in
+                last_render_time := Some (Charamel_os.Time.now clock);
+                Lwt.return_unit
+              in
+              let enqueue_output action =
+                mutate_state state (fun () -> Queue.add action state.effects)
+              in
+              let process_output_effect = function
+                | Output_bytes (bytes, resolver) ->
+                    let* () = write_output_locked bytes in
+                    Lwt.wakeup_later resolver () |> Lwt.return
+                | Output_print (text, resolver) ->
+                    let* view = peek_state state (fun () -> state.view) in
+                    let* () =
+                      if view.View.alt_screen then Lwt.return_unit
+                      else
+                        let* anchor = peek_state state (fun () -> state.anchor) in
+                        let* () =
+                          match anchor with
+                          | Fresh_line -> write_output_locked "\r\n"
+                          | Column_start -> write_output_locked "\r"
+                          | No_anchor -> Lwt.return_unit
+                        in
+                        let* () =
+                          if anchor <> No_anchor then
+                            mutate_state state (fun () -> state.anchor <- No_anchor)
+                          else Lwt.return_unit
+                        in
+                        let* () = write_output_locked (Screen.clear screen) in
+                        let* () = write_output_locked text in
+                        render_locked ()
+                    in
+                    Lwt.wakeup_later resolver () |> Lwt.return
+              in
+              let rec renderer_loop () =
+                let* effects, should_render, finishing = take_render_batch state in
+                if finishing && effects = [] && not should_render then Lwt.return_unit
+                else
+                  let* () =
+                    with_output (fun () ->
+                        let* () = Lwt_list.iter_s process_output_effect effects in
+                        if should_render then render_with_rate ~immediate:finishing
+                        else Lwt.return_unit)
                   in
-                  if alt_screen then begin
-                    Queue.add text state.backlog;
-                    Eio.Promise.resolve resolver ()
+                  renderer_loop ()
+              in
+              fork_daemon (fun _stop ->
+                  fun () ->
+                   Lwt.finalize renderer_loop (fun () ->
+                       if Lwt.is_sleeping renderer_promise then
+                         Lwt.wakeup_later renderer_resolver ();
+                       Lwt.return_unit));
+              let feed_bytes decoder bytes =
+                let events = Input.feed decoder bytes in
+                incr escape_generation;
+                let queue_event event = queue_external state (Queued_event event) in
+                let* () = Lwt_list.iter_s queue_event events in
+                if not (Input.pending_escape decoder) then Lwt.return_unit
+                else begin
+                  let generation = !escape_generation in
+                  fork_daemon (fun _stop ->
+                      fun () ->
+                       let* () = Charamel_os.Time.sleep clock 0.05 in
+                       if generation = !escape_generation && Input.pending_escape decoder
+                       then Lwt_list.iter_s queue_event (Input.flush decoder)
+                       else Lwt.return_unit);
+                  Lwt.return_unit
+                end
+              in
+              let rec read_input ~generation ~decoder ~finish_input =
+                if generation <> !reader_generation || state.stop_requested then
+                  Lwt.return_unit
+                else
+                  let* chunk = Charamel_os.Console_input.read terminal.Terminal.input in
+                  if chunk = "" then finish_input ()
+                  else
+                    let* () = feed_bytes decoder chunk in
+                    read_input ~generation ~decoder ~finish_input
+              in
+              let start_reader () =
+                incr reader_generation;
+                let generation = !reader_generation in
+                ignore
+                  (spawn_daemon (fun stop () ->
+                       let decoder = Input.create () in
+                       let finish_input () =
+                         let queue_event event =
+                           queue_external state (Queued_event event)
+                         in
+                         let* () = Lwt_list.iter_s queue_event (Input.flush decoder) in
+                         queue_external state (Queued_stop `Normal)
+                       in
+                       if generation = !reader_generation then reader_cancel := Some stop;
+                       Lwt.finalize
+                         (fun () -> read_input ~generation ~decoder ~finish_input)
+                         (fun () ->
+                           if generation = !reader_generation then reader_cancel := None;
+                           Lwt.return_unit)))
+              in
+              let cancel_timer timer =
+                match !(timer.cancel) with None -> () | Some cancel -> Lwt.cancel cancel
+              in
+              let start_timer timer =
+                ignore
+                  (spawn_daemon (fun stop () ->
+                       timer.cancel := Some stop;
+                       let rec loop () =
+                         if state.stop_requested || state.script_finished then
+                           Lwt.return_unit
+                         else
+                           let* () = Charamel_os.Time.sleep clock timer.interval in
+                           if state.stop_requested || state.script_finished then
+                             Lwt.return_unit
+                           else begin
+                             let callbacks = timer.callbacks in
+                             let tick callback =
+                               let message = callback (now ()) in
+                               queue_external state (Queued_message (message, None))
+                             in
+                             let* () = Lwt_list.iter_s tick callbacks in
+                             loop ()
+                           end
+                       in
+                       loop ()))
+              in
+              let sync_subscriptions () =
+                let handlers = collect_sub (app.App.subscriptions state.model) in
+                List.iter
+                  (fun (interval, _) ->
+                    ignore (valid_delay "subscription interval" interval))
+                  handlers.every;
+                state.handlers <- handlers;
+                let groups = group_every handlers.every in
+                let old_timers = state.timers in
+                let new_timers =
+                  List.map
+                    (fun (interval, callbacks) ->
+                      match
+                        List.find_opt (fun timer -> timer.interval = interval) old_timers
+                      with
+                      | Some timer ->
+                          timer.callbacks <- callbacks;
+                          timer
+                      | None ->
+                          let timer = { interval; callbacks; cancel = ref None } in
+                          if (not state.stop_requested) && not state.script_finished then
+                            start_timer timer;
+                          timer)
+                    groups
+                in
+                List.iter
+                  (fun timer ->
+                    if not (List.exists (fun candidate -> candidate == timer) new_timers)
+                    then cancel_timer timer)
+                  old_timers;
+                state.timers <- new_timers;
+                Lwt.return_unit
+              in
+              let mark_initial_event () =
+                if state.initial_events_left > 0 then begin
+                  state.initial_events_left <- state.initial_events_left - 1;
+                  if state.initial_events_left = 0 then set_dirty state
+                  else Lwt.return_unit
+                end
+                else Lwt.return_unit
+              in
+              let set_view model =
+                let view = app.App.view model in
+                mutate_state state (fun () ->
+                    state.view <- view;
+                    state.last_frame <- Charamel_ansi.Text.strip view.View.content;
+                    if state.initial_events_left = 0 then state.dirty <- true)
+              in
+              let start_command (command : 'msg Cmd.t) : unit Lwt.t =
+                let* command_id =
+                  mutate_state_result state (fun () ->
+                      let id = state.next_command_id in
+                      state.next_command_id <- state.next_command_id + 1;
+                      state.active_commands <- state.active_commands + 1;
+                      id)
+                in
+                let remove_command () =
+                  mutate_state state (fun () ->
+                      state.command_cancels :=
+                        List.filter
+                          (fun (id, _) -> id <> command_id)
+                          !(state.command_cancels))
+                in
+                let rec run_cmd : type a.
+                    a Cmd.t ->
+                    emit:(a -> unit Lwt.t) ->
+                    emit_effect:(a action -> unit Lwt.t) ->
+                    unit Lwt.t =
+                 fun command ~emit ~emit_effect ->
+                  match command with
+                  | Cmd.None_ -> Lwt.return_unit
+                  | Cmd.Batch commands ->
+                      Lwt_list.iter_p
+                        (fun child -> run_cmd child ~emit ~emit_effect)
+                        commands
+                  | Cmd.Seq commands ->
+                      Lwt_list.iter_s
+                        (fun child -> run_cmd child ~emit ~emit_effect)
+                        commands
+                  | Cmd.Map (mapping, child) ->
+                      run_cmd child
+                        ~emit:(fun value -> emit (mapping value))
+                        ~emit_effect:(fun action ->
+                          emit_effect (map_effect mapping action))
+                  | Cmd.Msg message -> emit message
+                  | Cmd.Perform thunk -> emit (thunk ())
+                  | Cmd.Await promise ->
+                      let* message = promise in
+                      emit message
+                  | Cmd.After (delay, thunk) ->
+                      let* () =
+                        Charamel_os.Time.sleep clock (valid_delay "command delay" delay)
+                      in
+                      emit (thunk ())
+                  | Cmd.Quit -> emit_effect Effect_quit
+                  | Cmd.Interrupt -> emit_effect Effect_interrupt
+                  | Cmd.Suspend -> emit_effect Effect_suspend
+                  | Cmd.Exec { argv; on_exit } ->
+                      if argv = [] then invalid_arg "exec requires a command";
+                      emit_effect (Effect_exec (argv, on_exit))
+                  | Cmd.Print text -> emit_effect (Effect_print (normalize_print text))
+                  | Cmd.Set_clipboard text -> emit_effect (Effect_clipboard text)
+                  | Cmd.Query query -> emit_effect (Effect_query query)
+                  | Cmd.Window_size -> emit_effect Effect_window_size
+                in
+                ignore
+                  (spawn_daemon (fun stop () ->
+                       Lwt.finalize
+                         (fun () ->
+                           let* () =
+                             mutate_state state (fun () ->
+                                 state.command_cancels :=
+                                   (command_id, stop) :: !(state.command_cancels))
+                           in
+                           let* stopping =
+                             peek_state state (fun () -> state.stop_requested)
+                           in
+                           if stopping then Lwt.return_unit
+                           else
+                             Lwt.catch
+                               (fun () ->
+                                 let emit message =
+                                   let promise, resolver = Lwt.wait () in
+                                   let* () =
+                                     queue_external state
+                                       (Queued_message (message, Some resolver))
+                                   in
+                                   promise
+                                 in
+                                 let emit_effect action = queue_effect state action in
+                                 run_cmd command ~emit ~emit_effect)
+                               (function
+                                 | Lwt.Canceled -> Lwt.return_unit
+                                 | exn ->
+                                     let backtrace = Printexc.get_raw_backtrace () in
+                                     fail_run exn backtrace;
+                                     Lwt.return_unit))
+                         (fun () ->
+                           let* () = remove_command () in
+                           mutate_state state (fun () ->
+                               state.active_commands <- state.active_commands - 1))));
+                Lwt.return_unit
+              in
+              let apply_message message =
+                match filter state.model message with
+                | None -> Lwt.return_unit
+                | Some message ->
+                    let model, command = app.App.update message state.model in
+                    state.model <- model;
+                    let* () = set_view model in
+                    let* () = sync_subscriptions () in
+                    start_command command
+              in
+              let dispatch_event event =
+                let handlers = state.handlers in
+                let* messages =
+                  match event with
+                  | Event.Key key -> (
+                      match key.Key.event with
+                      | Key.Release ->
+                          Lwt.return
+                            (List.map (fun handler -> handler key) handlers.key_release)
+                      | Key.Press | Key.Repeat ->
+                          Lwt.return (List.map (fun handler -> handler key) handlers.key))
+                  | Event.Mouse mouse ->
+                      let enabled =
+                        match state.view.View.mouse with
+                        | View.Mouse_off -> false
+                        | _ -> true
+                      in
+                      Lwt.return
+                        (if enabled then
+                           List.map (fun handler -> handler mouse) handlers.mouse
+                         else [])
+                  | Event.Paste text ->
+                      let enabled = state.view.View.bracketed_paste in
+                      Lwt.return
+                        (if enabled then
+                           List.map (fun handler -> handler text) handlers.paste
+                         else [])
+                  | Event.Focus ->
+                      Lwt.return
+                        (if state.view.View.report_focus then
+                           List.map (fun handler -> handler `Focused) handlers.focus
+                         else [])
+                  | Event.Blur ->
+                      Lwt.return
+                        (if state.view.View.report_focus then
+                           List.map (fun handler -> handler `Blurred) handlers.focus
+                         else [])
+                  | Event.Resize { rows; cols } ->
+                      if rows <= 0 || cols <= 0 then
+                        invalid_arg "terminal size must be positive";
+                      let* () =
+                        mutate_state state (fun () -> state.desired_size <- (rows, cols))
+                      in
+                      let* () = set_dirty state in
+                      Lwt.return
+                        (List.map (fun handler -> handler ~rows ~cols) handlers.resize)
+                  | Event.Profile _ | Event.Cursor_position _ | Event.Background_color _
+                  | Event.Foreground_color _ | Event.Cursor_color _
+                  | Event.Terminal_version _ | Event.Kitty_flags _ | Event.Mode_report _
+                  | Event.Unknown _ ->
+                      Lwt.return
+                        (List.map (fun handler -> handler event) handlers.terminal)
+                in
+                Lwt_list.iter_s apply_message messages
+              in
+              let query_bytes = function
+                | `Background -> Charamel_ansi.Seq.bg_query
+                | `Foreground -> Charamel_ansi.Seq.fg_query
+                | `Cursor_color -> Charamel_ansi.Seq.cursor_color_query
+                | `Terminal_version -> Charamel_ansi.Seq.xtversion
+                | `Kitty_flags -> "\x1b[?u"
+                | `Cursor_position -> "\x1b[6n"
+              in
+              let request_stop reason =
+                if state.stop_requested then ()
+                else begin
+                  state.stop_requested <- true;
+                  state.stop_reason <- reason;
+                  stop_reader ();
+                  stop_timers ();
+                  ignore
+                    (mutate_state state (fun () ->
+                         List.iter Lwt.cancel (List.map snd !(state.command_cancels))))
+                end
+              in
+              let resume_after_foreign () =
+                with_output (fun () ->
+                    terminal.Terminal.enter ();
+                    Screen.reset screen;
+                    let* () = update_anchor state Fresh_line in
+                    let* () = set_paused state false in
+                    if script = None && not state.stop_requested then start_reader ();
+                    set_dirty state)
+              in
+              let with_foreign fn =
+                let* () = set_paused state true in
+                stop_reader ();
+                Lwt.finalize
+                  (fun () ->
+                    with_output (fun () ->
+                        let* () = write_output_locked (Screen.restore screen) in
+                        terminal.Terminal.leave ();
+                        fn ()))
+                  resume_after_foreign
+              in
+              let handle_effect action resolver =
+                let resolve () = Lwt.wakeup_later resolver () in
+                match action with
+                | Effect_quit ->
+                    request_stop `Normal;
+                    Lwt.return (resolve ())
+                | Effect_interrupt ->
+                    request_stop `Interrupted;
+                    Lwt.return (resolve ())
+                | Effect_suspend ->
+                    if state.stop_requested then Lwt.return (resolve ())
+                    else
+                      let* () =
+                        with_foreign (fun () ->
+                            suspend ();
+                            Lwt.return_unit)
+                      in
+                      Lwt.return (resolve ())
+                | Effect_resume ->
+                    let* () =
+                      if state.paused then resume_after_foreign () else Lwt.return_unit
+                    in
+                    Lwt.return (resolve ())
+                | Effect_exec (argv, callback) ->
+                    let* code = with_foreign (fun () -> exec argv) in
+                    let* () = apply_message (callback code) in
+                    Lwt.return (resolve ())
+                | Effect_print text ->
+                    let* alt_screen =
+                      peek_state state (fun () -> state.view.View.alt_screen)
+                    in
+                    if alt_screen then begin
+                      Queue.add text state.backlog;
+                      Lwt.return (resolve ())
+                    end
+                    else enqueue_output (Output_print (text, resolver))
+                | Effect_clipboard text ->
+                    enqueue_output
+                      (Output_bytes (Charamel_ansi.Seq.clipboard_osc52 text, resolver))
+                | Effect_query query ->
+                    enqueue_output (Output_bytes (query_bytes query, resolver))
+                | Effect_window_size ->
+                    let rows, cols = terminal.Terminal.size () in
+                    let* () = dispatch_event (Event.Resize { rows; cols }) in
+                    Lwt.return (resolve ())
+              in
+              (* Delivery runs the action itself. A flag polled by a waiting fiber loses
+                 the wakeup between the failed check and the park — the race
+                 [Eio.Condition.loop_no_mutex] used to close atomically. On POSIX the
+                 action runs from [Lwt_unix.on_signal], which hands the signal to the
+                 event loop; on Windows the CRT handler installed here runs it directly,
+                 and resizes keep arriving through the console record queue. *)
+              let install_signal signal action =
+                if Charamel_os.Signal.supported (Sys.signal_to_int signal) then begin
+                  let number = Sys.signal_to_int signal in
+                  if Sys.win32 then begin
+                    (* The CRT handler is the delivery path there: Lwt's signal
+                       dispatcher has no Windows console route, and the job-control and
+                       window signals are already filtered out above. *)
+                    let previous =
+                      Sys.signal signal (Sys.Signal_handle (fun _ -> Lwt.async action))
+                    in
+                    old_handlers := (signal, previous) :: !old_handlers
                   end
                   else begin
-                    enqueue_output (Output_print (text, resolver))
+                    (* Register with the event loop first, then capture the pre-program
+                       disposition with a placeholder that forwards to
+                       [Lwt_unix.handle_signal]. That call is thread-safe and notifies
+                       every Lwt subscriber for the signal, so capturing never silences
+                       another watcher (a resize subscription, say), the action is never
+                       run inside the raw signal handler, and a signal arriving in the
+                       installation window is delivered rather than dropped. *)
+                    signal_watchers :=
+                      Lwt_unix.on_signal number (fun _ -> Lwt.async action)
+                      :: !signal_watchers;
+                    old_handlers :=
+                      ( signal,
+                        Sys.signal signal
+                          (Sys.Signal_handle (fun _ -> Lwt_unix.handle_signal number)) )
+                      :: !old_handlers
                   end
-              | Effect_clipboard text ->
-                  enqueue_output
-                    (Output_bytes (Charamel_ansi.Seq.clipboard_osc52 text, resolver))
-              | Effect_query query ->
-                  enqueue_output (Output_bytes (query_bytes query, resolver))
-              | Effect_window_size ->
-                  let rows, cols = terminal.Terminal.size () in
-                  dispatch_event (Event.Resize { rows; cols });
-                  Eio.Promise.resolve resolver ()
-            in
-            let setup_signals () =
-              if signals then begin
-                let winch = Eio.Condition.create () in
-                let interrupt = Eio.Condition.create () in
-                let terminate = Eio.Condition.create () in
-                let suspend_signal = Eio.Condition.create () in
-                let continue_signal = Eio.Condition.create () in
-                let winch_pending = Atomic.make false in
-                let interrupt_pending = Atomic.make false in
-                let terminate_pending = Atomic.make false in
-                let suspend_pending = Atomic.make false in
-                let continue_pending = Atomic.make false in
-                let install signal condition pending =
-                  let previous =
-                    Sys.signal signal
-                      (Sys.Signal_handle
-                         (fun _ ->
-                           Atomic.set pending true;
-                           Eio.Condition.broadcast condition))
-                  in
-                  old_handlers := (signal, previous) :: !old_handlers
-                in
-                install Sys.sigwinch winch winch_pending;
-                install Sys.sigint interrupt interrupt_pending;
-                install Sys.sigterm terminate terminate_pending;
-                install Sys.sigtstp suspend_signal suspend_pending;
-                install Sys.sigcont continue_signal continue_pending;
-                let watch condition pending action =
-                  fork_daemon (fun () ->
-                      try
-                        while not state.stop_requested do
-                          let pending =
-                            Eio.Condition.loop_no_mutex condition (fun () ->
-                                if state.stop_requested then Some false
-                                else if Atomic.exchange pending false then Some true
-                                else None)
-                          in
-                          if pending then action ()
-                        done
-                      with Eio.Cancel.Cancelled _ -> ())
-                in
-                watch winch winch_pending (fun () ->
+                end
+              in
+              let setup_signals () =
+                if not signals then Lwt.return_unit
+                else begin
+                  let resize_action () =
                     let rows, cols = terminal.Terminal.size () in
-                    queue_external state (Queued_event (Event.Resize { rows; cols })));
-                watch interrupt interrupt_pending (fun () ->
-                    queue_external state (Queued_stop `Interrupted));
-                watch terminate terminate_pending (fun () ->
-                    queue_external state (Queued_stop `Normal));
-                watch suspend_signal suspend_pending (fun () ->
-                    queue_effect state Effect_suspend);
-                watch continue_signal continue_pending (fun () ->
-                    queue_effect state Effect_resume)
-              end
-            in
-            let setup_resize_stream () =
-              match terminal.Terminal.on_resize with
-              | None -> ()
-              | Some stream ->
-                  fork_daemon (fun () ->
-                      try
-                        while not state.stop_requested do
-                          let notify = Eio.Stream.take stream in
-                          notify ();
-                          if not state.stop_requested then begin
-                            let rows, cols = terminal.Terminal.size () in
-                            queue_external state
-                              (Queued_event (Event.Resize { rows; cols }))
-                          end
-                        done
-                      with Eio.Cancel.Cancelled _ -> ())
-            in
-            let setup_script () =
-              match script with
-              | None -> start_reader ()
-              | Some events ->
-                  fork_daemon (fun () ->
-                      try
-                        let decoder = Input.create () in
-                        List.iter
-                          (function
-                            | `Key key ->
-                                queue_external state (Queued_event (Event.Key key))
-                            | `Text text -> feed_bytes decoder text
-                            | `Resize (rows, cols) ->
-                                queue_external state
-                                  (Queued_event (Event.Resize { rows; cols }))
-                            | `Msg message ->
-                                queue_external state (Queued_message (message, None))
-                            | `Wait seconds ->
-                                Eio.Time.sleep clock (valid_delay "script delay" seconds))
-                          events;
-                        List.iter
-                          (fun event -> queue_external state (Queued_event event))
-                          (Input.flush decoder);
-                        queue_external state Queued_script_done
-                      with Eio.Cancel.Cancelled _ -> ())
-            in
-            sync_subscriptions ();
-            queue_external state (Queued_initial (Event.Profile profile));
-            queue_external state (Queued_initial (Event.Resize { rows; cols }));
-            setup_signals ();
-            setup_resize_stream ();
-            setup_script ();
-            start_command initial_cmd;
-            let finish_if_ready () =
-              let pending = not (Eio.Stream.is_empty state.queue) in
-              if
-                state.script_finished && (not state.stop_requested) && (not pending)
-                && state.active_commands = 0
-              then request_stop `Normal;
-              if state.stop_requested && (not pending) && state.active_commands = 0 then begin
-                state.renderer_stop <- true;
-                Eio.Mutex.use_rw ~protect:false state.mutex (fun () ->
-                    Eio.Condition.broadcast state.condition);
-                Eio.Promise.await renderer_promise;
-                let model, frame =
-                  Eio.Mutex.use_ro state.mutex (fun () -> (state.model, state.last_frame))
-                in
-                match state.stop_reason with
-                | `Normal -> Some (Ok (model, frame))
-                | `Interrupted -> Some (Error `Interrupted)
-                | `Killed -> Some (Error `Killed)
-              end
-              else None
-            in
-            let rec loop () =
-              match finish_if_ready () with
-              | Some result -> result
-              | None -> (
-                  match wait_for_item state with
-                  | None -> loop ()
-                  | Some item ->
-                      (match item with
-                      | Queued_event event -> dispatch_event event
-                      | Queued_initial event ->
-                          dispatch_event event;
-                          mark_initial_event ()
-                      | Queued_message (message, resolver) -> (
-                          apply_message message;
-                          match resolver with
-                          | None -> ()
-                          | Some resolver -> Eio.Promise.resolve resolver ())
-                      | Queued_effect (action, resolver) -> handle_effect action resolver
-                      | Queued_stop reason -> request_stop reason
-                      | Queued_script_done ->
-                          state.script_finished <- true;
-                          stop_timers ());
-                      loop ())
-            in
-            loop ()))
-  with
-  | Eio.Cancel.Cancelled _ as ex -> raise ex
-  | ex ->
-      let backtrace = Printexc.get_raw_backtrace () in
-      Error (`Exn (ex, backtrace))
+                    queue_external state (Queued_event (Event.Resize { rows; cols }))
+                  in
+                  let stop_action reason () = queue_external state (Queued_stop reason) in
+                  install_signal Sys.sigwinch resize_action;
+                  install_signal Sys.sigint (stop_action `Interrupted);
+                  install_signal Sys.sigterm (stop_action `Normal);
+                  install_signal Sys.sigtstp (fun () -> queue_effect state Effect_suspend);
+                  install_signal Sys.sigcont (fun () -> queue_effect state Effect_resume);
+                  Lwt.return_unit
+                end
+              in
+              let setup_resize_stream () =
+                match terminal.Terminal.on_resize with
+                | None -> Lwt.return_unit
+                | Some stream ->
+                    fork_daemon (fun _stop ->
+                        fun () ->
+                         let rec loop () =
+                           let* item = Lwt_stream.get stream in
+                           match item with
+                           | None -> Lwt.return_unit
+                           | Some notify ->
+                               notify ();
+                               if state.stop_requested then Lwt.return_unit
+                               else begin
+                                 let rows, cols = terminal.Terminal.size () in
+                                 let* () =
+                                   queue_external state
+                                     (Queued_event (Event.Resize { rows; cols }))
+                                 in
+                                 loop ()
+                               end
+                         in
+                         loop ());
+                    Lwt.return_unit
+              in
+              let setup_script events =
+                fork_daemon (fun _stop ->
+                    fun () ->
+                     let decoder = Input.create () in
+                     let deliver event =
+                       match event with
+                       | `Key key -> queue_external state (Queued_event (Event.Key key))
+                       | `Text text -> feed_bytes decoder text
+                       | `Resize (rows, cols) ->
+                           queue_external state
+                             (Queued_event (Event.Resize { rows; cols }))
+                       | `Msg message ->
+                           queue_external state (Queued_message (message, None))
+                       | `Wait seconds ->
+                           Charamel_os.Time.sleep clock
+                             (valid_delay "script delay" seconds)
+                     in
+                     let* () = Lwt_list.iter_s deliver events in
+                     let* () =
+                       Lwt_list.iter_s
+                         (fun event -> queue_external state (Queued_event event))
+                         (Input.flush decoder)
+                     in
+                     queue_external state Queued_script_done);
+                Lwt.return_unit
+              in
+              let* () = sync_subscriptions () in
+              let* () = queue_external state (Queued_initial (Event.Profile profile)) in
+              let* () =
+                queue_external state (Queued_initial (Event.Resize { rows; cols }))
+              in
+              let* () = setup_signals () in
+              let* () = setup_resize_stream () in
+              let* () =
+                match script with
+                | None ->
+                    start_reader ();
+                    Lwt.return_unit
+                | Some events -> setup_script events
+              in
+              let* () = start_command initial_cmd in
+              let finish_if_ready () =
+                let pending = state.queued_count > 0 in
+                if
+                  state.script_finished && (not state.stop_requested) && (not pending)
+                  && state.active_commands = 0
+                then request_stop `Normal;
+                if state.stop_requested && (not pending) && state.active_commands = 0 then begin
+                  let* () = mutate_state state (fun () -> state.renderer_stop <- true) in
+                  let* () = renderer_promise in
+                  let* model, frame =
+                    peek_state state (fun () -> (state.model, state.last_frame))
+                  in
+                  let result =
+                    match state.stop_reason with
+                    | `Normal -> Ok (model, frame)
+                    | `Interrupted -> Error `Interrupted
+                    | `Killed -> Error `Killed
+                  in
+                  Lwt.return (Some result)
+                end
+                else Lwt.return_none
+              in
+              let rec loop () =
+                let* finished = finish_if_ready () in
+                match finished with
+                | Some result -> Lwt.return result
+                | None -> (
+                    let* next = wait_for_item state in
+                    match next with
+                    | None -> loop ()
+                    | Some item ->
+                        let* () =
+                          match item with
+                          | Queued_event event -> dispatch_event event
+                          | Queued_initial event ->
+                              let* () = dispatch_event event in
+                              mark_initial_event ()
+                          | Queued_message (message, resolver) ->
+                              let* () = apply_message message in
+                              Lwt.return
+                                (match resolver with
+                                | None -> ()
+                                | Some resolver -> Lwt.wakeup_later resolver ())
+                          | Queued_effect (action, resolver) ->
+                              handle_effect action resolver
+                          | Queued_stop reason ->
+                              request_stop reason;
+                              Lwt.return_unit
+                          | Queued_script_done ->
+                              state.script_finished <- true;
+                              stop_timers ();
+                              Lwt.return_unit
+                        in
+                        loop ())
+              in
+              Lwt.pick [ loop (); failure ]))
+        cleanup)
+    (function
+      | Lwt.Canceled as exn -> Lwt.fail exn
+      | Daemon_failed (exn, backtrace) -> Lwt.return (Error (`Exn (exn, backtrace)))
+      | exn -> Lwt.return (Error (`Exn (exn, Printexc.get_raw_backtrace ()))))
 
-let run ?terminal ?fps ?filter ~clock app env =
-  let terminal : Terminal.t = Option.value terminal ~default:(Terminal.local env) in
+let spawn_foreground argv =
+  match argv with
+  | [] -> invalid_arg "exec requires a command"
+  | program :: _ ->
+      let arguments = Array.of_list argv in
+      let executable = Option.value (Charamel_os.Exe.find program) ~default:program in
+      Unix.create_process executable arguments Unix.stdin Unix.stdout Unix.stderr
+
+let run ?terminal ?fps ?filter ~clock app =
+  let terminal = Option.value terminal ~default:(Terminal.local ()) in
   let fps = Option.value fps ~default:60 in
   let filter = Option.value filter ~default:(fun _ message -> Some message) in
   let exec argv =
-    match argv with
-    | [] -> invalid_arg "exec requires a command"
-    | _ -> (
-        try
-          Eio.Process.run (Eio.Stdenv.process_mgr env) ~stdin:terminal.Terminal.input
-            ~stdout:terminal.Terminal.output ~stderr:terminal.Terminal.output argv;
-          0
-        with
-        | Eio.Io (Eio.Process.E (Eio.Process.Child_error (`Exited code)), _) -> code
-        | Eio.Io (Eio.Process.E (Eio.Process.Child_error (`Signaled signal)), _) ->
-            128 + signal)
+    let pid = spawn_foreground argv in
+    let* _, status = Lwt_unix.waitpid [] pid in
+    Lwt.return
+      (match status with
+      | Unix.WEXITED code -> code
+      | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal)
   in
   let suspend () =
     if terminal.Terminal.is_tty then Unix.kill (Unix.getpid ()) Sys.sigstop
     else invalid_arg "suspend requires a local terminal"
   in
-  let* model, _ =
+  let* result =
     run_core ~terminal ~fps ~filter ~clock
-      ~now:(fun () -> Eio.Time.Mono.now (Eio.Stdenv.mono_clock env))
+      ~now:(fun () -> Mtime_clock.now ())
       ~exec ~suspend ~signals:true app
   in
-  Ok model
+  Lwt.return (match result with Ok (model, _) -> Ok model | Error error -> Error error)

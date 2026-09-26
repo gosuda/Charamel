@@ -38,6 +38,7 @@ val results : t -> Results.t
 val errors : t -> string list
 val set_dark : bool -> t -> t
 
-val run_accessible : Env.t -> out:(string -> unit) -> Accessible.reader -> t -> Results.t
+val run_accessible :
+  Env.t -> out:(string -> unit Lwt.t) -> Accessible.reader -> t -> Results.t Lwt.t
 (** [run_accessible] walks visible fields as plain prompts, committing every default and
     supplied value. *)

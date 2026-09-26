@@ -1,5 +1,6 @@
 open Charamel_fantasy
 open Stream_test_support
+open Lwt.Infix
 
 let sse ?event data =
   let prefix = match event with Some name -> Fmt.str "event: %s\n" name | None -> "" in
@@ -72,34 +73,29 @@ let model =
 
 let user s = Message.text Message.User s
 let default_body = completed usage_body
+let base_url server = Uri.to_string (Fixture_http.uri server "")
 
 let call ?(body = default_body) ?(model = model) ?(reasoning = `Off) ?temperature
     ?max_tokens ?(system = []) ?(tools = []) ?trunc_bytes messages =
-  let stream, observed, path, body =
-    Eio_main.run @@ fun env ->
-    Eio.Switch.run @@ fun sw ->
-    let server = Fixture_server.start ~sw ~net:env#net () in
-    Fixture_server.respond server body;
-    Option.iter (Fixture_server.trunc server) trunc_bytes;
-    let provider =
-      Provider.openai_responses
-        ~base_url:(Fixture_server.base_url server)
-        ~auth:(Provider.Api_key "test-key") ()
-    in
-    let stream =
-      Provider.stream provider ~sw ~clock:env#clock ~net:env#net ~model ?temperature
-        ?max_tokens ~reasoning ~system ~tools messages
-    in
-    let observed = drain stream in
-    (stream, observed, Fixture_server.last_path server, Fixture_server.last_body server)
-  in
-  (observed @ Stream_test_support.drain_queued stream, path, body)
+  Stream_test_support.with_fixture (fun server ->
+      Fixture_http.respond server ?truncate:trunc_bytes body;
+      let provider =
+        Provider.openai_responses ~base_url:(base_url server)
+          ~auth:(Provider.Api_key "test-key") ()
+      in
+      let stream =
+        Provider.stream provider ~clock:Charamel_os.Time.lwt ~model ?temperature
+          ?max_tokens ~reasoning ~system ~tools messages
+      in
+      Stream_test_support.drain stream >>= fun observed ->
+      Stream_test_support.drain_queued stream >|= fun tail ->
+      (observed @ tail, Fixture_http.last_path server, Fixture_http.last_body server))
 
 let expect_parts expected observed =
   Stream_test_support.expect_parts ~label:"stream parts" expected observed
 
 let test_fixture_stream () =
-  let observed, path, _ = call ~body:(read_fixture ()) [ user "hi" ] in
+  call ~body:(read_fixture ()) [ user "hi" ] >|= fun (observed, path, _) ->
   Alcotest.(check (option string)) "posts to /responses" (Some "/responses") path;
   expect_parts
     [
@@ -126,16 +122,15 @@ let test_split_argument_accumulation () =
     item_done ~index:0
       {|{"id":"fc_x","type":"function_call","status":"completed","arguments":"{\"location\":\"Florence\"}","call_id":"call_x","name":"weather"}|}
   in
-  let observed, _, _ =
-    call
-      ~body:
-        (opened
-        ^ arguments_delta ~index:0 {|{"loc|}
-        ^ arguments_delta ~index:0 {|ation":"Flo|}
-        ^ arguments_delta ~index:0 {|rence"}|}
-        ^ closed ^ completed usage_body)
-      [ user "hi" ]
-  in
+  call
+    ~body:
+      (opened
+      ^ arguments_delta ~index:0 {|{"loc|}
+      ^ arguments_delta ~index:0 {|ation":"Flo|}
+      ^ arguments_delta ~index:0 {|rence"}|}
+      ^ closed ^ completed usage_body)
+    [ user "hi" ]
+  >|= fun (observed, _, _) ->
   expect_parts
     [
       Stream_part.Tool_call_start { id = "call_x"; name = "weather" };
@@ -165,13 +160,12 @@ let test_interleaved_calls () =
     item_done ~index:1
       {|{"id":"fc_b","type":"function_call","status":"completed","arguments":"B1B2","call_id":"call_b","name":"b"}|}
   in
-  let observed, _, _ =
-    call
-      ~body:
-        (open_a ^ open_b ^ arguments_delta ~index:0 "A1" ^ arguments_delta ~index:1 "B1"
-       ^ arguments_delta ~index:1 "B2" ^ done_a ^ done_b ^ completed usage_body)
-      [ user "hi" ]
-  in
+  call
+    ~body:
+      (open_a ^ open_b ^ arguments_delta ~index:0 "A1" ^ arguments_delta ~index:1 "B1"
+     ^ arguments_delta ~index:1 "B2" ^ done_a ^ done_b ^ completed usage_body)
+    [ user "hi" ]
+  >|= fun (observed, _, _) ->
   expect_parts
     [
       Stream_part.Tool_call_start { id = "call_a"; name = "a" };
@@ -188,18 +182,20 @@ let test_interleaved_calls () =
 
 let test_finish_reasons () =
   let finish reason =
-    let observed, _, _ = call ~body:(completed ~reason usage_body) [ user "hi" ] in
+    call ~body:(completed ~reason usage_body) [ user "hi" ] >|= fun (observed, _, _) ->
     finish_name (single_finish observed)
   in
-  Alcotest.check Alcotest.string "stop" "Stop" (finish "");
-  Alcotest.check Alcotest.string "length" "Length" (finish "max_output_tokens");
-  Alcotest.check Alcotest.string "content filter" "Content_filter"
-    (finish "content_filter")
+  finish "" >>= fun reason ->
+  Alcotest.check Alcotest.string "stop" "Stop" reason;
+  finish "max_output_tokens" >>= fun reason ->
+  Alcotest.check Alcotest.string "length" "Length" reason;
+  finish "content_filter" >>= fun reason ->
+  Alcotest.check Alcotest.string "content filter" "Content_filter" reason;
+  Lwt.return_unit
 
 let test_usage_precedes_finish () =
-  let observed, _, _ =
-    call ~body:(text_delta ~index:0 "hi" ^ completed usage_body) [ user "hi" ]
-  in
+  call ~body:(text_delta ~index:0 "hi" ^ completed usage_body) [ user "hi" ]
+  >|= fun (observed, _, _) ->
   Alcotest.(check bool)
     "usage present" true
     (List.exists (function Stream_part.Usage _ -> true | _ -> false) observed);
@@ -207,19 +203,16 @@ let test_usage_precedes_finish () =
     (finish_name (single_finish observed))
 
 let test_malformed_event () =
-  let malformed, _, _ =
-    call ~body:(sse ~event:"response.output_text.delta" "not json") [ user "hi" ]
-  in
+  call ~body:(sse ~event:"response.output_text.delta" "not json") [ user "hi" ]
+  >>= fun (malformed, _, _) ->
   (match malformed with
   | [ Stream_part.Finish (`Error _) ] -> ()
   | other ->
       Alcotest.failf "expected one error finish, got %a" Fmt.(list Stream_part.pp) other);
-  let later, _, _ =
-    call
-      ~body:
-        (sse ~event:"response.output_text.delta" "not json" ^ text_delta ~index:0 "late")
-      [ user "hi" ]
-  in
+  call
+    ~body:(sse ~event:"response.output_text.delta" "not json" ^ text_delta ~index:0 "late")
+    [ user "hi" ]
+  >|= fun (later, _, _) ->
   match later with
   | [ Stream_part.Finish (`Error _) ] -> ()
   | other ->
@@ -228,7 +221,7 @@ let test_malformed_event () =
         other
 
 let test_premature_eof () =
-  let observed, _, _ = call ~body:(text_delta ~index:0 "hi") [ user "hi" ] in
+  call ~body:(text_delta ~index:0 "hi") [ user "hi" ] >|= fun (observed, _, _) ->
   (match last observed with
   | Some (Stream_part.Finish (`Error _)) -> ()
   | _ ->
@@ -240,9 +233,8 @@ let test_premature_eof () =
     (not (List.exists (function Stream_part.Usage _ -> true | _ -> false) observed))
 
 let test_silence_after_finish () =
-  let observed, _, _ =
-    call ~body:(completed usage_body ^ text_delta ~index:0 "late") [ user "hi" ]
-  in
+  call ~body:(completed usage_body ^ text_delta ~index:0 "late") [ user "hi" ]
+  >|= fun (observed, _, _) ->
   expect_parts [ Stream_part.Usage test_usage; Stream_part.Finish `Stop ] observed
 
 (* input1000/cached600/cache_write300/output100 must land as a disjoint
@@ -253,7 +245,7 @@ let cache_write_usage_body =
   {|"usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":600,"cache_write_tokens":300},"output_tokens":100}|}
 
 let test_cache_write_tokens () =
-  let observed, _, _ = call ~body:(completed cache_write_usage_body) [ user "hi" ] in
+  call ~body:(completed cache_write_usage_body) [ user "hi" ] >|= fun (observed, _, _) ->
   expect_parts
     [
       Stream_part.Usage
@@ -290,12 +282,11 @@ let tool =
          ])
 
 let test_encode_system_tools_and_config () =
-  let _, _, body =
-    call
-      ~system:[ "You are a helpful assistant" ]
-      ~tools:[ tool ] ~temperature:0.25
-      [ user "hi" ]
-  in
+  call
+    ~system:[ "You are a helpful assistant" ]
+    ~tools:[ tool ] ~temperature:0.25
+    [ user "hi" ]
+  >|= fun (_, _, body) ->
   let json = parse_body body in
   let input = array "input" json in
   let system = List.hd input in
@@ -324,11 +315,9 @@ let test_encode_system_tools_and_config () =
 
 let test_encode_reasoning_model () =
   let reasoning_model = { model with Model.id = "o3-mini" } in
-  let _, _, body =
-    call ~model:reasoning_model ~reasoning:`Medium ~system:[ "be terse" ]
-      ~temperature:0.25
-      [ user "hi" ]
-  in
+  call ~model:reasoning_model ~reasoning:`Medium ~system:[ "be terse" ] ~temperature:0.25
+    [ user "hi" ]
+  >|= fun (_, _, body) ->
   let json = parse_body body in
   let input = List.hd (array "input" json) in
   check_member_string "reasoning system role" "role" "developer" input;
@@ -339,9 +328,8 @@ let test_encode_reasoning_model () =
     (Option.is_some (member "temperature" json))
 
 let test_encode_o1_mini_removes_system () =
-  let _, _, body =
-    call ~model:{ model with Model.id = "o1-mini" } ~system:[ "dropped" ] [ user "hi" ]
-  in
+  call ~model:{ model with Model.id = "o1-mini" } ~system:[ "dropped" ] [ user "hi" ]
+  >|= fun (_, _, body) ->
   let json = parse_body body in
   let input = array "input" json in
   Alcotest.(check int) "only user input remains" 1 (List.length input);
@@ -382,7 +370,7 @@ let test_encode_conversation () =
         [ Message.Tool_result { id = "c1"; name = "weather"; output = `Text "40 C" } ];
     }
   in
-  let _, _, body = call [ user "what is the weather"; assistant; tool_result ] in
+  call [ user "what is the weather"; assistant; tool_result ] >|= fun (_, _, body) ->
   let input = array "input" (parse_body body) in
   let user_item = List.nth input 0 in
   let user_part = List.hd (array "content" user_item) in
@@ -416,7 +404,7 @@ let test_encode_file_part () =
         [ Message.File { mime = "image/png"; data = "aGVsbG8="; name = Some "shot.png" } ];
     }
   in
-  let _, _, body = call [ message ] in
+  call [ message ] >|= fun (_, _, body) ->
   let user_item = List.hd (array "input" (parse_body body)) in
   let image = List.hd (array "content" user_item) in
   check_member_string "file part type" "type" "input_image" image;
@@ -433,7 +421,7 @@ let test_encode_media_tool_result () =
         ];
     }
   in
-  let _, _, body = call [ message ] in
+  call [ message ] >|= fun (_, _, body) ->
   let input = array "input" (parse_body body) in
   let output_item = List.nth input 0 in
   check_member_string "media output type" "type" "function_call_output" output_item;
@@ -448,7 +436,7 @@ let test_encode_media_tool_result () =
     (List.hd (array "content" image_item))
 
 let test_provider_posts_encoded_body () =
-  let _, path, body = call ~system:[ "be terse" ] [ user "hi" ] in
+  call ~system:[ "be terse" ] [ user "hi" ] >|= fun (_, path, body) ->
   Alcotest.(check (option string))
     "the endpoint is the Responses API" (Some "/responses") path;
   let json = parse_body body in
@@ -459,28 +447,46 @@ let test_provider_posts_encoded_body () =
 let test_provider_premature_eof () =
   let first = text_delta ~index:0 "partial" in
   let body = first ^ completed usage_body in
-  let observed, _, _ = call ~body ~trunc_bytes:(String.length first + 8) [ user "hi" ] in
+  call ~body ~trunc_bytes:(String.length first + 8) [ user "hi" ]
+  >|= fun (observed, _, _) ->
   match single_finish observed with
   | `Error _ -> ()
   | other -> Alcotest.failf "expected an error finish, got %s" (finish_name other)
 
 let cases =
   [
-    ("fixture stream", `Quick, test_fixture_stream);
-    ("split argument accumulation", `Quick, test_split_argument_accumulation);
-    ("interleaved calls", `Quick, test_interleaved_calls);
-    ("finish reasons", `Quick, test_finish_reasons);
-    ("usage precedes finish", `Quick, test_usage_precedes_finish);
-    ("malformed event", `Quick, test_malformed_event);
-    ("premature eof", `Quick, test_premature_eof);
-    ("silence after finish", `Quick, test_silence_after_finish);
-    ("cache write tokens", `Quick, test_cache_write_tokens);
-    ("encode system tools config", `Quick, test_encode_system_tools_and_config);
-    ("encode reasoning model", `Quick, test_encode_reasoning_model);
-    ("encode o1 mini removes system", `Quick, test_encode_o1_mini_removes_system);
-    ("encode conversation", `Quick, test_encode_conversation);
-    ("encode file part", `Quick, test_encode_file_part);
-    ("encode media tool result", `Quick, test_encode_media_tool_result);
-    ("provider posts encoded body", `Quick, test_provider_posts_encoded_body);
-    ("provider premature eof", `Quick, test_provider_premature_eof);
+    Alcotest_lwt.test_case "fixture stream" `Quick (fun _switch () ->
+        test_fixture_stream ());
+    Alcotest_lwt.test_case "split argument accumulation" `Quick (fun _switch () ->
+        test_split_argument_accumulation ());
+    Alcotest_lwt.test_case "interleaved calls" `Quick (fun _switch () ->
+        test_interleaved_calls ());
+    Alcotest_lwt.test_case "finish reasons" `Quick (fun _switch () ->
+        test_finish_reasons ());
+    Alcotest_lwt.test_case "usage precedes finish" `Quick (fun _switch () ->
+        test_usage_precedes_finish ());
+    Alcotest_lwt.test_case "malformed event" `Quick (fun _switch () ->
+        test_malformed_event ());
+    Alcotest_lwt.test_case "premature eof" `Quick (fun _switch () ->
+        test_premature_eof ());
+    Alcotest_lwt.test_case "silence after finish" `Quick (fun _switch () ->
+        test_silence_after_finish ());
+    Alcotest_lwt.test_case "cache write tokens" `Quick (fun _switch () ->
+        test_cache_write_tokens ());
+    Alcotest_lwt.test_case "encode system tools config" `Quick (fun _switch () ->
+        test_encode_system_tools_and_config ());
+    Alcotest_lwt.test_case "encode reasoning model" `Quick (fun _switch () ->
+        test_encode_reasoning_model ());
+    Alcotest_lwt.test_case "encode o1 mini removes system" `Quick (fun _switch () ->
+        test_encode_o1_mini_removes_system ());
+    Alcotest_lwt.test_case "encode conversation" `Quick (fun _switch () ->
+        test_encode_conversation ());
+    Alcotest_lwt.test_case "encode file part" `Quick (fun _switch () ->
+        test_encode_file_part ());
+    Alcotest_lwt.test_case "encode media tool result" `Quick (fun _switch () ->
+        test_encode_media_tool_result ());
+    Alcotest_lwt.test_case "provider posts encoded body" `Quick (fun _switch () ->
+        test_provider_posts_encoded_body ());
+    Alcotest_lwt.test_case "provider premature eof" `Quick (fun _switch () ->
+        test_provider_premature_eof ());
   ]

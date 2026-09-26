@@ -1,5 +1,5 @@
-open Result.Syntax
 module Cmd = Charamel_tea.Cmd
+module Env = Charamel_cli.Env
 module Sub = Charamel_tea.Sub
 module Key = Charamel_tea.Key
 module View = Charamel_tea.View
@@ -14,34 +14,6 @@ let error_text = function
   | `Http message -> message
 
 let key_name key = Key.to_string key
-
-let split_words text =
-  let length = String.length text in
-  let rec loop index quote current acc =
-    if index = length then
-      let acc =
-        if Buffer.length current = 0 then acc else Buffer.contents current :: acc
-      in
-      List.rev acc
-    else
-      let character = text.[index] in
-      match quote with
-      | Some delimiter when Char.equal character delimiter ->
-          loop (index + 1) None current acc
-      | Some _ ->
-          Buffer.add_char current character;
-          loop (index + 1) quote current acc
-      | None ->
-          if character = '\'' || character = '"' then
-            loop (index + 1) (Some character) current acc
-          else if Char.equal character ' ' || Char.equal character '\t' then
-            if Buffer.length current = 0 then loop (index + 1) None current acc
-            else loop (index + 1) None (Buffer.create 16) (Buffer.contents current :: acc)
-          else (
-            Buffer.add_char current character;
-            loop (index + 1) None current acc)
-  in
-  loop 0 None (Buffer.create 32) []
 
 let theme ~is_dark style =
   match String.lowercase_ascii style with
@@ -62,7 +34,7 @@ let source_label document =
   match document.Source.path with None -> "stdin" | Some path -> path
 
 type pager = {
-  env : Eio_unix.Stdenv.base option;
+  env : Charamel_cli.Env.t option;
   config : Config.t;
   document : Source.document;
   origin_directory : string option;
@@ -79,7 +51,7 @@ type pager = {
 }
 
 type browser = {
-  env : Eio_unix.Stdenv.base;
+  env : Charamel_cli.Env.t;
   config : Config.t;
   root : string;
   listing : string List_view.t;
@@ -99,11 +71,10 @@ type msg =
   | Failed of string
   | Editor_done of int
 
-let tty_size _env =
-  try
-    let size : Eio_unix.Pty.winsize = Eio_unix.Pty.get_window_size Eio_unix.Fd.stdout in
-    (max 1 size.Eio_unix.Pty.rows, max 1 size.Eio_unix.Pty.cols)
-  with Unix.Unix_error _ | Eio.Io _ -> (80, 24)
+let tty_size (_ : Charamel_cli.Env.t) =
+  match Charamel_os.Tty.size_stdout () with
+  | Some (rows, cols) -> (max 1 rows, max 1 cols)
+  | None -> (80, 24)
 
 let width_for env (config : Config.t) =
   if config.Config.width > 0 then config.Config.width
@@ -193,11 +164,13 @@ let make_browser env (config : Config.t) root ~width ~height =
   in
   { env; config; root; listing; width; height }
 
-let load_command env location =
-  Cmd.perform (fun () ->
-      match Source.read ~env ~clock:env#clock ~net:env#net location with
-      | Ok document -> Loaded document
-      | Error error -> Failed (error_text error))
+let load_result = function
+  | Ok document -> Loaded document
+  | Error error -> Failed (error_text error)
+
+let load_command (env : Charamel_cli.Env.t) location =
+  Cmd.await
+    (Lwt.map load_result (Source.read ~cwd:env.Env.cwd ~stdin:env.Env.stdin location))
 
 let refresh_browser browser =
   make_browser browser.env browser.config browser.root ~width:browser.width
@@ -292,20 +265,20 @@ let update_search (pager : pager) (key : Key.t) =
       ({ pager with query = pager.query ^ text }, Cmd.none)
   | _ -> (pager, Cmd.none)
 
+let reload_command (pager : pager) =
+  Cmd.await
+    (match (pager.env, pager.document.Source.path) with
+    | None, _ -> Lwt.return (Failed "filesystem access is unavailable in scripted mode")
+    | Some _, None -> Lwt.return (Failed "the current source has no local file")
+    | Some env, Some path ->
+        Lwt.map load_result
+          (Source.read ~cwd:env.Charamel_cli.Env.cwd ~stdin:env.Charamel_cli.Env.stdin
+             (Source.File path)))
+
 let editor_words () =
   match Sys.getenv_opt "EDITOR" with
-  | Some value when String.trim value <> "" -> split_words value
+  | Some value when String.trim value <> "" -> Charamel_os.Shell.split_words value
   | _ -> [ "vi" ]
-
-let reload_command (pager : pager) =
-  Cmd.perform (fun () ->
-      match (pager.env, pager.document.Source.path) with
-      | None, _ -> Failed "filesystem access is unavailable in scripted mode"
-      | Some _, None -> Failed "the current source has no local file"
-      | Some env, Some path -> (
-          match Source.read ~env ~clock:env#clock ~net:env#net (Source.File path) with
-          | Ok document -> Loaded document
-          | Error error -> Failed (error_text error)))
 
 let editor_command pager =
   match pager.document.Source.path with
@@ -507,31 +480,36 @@ let scripted ~(config : Config.t) ~content ~events ~size =
   let _, frame = Charamel_tea.Test.run (app (Pager pager)) ~events ~size in
   frame
 
-let run env ~(config : Config.t) ~location =
+let run (env : Charamel_cli.Env.t) ~(config : Config.t) ~location =
   let initial_width = width_for env config in
   let _, initial_height = tty_size env in
   let initial =
     match location with
     | Source.Directory root ->
-        Ok
-          (Browser
-             (make_browser env config root ~width:initial_width ~height:initial_height))
-    | Source.Stdin | Source.File _ | Source.Url _ -> (
-        match Source.read ~env ~clock:env#clock ~net:env#net location with
-        | Error error -> Error (error_text error)
-        | Ok document ->
-            Ok
-              (Pager
-                 (make_pager env config document ~width:initial_width
-                    ~height:initial_height)))
+        Lwt.return
+          (Ok
+             (Browser
+                (make_browser env config root ~width:initial_width ~height:initial_height)))
+    | Source.Stdin | Source.File _ | Source.Url _ ->
+        Lwt.bind (Source.read ~cwd:env.Env.cwd ~stdin:env.Env.stdin location) (function
+          | Error error -> Lwt.return (Error (error_text error))
+          | Ok document ->
+              Lwt.return
+                (Ok
+                   (Pager
+                      (make_pager env config document ~width:initial_width
+                         ~height:initial_height))))
   in
-  let* initial = initial in
-  match
-    Charamel_tea.run
-      ~terminal:(Charamel_tea.Terminal.local env)
-      ~clock:env#clock (app initial) env
-  with
-  | Ok _ -> Ok ()
-  | Error `Interrupted -> Error "interrupted"
-  | Error `Killed -> Error "killed"
-  | Error (`Exn (exception_, _)) -> Error (Fmt.str "%s" (Printexc.to_string exception_))
+  Lwt.bind initial (function
+    | Error _ as error -> Lwt.return error
+    | Ok initial ->
+        Lwt.bind
+          (Charamel_tea.run
+             ~terminal:(Charamel_tea.Terminal.local ())
+             ~clock:env.Env.clock (app initial))
+          (function
+            | Ok _ -> Lwt.return (Ok ())
+            | Error `Interrupted -> Lwt.return (Error "interrupted")
+            | Error `Killed -> Lwt.return (Error "killed")
+            | Error (`Exn (exception_, _)) ->
+                Lwt.return (Error (Fmt.str "%s" (Printexc.to_string exception_)))))

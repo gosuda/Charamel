@@ -14,9 +14,11 @@
     system call each inside [Lwt_preemptive.detach] instead of registering with the event
     loop. A concurrent reader therefore occupies one pool worker until data arrives; that
     is the cost of a master descriptor the scheduler cannot poll, and the reason
-    {!val:read} takes a count rather than handing out a channel. {!val:create},
-    {!val:exec} and {!val:resize} run the same way for the same reason, and [grantpt] in
-    particular may itself spawn the [pt_chown] helper.
+    {!val:read} takes a count rather than handing out a channel. The two calls give up the
+    OCaml runtime lock while they wait, so a blocked reader freezes no part of the
+    scheduler: a parent may drain a terminal while it feeds the child's input.
+    {!val:create}, {!val:exec} and {!val:resize} run the same way for the same reason, and
+    [grantpt] in particular may itself spawn the [pt_chown] helper.
 
     The child is started by [posix_spawnp] — so a program name with no directory separator
     is searched in [PATH] — never by [fork]:

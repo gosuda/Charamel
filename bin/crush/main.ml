@@ -1,5 +1,7 @@
 open Result.Syntax
 open Crush_core
+open Lwt_direct
+module Env = Charamel_cli.Env
 
 type cli = {
   yolo : bool;
@@ -13,8 +15,8 @@ type cli = {
 }
 
 type common = {
-  env : Eio_unix.Stdenv.base;
-  sw : Eio.Switch.t;
+  env : Env.t;
+  sw : Lwt_switch.t;
   cwd : string;
   config : Config.t;
   auth : Auth.t;
@@ -32,10 +34,17 @@ type common = {
 type agent_runtime = { common : common; agent : Agent.t; permission : Permission.t ref }
 
 let random_bytes length = Mirage_crypto_rng_unix.getrandom length
-let path fs filename = Eio.Path.(fs / filename)
-let write flow text = Eio.Flow.copy_string text flow
-let print_stdout env text = write env#stdout text
-let print_stderr env text = write env#stderr text
+let with_root (env : Env.t) target = Filename.concat env.Env.fs_root target
+let print_stdout (env : Env.t) text = await (Lwt_io.write env.Env.stdout text)
+let print_stderr (env : Env.t) text = await (Lwt_io.write env.Env.stderr text)
+
+let open_url (env : Env.t) uri =
+  match Charamel_os.Editor.browser () with
+  | [] -> print_stderr env (Fmt.str "Open this URL in a browser: %s@." uri)
+  | argv -> (
+      try ignore (Charamel_os.Process.spawn (argv @ [ uri ]))
+      with Unix.Unix_error _ ->
+        print_stderr env (Fmt.str "Open this URL in a browser: %s@." uri))
 
 let with_data_dir (config : Config.t) (options : cli) =
   let data_dir =
@@ -53,16 +62,18 @@ let with_data_dir (config : Config.t) (options : cli) =
   in
   { config with options }
 
-let cwd_for env (options : cli) =
-  let current = Eio.Path.native_exn env#cwd in
+let cwd_for (env : Env.t) (options : cli) =
   match options.cwd with
-  | None -> current
-  | Some path -> if Filename.is_relative path then Filename.concat current path else path
+  | None -> env.Env.cwd
+  | Some path ->
+      if Filename.is_relative path then Filename.concat env.Env.cwd path else path
 
-let ensure_directory fs directory =
-  Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 (path fs directory)
+let ensure_directory (env : Env.t) directory =
+  match await (Charamel_os.Fs.mkdir_p (with_root env directory)) with
+  | Ok () -> ()
+  | Error _ -> invalid_arg (Fmt.str "cannot create directory %s" directory)
 
-let prepare_directories env config cwd =
+let prepare_directories (env : Env.t) config cwd =
   let xdg =
     [
       Charamel_cli.Xdg.config_dir ~app:"crush";
@@ -72,44 +83,44 @@ let prepare_directories env config cwd =
       Config.data_dir config ~cwd;
     ]
   in
-  List.iter (ensure_directory env#fs) xdg
+  List.iter (ensure_directory env) xdg
 
-let load_config env ~cwd (options : cli) =
-  match Config.load ~fs:env#fs ~env:Sys.getenv_opt ~cwd with
+let load_config (env : Env.t) ~cwd (options : cli) =
+  match await (Config.load ~fs_root:env.Env.fs_root ~env:Sys.getenv_opt ~cwd) with
   | Error error -> Charamel_cli.error (Fmt.str "%a" Config.pp_error error)
   | Ok (config, _) -> with_data_dir config options
 
 let home_directory () = match Sys.getenv_opt "HOME" with Some home -> home | None -> ""
 let log_path () = Filename.concat (Charamel_cli.Xdg.state_dir ~app:"crush") "crush.log"
-let permission_asker bridge request = Crush_ui.Bridge.ask_permission bridge request
 
-let create_common env sw (options : cli) ~interactive ~bridge =
+let permission_asker bridge request =
+  await (Crush_ui.Bridge.ask_permission bridge request)
+
+let create_common (env : Env.t) sw (options : cli) ~interactive ~bridge =
   let cwd = cwd_for env options in
   let config = load_config env ~cwd options in
   prepare_directories env config cwd;
   let auth =
-    match Auth.create ~path:(path env#fs (Auth.path ())) ~clock:env#clock () with
+    match
+      await (Auth.create ~path:(with_root env (Auth.path ())) ~clock:env.Env.clock ())
+    with
     | Ok value -> value
     | Error error -> Charamel_cli.error (Fmt.str "%a" Auth.pp_error error)
   in
-  let store = Session.store ~fs:env#fs ~cwd in
-  let rules = Rules.load ~fs:env#fs ~cwd ~config in
-  let skills = Skills.load ~fs:env#fs ~config ~home:(home_directory ()) in
-  let hooks =
-    Hooks.create ~config:config.Config.hooks ~proc_mgr:env#process_mgr ~clock:env#clock
-      ~cwd
+  let store = Session.store ~fs_root:env.Env.fs_root ~cwd in
+  let rules = await (Rules.load ~fs_root:env.Env.fs_root ~cwd ~config) in
+  let skills =
+    await (Skills.load ~fs_root:env.Env.fs_root ~config ~home:(home_directory ()))
   in
-  let mcp =
-    Mcp.create ~sw ~proc_mgr:env#process_mgr ~net:env#net ~clock:env#clock ~cwd ~config
-  in
+  let hooks = Hooks.create ~config:config.Config.hooks ~cwd in
+  let mcp = await (Mcp.create ~cwd ~config) in
   let lsp =
     if config.Config.options.Config.auto_lsp then
-      Some
-        (Lsp.create ~sw ~proc_mgr:env#process_mgr ~clock:env#clock ~fs:env#fs ~cwd ~config)
+      Some (Lsp.create ~sw ~clock:env.Env.clock ~fs_root:env.Env.fs_root ~cwd ~config)
     else None
   in
   let log_path = log_path () in
-  ensure_directory env#fs (Filename.dirname log_path);
+  ensure_directory env (Filename.dirname log_path);
   {
     env;
     sw;
@@ -133,7 +144,7 @@ let model_ref (model : Models.resolved) =
     model = model.Models.model.Charamel_fantasy.Model.id;
   }
 
-let selected_model config target ~fs ~auth ~env =
+let selected_model config target ~fs_root ~auth ~env =
   let split_target value =
     match String.index_opt value '/' with
     | Some slash when slash > 0 && slash < String.length value - 1 ->
@@ -146,7 +157,7 @@ let selected_model config target ~fs ~auth ~env =
   | Some (provider, model) ->
       Ok { Config.provider; model; reasoning = None; max_tokens = None }
   | None -> (
-      let rows = Models.list ~fs config ~auth ~env in
+      let rows = await (Models.list ~fs_root config ~auth ~env) in
       let found =
         List.find_map
           (fun (provider, models, _) ->
@@ -171,8 +182,8 @@ let config_for_model common (options : cli) =
   | None -> Ok common.config
   | Some target ->
       let* selected =
-        selected_model common.config target ~fs:common.env#fs ~auth:common.auth
-          ~env:Sys.getenv_opt
+        selected_model common.config target ~fs_root:common.env.Env.fs_root
+          ~auth:common.auth ~env:Sys.getenv_opt
       in
       Ok
         {
@@ -186,7 +197,7 @@ let session_for common (options : cli) large =
   else
     match (options.session, options.continue_) with
     | Some id, _ -> (
-        match Session.open_ common.store ~id with
+        match await (Session.open_ common.store ~id) with
         | Ok session -> Ok session
         | Error (`Not_found path) -> Error (Fmt.str "cannot open session %s" path)
         | Error (`Io (path, message)) ->
@@ -195,12 +206,13 @@ let session_for common (options : cli) large =
         | Error (`Session_corrupt (path, line)) ->
             Error (Fmt.str "session %s is corrupt at line %d" path line))
     | None, true -> (
-        match Session.last common.store with
+        match await (Session.last common.store) with
         | Ok session -> Ok session
         | Error (`Not_found _) -> (
             match
-              Session.create common.store ~clock:common.env#clock ~random:random_bytes
-                ~cwd:common.cwd ~model:(model_ref large) ()
+              await
+                (Session.create common.store ~clock:common.env.Env.clock
+                   ~random:random_bytes ~cwd:common.cwd ~model:(model_ref large) ())
             with
             | Ok session -> Ok session
             | Error error -> Error (Fmt.str "%a" Session.pp_error error))
@@ -208,28 +220,32 @@ let session_for common (options : cli) large =
             Error (Fmt.str "cannot read session index: %a" Session.pp_error error))
     | None, false -> (
         match
-          Session.create common.store ~clock:common.env#clock ~random:random_bytes
-            ~cwd:common.cwd ~model:(model_ref large) ()
+          await
+            (Session.create common.store ~clock:common.env.Env.clock ~random:random_bytes
+               ~cwd:common.cwd ~model:(model_ref large) ())
         with
         | Ok session -> Ok session
         | Error error -> Error (Fmt.str "%a" Session.pp_error error))
 
-let make_events common =
+let make_events common : Agent.event -> unit Lwt.t =
   match common.bridge with
   | Some bridge -> Crush_ui.Bridge.push bridge
-  | None -> (
+  | None ->
       fun event ->
-        match event with
+        (match event with
         | Agent.Text_delta text -> print_stdout common.env text
         | Agent.Tool_finished { output; name; _ } when output.Tool.is_error ->
             print_stderr common.env (Fmt.str "tool %s: %s@." name output.Tool.content)
         | Agent.Failed error ->
             print_stderr common.env (Fmt.str "ERROR: %a@." Agent.pp_error error)
         | Agent.Turn_done _ -> print_stdout common.env "\n"
-        | _ -> ())
+        | _ -> ());
+        Lwt.return_unit
 
 let make_ask common =
-  Option.map (fun bridge questions -> Crush_ui.Bridge.ask bridge questions) common.bridge
+  Option.map
+    (fun bridge questions -> await (Crush_ui.Bridge.ask bridge questions))
+    common.bridge
 
 let make_permission common (config : Config.t) (options : cli) =
   let asker = Option.map permission_asker common.bridge in
@@ -237,7 +253,7 @@ let make_permission common (config : Config.t) (options : cli) =
     match common.bridge with
     | None -> ()
     | Some bridge ->
-        Crush_ui.Bridge.push bridge (Agent.Permission_resolved (request, outcome))
+        await (Crush_ui.Bridge.push bridge (Agent.Permission_resolved (request, outcome)))
   in
   Permission.create ~config:config.Config.permissions ~yolo:options.yolo ?asker
     ~cwd:common.cwd
@@ -249,10 +265,8 @@ let create_agent_for_session common (options : cli) config ~large ~small session
   let deps : Agent.deps =
     {
       sw = common.sw;
-      clock = common.env#clock;
-      fs = common.env#fs;
-      net = common.env#net;
-      proc_mgr = common.env#process_mgr;
+      clock = common.env.Env.clock;
+      fs_root = common.env.Env.fs_root;
       random = random_bytes;
       env = Sys.getenv_opt;
       cwd = common.cwd;
@@ -271,10 +285,10 @@ let create_agent_for_session common (options : cli) config ~large ~small session
       events = make_events common;
     }
   in
-  match Agent.create deps ~session ~large ~small with
+  match await (Agent.create deps ~session ~large ~small) with
   | Error error -> Error (`Agent error)
   | Ok agent ->
-      if options.plan then Agent.set_plan_mode agent true;
+      if options.plan then await (Agent.set_plan_mode agent true);
       Ok { common; agent; permission = ref permission }
 
 let create_agent common (options : cli) =
@@ -282,10 +296,12 @@ let create_agent common (options : cli) =
   | Error message -> Error (`Config message)
   | Ok config -> (
       match
-        ( Models.resolve ~fs:common.env#fs config ~auth:common.auth ~env:Sys.getenv_opt
-            ~role:`Large,
-          Models.resolve ~fs:common.env#fs config ~auth:common.auth ~env:Sys.getenv_opt
-            ~role:`Small )
+        ( await
+            (Models.resolve ~fs_root:common.env.Env.fs_root config ~auth:common.auth
+               ~env:Sys.getenv_opt ~role:`Large),
+          await
+            (Models.resolve ~fs_root:common.env.Env.fs_root config ~auth:common.auth
+               ~env:Sys.getenv_opt ~role:`Small) )
       with
       | Ok large, Ok small -> (
           match session_for common options large with
@@ -301,63 +317,92 @@ let pp_runtime_error = function
   | `Models error -> Fmt.str "models: %a" Models.pp_error error
   | `Agent error -> Fmt.str "agent: %a" Agent.pp_error error
 
+let shutdown_common common =
+  Lwt.bind (Mcp.close common.mcp) (fun () ->
+      match common.lsp with None -> Lwt.return_unit | Some lsp -> Lsp.stop_all lsp)
+
 let with_agent env (options : cli) ~interactive f =
-  Eio.Switch.run @@ fun sw ->
-  let bridge =
-    if interactive then Some (Crush_ui.Bridge.create ~capacity:256 ()) else None
+  await
+    (Lwt_switch.with_switch (fun sw ->
+         let bridge =
+           if interactive then Some (Crush_ui.Bridge.create ~capacity:256 ()) else None
+         in
+         let common_ref = ref None in
+         let result =
+           try
+             let common = create_common env sw options ~interactive ~bridge in
+             common_ref := Some common;
+             match create_agent common options with
+             | Error error -> Error (pp_runtime_error error)
+             | Ok runtime -> f runtime
+           with
+           | Charamel_os.Fs.E (error, target) ->
+               let kind =
+                 match error with
+                 | `Already_exists -> "already exists"
+                 | `Is_directory -> "is a directory"
+                 | `Not_found -> "not found"
+                 | `Permission_denied -> "permission denied"
+               in
+               Error (Fmt.str "%s: %s" target kind)
+           | Unix.Unix_error (error, fn, arg) ->
+               Error (Fmt.str "%s (%s %s)" (Unix.error_message error) fn arg)
+           | Invalid_argument message -> Error message
+         in
+         Option.iter Crush_ui.Bridge.close bridge;
+         Option.iter (fun c -> await (shutdown_common c)) !common_ref;
+         Lwt.return result))
+
+let read_stdin_bounded (env : Env.t) =
+  let buffer = Buffer.create 4096 in
+  let rec pump () =
+    let chunk = await (Lwt_io.read ~count:4096 env.Env.stdin) in
+    if String.length chunk = 0 then ()
+    else if Buffer.length buffer + String.length chunk > 10_485_760 then
+      invalid_arg "prompt on stdin exceeds 10 MiB"
+    else begin
+      Buffer.add_string buffer chunk;
+      pump ()
+    end
   in
-  let result =
-    try
-      let common = create_common env sw options ~interactive ~bridge in
-      match create_agent common options with
-      | Error error -> Error (pp_runtime_error error)
-      | Ok runtime -> f runtime
-    with
-    | Eio.Io _ as exn -> Error (Fmt.str "%a" Eio.Exn.pp exn)
-    | Unix.Unix_error (error, fn, arg) ->
-        Error (Fmt.str "%s (%s %s)" (Unix.error_message error) fn arg)
-    | Invalid_argument message -> Error message
-  in
-  Option.iter Crush_ui.Bridge.close bridge;
-  result
+  pump ();
+  Buffer.contents buffer
 
 let prompt_from env prompts =
   match prompts with
   | first :: rest -> Ok (String.concat " " (first :: rest))
-  | [] -> (
-      try
-        let value =
-          Eio.Buf_read.parse_exn ~max_size:10_485_760 Eio.Buf_read.take_all env#stdin
-        in
-        if String.trim value = "" then Error "prompt is empty" else Ok value
-      with End_of_file -> Error "prompt is empty")
+  | [] ->
+      let value = read_stdin_bounded env in
+      if String.trim value = "" then Error "prompt is empty" else Ok value
 
 let validate_agent_options options =
   if Option.is_some options.session && options.continue_ then
     Charamel_cli.error ~code:2 "--session and --continue cannot be used together"
 
-let run_agent env options prompts =
-  validate_agent_options options;
-  match prompt_from env prompts with
-  | Error message -> Charamel_cli.error message
-  | Ok prompt -> (
-      match
-        with_agent env options ~interactive:false (fun runtime ->
-            match Agent.prompt runtime.agent prompt with
-            | Error error -> Error (Fmt.str "%a" Agent.pp_error error)
-            | Ok (`Stop | `Length | `Content_filter) -> Ok ()
-            | Ok `Interrupted -> Error "interrupted"
-            | Ok `Loop_detected -> Error "agent loop detected"
-            | Ok `Budget -> Error "subagent request budget exhausted"
-            | Ok (`Halted reason) -> Error ("agent halted: " ^ reason))
-      with
-      | Ok () -> ()
-      | Error "interrupted" -> Charamel_cli.exit 130
-      | Error message -> Charamel_cli.error message)
+let run_agent (env : Env.t) options prompts =
+  spawn (fun () ->
+      validate_agent_options options;
+      match prompt_from env prompts with
+      | Error message -> Charamel_cli.error message
+      | Ok prompt -> (
+          match
+            with_agent env options ~interactive:false (fun runtime ->
+                match await (Agent.prompt runtime.agent prompt) with
+                | Error error -> Error (Fmt.str "%a" Agent.pp_error error)
+                | Ok (`Stop | `Length | `Content_filter) -> Ok ()
+                | Ok `Interrupted -> Error "interrupted"
+                | Ok `Loop_detected -> Error "agent loop detected"
+                | Ok `Budget -> Error "subagent request budget exhausted"
+                | Ok (`Halted reason) -> Error ("agent halted: " ^ reason))
+          with
+          | Ok () -> ()
+          | Error "interrupted" -> Charamel_cli.exit 130
+          | Error message -> Charamel_cli.error message))
 
-let form_environment env =
-  Charamel_huh.Form.Env.v ~fs:env#fs ~temp_dir:env#cwd
-    ~editor:(Charamel_huh.Form.Env.editor_of_string (Sys.getenv_opt "EDITOR"))
+let form_environment (env : Env.t) =
+  Charamel_huh.Form.Env.v ~fs_root:env.Env.fs_root ~temp_dir:env.Env.cwd
+    ~editor:(Some (Charamel_huh.Form.Env.editor_of_string (Sys.getenv_opt "EDITOR")))
+    ~clock:env.Env.clock
 
 let mime_type path =
   match String.lowercase_ascii (Filename.extension path) with
@@ -370,37 +415,43 @@ let mime_type path =
   | ".txt" | ".md" | ".ml" | ".mli" | ".rs" | ".py" | ".ts" | ".js" -> "text/plain"
   | _ -> "application/octet-stream"
 
-let attachment env cwd filename =
+let attachment (env : Env.t) cwd filename =
   let target =
-    if Filename.is_relative filename then path env#fs (Filename.concat cwd filename)
-    else path env#fs filename
+    if Filename.is_relative filename then Filename.concat cwd filename else filename
   in
-  try Ok (mime_type filename, Eio.Path.load target, Some (Filename.basename filename))
-  with Eio.Io _ -> Error (Fmt.str "cannot read attachment %s" filename)
+  try
+    Ok
+      ( mime_type filename,
+        await
+          (Lwt_io.with_file ~mode:Lwt_io.Input (with_root env target) (fun channel ->
+               Lwt_io.read channel)),
+        Some (Filename.basename filename) )
+  with Unix.Unix_error _ | Sys_error _ ->
+    Error (Fmt.str "cannot read attachment %s" filename)
 
 let model_rows runtime =
-  match
-    Models.list ~fs:runtime.common.env#fs runtime.common.config ~auth:runtime.common.auth
-      ~env:Sys.getenv_opt
-  with
-  | rows ->
-      List.concat_map
-        (fun (provider, models, _) ->
-          List.map
-            (fun (model : Charamel_fantasy.Model.t) ->
-              {
-                Crush_ui.id = model.Charamel_fantasy.Model.id;
-                provider;
-                context_window = model.Charamel_fantasy.Model.context_window;
-                max_tokens = model.Charamel_fantasy.Model.default_max_tokens;
-                can_reason = model.Charamel_fantasy.Model.can_reason;
-                supports_attachments = model.Charamel_fantasy.Model.supports_attachments;
-              })
-            models)
-        rows
+  let rows =
+    await
+      (Models.list ~fs_root:runtime.common.env.Env.fs_root runtime.common.config
+         ~auth:runtime.common.auth ~env:Sys.getenv_opt)
+  in
+  List.concat_map
+    (fun (provider, models, _) ->
+      List.map
+        (fun (model : Charamel_fantasy.Model.t) ->
+          {
+            Crush_ui.id = model.Charamel_fantasy.Model.id;
+            provider;
+            context_window = model.Charamel_fantasy.Model.context_window;
+            max_tokens = model.Charamel_fantasy.Model.default_max_tokens;
+            can_reason = model.Charamel_fantasy.Model.can_reason;
+            supports_attachments = model.Charamel_fantasy.Model.supports_attachments;
+          })
+        models)
+    rows
 
 let session_rows runtime =
-  match Session.list runtime.common.store with
+  match await (Session.list runtime.common.store) with
   | Error _ -> []
   | Ok rows ->
       List.map
@@ -417,7 +468,7 @@ let session_rows runtime =
 
 let model_config runtime ~agent target =
   let* selected =
-    selected_model runtime.common.config target ~fs:runtime.common.env#fs
+    selected_model runtime.common.config target ~fs_root:runtime.common.env.Env.fs_root
       ~auth:runtime.common.auth ~env:Sys.getenv_opt
   in
   let config =
@@ -427,10 +478,12 @@ let model_config runtime ~agent target =
     }
   in
   match
-    ( Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
-        ~env:Sys.getenv_opt ~role:`Large,
-      Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
-        ~env:Sys.getenv_opt ~role:`Small )
+    ( await
+        (Models.resolve ~fs_root:runtime.common.env.Env.fs_root config
+           ~auth:runtime.common.auth ~env:Sys.getenv_opt ~role:`Large),
+      await
+        (Models.resolve ~fs_root:runtime.common.env.Env.fs_root config
+           ~auth:runtime.common.auth ~env:Sys.getenv_opt ~role:`Small) )
   with
   | Ok large, Ok small ->
       Agent.set_models agent ~large ~small;
@@ -443,10 +496,12 @@ let replace_agent runtime options ~agent_ref session =
   let previous_plan = Permission.plan_mode !(runtime.permission) in
   let* config = config_for_model runtime.common options in
   match
-    ( Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
-        ~env:Sys.getenv_opt ~role:`Large,
-      Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
-        ~env:Sys.getenv_opt ~role:`Small )
+    ( await
+        (Models.resolve ~fs_root:runtime.common.env.Env.fs_root config
+           ~auth:runtime.common.auth ~env:Sys.getenv_opt ~role:`Large),
+      await
+        (Models.resolve ~fs_root:runtime.common.env.Env.fs_root config
+           ~auth:runtime.common.auth ~env:Sys.getenv_opt ~role:`Small) )
   with
   | Ok large, Ok small -> (
       match
@@ -457,7 +512,7 @@ let replace_agent runtime options ~agent_ref session =
       | Error (`Session error) -> Error ("session: " ^ error)
       | Error (`Config message) -> Error message
       | Ok next ->
-          if previous_plan then Agent.set_plan_mode next.agent true;
+          if previous_plan then await (Agent.set_plan_mode next.agent true);
           agent_ref := next.agent;
           runtime.permission := !(next.permission);
           Ok next.agent)
@@ -467,20 +522,22 @@ let replace_agent runtime options ~agent_ref session =
 let new_session_agent runtime options ~agent_ref =
   let* config = config_for_model runtime.common options in
   match
-    Models.resolve ~fs:runtime.common.env#fs config ~auth:runtime.common.auth
-      ~env:Sys.getenv_opt ~role:`Large
+    await
+      (Models.resolve ~fs_root:runtime.common.env.Env.fs_root config
+         ~auth:runtime.common.auth ~env:Sys.getenv_opt ~role:`Large)
   with
   | Error error -> Error (Fmt.str "%a" Models.pp_error error)
   | Ok large -> (
       match
-        Session.create runtime.common.store ~clock:runtime.common.env#clock
-          ~random:random_bytes ~cwd:runtime.common.cwd ~model:(model_ref large) ()
+        await
+          (Session.create runtime.common.store ~clock:runtime.common.env.Env.clock
+             ~random:random_bytes ~cwd:runtime.common.cwd ~model:(model_ref large) ())
       with
       | Error error -> Error (Fmt.str "%a" Session.pp_error error)
       | Ok session -> replace_agent runtime options ~agent_ref session)
 
 let resumed_agent runtime options ~agent_ref id =
-  match Session.open_ runtime.common.store ~id with
+  match await (Session.open_ runtime.common.store ~id) with
   | Error error -> Error (Fmt.str "%a" Session.pp_error error)
   | Ok session -> replace_agent runtime options ~agent_ref session
 
@@ -517,243 +574,259 @@ let history_rows agent =
       })
     (Session.messages (Agent.session agent))
 
-let login_provider env provider ~force =
+let login_provider (env : Env.t) provider ~force =
   if not (String.equal provider "anthropic") then
     Charamel_cli.error "only anthropic OAuth login is supported"
   else
-    Eio.Switch.run @@ fun sw ->
-    let auth =
-      match Auth.create ~path:(path env#fs (Auth.path ())) ~clock:env#clock () with
-      | Ok value -> value
-      | Error error -> Charamel_cli.error (Fmt.str "%a" Auth.pp_error error)
-    in
-    match Auth.find auth ~provider with
-    | Some (Auth.Oauth _) when not force ->
-        print_stdout env
-          (Fmt.str "You are already logged in to %s.\nUse --force to re-authenticate.\n"
-             provider)
-    | _ -> (
-        let reader = Eio.Buf_read.of_flow ~max_size:65_536 env#stdin in
-        let prompt_paste () =
-          print_stderr env "Paste the OAuth callback URL or code#state: ";
-          try Some (Eio.Buf_read.line reader) with End_of_file -> None
+    spawn (fun () ->
+        let auth =
+          match
+            await
+              (Auth.create ~path:(with_root env (Auth.path ())) ~clock:env.Env.clock ())
+          with
+          | Ok value -> value
+          | Error error -> Charamel_cli.error (Fmt.str "%a" Auth.pp_error error)
         in
-        let open_browser uri =
-          let browser = Option.value (Sys.getenv_opt "BROWSER") ~default:"xdg-open" in
-          try
-            ignore
-              (Eio_unix.run_in_systhread (fun () ->
-                   Unix.create_process browser [| browser; uri |] Unix.stdin Unix.stdout
-                     Unix.stderr))
-          with Unix.Unix_error _ ->
-            print_stderr env (Fmt.str "Open this URL in a browser: %s@." uri)
-        in
-        match Auth.Login.anthropic ~sw ~net:env#net ~open_browser ~prompt_paste auth with
-        | Ok () -> print_stdout env "Logged in to anthropic.\n"
-        | Error `Timeout -> Charamel_cli.error ~code:124 "OAuth login timed out"
-        | Error `Aborted -> Charamel_cli.exit 130
-        | Error (`Oauth message) -> Charamel_cli.error message
-        | Error (`Io (path, message)) ->
-            Charamel_cli.error (Fmt.str "%s: %s" path message)
-        | Error (`Parse (path, message)) ->
-            Charamel_cli.error (Fmt.str "%s: %s" path message))
-
-let logout_provider env provider ~force =
-  Eio.Switch.run @@ fun _sw ->
-  let auth =
-    match Auth.create ~path:(path env#fs (Auth.path ())) ~clock:env#clock () with
-    | Ok value -> value
-    | Error error -> Charamel_cli.error (Fmt.str "%a" Auth.pp_error error)
-  in
-  if (not force) && Option.is_none (Auth.find auth ~provider) then
-    Charamel_cli.error (Fmt.str "no credentials for provider %s" provider);
-  match Auth.remove auth ~provider with
-  | Ok () -> print_stdout env (Fmt.str "Logged out of %s.\n" provider)
-  | Error error -> Charamel_cli.error (Fmt.str "%a" Auth.pp_error error)
-
-let run_tui env options =
-  match
-    with_agent env options ~interactive:true (fun runtime ->
-        match runtime.common.bridge with
-        | None -> Error "interactive bridge unavailable"
-        | Some bridge -> (
-            let agent_ref = ref runtime.agent in
-            let open_browser uri =
-              let browser = Option.value (Sys.getenv_opt "BROWSER") ~default:"xdg-open" in
-              try
-                ignore
-                  (Eio_unix.run_in_systhread (fun () ->
-                       Unix.create_process browser [| browser; uri |] Unix.stdin
-                         Unix.stdout Unix.stderr))
-              with Unix.Unix_error _ ->
-                print_stderr env (Fmt.str "Open this URL in a browser: %s@." uri)
+        match Auth.find auth ~provider with
+        | Some (Auth.Oauth _) when not force ->
+            print_stdout env
+              (Fmt.str
+                 "You are already logged in to %s.\nUse --force to re-authenticate.\n"
+                 provider)
+        | _ -> (
+            let pasted = ref false in
+            let prompt_paste () =
+              if !pasted then Lwt.return_none
+              else begin
+                pasted := true;
+                print_stderr env "Paste the OAuth callback URL or code#state: ";
+                Lwt_io.read_line_opt env.Env.stdin
+              end
             in
-            let login provider code =
-              if not (String.equal provider "anthropic") then
-                Error "only anthropic OAuth login is supported"
-              else
-                let pasted = ref false in
-                let prompt_paste () =
-                  if !pasted || String.trim code = "" then None
-                  else (
-                    pasted := true;
-                    Some code)
-                in
-                match
-                  Auth.Login.anthropic ~sw:runtime.common.sw ~net:env#net ~open_browser
-                    ~prompt_paste runtime.common.auth
-                with
-                | Error `Timeout -> Error "OAuth login timed out"
-                | Error `Aborted -> Error "OAuth login aborted"
-                | Error (`Oauth message) -> Error message
-                | Error (`Io (path, message)) -> Error (Fmt.str "%s: %s" path message)
-                | Error (`Parse (path, message)) -> Error (Fmt.str "%s: %s" path message)
-                | Ok () ->
-                    let session = Agent.session !agent_ref in
-                    Result.map
-                      (fun _ -> ())
-                      (replace_agent runtime options ~agent_ref session)
-            in
-            let backend : Crush_ui.backend =
-              {
-                agent = agent_ref;
-                events = bridge;
-                clock = env#clock;
-                env;
-                form_env = form_environment env;
-                project = runtime.common.cwd;
-                session_id = (fun () -> Session.id (Agent.session !agent_ref));
-                new_session = (fun () -> new_session_agent runtime options ~agent_ref);
-                sessions = (fun () -> session_rows runtime);
-                resume_session = (fun id -> resumed_agent runtime options ~agent_ref id);
-                history = (fun () -> history_rows !agent_ref);
-                models = (fun () -> model_rows runtime);
-                select_model = (fun id -> model_config runtime ~agent:!agent_ref id);
-                login;
-                logout =
-                  (fun provider ->
-                    match Auth.remove runtime.common.auth ~provider with
-                    | Error error -> Error (Fmt.str "%a" Auth.pp_error error)
+            match
+              await (Auth.Login.anthropic ~open_browser:(open_url env) ~prompt_paste auth)
+            with
+            | Ok () -> print_stdout env "Logged in to anthropic.\n"
+            | Error `Timeout -> Charamel_cli.error ~code:124 "OAuth login timed out"
+            | Error `Aborted -> Charamel_cli.exit 130
+            | Error (`Oauth message) -> Charamel_cli.error message
+            | Error (`Io (path, message)) ->
+                Charamel_cli.error (Fmt.str "%s: %s" path message)
+            | Error (`Parse (path, message)) ->
+                Charamel_cli.error (Fmt.str "%s: %s" path message)))
+
+let logout_provider (env : Env.t) provider ~force =
+  spawn (fun () ->
+      let auth =
+        match
+          await (Auth.create ~path:(with_root env (Auth.path ())) ~clock:env.Env.clock ())
+        with
+        | Ok value -> value
+        | Error error -> Charamel_cli.error (Fmt.str "%a" Auth.pp_error error)
+      in
+      if (not force) && Option.is_none (Auth.find auth ~provider) then
+        Charamel_cli.error (Fmt.str "no credentials for provider %s" provider);
+      match await (Auth.remove auth ~provider) with
+      | Ok () -> print_stdout env (Fmt.str "Logged out of %s.\n" provider)
+      | Error error -> Charamel_cli.error (Fmt.str "%a" Auth.pp_error error))
+
+let run_tui (env : Env.t) options =
+  spawn (fun () ->
+      match
+        with_agent env options ~interactive:true (fun runtime ->
+            match runtime.common.bridge with
+            | None -> Error "interactive bridge unavailable"
+            | Some bridge -> (
+                let agent_ref = ref runtime.agent in
+                let login provider code =
+                  if not (String.equal provider "anthropic") then
+                    Error "only anthropic OAuth login is supported"
+                  else
+                    let pasted = ref false in
+                    let prompt_paste () =
+                      if !pasted || String.trim code = "" then Lwt.return_none
+                      else begin
+                        pasted := true;
+                        Lwt.return_some code
+                      end
+                    in
+                    match
+                      await
+                        (Auth.Login.anthropic ~open_browser:(open_url env) ~prompt_paste
+                           runtime.common.auth)
+                    with
+                    | Error `Timeout -> Error "OAuth login timed out"
+                    | Error `Aborted -> Error "OAuth login aborted"
+                    | Error (`Oauth message) -> Error message
+                    | Error (`Io (path, message)) -> Error (Fmt.str "%s: %s" path message)
+                    | Error (`Parse (path, message)) ->
+                        Error (Fmt.str "%s: %s" path message)
                     | Ok () ->
-                        Agent.cancel !agent_ref;
+                        let session = Agent.session !agent_ref in
+                        Result.map
+                          (fun _ -> ())
+                          (replace_agent runtime options ~agent_ref session)
+                in
+                let backend : Crush_ui.backend =
+                  {
+                    agent = agent_ref;
+                    events = bridge;
+                    clock = env.Env.clock;
+                    form_env = form_environment env;
+                    project = runtime.common.cwd;
+                    session_id = (fun () -> Session.id (Agent.session !agent_ref));
+                    new_session = (fun () -> new_session_agent runtime options ~agent_ref);
+                    sessions = (fun () -> session_rows runtime);
+                    resume_session =
+                      (fun id -> resumed_agent runtime options ~agent_ref id);
+                    history = (fun () -> history_rows !agent_ref);
+                    models = (fun () -> model_rows runtime);
+                    select_model = (fun id -> model_config runtime ~agent:!agent_ref id);
+                    login;
+                    logout =
+                      (fun provider ->
+                        match await (Auth.remove runtime.common.auth ~provider) with
+                        | Error error -> Error (Fmt.str "%a" Auth.pp_error error)
+                        | Ok () ->
+                            Agent.cancel !agent_ref;
+                            Ok ());
+                    load_attachment =
+                      (fun attachment_path ->
+                        attachment env runtime.common.cwd attachment_path);
+                    yolo = (fun () -> options.yolo);
+                    approve_session =
+                      (fun () ->
+                        Permission.set_plan_mode !(runtime.permission) false;
+                        await (Agent.set_plan_mode !agent_ref false);
                         Ok ());
-                load_attachment =
-                  (fun attachment_path ->
-                    attachment env runtime.common.cwd attachment_path);
-                yolo = (fun () -> options.yolo);
-                approve_session =
-                  (fun () ->
-                    Permission.set_plan_mode !(runtime.permission) false;
-                    Agent.set_plan_mode !agent_ref false;
-                    Ok ());
-                set_plan_mode =
-                  (fun enabled ->
-                    Permission.set_plan_mode !(runtime.permission) enabled;
-                    Agent.set_plan_mode !agent_ref enabled;
-                    Ok ());
-                plan_mode = (fun () -> Permission.plan_mode !(runtime.permission));
-                lsp_status =
-                  (fun () ->
-                    match runtime.common.lsp with
-                    | None -> "disabled"
-                    | Some lsp ->
+                    set_plan_mode =
+                      (fun enabled ->
+                        Permission.set_plan_mode !(runtime.permission) enabled;
+                        await (Agent.set_plan_mode !agent_ref enabled);
+                        Ok ());
+                    plan_mode = (fun () -> Permission.plan_mode !(runtime.permission));
+                    lsp_status =
+                      (fun () ->
+                        match runtime.common.lsp with
+                        | None -> "disabled"
+                        | Some lsp ->
+                            let state_text = function
+                              | Lsp.Not_started -> "not started"
+                              | Lsp.Starting -> "starting"
+                              | Lsp.Ready -> "ready"
+                              | Lsp.Failed message -> "failed: " ^ message
+                              | Lsp.Disabled -> "disabled"
+                            in
+                            String.concat ", "
+                              (List.map
+                                 (fun (name, state) -> name ^ ": " ^ state_text state)
+                                 (await (Lsp.servers lsp))));
+                    mcp_status =
+                      (fun () ->
                         let state_text = function
-                          | Lsp.Not_started -> "not started"
-                          | Lsp.Starting -> "starting"
-                          | Lsp.Ready -> "ready"
-                          | Lsp.Failed message -> "failed: " ^ message
-                          | Lsp.Disabled -> "disabled"
+                          | Mcp.Connecting -> "connecting"
+                          | Mcp.Connected { tools; resources; prompts } ->
+                              Fmt.str "connected (%d tools, %d resources, %d prompts)"
+                                tools resources prompts
+                          | Mcp.Failed message -> "failed: " ^ message
+                          | Mcp.Disabled -> "disabled"
                         in
                         String.concat ", "
                           (List.map
                              (fun (name, state) -> name ^ ": " ^ state_text state)
-                             (Lsp.servers lsp)));
-                mcp_status =
-                  (fun () ->
-                    let state_text = function
-                      | Mcp.Connecting -> "connecting"
-                      | Mcp.Connected { tools; resources; prompts } ->
-                          Fmt.str "connected (%d tools, %d resources, %d prompts)" tools
-                            resources prompts
-                      | Mcp.Failed message -> "failed: " ^ message
-                      | Mcp.Disabled -> "disabled"
-                    in
-                    String.concat ", "
-                      (List.map
-                         (fun (name, state) -> name ^ ": " ^ state_text state)
-                         (Mcp.states runtime.common.mcp)));
-                dark = (fun () -> Charamel_cli.is_dark ~env:Sys.getenv_opt);
-                quit = (fun () -> Agent.cancel !agent_ref);
-              }
-            in
-            match Crush_ui.run backend with
-            | Ok _ -> Ok ()
-            | Error `Interrupted -> Error "interrupted"
-            | Error `Killed -> Error "TUI killed"
-            | Error (`Exn (exn, _)) -> Error (Printexc.to_string exn)))
-  with
-  | Ok () -> ()
-  | Error "interrupted" -> Charamel_cli.exit 130
-  | Error message -> Charamel_cli.error message
+                             (Mcp.states runtime.common.mcp)));
+                    dark = (fun () -> Charamel_cli.is_dark ~env:Sys.getenv_opt);
+                    quit = (fun () -> Agent.cancel !agent_ref);
+                  }
+                in
+                match await (Crush_ui.run backend) with
+                | Ok _ -> Ok ()
+                | Error `Interrupted -> Error "interrupted"
+                | Error `Killed -> Error "TUI killed"
+                | Error (`Exn (exn, _)) -> Error (Printexc.to_string exn)))
+      with
+      | Ok () -> ()
+      | Error "interrupted" -> Charamel_cli.exit 130
+      | Error message -> Charamel_cli.error message)
 
-let list_models env options =
-  Eio.Switch.run @@ fun sw ->
-  let common = create_common env sw options ~interactive:false ~bridge:None in
-  let rows = Models.list ~fs:env#fs common.config ~auth:common.auth ~env:Sys.getenv_opt in
-  List.iter
-    (fun (provider, models, status) ->
-      let status =
-        match status with
-        | `Ready -> "ready"
-        | `No_credential -> "no credential"
-        | `Disabled -> "disabled"
-      in
-      print_stdout env (Fmt.str "%s\t%s\n" provider status);
-      List.iter
-        (fun (model : Charamel_fantasy.Model.t) ->
-          print_stdout env
-            (Fmt.str "  %s\t%d\t%d\n" model.Charamel_fantasy.Model.id
-               model.Charamel_fantasy.Model.context_window
-               model.Charamel_fantasy.Model.default_max_tokens))
-        models)
-    rows
+let list_models (env : Env.t) options =
+  spawn (fun () ->
+      await
+        (Lwt_switch.with_switch (fun sw ->
+             let common = create_common env sw options ~interactive:false ~bridge:None in
+             Lwt.finalize
+               (fun () ->
+                 let rows =
+                   await
+                     (Models.list ~fs_root:env.Env.fs_root common.config ~auth:common.auth
+                        ~env:Sys.getenv_opt)
+                 in
+                 List.iter
+                   (fun (provider, models, status) ->
+                     let status =
+                       match status with
+                       | `Ready -> "ready"
+                       | `No_credential -> "no credential"
+                       | `Disabled -> "disabled"
+                     in
+                     print_stdout env (Fmt.str "%s\t%s\n" provider status);
+                     List.iter
+                       (fun (model : Charamel_fantasy.Model.t) ->
+                         print_stdout env
+                           (Fmt.str "  %s\t%d\t%d\n" model.Charamel_fantasy.Model.id
+                              model.Charamel_fantasy.Model.context_window
+                              model.Charamel_fantasy.Model.default_max_tokens))
+                       models)
+                   rows;
+                 Lwt.return_unit)
+               (fun () -> shutdown_common common))))
 
-let list_sessions env options =
-  Eio.Switch.run @@ fun sw ->
-  let common = create_common env sw options ~interactive:false ~bridge:None in
-  match Session.list common.store with
-  | Error error -> Charamel_cli.error (Fmt.str "%a" Session.pp_error error)
-  | Ok rows ->
-      List.iter
-        (fun (row : Session.index_entry) ->
-          print_stdout env (Fmt.str "%s\t%s\n" row.Session.id row.Session.title))
-        rows
+let list_sessions (env : Env.t) options =
+  spawn (fun () ->
+      await
+        (Lwt_switch.with_switch (fun sw ->
+             let common = create_common env sw options ~interactive:false ~bridge:None in
+             Lwt.finalize
+               (fun () ->
+                 (match await (Session.list common.store) with
+                 | Error error -> Charamel_cli.error (Fmt.str "%a" Session.pp_error error)
+                 | Ok rows ->
+                     List.iter
+                       (fun (row : Session.index_entry) ->
+                         print_stdout env
+                           (Fmt.str "%s\t%s\n" row.Session.id row.Session.title))
+                       rows);
+                 Lwt.return_unit)
+               (fun () -> shutdown_common common))))
 
-let update_providers env source =
+let update_providers (env : Env.t) source =
   if String.equal source "embedded" then
     Charamel_cli.error ~code:2 "--source expects a catalog URL"
   else
-    Eio.Switch.run @@ fun _sw ->
-    match Models.update_catalog ~source ~fs:env#fs ~net:env#net ~clock:env#clock () with
-    | Error (`Io (target, message)) ->
-        Charamel_cli.error (Fmt.str "%s: %s" target message)
-    | Error (`Parse message) ->
-        Charamel_cli.error (Fmt.str "provider catalog: %s" message)
-    | Error (`Fetch fetch_error) ->
-        Charamel_cli.error
-          (Fmt.str "provider catalog: %a" Charamel_fantasy.Error.pp fetch_error)
-    | Ok (Models.Updated etag) ->
-        print_stdout env
-          (if etag = "" then "Updated provider catalog.\n"
-           else Fmt.str "Updated provider catalog (etag %s).\n" etag)
-    | Ok Models.Not_modified -> print_stdout env "Provider catalog is unchanged.\n"
+    spawn (fun () ->
+        match await (Models.update_catalog ~source ~fs_root:env.Env.fs_root ()) with
+        | Error (`Io (target, message)) ->
+            Charamel_cli.error (Fmt.str "%s: %s" target message)
+        | Error (`Parse message) ->
+            Charamel_cli.error (Fmt.str "provider catalog: %s" message)
+        | Error (`Fetch fetch_error) ->
+            Charamel_cli.error
+              (Fmt.str "provider catalog: %a" Charamel_fantasy.Error.pp fetch_error)
+        | Ok (Models.Updated etag) ->
+            print_stdout env
+              (if etag = "" then "Updated provider catalog.\n"
+               else Fmt.str "Updated provider catalog (etag %s).\n" etag)
+        | Ok Models.Not_modified -> print_stdout env "Provider catalog is unchanged.\n")
 
-let read_log env ~tail ~follow =
+let read_log (env : Env.t) ~tail ~follow =
   if tail < 1 then Charamel_cli.error ~code:2 "--tail must be at least 1";
   let filename = log_path () in
   let read () =
-    try Eio.Path.load (path env#fs filename)
-    with Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> ""
+    try
+      await
+        (Lwt_io.with_file ~mode:Lwt_io.Input (with_root env filename) (fun channel ->
+             Lwt_io.read channel))
+    with Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> ""
   in
   let take_tail text =
     let lines =
@@ -768,31 +841,34 @@ let read_log env ~tail ~follow =
   let previous = ref "" in
   let emit () =
     let current = take_tail (read ()) in
-    if not (String.equal current !previous) then (
+    if not (String.equal current !previous) then begin
       previous := current;
-      print_stdout env (if current = "" then "" else current ^ "\n"))
+      print_stdout env (if current = "" then "" else current ^ "\n")
+    end
   in
-  if follow then
-    while true do
-      emit ();
-      Eio.Time.sleep env#clock 0.25
-    done
-  else emit ()
+  spawn (fun () ->
+      if follow then
+        while true do
+          emit ();
+          await (Charamel_os.Time.sleep env.Env.clock 0.25)
+        done
+      else emit ())
 
-let dirs env options =
-  let cwd = cwd_for env options in
-  let config = load_config env ~cwd options in
-  let lines =
-    [
-      "config: " ^ Charamel_cli.Xdg.config_dir ~app:"crush";
-      "data: " ^ Charamel_cli.Xdg.data_dir ~app:"crush";
-      "state: " ^ Charamel_cli.Xdg.state_dir ~app:"crush";
-      "cache: " ^ Charamel_cli.Xdg.cache_dir ~app:"crush";
-      "project: " ^ Config.data_dir config ~cwd;
-      "project-key: " ^ Config.project_key ~cwd;
-    ]
-  in
-  print_stdout env (String.concat "\n" lines ^ "\n")
+let dirs (env : Env.t) options =
+  spawn (fun () ->
+      let cwd = cwd_for env options in
+      let config = load_config env ~cwd options in
+      let lines =
+        [
+          "config: " ^ Charamel_cli.Xdg.config_dir ~app:"crush";
+          "data: " ^ Charamel_cli.Xdg.data_dir ~app:"crush";
+          "state: " ^ Charamel_cli.Xdg.state_dir ~app:"crush";
+          "cache: " ^ Charamel_cli.Xdg.cache_dir ~app:"crush";
+          "project: " ^ Config.data_dir config ~cwd;
+          "project-key: " ^ Config.project_key ~cwd;
+        ]
+      in
+      print_stdout env (String.concat "\n" lines ^ "\n"))
 
 let option_term =
   let open Cmdliner in
@@ -825,11 +901,9 @@ let option_term =
     Arg.(
       value
       & opt (some string) None
-      & info [ "D"; "data-dir" ] ~docv:"DIR" ~doc:"Store Crush data below DIR.")
+      & info [ "d"; "data-dir" ] ~docv:"DIR" ~doc:"Store Crush data below DIR.")
   in
-  let debug =
-    Arg.(value & flag & info [ "d"; "debug" ] ~doc:"Enable debug configuration.")
-  in
+  let debug = Arg.(value & flag & info [ "debug" ] ~doc:"Enable debug logging.") in
   Term.(
     const (fun yolo plan model session continue_ cwd data_dir debug ->
         { yolo; plan; model; session; continue_; cwd; data_dir; debug })
@@ -837,14 +911,14 @@ let option_term =
 
 let command_info name doc = Cmdliner.Cmd.info name ~doc
 
-let command_run env =
+let command_run (env : Env.t) =
   let prompts = Cmdliner.Arg.(value & pos_all string [] & info [] ~docv:"PROMPT") in
   let action options prompts = run_agent env options prompts in
   Cmdliner.Cmd.v
     (command_info "run" "Run one coding-agent prompt.")
     Cmdliner.Term.(const action $ option_term $ prompts)
 
-let command_login env =
+let command_login (env : Env.t) =
   let provider =
     Cmdliner.Arg.(required & pos 0 (some string) None & info [] ~docv:"PROVIDER")
   in
@@ -859,7 +933,7 @@ let command_login env =
     (command_info "login" "Authenticate a provider.")
     Cmdliner.Term.(const action $ provider $ force)
 
-let command_logout env =
+let command_logout (env : Env.t) =
   let provider =
     Cmdliner.Arg.(required & pos 0 (some string) None & info [] ~docv:"PROVIDER")
   in
@@ -873,19 +947,19 @@ let command_logout env =
     (command_info "logout" "Remove a provider credential.")
     Cmdliner.Term.(const action $ provider $ force)
 
-let command_models env =
+let command_models (env : Env.t) =
   let action = list_models env in
   Cmdliner.Cmd.v
     (command_info "models" "List configured and catalog models.")
     Cmdliner.Term.(const action $ option_term)
 
-let command_sessions env =
+let command_sessions (env : Env.t) =
   let action = list_sessions env in
   Cmdliner.Cmd.v
     (command_info "sessions" "List saved sessions.")
     Cmdliner.Term.(const action $ option_term)
 
-let command_update_providers env =
+let command_update_providers (env : Env.t) =
   let source =
     Cmdliner.Arg.(
       value
@@ -897,7 +971,7 @@ let command_update_providers env =
     (command_info "update-providers" "Refresh the provider catalog.")
     Cmdliner.Term.(const action $ source)
 
-let command_logs env =
+let command_logs (env : Env.t) =
   let follow =
     Cmdliner.Arg.(value & flag & info [ "f"; "follow" ] ~doc:"Follow new log lines.")
   in
@@ -911,20 +985,21 @@ let command_logs env =
     Cmdliner.Term.(
       const (fun _options follow tail -> action follow tail) $ option_term $ follow $ tail)
 
-let command_dirs env =
+let command_dirs (env : Env.t) =
   let action = dirs env in
   Cmdliner.Cmd.v
     (command_info "dirs" "Show Crush directories.")
     Cmdliner.Term.(const action $ option_term)
 
-let command_schema env =
-  let action _env = print_stdout env (Jsonx.string_of_json Config.schema ^ "\n") in
-  let env_term = Cmdliner.Term.const env in
+let command_schema (env : Env.t) =
+  let action () =
+    spawn (fun () -> print_stdout env (Jsonx.string_of_json Config.schema ^ "\n"))
+  in
   Cmdliner.Cmd.v
     (command_info "schema" "Print the Crush configuration schema.")
-    Cmdliner.Term.(const action $ env_term)
+    Cmdliner.Term.(const action $ const ())
 
-let default env =
+let default (env : Env.t) =
   let action = run_tui env in
   Cmdliner.Term.(const action $ option_term)
 

@@ -2,21 +2,19 @@
  (name charamel_fantasy)
  (public_name charamel.fantasy)
  (libraries
-  eio
-  eio.unix
+  base64
+  charamel.net
+  charamel.os
+  cohttp
+  digestif
   fmt
-  logs
+  http
   jsont
   jsont.bytesrw
-  cohttp-eio
-  cohttp
-  http
-  tls
-  tls-eio
-  ca-certs
-  domain-name
-  digestif
-  base64
-  uri
+  lwt
+  lwt.unix
+  logs
+  mirage-crypto-rng
   ptime
-  mirage-crypto-rng))
+  unix
+  uri))

@@ -10,10 +10,7 @@ depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.24"}
   "charamel"
-  "cohttp-eio"
-  "tls-eio"
   "ca-certs"
-  "eio"
   "jsont"
   "bytesrw"
   "re"
@@ -30,10 +27,10 @@ depends: [
   "domain-name"
   "cstruct"
   "cmdliner"
-  "eio_main"
   "optint"
   "ipaddr"
   "alcotest" {with-test}
+  "alcotest-lwt" {>= "1.9.1" & with-test}
   "odoc" {with-doc}
 ]
 build: [

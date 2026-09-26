@@ -11,12 +11,11 @@ depends: [
   "dune" {>= "3.24"}
   "charamel"
   "charamel-ssh"
-  "eio"
   "fmt"
-  "eio_main"
   "cmdliner"
   "mirage-crypto-rng"
   "alcotest" {with-test}
+  "alcotest-lwt" {>= "1.9.1" & with-test}
   "odoc" {with-doc}
 ]
 build: [

@@ -65,9 +65,10 @@ let keymap () =
 
 let cases =
   [
-    Alcotest.test_case "editing unicode and limits" `Quick editing_unicode_and_limits;
-    Alcotest.test_case "validation" `Quick validation;
-    Alcotest.test_case "suggestions" `Quick suggestions;
-    Alcotest.test_case "scrolling and paste" `Quick scrolling_and_paste;
-    Alcotest.test_case "keymap" `Quick keymap;
+    Alcotest_lwt.test_case_sync "editing unicode and limits" `Quick
+      editing_unicode_and_limits;
+    Alcotest_lwt.test_case_sync "validation" `Quick validation;
+    Alcotest_lwt.test_case_sync "suggestions" `Quick suggestions;
+    Alcotest_lwt.test_case_sync "scrolling and paste" `Quick scrolling_and_paste;
+    Alcotest_lwt.test_case_sync "keymap" `Quick keymap;
   ]

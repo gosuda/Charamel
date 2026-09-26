@@ -64,21 +64,24 @@ val authorized_key : ?comment:string -> t -> string
 (** [authorized_key ?comment t] is an authorized_keys line. It is the key type, the base64
     public blob, then the comment. [comment] defaults to [""]. *)
 
-val write : fs:_ Eio.Fs.dir -> path:string -> ?comment:string -> t -> (unit, error) result
-(** [write ~fs ~path ?comment t] writes the private key to [path] with mode 0600 and the
-    public key to [path ^ ".pub"] with mode 0644. Both files are created exclusively.
-    [comment] defaults to [""]. When either path already exists, including as a dangling
-    or regular symlink, the call writes neither file and is [`Already_exists] naming the
-    existing path. On any other failure after a file was created, only files this call
-    created are removed, so a failed call leaves no private key behind. The pair is not
-    atomic across both names. Other filesystem failures are [`Io]. *)
+val write :
+  fs_root:string -> path:string -> ?comment:string -> t -> (unit, error) result Lwt.t
+(** [write ~fs_root ~path ?comment t] writes the private key to [path] with mode 0600 and
+    the public key to [path ^ ".pub"] with mode 0644. Both files are created exclusively.
+    [comment] defaults to [""]. [path] is resolved against [fs_root] when it is relative
+    and used as it stands when it is absolute. When either path already exists, including
+    as a dangling or regular symlink, the call writes neither file and is
+    [`Already_exists] naming the existing path. On any other failure after a file was
+    created, only files this call created are removed, so a failed call leaves no private
+    key behind. The pair is not atomic across both names. Other filesystem failures are
+    [`Io]. *)
 
 val load_or_generate :
-  fs:_ Eio.Fs.dir ->
+  fs_root:string ->
   path:string ->
   algorithm ->
-  (t * [ `Loaded | `Generated ], error) result
-(** [load_or_generate ~fs ~path algorithm] loads the pair from [path] when the file
+  (t * [ `Loaded | `Generated ], error) result Lwt.t
+(** [load_or_generate ~fs_root ~path algorithm] loads the pair from [path] when the file
     exists, and otherwise generates a fresh pair of [algorithm] and writes it. The result
     reports which happened. An existing file is never replaced. A file larger than 65536
     bytes is [`Io]. An unparseable file returns its parse error. *)

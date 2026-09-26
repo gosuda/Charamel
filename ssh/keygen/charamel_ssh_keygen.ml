@@ -1,3 +1,4 @@
+open Lwt.Infix
 open Result.Syntax
 
 type algorithm = Ed25519 | Ecdsa_p256 | Ecdsa_p384 | Ecdsa_p521
@@ -198,89 +199,118 @@ let authorized_key ?(comment = "") t =
 
 (* The pair write is not atomic across two names. On failure this module
    removes only the files the failing call itself created. *)
+let fs_text = function
+  | `Already_exists -> "already exists"
+  | `Is_directory -> "is a directory"
+  | `Not_found -> "no such file or directory"
+  | `Permission_denied -> "permission denied"
+
+let io_text exn =
+  match exn with
+  | Unix.Unix_error (kind, _, _) -> Unix.error_message kind
+  | Charamel_os.Fs.E (error, path) -> Fmt.str "%s: %s" path (fs_text error)
+  | exn -> Printexc.to_string exn
+
 let io_of fn =
-  try Ok (fn ())
-  with Eio.Io (Eio.Fs.E _, _) as exn ->
-    Eio.Fiber.check ();
-    Error (`Io (Fmt.str "%a" Eio.Exn.pp exn))
+  Lwt.catch
+    (fun () -> fn () >|= fun value -> Ok value)
+    (function
+      | Lwt.Canceled as exn -> Lwt.fail exn
+      | exn -> Lwt.return (Error (`Io (io_text exn))))
 
-let path_of fs path = Eio.Path.(Eio.Path.of_dir fs / path)
+let path_of fs_root path =
+  if String.equal path "" || String.equal path "." then fs_root
+  else if Filename.is_relative path then Filename.concat fs_root path
+  else path
 
-let path_exists p =
-  let* kind = io_of (fun () -> Eio.Path.kind ~follow:false p) in
-  match kind with `Not_found -> Ok false | _ -> Ok true
+(* Only a short-circuit: [save] creates exclusively, so a wrong answer here still ends up
+   reported as [Already_exists] or [Io] by the create that follows. *)
+let path_exists p = Charamel_os.Fs.stat p >|= function Ok _ -> true | Error _ -> false
+
+let read_capped channel limit =
+  let buffer = Buffer.create 8192 in
+  let rec go () =
+    let remaining = limit - Buffer.length buffer in
+    if remaining <= 0 then Lwt.return_unit
+    else
+      Lwt_io.read ~count:remaining channel >>= fun chunk ->
+      if String.is_empty chunk then Lwt.return_unit
+      else begin
+        Buffer.add_string buffer chunk;
+        go ()
+      end
+  in
+  go () >|= fun () -> Buffer.contents buffer
 
 let write_pair p path_name pub_p pub_name private_body pub_body =
   let created = ref [] in
   let committed = ref false in
   let rec rollback = function
-    | [] -> ()
+    | [] -> Lwt.return_unit
     | q :: rest ->
-        Fun.protect
-          ~finally:(fun () -> rollback rest)
-          (fun () ->
-            try Eio.Path.unlink ~missing_ok:true q with Eio.Io (Eio.Fs.E _, _) -> ())
+        Lwt.catch
+          (fun () -> Charamel_os.Fs.unlink q >|= fun _ -> ())
+          (fun _exn -> Lwt.return_unit)
+        >>= fun () -> rollback rest
   in
   let save dest name perm body =
-    try
-      Eio.Path.with_open_out ~create:(`Exclusive perm) dest (fun flow ->
-          created := dest :: !created;
-          Eio.Flow.copy_string body flow);
-      Ok ()
-    with
-    | Eio.Io (Eio.Fs.E (Already_exists _), _) -> Error (`Already_exists name)
-    | Eio.Io (Eio.Fs.E _, _) as exn ->
-        Eio.Fiber.check ();
-        Error (`Io (Fmt.str "%a" Eio.Exn.pp exn))
+    Lwt.catch
+      (fun () ->
+        Lwt_unix.openfile dest [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] perm
+        >>= fun fd ->
+        created := dest :: !created;
+        let channel = Lwt_io.of_fd ~mode:Lwt_io.output fd in
+        Lwt_io.write channel body >>= fun () ->
+        Lwt_io.close channel >|= fun () -> Ok ())
+      (function
+        | Unix.Unix_error (Unix.EEXIST, _, _) -> Lwt.return (Error (`Already_exists name))
+        | Lwt.Canceled as exn -> Lwt.fail exn
+        | exn -> Lwt.return (Error (`Io (io_text exn))))
   in
-  Fun.protect
-    ~finally:(fun () ->
-      if not !committed then Eio.Cancel.protect (fun () -> rollback !created))
+  Lwt.finalize
     (fun () ->
-      match
-        Eio.Cancel.protect (fun () ->
-            let* () = save p path_name 0o600 private_body in
-            save pub_p pub_name 0o644 pub_body)
-      with
-      | Ok () as ok ->
-          committed := true;
-          Eio.Fiber.check ();
-          ok
-      | Error _ as err -> err)
+      save p path_name 0o600 private_body >>= function
+      | Error _ as err -> Lwt.return err
+      | Ok () -> (
+          save pub_p pub_name 0o644 pub_body >>= function
+          | Error _ as err -> Lwt.return err
+          | Ok () ->
+              committed := true;
+              Lwt.return (Ok ())))
+    (fun () -> if !committed then Lwt.return_unit else rollback !created)
 
-let write ~fs ~path ?comment t =
-  let p = path_of fs path in
+let write ~fs_root ~path ?comment t =
+  let p = path_of fs_root path in
   let pub_name = path ^ ".pub" in
-  let pub_p = path_of fs pub_name in
-  let* priv_exists = path_exists p in
-  let* () = if priv_exists then Error (`Already_exists path) else Ok () in
-  let* pub_exists = path_exists pub_p in
-  let* () = if pub_exists then Error (`Already_exists pub_name) else Ok () in
-  write_pair p path pub_p pub_name
-    (to_openssh_private ?comment t)
-    (authorized_key ?comment t)
+  let pub_p = path_of fs_root pub_name in
+  path_exists p >>= function
+  | true -> Lwt.return (Error (`Already_exists path))
+  | false -> (
+      path_exists pub_p >>= function
+      | true -> Lwt.return (Error (`Already_exists pub_name))
+      | false ->
+          write_pair p path pub_p pub_name
+            (to_openssh_private ?comment t)
+            (authorized_key ?comment t))
 
 let max_key_file_size = 65536
 
-let load_existing ~path p =
-  let* contents =
-    io_of (fun () ->
-        Eio.Path.with_open_in p (fun flow ->
-            Eio.Buf_read.parse ~max_size:(max_key_file_size + 1) Eio.Buf_read.take_all
-              flow))
-  in
-  match contents with
-  | Error (`Msg _) -> Error (`Io (Fmt.str "%s: exceeds the key file size limit" path))
-  | Ok pem ->
-      let* t = of_openssh_private pem in
-      Ok (t, `Loaded)
+let decode_saved ~path body =
+  if String.length body > max_key_file_size then
+    Error (`Io (Fmt.str "%s: exceeds the key file size limit" path))
+  else Result.map (fun t -> (t, `Loaded)) (of_openssh_private body)
 
-let load_or_generate ~fs ~path algorithm =
-  let p = path_of fs path in
-  let* kind = io_of (fun () -> Eio.Path.kind ~follow:false p) in
-  match kind with
-  | `Not_found ->
+let load_existing ~path p =
+  io_of (fun () ->
+      Lwt_io.with_file ~mode:Lwt_io.input p (fun channel ->
+          read_capped channel (max_key_file_size + 1)))
+  >>= fun read -> Lwt.return (Result.bind read (fun body -> decode_saved ~path body))
+
+let load_or_generate ~fs_root ~path algorithm =
+  let p = path_of fs_root path in
+  path_exists p >>= function
+  | true -> load_existing ~path p
+  | false ->
       let t = generate algorithm in
-      let* () = write ~fs ~path t in
-      Ok (t, `Generated)
-  | _ -> load_existing ~path p
+      write ~fs_root ~path t >>= fun written ->
+      Lwt.return (Result.map (fun () -> (t, `Generated)) written)

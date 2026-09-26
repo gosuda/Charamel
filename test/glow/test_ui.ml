@@ -1,9 +1,10 @@
 let command_split () =
   Alcotest.(check (list string))
-    "quoted command" [ "less"; "-R" ] (Ui.split_words "less '-R'");
+    "quoted command" [ "less"; "-R" ]
+    (Charamel_os.Shell.split_words "less '-R'");
   Alcotest.(check (list string))
     "spaces" [ "sh"; "-c"; "echo hi" ]
-    (Ui.split_words "sh -c \"echo hi\"")
+    (Charamel_os.Shell.split_words "sh -c \"echo hi\"")
 
 let key code = Charamel_tea.Key.v (Charamel_tea.Key.Char (Uchar.of_char code))
 let enter = Charamel_tea.Key.v Charamel_tea.Key.Enter
@@ -34,6 +35,6 @@ let scripted_pager () =
 let suite =
   ( "ui",
     [
-      Alcotest.test_case "command split" `Quick command_split;
-      Alcotest.test_case "scripted pager" `Quick scripted_pager;
+      Alcotest_lwt.test_case_sync "command split" `Quick command_split;
+      Alcotest_lwt.test_case_sync "scripted pager" `Quick scripted_pager;
     ] )

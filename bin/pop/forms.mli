@@ -20,8 +20,10 @@ val pp_error : Format.formatter -> error -> unit
 (** [pp_error ppf error] renders [error]. *)
 
 val run :
-  clock:_ Eio.Time.clock ->
-  Eio_unix.Stdenv.base ->
+  clock:Charamel_os.Time.clock ->
+  fs_root:string ->
+  temp_dir:string ->
   initial:values ->
-  (values, error) result
-(** [run ~clock env ~initial] prompts for email fields using [initial] as defaults. *)
+  (values, error) result Lwt.t
+(** [run ~clock ~fs_root ~temp_dir ~initial] prompts for email fields using [initial] as
+    defaults. *)

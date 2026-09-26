@@ -46,6 +46,10 @@ val std_output : unit -> handle
 (** [std_output ()] is [GetStdHandle(STD_OUTPUT_HANDLE)], or the [CONOUT$] handle when the
     standard handle is not a console. *)
 
+val std_error : unit -> handle
+(** [std_error ()] is [GetStdHandle(STD_ERROR_HANDLE)], or the [CONOUT$] handle when the
+    standard handle is not a console. *)
+
 val get_console_mode : handle -> mode option
 (** [get_console_mode h] is the current mode of [h], or [None] when [h] is not a console
     handle ([GetConsoleMode] fails). *)

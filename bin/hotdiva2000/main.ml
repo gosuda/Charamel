@@ -1,4 +1,5 @@
 module Name = Hotdiva_core.Name
+module Env = Charamel_cli.Env
 
 let count_arg =
   Cmdliner.Arg.(
@@ -20,14 +21,17 @@ let tokens_arg =
          (info [ "tokens" ] ~docv:"TOKENS"
             ~doc:"Number of words in each name (default: 2).")))
 
-let write_line env name = Eio.Flow.copy_string (name ^ "\n") env#stdout
+let write_line env name = Lwt_io.write env.Env.stdout (name ^ "\n")
 
 let generate env count separator tokens =
   let names =
     try Name.generate_many ~random:Mirage_crypto_rng.generate ~count ~separator ~tokens ()
     with Invalid_argument message -> Charamel_cli.error message
   in
-  try List.iter (write_line env) names with Unix.Unix_error (Unix.EPIPE, _, _) -> ()
+  Lwt.catch
+    (fun () -> Lwt_list.iter_s (write_line env) names)
+    (function
+      | Unix.Unix_error (Unix.EPIPE, _, _) -> Lwt.return_unit | exn -> Lwt.fail exn)
 
 let default env =
   let action = generate env in

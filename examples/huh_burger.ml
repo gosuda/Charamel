@@ -32,8 +32,7 @@ let print_results results =
     toppings confirmed
 
 let () =
-  Eio_main.run (fun env ->
-      match Charamel_huh.run ~clock:env#clock form env with
-      | Ok results -> print_results results
-      | Error `Aborted -> Fmt.epr "Order cancelled.@."
-      | Error `Timeout -> Fmt.epr "Order timed out.@.")
+  match Lwt_main.run (Charamel_huh.run ~clock:Charamel_os.Time.lwt form) with
+  | Ok results -> print_results results
+  | Error `Aborted -> Fmt.epr "Order cancelled.@."
+  | Error `Timeout -> Fmt.epr "Order timed out.@."

@@ -94,11 +94,11 @@ let normalizer_pins () =
 
 let cases =
   [
-    Alcotest.test_case "ok output" `Quick output_case;
-    Alcotest.test_case "failed output" `Quick failure_case;
-    Alcotest.test_case "schema helpers" `Quick schema_case;
-    Alcotest.test_case "decode valid JSON" `Quick decode_case;
-    Alcotest.test_case "decode invalid JSON" `Quick invalid_decode_case;
-    Alcotest.test_case "fantasy conversion" `Quick fantasy_case;
-    Alcotest.test_case "normalizer pins" `Quick normalizer_pins;
+    Test_tools_test_support.case "ok output" `Quick output_case;
+    Test_tools_test_support.case "failed output" `Quick failure_case;
+    Test_tools_test_support.case "schema helpers" `Quick schema_case;
+    Test_tools_test_support.case "decode valid JSON" `Quick decode_case;
+    Test_tools_test_support.case "decode invalid JSON" `Quick invalid_decode_case;
+    Test_tools_test_support.case "fantasy conversion" `Quick fantasy_case;
+    Test_tools_test_support.case "normalizer pins" `Quick normalizer_pins;
   ]

@@ -1,28 +1,42 @@
+open Lwt.Infix
+
 type skill = { name : string; description : string; dir : string; body : string }
 type t = { skills : skill list }
 
 let max_file_bytes = 65_536
 let max_name_bytes = 256
 let max_description_bytes = 8_192
-let path_of fs path = Eio.Path.(fs / path)
+let path_of fs_root path = Filename.concat fs_root path
+
+exception Over_limit
 
 let read_file_opt path =
-  try
-    Eio.Path.with_open_in path (fun flow ->
-        match
-          Eio.Buf_read.parse ~max_size:(max_file_bytes + 1) Eio.Buf_read.take_all flow
-        with
-        | Ok content -> Some content
-        | Error (`Msg _) -> None)
-  with Eio.Io _ | Unix.Unix_error _ -> None
+  let buffer = Buffer.create 4096 in
+  let rec pump channel =
+    Lwt_io.read ~count:4096 channel >>= fun chunk ->
+    if String.is_empty chunk then Lwt.return_unit
+    else if Buffer.length buffer + String.length chunk > max_file_bytes + 1 then
+      Lwt.fail Over_limit
+    else (
+      Buffer.add_string buffer chunk;
+      pump channel)
+  in
+  Lwt.catch
+    (fun () ->
+      Lwt_io.with_file ~mode:Lwt_io.Input path (fun channel ->
+          pump channel >>= fun () -> Lwt.return (Buffer.contents buffer))
+      >>= fun content -> Lwt.return_some content)
+    (function
+      | Over_limit | Unix.Unix_error _ | Sys_error _ -> Lwt.return_none
+      | exn -> Lwt.fail exn)
 
-let is_directory path =
-  try match Eio.Path.kind ~follow:true path with `Directory -> true | _ -> false
-  with Eio.Io _ | Unix.Unix_error _ -> false
+let kind path =
+  Lwt.catch
+    (fun () -> Lwt_unix.stat path >|= fun stats -> Some stats.Unix.st_kind)
+    (function Unix.Unix_error _ | Sys_error _ -> Lwt.return_none | exn -> Lwt.fail exn)
 
-let is_regular_file path =
-  try match Eio.Path.kind ~follow:true path with `Regular_file -> true | _ -> false
-  with Eio.Io _ | Unix.Unix_error _ -> false
+let is_directory path = kind path >|= function Some Unix.S_DIR -> true | _ -> false
+let is_regular_file path = kind path >|= function Some Unix.S_REG -> true | _ -> false
 
 let trim_cr line =
   let length = String.length line in
@@ -84,48 +98,57 @@ let parse_document path content ~default_name =
           invalid path "directory name is too long";
         Some (default_name, "", content)
 
-let discover_directory fs directory =
-  if not (is_directory (path_of fs directory)) then []
+let discover_entry fs_root directory name =
+  let skill_dir = Filename.concat directory name in
+  let document = Filename.concat skill_dir "SKILL.md" in
+  let reject = Lwt.return_none in
+  is_directory (path_of fs_root skill_dir) >>= fun is_dir ->
+  if not is_dir then reject
   else
-    let entries =
-      try Eio.Path.read_dir (path_of fs directory)
-      with Eio.Io _ | Unix.Unix_error _ -> []
-    in
-    List.filter_map
-      (fun name ->
-        let skill_dir = Filename.concat directory name in
-        let document = Filename.concat skill_dir "SKILL.md" in
-        if
-          (not (is_directory (path_of fs skill_dir)))
-          || not (is_regular_file (path_of fs document))
-        then None
-        else
-          Option.bind
-            (read_file_opt (path_of fs document))
-            (fun content ->
-              Option.map
-                (fun (name, description, body) ->
-                  { name; description; dir = skill_dir; body })
-                (parse_document document content ~default_name:name)))
-      entries
+    is_regular_file (path_of fs_root document) >>= fun is_file ->
+    if not is_file then reject
+    else
+      read_file_opt (path_of fs_root document) >>= function
+      | None -> reject
+      | Some content ->
+          Lwt.return
+          @@ Option.map
+               (fun (name, description, body) ->
+                 { name; description; dir = skill_dir; body })
+               (parse_document document content ~default_name:name)
 
-let load ~fs ~(config : Config.t) ~home =
+let discover_directory fs_root directory =
+  is_directory (path_of fs_root directory) >>= fun is_dir ->
+  if not is_dir then Lwt.return_nil
+  else
+    Charamel_os.Fs.read_dir (path_of fs_root directory) >>= function
+    | Error _ -> Lwt.return_nil
+    | Ok entries ->
+        Lwt_list.map_s (discover_entry fs_root directory) entries >|= fun found ->
+        List.filter_map Fun.id found
+
+let load ~fs_root ~(config : Config.t) ~home =
   let directories =
     config.Config.skills_paths @ [ Filename.concat home ".crush/skills" ]
   in
-  let skills =
-    List.fold_left
-      (fun accumulated directory ->
-        let discovered = discover_directory fs directory in
-        List.fold_left
-          (fun current skill ->
-            if List.exists (fun existing -> String.equal existing.name skill.name) current
-            then current
-            else current @ [ skill ])
-          accumulated discovered)
-      [] directories
+  let rec visit accumulated = function
+    | [] -> Lwt.return { skills = accumulated }
+    | directory :: rest ->
+        discover_directory fs_root directory >>= fun discovered ->
+        let skills =
+          List.fold_left
+            (fun current skill ->
+              if
+                List.exists
+                  (fun existing -> String.equal existing.name skill.name)
+                  current
+              then current
+              else current @ [ skill ])
+            accumulated discovered
+        in
+        visit skills rest
   in
-  { skills }
+  visit [] directories
 
 let find t name = List.find_opt (fun skill -> String.equal skill.name name) t.skills
 let all t = t.skills
@@ -144,20 +167,38 @@ let safe_relative_path path =
        (fun component -> component <> "" && component <> "." && component <> "..")
        (String.split_on_char '/' path)
 
-let read_skill_relative fs skill relative =
-  try
-    Eio.Path.with_subtree (path_of fs skill.dir) (fun subtree ->
-        read_file_opt Eio.Path.(subtree / relative))
-  with Eio.Io _ | Unix.Unix_error _ -> None
+let within ~root path =
+  String.equal root path
+  || String.length path > String.length root
+     && String.starts_with ~prefix:(root ^ Filename.dir_sep) path
 
-let resolve_uri t ~fs uri =
-  let missing () = Error (`Not_found uri) in
+let resolve fs_root relative =
+  Lwt.catch
+    (fun () ->
+      Lwt_preemptive.detach Unix.realpath (path_of fs_root relative) >|= fun target ->
+      Some target)
+    (function Unix.Unix_error _ | Sys_error _ -> Lwt.return_none | exn -> Lwt.fail exn)
+
+let read_skill_relative fs_root skill relative =
+  resolve fs_root skill.dir >>= fun root ->
+  match root with
+  | None -> Lwt.return_none
+  | Some root -> (
+      resolve fs_root (Filename.concat skill.dir relative) >>= fun target ->
+      match target with
+      | Some target when within ~root target -> read_file_opt target
+      | _ -> Lwt.return_none)
+
+let resolve_uri t ~fs_root uri =
+  let missing () = Lwt.return_error (`Not_found uri) in
   if not (String.starts_with ~prefix:"skill://" uri) then missing ()
   else
     let target = String.sub uri 8 (String.length uri - 8) in
     match String.index_opt target '/' with
     | None -> (
-        match find t target with Some skill -> Ok skill.body | None -> missing ())
+        match find t target with
+        | Some skill -> Lwt.return_ok skill.body
+        | None -> missing ())
     | Some slash -> (
         let name = String.sub target 0 slash in
         let relative = String.sub target (slash + 1) (String.length target - slash - 1) in
@@ -166,6 +207,6 @@ let resolve_uri t ~fs uri =
           match find t name with
           | None -> missing ()
           | Some skill -> (
-              match read_skill_relative fs skill relative with
-              | Some body when String.length body <= max_file_bytes -> Ok body
+              read_skill_relative fs_root skill relative >>= function
+              | Some body when String.length body <= max_file_bytes -> Lwt.return_ok body
               | _ -> missing ()))

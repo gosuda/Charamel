@@ -77,10 +77,10 @@ let strip_input () =
 
 let cases =
   [
-    Alcotest.test_case "template styles" `Quick template_styles_text;
-    Alcotest.test_case "nested trim" `Quick nested_and_trim;
-    Alcotest.test_case "template functions" `Quick template_functions;
-    Alcotest.test_case "all renderers" `Quick all_renderers;
-    Alcotest.test_case "invalid template" `Quick invalid_template;
-    Alcotest.test_case "strip" `Quick strip_input;
+    Alcotest_lwt.test_case_sync "template styles" `Quick template_styles_text;
+    Alcotest_lwt.test_case_sync "nested trim" `Quick nested_and_trim;
+    Alcotest_lwt.test_case_sync "template functions" `Quick template_functions;
+    Alcotest_lwt.test_case_sync "all renderers" `Quick all_renderers;
+    Alcotest_lwt.test_case_sync "invalid template" `Quick invalid_template;
+    Alcotest_lwt.test_case_sync "strip" `Quick strip_input;
   ]

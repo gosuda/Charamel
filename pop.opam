@@ -10,15 +10,12 @@ depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.24"}
   "charamel"
-  "cohttp-eio"
-  "tls-eio"
   "ca-certs"
   "cmarkit"
   "cohttp"
   "http"
   "tls"
   "domain-name"
-  "eio"
   "fmt"
   "jsont"
   "base64"
@@ -26,9 +23,9 @@ depends: [
   "ptime"
   "uri"
   "cmdliner"
-  "eio_main"
   "mirage-crypto-rng"
   "alcotest" {with-test}
+  "alcotest-lwt" {>= "1.9.1" & with-test}
   "odoc" {with-doc}
 ]
 build: [

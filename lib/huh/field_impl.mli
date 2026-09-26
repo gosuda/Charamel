@@ -61,7 +61,8 @@ val key_name : t -> string option
 val key_binds : t -> ctx -> Charamel_bubbles.Key_binding.t list
 (** [key_binds field ctx] returns enabled bindings for the current position. *)
 
-val run_accessible : t -> ctx -> out:(string -> unit) -> Accessible.reader -> t
+val run_accessible :
+  t -> ctx -> out:(string -> unit Lwt.t) -> Accessible.reader -> t Lwt.t
 (** [run_accessible field ctx ~out reader] performs this field's line-oriented prompt. *)
 
 val commit : t -> Results.t -> Results.t

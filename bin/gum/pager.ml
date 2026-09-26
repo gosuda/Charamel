@@ -356,22 +356,27 @@ let app options : (model, msg) Charamel_tea.app =
   }
 
 let run env (options : options) =
-  let content =
-    if options.content <> "" then options.content
-    else
-      match Gum_io.read_stdin env with
-      | Ok value -> value
-      | Error `Empty -> Charamel_cli.error "provide some content to display"
-      | Error (`Read value) -> value
-  in
-  let content = sanitize content in
-  if content = "" then Charamel_cli.error "provide some content to display";
-  let options = { options with content } in
-  try
-    ignore
-      (Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun _ ->
-           Gum_run.Submitted))
-  with Gum_io.No_tty -> Charamel_cli.error "pager: requires a terminal"
+  Lwt.bind
+    (if options.content <> "" then Lwt.return options.content
+     else
+       Lwt.map
+         (function
+           | Ok value -> value
+           | Error `Empty -> Charamel_cli.error "provide some content to display"
+           | Error (`Read value) -> value)
+         (Gum_io.read_stdin env))
+    (fun content ->
+      let content = sanitize content in
+      if content = "" then Charamel_cli.error "provide some content to display";
+      let options = { options with content } in
+      Lwt.catch
+        (fun () ->
+          Lwt.map ignore
+            (Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun _ ->
+                 Gum_run.Submitted)))
+        (function
+          | Gum_io.No_tty -> Charamel_cli.error "pager: requires a terminal"
+          | exn -> Lwt.fail exn))
 
 let cmd env =
   let open Cmdliner in

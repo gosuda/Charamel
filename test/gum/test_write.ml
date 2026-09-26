@@ -20,6 +20,6 @@ let line_limit () =
 
 let cases =
   [
-    Alcotest.test_case "multiline input" `Quick multiline_input;
-    Alcotest.test_case "line limit" `Quick line_limit;
+    Alcotest_lwt.test_case_sync "multiline input" `Quick multiline_input;
+    Alcotest_lwt.test_case_sync "line limit" `Quick line_limit;
   ]

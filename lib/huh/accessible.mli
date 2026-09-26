@@ -1,39 +1,46 @@
-(** Line-oriented accessible form input. *)
+(** Line-oriented accessible form input.
 
-type reader = { read_line : unit -> string option; read_password : unit -> string option }
+    Every prompt returns a promise: the reader waits on a channel, and a channel read only
+    completes when the user answers. *)
 
-val reader_of_flow :
-  stdin:_ Eio.Flow.source -> echo_off:(unit -> unit -> unit) option -> reader
-(** [reader_of_flow ~stdin ~echo_off] creates one buffered reader. [echo_off], when
-    present, supplies a restoration function around password reads. *)
+type reader = {
+  read_line : unit -> string option Lwt.t;
+  read_password : unit -> string option Lwt.t;
+}
+
+val reader_of_channel :
+  stdin:Lwt_io.input_channel -> echo_off:(unit -> unit) option -> reader
+(** [reader_of_channel ~stdin ~echo_off] creates one reader over [stdin]. [echo_off], when
+    present, is the closure that puts echo back after a password read. *)
 
 val prompt_string :
-  out:(string -> unit) ->
+  out:(string -> unit Lwt.t) ->
   reader ->
   prompt:string ->
   default:string ->
   validate:(string -> (unit, string) result) ->
-  string
+  string Lwt.t
 (** [prompt_string] repeats the prompt until validation succeeds, using [default] for
     blank input or end of file. *)
 
 val prompt_int :
-  (string -> unit) ->
+  (string -> unit Lwt.t) ->
   reader ->
   prompt:string ->
   low:int ->
   high:int ->
   default:int option ->
-  int
+  int Lwt.t
 (** [prompt_int] reads an integer in the inclusive range, repeating on malformed input. *)
 
-val prompt_bool : (string -> unit) -> reader -> prompt:string -> default:bool -> bool
+val prompt_bool :
+  (string -> unit Lwt.t) -> reader -> prompt:string -> default:bool -> bool Lwt.t
 (** [prompt_bool] reads yes/no, using [default] for a blank line. *)
 
 val prompt_password :
-  (string -> unit) ->
+  out:(string -> unit Lwt.t) ->
   reader ->
   prompt:string ->
   validate:(string -> (unit, string) result) ->
-  string
+  string Lwt.t
 (** [prompt_password] reads a non-defaulted value, repeating on validation errors. *)

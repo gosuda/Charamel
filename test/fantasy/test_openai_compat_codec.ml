@@ -1,14 +1,9 @@
 open Charamel_fantasy
 open Stream_test_support
+open Lwt.Infix
 
-let fixture_body path =
-  let ic = open_in_bin path in
-  let n = in_channel_length ic in
-  let s = really_input_string ic n in
-  close_in ic;
-  s
-
-let sse = fixture_body "data/openai_compat_codec.sse"
+let fixture_path = "data/openai_compat_codec.sse"
+let read_fixture () = Stream_test_support.read_fixture ~fixture_path ()
 
 let model =
   {
@@ -50,54 +45,32 @@ let event data = Fmt.str "event: chat.completion.chunk\ndata: %s\n\n" data
 let named_event name data = Fmt.str "event: %s\ndata: %s\n\n" name data
 let data_event data = Fmt.str "data: %s\n\n" data
 let done_event = data_event "[DONE]"
+let base_url server = Uri.to_string (Fixture_http.uri server "")
 
-let provider_call ?(body = sse) ?(reasoning = `Off) ?temperature ?max_tokens
-    ?(system = []) ?(tools = []) ?(messages = [ user "hi" ]) ?truncate () =
-  let stream, observed, path, body =
-    Eio_main.run @@ fun env ->
-    Eio.Switch.run @@ fun sw ->
-    let server = Fixture_server.start ~sw ~net:env#net () in
-    Fixture_server.respond server body;
-    (match truncate with Some n -> Fixture_server.trunc server n | None -> ());
-    let provider =
-      Provider.openai_compatible
-        ~base_url:(Fixture_server.base_url server)
-        ~auth:(Provider.Api_key "test-key") ()
-    in
-    let stream =
-      Provider.stream provider ~sw ~clock:env#clock ~net:env#net ~model ?max_tokens
-        ?temperature ~reasoning ~system ~tools messages
-    in
-    let observed = drain stream in
-    (stream, observed, Fixture_server.last_path server, Fixture_server.last_body server)
-  in
-  (observed @ Stream_test_support.drain_queued stream, path, body)
+let provider_call ~body ?(reasoning = `Off) ?temperature ?max_tokens ?(system = [])
+    ?(tools = []) ?(messages = [ user "hi" ]) ?truncate () =
+  Stream_test_support.with_fixture (fun server ->
+      Fixture_http.respond server ?truncate body;
+      let provider =
+        Provider.openai_compatible ~base_url:(base_url server)
+          ~auth:(Provider.Api_key "test-key") ()
+      in
+      let stream =
+        Provider.stream provider ~clock:Charamel_os.Time.lwt ~model ?max_tokens
+          ?temperature ~reasoning ~system ~tools messages
+      in
+      Stream_test_support.drain stream >>= fun observed ->
+      Stream_test_support.drain_queued stream >|= fun tail ->
+      (observed @ tail, Fixture_http.last_path server, Fixture_http.last_body server))
 
-let json s =
-  match Jsont_bytesrw.decode_string Jsont.json s with
-  | Ok j -> j
-  | Error e -> Alcotest.failf "json %s: %s" s e
-
-let mem (j : Jsont.json) k =
-  match j with
-  | Jsont.Object (ms, _) -> (
-      match Jsont.Json.find_mem k ms with Some (_, v) -> Some v | None -> None)
-  | _ -> None
-
-let str_mem k j = match mem j k with Some (Jsont.String (s, _)) -> Some s | _ -> None
-
-let int_mem k j =
-  match mem j k with Some (Jsont.Number (f, _)) -> Some (int_of_float f) | _ -> None
-
-let number_mem k j = match mem j k with Some (Jsont.Number (f, _)) -> Some f | _ -> None
-let bool_mem k j = match mem j k with Some (Jsont.Bool (b, _)) -> Some b | _ -> None
+let expect_parts name expected observed =
+  Stream_test_support.expect_parts ~label:name expected observed
 
 let test_fixture_stream () =
-  let ps, path, _ = provider_call () in
+  provider_call ~body:(read_fixture ()) () >|= fun (ps, path, _) ->
   Alcotest.(check (option string))
     "posts to /chat/completions" (Some "/chat/completions") path;
-  Alcotest.(check parts)
-    "fixture parts through the public provider"
+  expect_parts "fixture parts through the public provider"
     [
       Stream_part.Reasoning_delta "The user wants the date.";
       Stream_part.Reasoning_delta " I'll call get_date.";
@@ -124,9 +97,8 @@ let test_usage_never_lost () =
         done_event;
       ]
   in
-  let ps, _, _ = provider_call ~body () in
-  Alcotest.(check parts)
-    "finish follows trailing usage"
+  provider_call ~body () >|= fun (ps, _, _) ->
+  expect_parts "finish follows trailing usage"
     [
       Stream_part.Text_delta "hi";
       usage ~input:100 ~output:40 ~cache_read:20 ~cache_write:0 ~reasoning:8;
@@ -137,18 +109,24 @@ let test_usage_never_lost () =
 let test_finish_reasons () =
   let finish_of reason =
     let body = event (chunk ~finish:reason {|{}|}) ^ done_event in
-    provider_call ~body () |> fun (ps, _, _) -> finish_name (single_finish ps)
+    provider_call ~body () >|= fun (ps, _, _) -> finish_name (single_finish ps)
   in
-  Alcotest.check Alcotest.string "stop" "Stop" (finish_of "stop");
-  Alcotest.check Alcotest.string "length" "Length" (finish_of "length");
-  Alcotest.check Alcotest.string "content filter" "Content_filter"
-    (finish_of "content_filter");
-  Alcotest.check Alcotest.string "tool_calls" "Tool_calls" (finish_of "tool_calls");
+  finish_of "stop" >>= fun stop ->
+  Alcotest.check Alcotest.string "stop" "Stop" stop;
+  finish_of "length" >>= fun length ->
+  Alcotest.check Alcotest.string "length" "Length" length;
+  finish_of "content_filter" >>= fun content_filter ->
+  Alcotest.check Alcotest.string "content filter" "Content_filter" content_filter;
+  finish_of "tool_calls" >>= fun tool_calls ->
+  Alcotest.check Alcotest.string "tool_calls" "Tool_calls" tool_calls;
+  finish_of "insufficient_system_resource" >>= fun insufficient_system_resource ->
   Alcotest.check Alcotest.string "insufficient system resource"
     "Error provider ended with finish reason insufficient_system_resource"
-    (finish_of "insufficient_system_resource");
+    insufficient_system_resource;
+  finish_of "banana" >>= fun banana ->
   Alcotest.check Alcotest.bool "unknown reason errors" true
-    (String.starts_with ~prefix:"Error unknown finish reason banana" (finish_of "banana"))
+    (String.starts_with ~prefix:"Error unknown finish reason banana" banana);
+  Lwt.return_unit
 
 let test_interleaved_tool_calls () =
   let body =
@@ -169,7 +147,7 @@ let test_interleaved_tool_calls () =
         done_event;
       ]
   in
-  let ps, _, _ = provider_call ~body () in
+  provider_call ~body () >|= fun (ps, _, _) ->
   let args id =
     List.filter_map
       (function
@@ -190,9 +168,8 @@ let test_synthetic_tool_id () =
     ^ event (chunk ~finish:"tool_calls" {|{}|})
     ^ done_event
   in
-  let ps, _, _ = provider_call ~body () in
-  Alcotest.(check parts)
-    "missing id gets a stable synthetic id"
+  provider_call ~body () >|= fun (ps, _, _) ->
+  expect_parts "missing id gets a stable synthetic id"
     [
       Stream_part.Tool_call_start { id = "tool-call-2"; name = "f" };
       Stream_part.Tool_input_delta { id = "tool-call-2"; delta = "{}" };
@@ -207,9 +184,8 @@ let test_empty_tool_entry_skipped () =
     ^ event (chunk ~finish:"stop" {|{}|})
     ^ done_event
   in
-  let ps, _, _ = provider_call ~body () in
-  Alcotest.(check parts)
-    "empty tool entries have no tool effects" [ Stream_part.Finish `Stop ] ps
+  provider_call ~body () >|= fun (ps, _, _) ->
+  expect_parts "empty tool entries have no tool effects" [ Stream_part.Finish `Stop ] ps
 
 let test_unknown_tool_type_errors () =
   let body =
@@ -218,7 +194,7 @@ let test_unknown_tool_type_errors () =
          {|{"tool_calls":[{"index":0,"id":"c1","type":"custom_tool","function":{"name":"f","arguments":"{}"}}]}|})
     ^ done_event
   in
-  let ps, _, _ = provider_call ~body () in
+  provider_call ~body () >|= fun (ps, _, _) ->
   match single_finish ps with
   | `Error m ->
       Alcotest.(check bool)
@@ -228,7 +204,7 @@ let test_unknown_tool_type_errors () =
 
 let test_malformed_event () =
   let body = named_event "chat.completion.chunk" "not json at all" in
-  let ps, _, _ = provider_call ~body () in
+  provider_call ~body () >|= fun (ps, _, _) ->
   match ps with
   | [ Stream_part.Finish (`Error m) ] ->
       Alcotest.(check bool)
@@ -244,7 +220,7 @@ let test_truncated_arguments_error () =
          {|{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"f","arguments":"{\"pa"}}]}|})
     ^ done_event
   in
-  let ps, _, _ = provider_call ~body () in
+  provider_call ~body () >|= fun (ps, _, _) ->
   match single_finish ps with
   | `Error m ->
       Alcotest.(check bool)
@@ -254,7 +230,7 @@ let test_truncated_arguments_error () =
 
 let test_premature_eof () =
   let body = event (chunk {|{"content":"partial"}|}) in
-  let ps, _, _ = provider_call ~body ~truncate:(String.length body - 1) () in
+  provider_call ~body ~truncate:(String.length body - 1) () >|= fun (ps, _, _) ->
   match ps with
   | [ Stream_part.Text_delta "partial"; Stream_part.Finish (`Error _) ] -> ()
   | other ->
@@ -272,9 +248,8 @@ let test_silence_after_finish () =
         event (chunk {|{"content":"late"}|});
       ]
   in
-  let ps, _, _ = provider_call ~body () in
-  Alcotest.(check parts)
-    "events after the terminal are silent"
+  provider_call ~body () >|= fun (ps, _, _) ->
+  expect_parts "events after the terminal are silent"
     [
       usage ~input:100 ~output:40 ~cache_read:20 ~cache_write:0 ~reasoning:8;
       Stream_part.Finish `Stop;
@@ -294,96 +269,111 @@ let test_ignored_events () =
         done_event;
       ]
   in
-  let ps, _, _ = provider_call ~body () in
-  Alcotest.(check parts)
-    "ignored events do not alter the stream"
+  provider_call ~body () >|= fun (ps, _, _) ->
+  expect_parts "ignored events do not alter the stream"
     [
       usage ~input:100 ~output:40 ~cache_read:20 ~cache_write:0 ~reasoning:8;
       Stream_part.Finish `Stop;
     ]
     ps
 
+let tool =
+  Tool.v ~name:"weather" ~description:"Get weather"
+    ~schema:
+      (Jsont.Json.object'
+         [
+           Jsont.Json.mem (Jsont.Json.name "type") (Jsont.Json.string "object");
+           Jsont.Json.mem
+             (Jsont.Json.name "properties")
+             (Jsont.Json.object'
+                [
+                  Jsont.Json.mem (Jsont.Json.name "location")
+                    (Jsont.Json.object'
+                       [
+                         Jsont.Json.mem (Jsont.Json.name "type")
+                           (Jsont.Json.string "string");
+                       ]);
+                ]);
+           Jsont.Json.mem (Jsont.Json.name "required")
+             (Jsont.Json.list [ Jsont.Json.string "location" ]);
+         ])
+
 let test_encode_system_tools_and_config () =
-  let tool =
-    Tool.v ~name:"weather" ~description:"Get weather"
-      ~schema:
-        (json
-           {|{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}|})
-  in
-  let response = data_event "[DONE]" in
-  let _, path, body =
-    provider_call ~body:response
-      ~system:[ "You are a helpful assistant" ]
-      ~tools:[ tool ] ~temperature:0.25 ()
-  in
+  provider_call ~body:(data_event "[DONE]")
+    ~system:[ "You are a helpful assistant" ]
+    ~tools:[ tool ] ~temperature:0.25 ()
+  >|= fun (_, path, body) ->
   Alcotest.(check (option string))
     "chat completions endpoint" (Some "/chat/completions") path;
   let j = parse_body body in
-  Alcotest.(check (option string)) "model" (Some model.Model.id) (str_mem "model" j);
-  Alcotest.(check (option bool)) "stream" (Some true) (bool_mem "stream" j);
-  Alcotest.(check (option int)) "max_tokens" (Some 4096) (int_mem "max_tokens" j);
-  Alcotest.(check (option (float 0.)))
-    "temperature" (Some 0.25) (number_mem "temperature" j);
-  (match mem j "stream_options" with
-  | Some options ->
-      Alcotest.(check (option bool))
-        "include usage" (Some true)
-        (bool_mem "include_usage" options)
-  | None -> Alcotest.fail "stream_options is missing");
-  (match mem j "messages" with
-  | Some (Jsont.Array ([ system; user_message ], _)) ->
-      Alcotest.(check (option string))
-        "system role" (Some "system") (str_mem "role" system);
-      Alcotest.(check (option string))
-        "system content" (Some "You are a helpful assistant") (str_mem "content" system);
-      Alcotest.(check (option string))
-        "user role" (Some "user") (str_mem "role" user_message)
-  | Some (Jsont.Array (_, _)) -> Alcotest.fail "unexpected message count"
-  | _ -> Alcotest.fail "messages are missing");
-  match mem j "tools" with
-  | Some (Jsont.Array ([ tool_json ], _)) -> (
-      Alcotest.(check (option string))
-        "tool type" (Some "function") (str_mem "type" tool_json);
-      match mem tool_json "function" with
-      | Some function_json -> (
-          Alcotest.(check (option string))
-            "tool name" (Some "weather")
-            (str_mem "name" function_json);
-          Alcotest.(check (option string))
-            "tool description" (Some "Get weather")
-            (str_mem "description" function_json);
-          match mem function_json "parameters" with
-          | Some (Jsont.Object _) -> ()
-          | _ -> Alcotest.fail "tool schema is missing")
-      | None -> Alcotest.fail "tool function is missing")
-  | _ -> Alcotest.fail "tools are missing"
+  check_member_string "model" "model" model.Model.id j;
+  check_bool_member "stream" "stream" true j;
+  Alcotest.(check int)
+    "max tokens" 4096
+    (int_of_float (number_value "max tokens" (required "max_tokens" j)));
+  check_member_number "temperature" "temperature" 0.25 j;
+  check_bool_member "include usage" "include_usage" true (object_value "stream_options" j);
+  let messages = array "messages" j in
+  Alcotest.(check int) "message count" 2 (List.length messages);
+  let system_message = List.hd messages in
+  check_member_string "system role" "role" "system" system_message;
+  check_member_string "system content" "content" "You are a helpful assistant"
+    system_message;
+  check_member_string "user role" "role" "user" (List.nth messages 1);
+  let tools = array "tools" j in
+  Alcotest.(check int) "tool count" 1 (List.length tools);
+  let tool_json = List.hd tools in
+  check_member_string "tool type" "type" "function" tool_json;
+  let function_json = object_value "function" tool_json in
+  check_member_string "tool name" "name" "weather" function_json;
+  check_member_string "tool description" "description" "Get weather" function_json;
+  let parameters = object_value "parameters" function_json in
+  check_member_string "schema type" "type" "object" parameters
 
 let test_encode_reasoning_model () =
-  let _, _, body = provider_call ~body:done_event ~reasoning:`High ~temperature:0.25 () in
+  provider_call ~body:done_event ~reasoning:`High ~temperature:0.25 ()
+  >|= fun (_, _, body) ->
   let j = parse_body body in
-  Alcotest.(check (option string))
-    "reasoning effort" (Some "high")
-    (str_mem "reasoning_effort" j);
-  Alcotest.(check (option int))
-    "reasoning token cap" (Some 4096)
-    (int_mem "max_completion_tokens" j);
-  Alcotest.(check bool) "reasoning omits temperature" true (mem j "temperature" = None);
-  Alcotest.(check bool) "reasoning omits max_tokens" true (mem j "max_tokens" = None)
+  check_member_string "reasoning effort" "reasoning_effort" "high" j;
+  Alcotest.(check int)
+    "reasoning token cap" 4096
+    (int_of_float
+       (number_value "reasoning token cap" (required "max_completion_tokens" j)));
+  Alcotest.(check bool)
+    "reasoning omits temperature" false
+    (Option.is_some (member "temperature" j));
+  Alcotest.(check bool)
+    "reasoning omits max_tokens" false
+    (Option.is_some (member "max_tokens" j))
 
 let cases =
   [
-    ("fixture stream", `Quick, test_fixture_stream);
-    ("usage never lost", `Quick, test_usage_never_lost);
-    ("finish reasons", `Quick, test_finish_reasons);
-    ("interleaved tool calls", `Quick, test_interleaved_tool_calls);
-    ("synthetic tool id", `Quick, test_synthetic_tool_id);
-    ("empty tool entry skipped", `Quick, test_empty_tool_entry_skipped);
-    ("unknown tool type errors", `Quick, test_unknown_tool_type_errors);
-    ("malformed event", `Quick, test_malformed_event);
-    ("truncated arguments error", `Quick, test_truncated_arguments_error);
-    ("premature eof", `Quick, test_premature_eof);
-    ("silence after finish", `Quick, test_silence_after_finish);
-    ("ignored events", `Quick, test_ignored_events);
-    ("encode system tools config", `Quick, test_encode_system_tools_and_config);
-    ("encode reasoning model", `Quick, test_encode_reasoning_model);
+    Alcotest_lwt.test_case "fixture stream" `Quick (fun _switch () ->
+        test_fixture_stream ());
+    Alcotest_lwt.test_case "usage never lost" `Quick (fun _switch () ->
+        test_usage_never_lost ());
+    Alcotest_lwt.test_case "finish reasons" `Quick (fun _switch () ->
+        test_finish_reasons ());
+    Alcotest_lwt.test_case "interleaved tool calls" `Quick (fun _switch () ->
+        test_interleaved_tool_calls ());
+    Alcotest_lwt.test_case "synthetic tool id" `Quick (fun _switch () ->
+        test_synthetic_tool_id ());
+    Alcotest_lwt.test_case "empty tool entry skipped" `Quick (fun _switch () ->
+        test_empty_tool_entry_skipped ());
+    Alcotest_lwt.test_case "unknown tool type errors" `Quick (fun _switch () ->
+        test_unknown_tool_type_errors ());
+    Alcotest_lwt.test_case "malformed event" `Quick (fun _switch () ->
+        test_malformed_event ());
+    Alcotest_lwt.test_case "truncated arguments error" `Quick (fun _switch () ->
+        test_truncated_arguments_error ());
+    Alcotest_lwt.test_case "premature eof" `Quick (fun _switch () ->
+        test_premature_eof ());
+    Alcotest_lwt.test_case "silence after finish" `Quick (fun _switch () ->
+        test_silence_after_finish ());
+    Alcotest_lwt.test_case "ignored events" `Quick (fun _switch () ->
+        test_ignored_events ());
+    Alcotest_lwt.test_case "encode system tools config" `Quick (fun _switch () ->
+        test_encode_system_tools_and_config ());
+    Alcotest_lwt.test_case "encode reasoning model" `Quick (fun _switch () ->
+        test_encode_reasoning_model ());
   ]

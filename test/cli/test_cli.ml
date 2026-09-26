@@ -1,1 +1,1 @@
-let () = Alcotest.run "cli" [ ("XDG", Test_xdg.cases) ]
+let () = Test_support.run_lwt "cli" [ ("XDG", Test_xdg.cases) ]

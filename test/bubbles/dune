@@ -7,9 +7,12 @@
   charamel.ansi
   charamel.lipgloss
   alcotest
-  eio
+  alcotest-lwt
+  charamel.os
   fmt
-  optint
+  lwt
+  lwt.unix
+  unix
   test_support)
  (modules
   test_bubbles

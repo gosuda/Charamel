@@ -1,10 +1,11 @@
 type t = {
-  fs : Eio.Fs.dir_ty Eio.Path.t;
-  temp_dir : Eio.Fs.dir_ty Eio.Path.t;
-  editor : string list;
+  fs_root : string;
+  temp_dir : string;
+  editor : string list option;
+  clock : Charamel_os.Time.clock;
 }
 
-let v ~fs ~temp_dir ~editor = { fs; temp_dir; editor }
+let v ~fs_root ~temp_dir ~editor ~clock = { fs_root; temp_dir; editor; clock }
 
 let editor_of_string value =
   let source =

@@ -1,4 +1,4 @@
-open Result.Syntax
+open Lwt.Infix
 
 type value = Text of string | Binary of string
 
@@ -52,7 +52,7 @@ let encode_db db =
     db;
   Buffer.contents buf
 
-let db_path root db = Eio.Path.(root / (encode_db db ^ ".json"))
+let db_path root db = Filename.concat root (encode_db db ^ ".json")
 
 (* Generic JSON value helpers, matching the [Jsont.Json] convention already
    used elsewhere in this project (see lib/fantasy/anthropic_codec.ml). *)
@@ -98,38 +98,51 @@ let members_of_table t =
    ever truncating a database this application will realistically produce. *)
 let max_db_bytes = 64 * 1024 * 1024
 
+(* The diagnostic one filesystem failure renders as. The store's [Io] contract
+   carries a message string, and the errno triple is what distinguishes a
+   refusal from a missing component on disk. *)
+let io_message = function
+  | Unix.Unix_error (code, name, arg) ->
+      Fmt.str "%s (%s %s)" (Unix.error_message code) name arg
+  | exn -> Printexc.to_string exn
+
 let read_file path =
-  match
-    Eio.Path.with_open_in path (fun flow ->
-        Eio.Buf_read.parse ~max_size:(max_db_bytes + 1) Eio.Buf_read.take_all flow)
-  with
-  | Ok body when String.length body > max_db_bytes ->
+  Lwt.catch
+    (fun () ->
+      Lwt_io.with_file ~mode:Lwt_io.input path (fun channel ->
+          Lwt_io.read ~count:(max_db_bytes + 1) channel)
+      >|= fun body -> Some body)
+    (function
+      | Unix.Unix_error (Unix.ENOENT, _, _) -> Lwt.return_none
+      | Lwt.Canceled -> Lwt.fail Lwt.Canceled
+      | exn -> Lwt.fail exn)
+  >|= function
+  | None -> Ok None
+  | Some body when String.length body > max_db_bytes ->
       Error (`Io "database file exceeds the read size limit")
-  | Ok body -> Ok (Some body)
-  | Error (`Msg _) -> Error (`Io "database file exceeds the read size limit")
-  | exception Eio.Io (Eio.Fs.E (Not_found _), _) -> Ok None
-  | exception (Eio.Io (Eio.Fs.E _, _) as exn) ->
-      Eio.Fiber.check ();
-      Error (`Io (Fmt.str "%a" Eio.Exn.pp exn))
+  | Some body -> Ok (Some body)
 
 type presence = Absent | Present of (string, Jsont.json) Hashtbl.t
 
 let load_table ~db path =
-  match read_file path with
-  | Error _ as e -> e
-  | Ok None -> Ok Absent
+  read_file path >>= function
+  | Error _ as e -> Lwt.return e
+  | Ok None -> Lwt.return (Ok Absent)
   | Ok (Some body) -> (
       match Jsont_bytesrw.decode_string Jsont.json body with
-      | Error message -> Error (`Corrupt (Fmt.str "%s: %s" db message))
+      | Error message -> Lwt.return (Error (`Corrupt (Fmt.str "%s: %s" db message)))
       | Ok (Jsont.Object (ms, _)) ->
           let rec validate = function
             | [] -> Ok (Present (table_of_members ms))
-            | ((key, _), value) :: rest ->
-                let* _ = decode_value ~db ~key value in
-                validate rest
+            | ((key, _), value) :: rest -> (
+                match decode_value ~db ~key value with
+                | Error _ as e -> e
+                | Ok _ -> validate rest)
           in
-          validate ms
-      | Ok _ -> Error (`Corrupt (Fmt.str "%s: top-level JSON value is not an object" db)))
+          Lwt.return (validate ms)
+      | Ok _ ->
+          Lwt.return
+            (Error (`Corrupt (Fmt.str "%s: top-level JSON value is not an object" db))))
 
 let serialize t =
   match
@@ -140,7 +153,7 @@ let serialize t =
   | Error message -> Error (`Io (Fmt.str "database JSON encoding failed: %s" message))
 
 (* A single lock also serializes callers using different paths to the same root. *)
-let write_lock = Eio.Mutex.create ()
+let write_lock = Lwt_mutex.create ()
 let max_temp_attempts = 8
 
 (* A per-process random tag plus a monotonic counter: not a cryptographic
@@ -157,112 +170,162 @@ let next_temp_name base =
 
 let save_atomic dest body =
   let rec attempt dir base remaining =
-    if remaining = 0 then Error (`Io "could not create a unique temporary file")
+    if remaining = 0 then
+      Lwt.return (Error (`Io "could not create a unique temporary file"))
     else
-      let tmp = Eio.Path.(dir / next_temp_name base) in
+      let tmp = Filename.concat dir (next_temp_name base) in
       let owned = ref false in
-      let outcome =
-        try
-          Eio.Path.with_open_out ~create:(`Exclusive 0o600) tmp (fun flow ->
-              owned := true;
-              Eio.Flow.copy_string body flow);
-          Eio.Path.rename tmp dest;
-          owned := false;
-          Ok ()
-        with
-        | Eio.Io (Eio.Fs.E (Already_exists _), _) when not !owned ->
-            attempt dir base (remaining - 1)
-        | Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (Fmt.str "%a" Eio.Exn.pp exn))
-      in
-      if not !owned then outcome
+      Lwt.catch
+        (fun () ->
+          Lwt_unix.openfile tmp [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600
+          >>= fun fd ->
+          owned := true;
+          let channel = Lwt_io.of_fd ~mode:Lwt_io.output fd in
+          Lwt.finalize
+            (fun () -> Lwt_io.write channel body)
+            (fun () -> Lwt_io.close channel)
+          >>= fun () ->
+          Lwt_unix.rename tmp dest >|= fun () -> Ok ())
+        (function
+          | Unix.Unix_error (Unix.EEXIST, _, _) when not !owned ->
+              attempt dir base (remaining - 1)
+          | Lwt.Canceled -> Lwt.fail Lwt.Canceled
+          | exn -> Lwt.return (Error (`Io (io_message exn))))
+      >>= fun outcome ->
+      if not !owned then Lwt.return outcome
       else
-        match Eio.Path.unlink ~missing_ok:true tmp with
-        | () -> outcome
-        | exception (Eio.Io (Eio.Fs.E _, _) as exn) ->
-            Error (`Io (Fmt.str "temporary file cleanup failed: %a" Eio.Exn.pp exn))
+        Lwt.catch
+          (fun () -> Lwt_unix.unlink tmp >|= fun () -> outcome)
+          (function
+            | Unix.Unix_error (Unix.ENOENT, _, _) -> Lwt.return outcome
+            | Lwt.Canceled -> Lwt.fail Lwt.Canceled
+            | exn ->
+                Lwt.return
+                  (Error
+                     (`Io (Fmt.str "temporary file cleanup failed: %s" (io_message exn)))))
   in
-  Eio.Cancel.protect (fun () ->
-      match Eio.Path.split dest with
-      | None -> Error (`Io "destination path has no basename")
-      | Some (dir, base) -> attempt dir base max_temp_attempts)
+  let dir, base = (Filename.dirname dest, Filename.basename dest) in
+  attempt dir base max_temp_attempts
+
+(* Create [path] and every missing ancestor with [perm]; a directory already
+   being in place is fine, anything else occupying the name is an error. *)
+let mkdir_exists perm path =
+  Lwt.catch
+    (fun () -> Lwt_unix.mkdir path perm >|= fun () -> Ok ())
+    (function
+      | Unix.Unix_error (Unix.EEXIST, _, _) ->
+          Lwt.catch
+            (fun () ->
+              Lwt_unix.stat path >|= fun stats ->
+              if stats.Unix.st_kind = Unix.S_DIR then Ok () else Error Unix.ENOTDIR)
+            (fun _ -> Lwt.return (Error Unix.ENOTDIR))
+      | Unix.Unix_error (code, _, _) -> Lwt.return (Error code)
+      | Lwt.Canceled -> Lwt.fail Lwt.Canceled
+      | exn -> Lwt.fail exn)
+
+let ensure_dir ~perm path =
+  let rec up path =
+    if path = Filename.dir_sep || path = "." then Lwt.return (Ok ())
+    else
+      mkdir_exists perm path >>= function
+      | Ok () -> Lwt.return (Ok ())
+      | Error Unix.ENOENT when not (String.equal (Filename.dirname path) path) -> (
+          up (Filename.dirname path) >>= function
+          | Ok () -> mkdir_exists perm path
+          | Error _ as e -> Lwt.return e)
+      | Error code -> Lwt.return (Error code)
+  in
+  up path
 
 let ensure_root root =
-  try
-    Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 root;
-    Ok ()
-  with Eio.Io (Eio.Fs.E _, _) as exn ->
-    Eio.Fiber.check ();
-    Error (`Io (Fmt.str "%a" Eio.Exn.pp exn))
+  ensure_dir ~perm:0o700 root >>= function
+  | Ok () -> Lwt.return (Ok ())
+  | Error code -> Lwt.return (Error (`Io (Unix.error_message code)))
 
 (* The [b] flag is determined solely by [String.is_valid_utf_8]; callers never
    choose it (see the .mli). *)
 let classify data = if String.is_valid_utf_8 data then Text data else Binary data
 
 let set ~root ~db key data =
-  let* () = validate_db db in
-  let path = db_path root db in
-  Eio.Mutex.use_rw ~protect:true write_lock (fun () ->
-      let* () = ensure_root root in
-      let* presence = load_table ~db path in
-      let t = match presence with Absent -> Hashtbl.create 8 | Present t -> t in
-      Hashtbl.replace t key (encode_value (classify data));
-      let* body = serialize t in
-      save_atomic path body)
+  match validate_db db with
+  | Error _ as e -> Lwt.return e
+  | Ok () ->
+      let path = db_path root db in
+      Lwt_mutex.with_lock write_lock (fun () ->
+          ensure_root root >>= function
+          | Error _ as e -> Lwt.return e
+          | Ok () -> (
+              load_table ~db path >>= function
+              | Error _ as e -> Lwt.return e
+              | Ok presence -> (
+                  let t =
+                    match presence with Absent -> Hashtbl.create 8 | Present t -> t
+                  in
+                  Hashtbl.replace t key (encode_value (classify data));
+                  match serialize t with
+                  | Ok body -> save_atomic path body
+                  | Error _ as e -> Lwt.return e)))
 
 let get ~root ~db key =
-  let* () = validate_db db in
-  match load_table ~db (db_path root db) with
-  | Error _ as e -> e
-  | Ok Absent -> Error (`No_such_db db)
-  | Ok (Present t) -> (
-      match Hashtbl.find_opt t key with
-      | None -> Error (`No_such_key key)
-      | Some j -> decode_value ~db ~key j)
+  match validate_db db with
+  | Error _ as e -> Lwt.return e
+  | Ok () -> (
+      load_table ~db (db_path root db) >>= function
+      | Error _ as e -> Lwt.return e
+      | Ok Absent -> Lwt.return (Error (`No_such_db db))
+      | Ok (Present t) -> (
+          match Hashtbl.find_opt t key with
+          | None -> Lwt.return (Error (`No_such_key key))
+          | Some j -> Lwt.return (decode_value ~db ~key j)))
 
 let delete ~root ~db key =
-  let* () = validate_db db in
-  let path = db_path root db in
-  Eio.Mutex.use_rw ~protect:true write_lock (fun () ->
-      match load_table ~db path with
-      | Error _ as e -> e
-      | Ok Absent -> Error (`No_such_db db)
-      | Ok (Present t) ->
-          if not (Hashtbl.mem t key) then Error (`No_such_key key)
-          else (
-            Hashtbl.remove t key;
-            let* body = serialize t in
-            save_atomic path body))
+  match validate_db db with
+  | Error _ as e -> Lwt.return e
+  | Ok () ->
+      let path = db_path root db in
+      Lwt_mutex.with_lock write_lock (fun () ->
+          load_table ~db path >>= function
+          | Error _ as e -> Lwt.return e
+          | Ok Absent -> Lwt.return (Error (`No_such_db db))
+          | Ok (Present t) ->
+              if not (Hashtbl.mem t key) then Lwt.return (Error (`No_such_key key))
+              else (
+                Hashtbl.remove t key;
+                match serialize t with
+                | Ok body -> save_atomic path body
+                | Error _ as e -> Lwt.return e))
 
 let list ~root ~db =
-  let* () = validate_db db in
-  match load_table ~db (db_path root db) with
-  | Error _ as e -> e
-  | Ok Absent -> Ok []
-  | Ok (Present t) ->
-      let entries = Hashtbl.fold (fun k j acc -> (k, j) :: acc) t [] in
-      let rec collect acc = function
-        | [] -> Ok (List.rev acc)
-        | (k, j) :: rest -> (
-            match decode_value ~db ~key:k j with
-            | Error _ as e -> e
-            | Ok v -> collect ((k, v) :: acc) rest)
-      in
-      Result.map
-        (List.sort (fun (a, _) (b, _) -> String.compare a b))
-        (collect [] entries)
+  match validate_db db with
+  | Error _ as e -> Lwt.return e
+  | Ok () -> (
+      load_table ~db (db_path root db) >>= function
+      | Error _ as e -> Lwt.return e
+      | Ok Absent -> Lwt.return (Ok [])
+      | Ok (Present t) ->
+          let entries = Hashtbl.fold (fun k j acc -> (k, j) :: acc) t [] in
+          let rec collect acc = function
+            | [] -> Lwt.return (Ok (List.rev acc))
+            | (k, j) :: rest -> (
+                match decode_value ~db ~key:k j with
+                | Error _ as e -> Lwt.return e
+                | Ok v -> collect ((k, v) :: acc) rest)
+          in
+          collect [] entries
+          >|= Result.map (List.sort (fun (a, _) (b, _) -> String.compare a b)))
 
 let delete_db ~root ~db =
-  let* () = validate_db db in
-  let path = db_path root db in
-  Eio.Mutex.use_rw ~protect:true write_lock (fun () ->
-      try
-        Eio.Path.unlink ~missing_ok:false path;
-        Ok ()
-      with
-      | Eio.Io (Eio.Fs.E (Not_found _), _) -> Error (`No_such_db db)
-      | Eio.Io (Eio.Fs.E _, _) as exn ->
-          Eio.Fiber.check ();
-          Error (`Io (Fmt.str "%a" Eio.Exn.pp exn)))
+  match validate_db db with
+  | Error _ as e -> Lwt.return e
+  | Ok () ->
+      let path = db_path root db in
+      Lwt_mutex.with_lock write_lock (fun () ->
+          Lwt.catch
+            (fun () -> Lwt_unix.unlink path >|= fun () -> Ok ())
+            (function
+              | Unix.Unix_error (Unix.ENOENT, _, _) -> Lwt.return (Error (`No_such_db db))
+              | Lwt.Canceled -> Lwt.fail Lwt.Canceled
+              | exn -> Lwt.return (Error (`Io (io_message exn)))))
 
 let dbs ~root =
   let suffix = ".json" in
@@ -273,8 +336,9 @@ let dbs ~root =
       Some (String.sub name 0 (nlen - slen))
     else None
   in
-  match Eio.Path.read_dir root with
-  | names ->
+  Lwt.catch
+    (fun () ->
+      Lwt_stream.to_list (Lwt_unix.files_of_directory root) >|= fun names ->
       let rec collect acc = function
         | [] -> acc
         | name :: rest -> (
@@ -282,8 +346,8 @@ let dbs ~root =
             | None -> collect acc rest
             | Some db -> collect (db :: acc) rest)
       in
-      Ok (List.sort String.compare (collect [] names))
-  | exception Eio.Io (Eio.Fs.E (Not_found _), _) -> Ok []
-  | exception (Eio.Io (Eio.Fs.E _, _) as exn) ->
-      Eio.Fiber.check ();
-      Error (`Io (Fmt.str "%a" Eio.Exn.pp exn))
+      Ok (List.sort String.compare (collect [] names)))
+    (function
+      | Unix.Unix_error (Unix.ENOENT, _, _) -> Lwt.return (Ok [])
+      | Lwt.Canceled -> Lwt.fail Lwt.Canceled
+      | exn -> Lwt.return (Error (`Io (io_message exn))))

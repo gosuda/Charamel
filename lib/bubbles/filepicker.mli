@@ -1,7 +1,7 @@
 (** Filesystem file picker.
 
     [t] is an immutable picker model. Directory reads are issued by [init] and [update] as
-    commands through the explicitly supplied Eio filesystem path. *)
+    commands over the explicitly supplied root directory. *)
 
 type keymap = {
   go_to_top : Key_binding.t;
@@ -61,7 +61,7 @@ type msg =
 type t
 
 val v :
-  fs:Eio.Fs.dir_ty Eio.Path.t ->
+  root:string ->
   ?current_directory:string ->
   ?allowed_types:string list ->
   ?show_permissions:bool ->
@@ -76,11 +76,11 @@ val v :
   ?styles:styles ->
   unit ->
   t
-(** [v ~fs ()] creates a picker rooted at [current_directory] (default [.]). It uses [fs]
-    for every directory and metadata operation. [allowed_types] contains filename
-    suffixes; an empty list allows every file. Defaults are permissions and sizes shown,
-    hidden entries omitted, files allowed, directories disallowed, automatic height
-    enabled, height [0], and cursor [">"]. *)
+(** [v ~root ()] creates a picker rooted at [current_directory] (default [.]) inside
+    [root]. Every directory and metadata operation is resolved against [root].
+    [allowed_types] contains filename suffixes; an empty list allows every file. Defaults
+    are permissions and sizes shown, hidden entries omitted, files allowed, directories
+    disallowed, automatic height enabled, height [0], and cursor [">"]. *)
 
 val init : t -> t * msg Charamel_tea.Cmd.t
 (** [init t] schedules a real read of [current_directory]. *)

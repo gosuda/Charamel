@@ -1,4 +1,5 @@
 open Result.Syntax
+open Lwt_direct
 
 type path_args = { path : string option }
 type symbol_args = { symbol : string; path : string option }
@@ -96,11 +97,11 @@ let with_lsp (ctx : Tool.ctx) f =
   | None -> Error (`Unavailable "no LSP configured")
   | Some lsp -> f lsp
 
-let touch_file lsp path = if path <> "" && path <> "/" then Lsp.touch lsp ~path
+let touch_file lsp path = if path <> "" && path <> "/" then await (Lsp.touch lsp ~path)
 
 let truncate_output (ctx : Tool.ctx) ?diagnostics text =
   let content, artifact =
-    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
+    await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text)
   in
   Tool.ok ?artifact ?diagnostics content
 
@@ -120,6 +121,15 @@ let diagnostics_text diagnostics =
   | [] -> "no diagnostics"
   | values -> String.concat "\n" (List.map format_diagnostic values)
 
+let gather_diagnostics lsp paths =
+  let open Lwt.Infix in
+  Lwt_list.map_s
+    (fun path ->
+      (if path <> "" && path <> "/" then Lsp.touch lsp ~path else Lwt.return_unit)
+      >>= fun () -> Lsp.diagnostics lsp ~path ~wait:0.5)
+    paths
+  >|= List.concat
+
 let run_diagnostics ctx input =
   let* ({ path } : path_args) = Tool.decode path_codec input in
   let permission_path = path_for_permission ctx path in
@@ -130,12 +140,8 @@ let run_diagnostics ctx input =
   with_lsp ctx (fun lsp ->
       let paths = requested_paths ctx path in
       let outcome =
-        Tool.with_timeout ctx 2. (fun () ->
-            List.concat_map
-              (fun path ->
-                touch_file lsp path;
-                Lsp.diagnostics lsp ~path ~wait:0.5)
-              paths)
+        try Ok (await (Lwt_unix.with_timeout 2. (fun () -> gather_diagnostics lsp paths)))
+        with Lwt_unix.Timeout -> Error (`Timeout 2.)
       in
       let* diagnostics = outcome in
       Ok (truncate_output ctx (diagnostics_text diagnostics)))
@@ -146,51 +152,51 @@ let file_uri_path path =
     String.sub path start (String.length path - start)
   else path
 
-let read_context (ctx : Tool.ctx) (location : Lsp.location) =
+let read_context (location : Lsp.location) =
   let path = file_uri_path location.Lsp.path in
   let first = max 1 (location.Lsp.line - 5) in
   let last = max first (location.Lsp.end_line + 5) in
   try
-    let lines = ref [] in
-    let line_number = ref 1 in
-    Eio.Path.with_lines
-      Eio.Path.(ctx.Tool.fs / path)
-      (fun stream ->
-        let rec consume stream =
-          if !line_number > last then ()
-          else
-            match stream () with
-            | Seq.Nil -> ()
-            | Seq.Cons (line, next) ->
-                if !line_number >= first then
-                  lines := Fmt.str "%d:%s" !line_number line :: !lines;
-                incr line_number;
-                consume next
-        in
-        consume stream);
-    List.rev !lines
-  with Eio.Io _ -> []
+    await
+      (Lwt_io.with_file ~mode:Lwt_io.Input path (fun channel ->
+           let open Lwt.Infix in
+           let stream = Lwt_io.read_lines channel in
+           let lines = ref [] in
+           let line_number = ref 1 in
+           let rec consume () =
+             if !line_number > last then Lwt.return_unit
+             else
+               Lwt_stream.get stream >>= function
+               | None -> Lwt.return_unit
+               | Some line ->
+                   if !line_number >= first then
+                     lines := Fmt.str "%d:%s" !line_number line :: !lines;
+                   incr line_number;
+                   consume ()
+           in
+           consume () >|= fun () -> List.rev !lines))
+  with Unix.Unix_error _ | Sys_error _ -> []
 
-let format_location ctx (location : Lsp.location) =
+let format_location (location : Lsp.location) =
   let path = file_uri_path location.Lsp.path in
   let header =
     Fmt.str "%s:%d:%d-%d:%d" path location.Lsp.line location.Lsp.col location.Lsp.end_line
       location.Lsp.end_col
   in
-  match read_context ctx location with
+  match read_context location with
   | [] -> header
   | context ->
       header ^ "\n" ^ String.concat "\n" (List.map (fun line -> "  " ^ line) context)
 
-let locations_text ctx locations =
+let locations_text locations =
   match locations with
   | [] -> "no locations"
-  | values -> String.concat "\n\n" (List.map (format_location ctx) values)
+  | values -> String.concat "\n\n" (List.map format_location values)
 
 let locate_symbol (ctx : Tool.ctx) lsp path name =
   let source = canonical_path ctx path in
   if source <> ctx.Tool.cwd then touch_file lsp source;
-  match Lsp.find_symbol lsp ~path:source ~name with
+  match await (Lsp.find_symbol lsp ~path:source ~name) with
   | Ok (Some symbol) -> Ok symbol
   | Ok None -> Error (`Not_found name)
   | Error error -> Error (map_lsp_error error)
@@ -206,10 +212,11 @@ let run_definition ctx input =
       let* symbol = locate_symbol ctx lsp path symbol in
       let location = (symbol : Lsp.symbol).Lsp.range in
       match
-        Lsp.definition lsp ~path:location.Lsp.path ~line:location.Lsp.line
-          ~col:location.Lsp.col
+        await
+          (Lsp.definition lsp ~path:location.Lsp.path ~line:location.Lsp.line
+             ~col:location.Lsp.col)
       with
-      | Ok locations -> Ok (truncate_output ctx (locations_text ctx locations))
+      | Ok locations -> Ok (truncate_output ctx (locations_text locations))
       | Error error -> Error (map_lsp_error error))
 
 let run_references ctx input =
@@ -223,8 +230,9 @@ let run_references ctx input =
       let* found = locate_symbol ctx lsp path symbol in
       let location = (found : Lsp.symbol).Lsp.range in
       match
-        Lsp.references lsp ~path:location.Lsp.path ~line:location.Lsp.line
-          ~col:location.Lsp.col
+        await
+          (Lsp.references lsp ~path:location.Lsp.path ~line:location.Lsp.line
+             ~col:location.Lsp.col)
       with
       | Ok locations ->
           let limited =
@@ -232,7 +240,7 @@ let run_references ctx input =
               List.filteri (fun index _ -> index < 200) locations
             else locations
           in
-          Ok (truncate_output ctx (locations_text ctx limited))
+          Ok (truncate_output ctx (locations_text limited))
       | Error error -> Error (map_lsp_error error))
 
 let rec symbol_lines indent (symbol : Lsp.symbol) =
@@ -256,7 +264,7 @@ let run_symbols ctx input =
   in
   with_lsp ctx (fun lsp ->
       touch_file lsp source;
-      match Lsp.document_symbols lsp ~path:source with
+      match await (Lsp.document_symbols lsp ~path:source) with
       | Ok symbols ->
           let lines = List.concat_map (symbol_lines 0) symbols in
           Ok
@@ -278,17 +286,18 @@ let run_rename (ctx : Tool.ctx) input =
       let* found = locate_symbol ctx lsp path symbol in
       let location = (found : Lsp.symbol).Lsp.range in
       match
-        Lsp.rename lsp ~path:location.Lsp.path ~line:location.Lsp.line
-          ~col:location.Lsp.col ~new_name
+        await
+          (Lsp.rename lsp ~path:location.Lsp.path ~line:location.Lsp.line
+             ~col:location.Lsp.col ~new_name)
       with
       | Error error -> Error (map_lsp_error error)
       | Ok edits -> (
-          match Lsp.apply_edits ~cwd:ctx.Tool.cwd ~fs:ctx.Tool.fs edits with
+          match await (Lsp.apply_edits ~cwd:ctx.Tool.cwd edits) with
           | Error error -> Error (map_lsp_error error)
           | Ok touched ->
               let diagnostics =
                 match touched with
-                | first :: _ -> Lsp.diagnostics lsp ~path:first ~wait:0.5
+                | first :: _ -> await (Lsp.diagnostics lsp ~path:first ~wait:0.5)
                 | [] -> []
               in
               let files =
@@ -308,7 +317,7 @@ let run_restart ctx input =
       ~description:"Restart language servers"
   in
   with_lsp ctx (fun lsp ->
-      match Lsp.restart lsp ~name with
+      match await (Lsp.restart lsp ~name) with
       | Error error -> Error (map_lsp_error error)
       | Ok (restarted, failed) ->
           let group values = if values = [] then "none" else String.concat ", " values in

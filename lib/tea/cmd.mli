@@ -12,6 +12,7 @@ type 'msg t = private
   | Map : ('a -> 'b) * 'a t -> 'b t
   | Msg of 'msg
   | Perform of (unit -> 'msg)
+  | Await of 'msg Lwt.t
   | After of float * (unit -> 'msg)
   | Quit
   | Interrupt
@@ -52,9 +53,14 @@ val msg : 'msg -> 'msg t
 (** [msg m] delivers [m] on the next loop iteration. *)
 
 val perform : (unit -> 'msg) -> 'msg t
-(** [perform thunk] runs [thunk] in its own fiber once the command is dispatched and
+(** [perform thunk] runs [thunk] in its own task once the command is dispatched and
     delivers its result. An exception raised by [thunk] terminates the program with
     [`Exn]. [thunk] is not called when the command is built. *)
+
+val await : 'msg Lwt.t -> 'msg t
+(** [await promise] delivers the value [promise] resolves to, and fails the program with
+    its error if it fails. The run loop keeps rendering while [promise] is pending.
+    Cancelling the command does not cancel [promise]. *)
 
 val after : float -> (unit -> 'msg) -> 'msg t
 (** [after seconds thunk] runs [thunk] once, [seconds] after the command is dispatched,

@@ -1,7 +1,7 @@
 (** Skate store and command tests. *)
 
-type test = unit Alcotest.test_case
-(** The type for a synchronous store test case. *)
+type test = unit Alcotest_lwt.test_case
+(** The type for a store test case. *)
 
 val roundtrip_text : test
 (** [roundtrip_text] checks UTF-8 storage and retrieval. *)
@@ -72,5 +72,5 @@ val cli_absent_paths : test
 val cli_unknown_command : test
 (** [cli_unknown_command] checks rejection of an unknown command. *)
 
-val cases : unit Alcotest.test
+val cases : unit Alcotest_lwt.test
 (** [cases] is the complete Skate test suite. *)

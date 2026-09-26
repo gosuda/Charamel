@@ -21,7 +21,7 @@ let nonempty value =
 let get_string results key default =
   match Charamel_huh.Results.get key results with Some value -> value | None -> default
 
-let run ~clock env ~initial =
+let run ~clock ~fs_root ~temp_dir ~initial =
   let to_key = Charamel_huh.Key.v "to" in
   let cc_key = Charamel_huh.Key.v "cc" in
   let bcc_key = Charamel_huh.Key.v "bcc" in
@@ -48,23 +48,24 @@ let run ~clock env ~initial =
     Charamel_huh.Form.v ~show_help:true ~show_errors:true
       [ Charamel_huh.Group.v ~title:"Compose email" fields ]
   in
-  let form_env = Charamel_huh.Form.Env.v ~fs:env#fs ~temp_dir:env#fs ~editor:[] in
-  match Charamel_huh.run ~env:form_env ~clock form env with
-  | Error ((`Aborted | `Timeout) as error) -> Error error
-  | Ok results ->
-      let send =
-        match Charamel_huh.Results.get send_key results with
-        | Some value -> value
-        | None -> true
-      in
-      if not send then Error `Aborted
-      else
-        Ok
-          {
-            to_ = get_string results to_key initial.to_;
-            cc = get_string results cc_key initial.cc;
-            bcc = get_string results bcc_key initial.bcc;
-            from = get_string results from_key initial.from;
-            subject = get_string results subject_key initial.subject;
-            body = get_string results body_key initial.body;
-          }
+  let form_env = Charamel_huh.Form.Env.v ~fs_root ~temp_dir ~editor:None ~clock in
+  Lwt.bind (Charamel_huh.run ~env:form_env ~clock form) (function
+    | Error ((`Aborted | `Timeout) as error) -> Lwt.return (Error error)
+    | Ok results ->
+        let send =
+          match Charamel_huh.Results.get send_key results with
+          | Some value -> value
+          | None -> true
+        in
+        if not send then Lwt.return (Error `Aborted)
+        else
+          Lwt.return
+            (Ok
+               {
+                 to_ = get_string results to_key initial.to_;
+                 cc = get_string results cc_key initial.cc;
+                 bcc = get_string results bcc_key initial.bcc;
+                 from = get_string results from_key initial.from;
+                 subject = get_string results subject_key initial.subject;
+                 body = get_string results body_key initial.body;
+               }))

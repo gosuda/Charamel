@@ -10,5 +10,5 @@ val join :
     direction is horizontal; [vertical] wins when both directions are requested. [align]
     defaults to [left] and accepts left, center, right, top, bottom, or middle. *)
 
-val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
+val cmd : Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t
 (** [cmd env] is the [join] subcommand evaluated with [env]. *)

@@ -1,11 +1,13 @@
+open Lwt.Syntax
+
 let runtime_probe mode =
   let action () =
     match mode with
     | "error" -> Charamel_cli.error "probe failure"
     | "silent" -> Charamel_cli.exit 1
-    | "timeout" -> raise Eio.Time.Timeout
+    | "timeout" -> raise Lwt_unix.Timeout
     | "interrupt" -> raise Sys.Break
-    | _ -> ()
+    | _ -> Lwt.return_unit
   in
   Charamel_cli.run ~name:"cli-probe" ~version:"dev" ~doc:"CLI runtime probe"
     ~default:(fun _env -> Cmdliner.Term.(const action $ const ()))
@@ -13,16 +15,18 @@ let runtime_probe mode =
 
 let child_status mode =
   let args = if mode = "usage" then [ "--unknown-option" ] else [] in
-  let status, _stdout, _stderr =
+  let* status, _stdout, _stderr =
     Test_support.run_cli ~exe:Sys.executable_name
       ~env:[| "CHARAMEL_CLI_RUNTIME_PROBE=" ^ mode |]
       args
   in
-  status
+  Lwt.return status
 
 let status_case mode expected =
-  Alcotest.test_case mode `Quick (fun () ->
-      Alcotest.(check int) mode expected (child_status mode))
+  Alcotest_lwt.test_case mode `Quick (fun _switch () ->
+      let* status = child_status mode in
+      Alcotest.(check int) mode expected status;
+      Lwt.return_unit)
 
 let cases =
   [
@@ -37,5 +41,5 @@ let () =
   match Sys.getenv_opt "CHARAMEL_CLI_RUNTIME_PROBE" with
   | Some mode -> runtime_probe mode
   | None ->
-      Alcotest.run "cli-behavior"
+      Test_support.run_lwt "cli-behavior"
         [ ("nearest", Test_cli_nearest.cases); ("runtime", cases) ]

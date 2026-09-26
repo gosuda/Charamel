@@ -1,11 +1,11 @@
 (library
  (name skate_core)
  (modules store)
- (libraries eio fmt jsont jsont.bytesrw base64))
+ (libraries lwt lwt.unix unix fmt jsont jsont.bytesrw base64))
 
 (executable
  (name main)
  (public_name skate)
  (package skate)
  (modules main skate_cli)
- (libraries skate_core charamel.cli cmdliner eio eio.unix fmt))
+ (libraries skate_core charamel.cli lwt lwt.unix unix cmdliner fmt))

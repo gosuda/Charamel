@@ -7,9 +7,9 @@
   charamel.colorprofile
   cmdliner
   dune-build-info
-  eio
-  eio.unix
-  eio_main
+  charamel.os
+  lwt
+  lwt.unix
   fmt
   logs
   unix))

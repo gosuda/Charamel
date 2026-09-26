@@ -5,5 +5,5 @@
 val render : Mime.message -> string
 (** [render message] is the complete deterministic MIME message. *)
 
-val write : _ Eio.Flow.sink -> Mime.message -> unit
+val write : Lwt_io.output_channel -> Mime.message -> unit Lwt.t
 (** [write sink message] writes [render message] to [sink]. *)

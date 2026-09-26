@@ -12,12 +12,11 @@ depends: [
   "charamel"
   "charamel-ssh"
   "digestif"
-  "eio"
-  "eio_main"
   "cmdliner"
   "mirage-crypto-rng"
   "fmt"
   "alcotest" {with-test}
+  "alcotest-lwt" {>= "1.9.1" & with-test}
   "odoc" {with-doc}
 ]
 build: [

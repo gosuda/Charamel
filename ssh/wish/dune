@@ -2,13 +2,18 @@
  (name charamel_ssh_wish)
  (public_name charamel-ssh.wish)
  (libraries
-  charamel.tea
-  charamel.colorprofile
-  charamel-ssh.keygen
   awa
-  eio
-  eio.unix
+  charamel.cli
+  charamel.colorprofile
+  charamel.net
+  charamel.os
+  charamel.tea
+  charamel-ssh.keygen
+  cstruct
   fmt
   logs
-  cstruct
-  mtime))
+  lwt
+  lwt.unix
+  mirage-crypto-rng
+  mtime
+  unix))

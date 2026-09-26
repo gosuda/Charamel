@@ -1,5 +1,5 @@
 let wire name input expected =
-  Alcotest.test_case name `Quick (fun () ->
+  Alcotest_lwt.test_case_sync name `Quick (fun () ->
       Alcotest.check Alcotest.string name expected (Explain.explain input))
 
 let cases =

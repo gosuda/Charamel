@@ -1,4 +1,4 @@
-(** Loopback SMTP fixture, the Lwt port of the Eio harness in [test/pop].
+(** Loopback SMTP fixture, re-derived from the harness that lived in [test/pop].
 
     [t] speaks the same reply vocabulary as the original: greeting, [EHLO] with capability
     lines, [HELO], [AUTH PLAIN], [AUTH LOGIN] challenges, [MAIL FROM]/[RCPT TO], [DATA]

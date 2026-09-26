@@ -97,12 +97,11 @@ let make (options : options) =
   }
 
 let initial_value env (options : options) =
-  if options.value <> "" then options.value
+  if options.value <> "" then Lwt.return options.value
   else
-    match Gum_io.read_stdin ~strip_ansi:options.strip_ansi env with
-    | Ok value -> value
-    | Error `Empty -> ""
-    | Error (`Read value) -> value
+    Lwt.map
+      (function Ok value -> value | Error `Empty -> "" | Error (`Read value) -> value)
+      (Gum_io.read_stdin ~strip_ansi:options.strip_ansi env)
 
 let value model = Textinput.value model.input
 let submitted model = model.submitted
@@ -163,13 +162,15 @@ let app options : (model, msg) Charamel_tea.app =
   }
 
 let run env (options : options) =
-  let options = { options with value = initial_value env options } in
-  let model =
-    Gum_run.run_tui ~name:"input" ?timeout:options.timeout env (app options)
-      ~finished:(fun model -> if submitted model then Gum_run.Submitted else Gum_run.Quit)
-  in
-  if not (submitted model) then Charamel_cli.error "not submitted";
-  Gum_io.print_raw env (value model)
+  Lwt.bind (initial_value env options) (fun initial ->
+      let options = { options with value = initial } in
+      Lwt.bind
+        (Gum_run.run_tui ~name:"input" ?timeout:options.timeout env (app options)
+           ~finished:(fun model ->
+             if submitted model then Gum_run.Submitted else Gum_run.Quit))
+        (fun model ->
+          if not (submitted model) then Charamel_cli.error "not submitted";
+          Gum_io.print_raw env (value model)))
 
 let cmd env =
   let open Cmdliner in

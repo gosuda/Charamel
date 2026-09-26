@@ -6,10 +6,10 @@ type rule = { path : string; globs : string list; always : bool; body : string }
 type t
 (** The loaded rule index. *)
 
-val load : fs:Eio.Fs.dir_ty Eio.Path.t -> cwd:string -> config:Config.t -> t
-(** [load ~fs ~cwd ~config] reads only [config.context_paths], relative to [cwd]. Files
-    and Markdown rule headers use the supported [globs] and [always] fields; malformed
-    headers raise [Invalid_argument]. Missing paths are skipped. *)
+val load : fs_root:string -> cwd:string -> config:Config.t -> t Lwt.t
+(** [load ~fs_root ~cwd ~config] reads only [config.context_paths], relative to [cwd].
+    Files and Markdown rule headers use the supported [globs] and [always] fields;
+    malformed headers raise [Invalid_argument]. Missing paths are skipped. *)
 
 val context_text : t -> string
 (** [context_text t] renders all always rules as Markdown context sections. *)

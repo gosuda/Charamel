@@ -1,6 +1,7 @@
 let is_tty_stdin = Os_platform.Tty.is_stdin
 let is_tty_stdout = Os_platform.Tty.is_stdout
 let size_stdout = Os_platform.Tty.size_stdout
+let size_of_output = Os_platform.Tty.size_of_output
 let supports_suspend = Os_platform.Tty.supports_suspend
 let open_controlling_in = Os_platform.Tty.controlling_input
 

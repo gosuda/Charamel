@@ -31,8 +31,9 @@
   charamel.lipgloss
   charamel.tea
   charamel.bubbles
-  eio
-  eio.unix
+  charamel.os
+  lwt
+  lwt.unix
   fmt
   logs
   unix))

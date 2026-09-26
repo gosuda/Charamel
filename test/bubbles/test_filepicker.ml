@@ -1,3 +1,4 @@
+open Lwt.Syntax
 module Filepicker = Charamel_bubbles.Filepicker
 
 let check_string name expected actual =
@@ -5,38 +6,38 @@ let check_string name expected actual =
 
 let check_bool name expected actual = Alcotest.check Alcotest.bool name expected actual
 let check_int name expected actual = Alcotest.check Alcotest.int name expected actual
-let path_append = Eio.Path.( / )
 
 let path_join dir name =
   if dir = "" || dir = "." then name
   else if String.ends_with ~suffix:"/" dir then dir ^ name
   else dir ^ "/" ^ name
 
-let read_real_entries fs path =
+let resolve root path =
+  if path = "" || path = "." then root
+  else if Filename.is_relative path then Filename.concat root path
+  else path
+
+let read_real_entries root path =
   try
-    let raw = Eio.Path.read_dir_entries (path_append fs path) in
+    let directory = resolve root path in
     let entries =
-      raw
-      |> Stdlib.List.filter_map (fun (kind, name) ->
+      Array.to_list (Sys.readdir directory)
+      |> Stdlib.List.filter_map (fun name ->
           if name <> "" && name.[0] = '.' then None
           else
-            let entry_path = path_append fs (path_join path name) in
-            let lstat = Eio.Path.stat ~follow:false entry_path in
-            let is_symlink =
-              kind = `Symbolic_link || lstat.Eio.File.Stat.kind = `Symbolic_link
-            in
-            let target = if is_symlink then Eio.Path.read_link entry_path else "" in
-            let stat =
-              if is_symlink then Eio.Path.stat ~follow:true entry_path else lstat
-            in
+            let entry_path = path_join directory name in
+            let lstat = Unix.lstat entry_path in
+            let is_symlink = lstat.Unix.st_kind = Unix.S_LNK in
+            let target = if is_symlink then Unix.readlink entry_path else "" in
+            let stat = if is_symlink then Unix.stat entry_path else lstat in
             Some
               {
                 Filepicker.name;
-                is_dir = stat.Eio.File.Stat.kind = `Directory;
+                is_dir = stat.Unix.st_kind = Unix.S_DIR;
                 is_symlink;
                 symlink_target = target;
                 perm = "";
-                size = Optint.Int63.to_int stat.Eio.File.Stat.size;
+                size = stat.Unix.st_size;
               })
     in
     let entries =
@@ -49,30 +50,34 @@ let read_real_entries fs path =
         entries
     in
     Ok entries
-  with Eio.Io (Eio.Fs.E _, _) -> Error (Fmt.str "cannot read %s" path)
+  with
+  | Sys_error message -> Error (Fmt.str "cannot read %s: %s" path message)
+  | Unix.Unix_error (kind, _, _) ->
+      Error (Fmt.str "cannot read %s: %s" path (Unix.error_message kind))
 
-let with_directory f =
-  Test_support.with_temp_dir (fun fs -> f fs (Eio.Path.native_exn fs))
+let write_file path text =
+  Charamel_os.Fs.with_open_out ~perm:0o600 path (fun channel -> Lwt_io.write channel text)
 
-let read_model fs path picker =
+let make_directory path = Lwt.map Result.get_ok (Charamel_os.Fs.mkdir_p path)
+
+let read_model root path picker =
   let picker, command = Filepicker.init picker in
   ignore command;
-  let entries = read_real_entries fs path in
+  let entries = read_real_entries root path in
   Filepicker.update (Filepicker.Read_dir { path; entries }) picker
 
 let names entries =
   Stdlib.List.map (fun (entry : Filepicker.entry) -> entry.Filepicker.name) entries
 
 let navigation_and_real_io () =
-  with_directory @@ fun fs name ->
-  let sub = path_append fs "subdir" in
-  Eio.Path.mkdir ~perm:0o700 sub;
-  Eio.Path.save ~create:(`Exclusive 0o600) (path_append fs "root.txt") "root";
-  Eio.Path.save ~create:(`Exclusive 0o600) (path_append sub "file.go") "package main\n";
-  Eio.Path.save ~create:(`Exclusive 0o600) (path_append fs ".hidden") "hidden";
-  let picker = Filepicker.v ~fs ~current_directory:name ~allowed_types:[ ".go" ] () in
-  let picker, _ = read_model fs name picker in
-  check_string "root directory" name (Filepicker.current_directory picker);
+  Test_support.with_temp_dir @@ fun root ->
+  let* () = make_directory (path_join root "subdir") in
+  let* () = write_file (path_join root "root.txt") "root" in
+  let* () = write_file (path_join root "subdir/file.go") "package main\n" in
+  let* () = write_file (path_join root ".hidden") "hidden" in
+  let picker = Filepicker.v ~root ~current_directory:root ~allowed_types:[ ".go" ] () in
+  let picker, _ = read_model root root picker in
+  check_string "root directory" root (Filepicker.current_directory picker);
   check_bool "hidden omitted" false
     (Stdlib.List.mem ".hidden" (names (Filepicker.entries picker)));
   check_bool "directory first" true
@@ -80,57 +85,67 @@ let navigation_and_real_io () =
     | first :: _ -> first.Filepicker.is_dir
     | [] -> false);
   let picker, _ = Filepicker.update Filepicker.Open picker in
-  let picker, _ = read_model fs (Filepicker.current_directory picker) picker in
-  check_string "entered directory" (name ^ "/subdir")
+  let entered = Filepicker.current_directory picker in
+  let picker, _ = read_model root entered picker in
+  check_string "entered directory" (root ^ "/subdir")
     (Filepicker.current_directory picker);
   check_bool "child discovered" true
     (Stdlib.List.mem "file.go" (names (Filepicker.entries picker)));
   let selected = Filepicker.did_select_file Filepicker.Open picker in
-  check_string "select path" (name ^ "/subdir/file.go") (Option.get selected);
-  check_int "cursor starts at first child" 0 (Filepicker.cursor picker)
+  check_string "select path" (root ^ "/subdir/file.go") (Option.get selected);
+  check_int "cursor starts at first child" 0 (Filepicker.cursor picker);
+  Lwt.return_unit
 
 let filtering_and_disabled_selection () =
-  with_directory @@ fun fs name ->
-  Eio.Path.save ~create:(`Exclusive 0o600) (path_append fs "good.go") "go";
-  Eio.Path.save ~create:(`Exclusive 0o600) (path_append fs "bad.txt") "txt";
-  let picker = Filepicker.v ~fs ~current_directory:name ~allowed_types:[ ".go" ] () in
-  let picker, _ = read_model fs name picker in
+  Test_support.with_temp_dir @@ fun root ->
+  let* () = write_file (path_join root "good.go") "go" in
+  let* () = write_file (path_join root "bad.txt") "txt" in
+  let picker = Filepicker.v ~root ~current_directory:root ~allowed_types:[ ".go" ] () in
+  let picker, _ = read_model root root picker in
   let picker, _ = Filepicker.update Filepicker.Go_to_top picker in
   check_bool "disallowed file has no selection" false
     (Option.is_some (Filepicker.did_select_file Filepicker.Open picker));
-  check_string "disabled path is reported" (name ^ "/bad.txt")
+  check_string "disabled path is reported" (root ^ "/bad.txt")
     (Option.get (Filepicker.did_select_disabled_file Filepicker.Open picker));
   let picker = Filepicker.set_allowed_types [] picker in
   check_bool "allowed types can be reset" true
-    (Option.is_some (Filepicker.did_select_file Filepicker.Open picker))
+    (Option.is_some (Filepicker.did_select_file Filepicker.Open picker));
+  Lwt.return_unit
 
 let directory_error_is_visible () =
-  with_directory @@ fun fs name ->
-  let picker = Filepicker.v ~fs ~current_directory:name () in
-  let picker, _ = read_model fs name picker in
-  let missing = name ^ "/missing" in
+  Test_support.with_temp_dir @@ fun root ->
+  let picker = Filepicker.v ~root ~current_directory:root () in
+  let picker, _ = read_model root root picker in
+  let missing = root ^ "/missing" in
   let picker = Filepicker.set_current_directory missing picker in
-  let picker, _ = read_model fs missing picker in
+  let picker, _ = read_model root missing picker in
   let view = Charamel_ansi.Text.strip (Filepicker.view picker) in
   check_bool "directory failure visible" true
     (String.length view > 0 && String.contains view 'E');
   check_int "failed read clears entries" 0
-    (Stdlib.List.length (Filepicker.entries picker))
+    (Stdlib.List.length (Filepicker.entries picker));
+  Lwt.return_unit
 
 let auto_height_and_resize () =
-  with_directory @@ fun fs name ->
-  let picker = Filepicker.v ~fs ~current_directory:name ~height:10 () in
+  Test_support.with_temp_dir @@ fun root ->
+  let picker = Filepicker.v ~root ~current_directory:root ~height:10 () in
   let picker, _ = Filepicker.update (Filepicker.Resize 8) picker in
   check_int "auto height leaves bottom margin" 3 (Filepicker.height picker);
-  let picker = Filepicker.v ~fs ~current_directory:name ~auto_height:false ~height:4 () in
+  let picker =
+    Filepicker.v ~root ~current_directory:root ~auto_height:false ~height:4 ()
+  in
   let picker, _ = Filepicker.update (Filepicker.Resize 1) picker in
-  check_int "manual height unchanged" 4 (Filepicker.height picker)
+  check_int "manual height unchanged" 4 (Filepicker.height picker);
+  Lwt.return_unit
 
 let cases =
   [
-    Alcotest.test_case "navigation and real filesystem" `Quick navigation_and_real_io;
-    Alcotest.test_case "filtering and disabled selection" `Quick
-      filtering_and_disabled_selection;
-    Alcotest.test_case "directory failures are visible" `Quick directory_error_is_visible;
-    Alcotest.test_case "automatic height" `Quick auto_height_and_resize;
+    Alcotest_lwt.test_case "navigation and real filesystem" `Quick (fun _switch () ->
+        navigation_and_real_io ());
+    Alcotest_lwt.test_case "filtering and disabled selection" `Quick (fun _switch () ->
+        filtering_and_disabled_selection ());
+    Alcotest_lwt.test_case "directory failures are visible" `Quick (fun _switch () ->
+        directory_error_is_visible ());
+    Alcotest_lwt.test_case "automatic height" `Quick (fun _switch () ->
+        auto_height_and_resize ());
   ]

@@ -28,6 +28,16 @@ val size_stdout : unit -> (int * int) option
     Windows reads the visible window of [GetConsoleScreenBufferInfo] for the standard
     output handle. *)
 
+val size_of_output : [ `Stdout | `Stderr ] -> (int * int) option
+(** [size_of_output output] is the current [(rows, cols)] of the terminal the selected
+    standard output points at, or [None] when it is not a terminal or the size cannot be
+    read — the same contract as {!val:size_stdout}, for the descriptor the caller actually
+    renders to, which is [Stderr] for a tool that keeps stdout for data. The selection is
+    by role, not by [Unix.file_descr]: that type is abstract and converts to no number in
+    either direction. POSIX issues [ioctl TIOCGWINSZ] on descriptor 1 or 2; Windows reads
+    the screen buffer of [GetStdHandle(STD_OUTPUT_HANDLE)] or
+    [GetStdHandle(STD_ERROR_HANDLE)]. *)
+
 (** {1 Modes} *)
 
 val enter_raw : unit -> unit -> unit

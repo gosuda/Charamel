@@ -1,18 +1,19 @@
 module Tool = Crush_core.Tool
 module Tools_search = Crush_core.Tools_search
 open Test_tools_test_support
+open Lwt_direct
 
 let with_context =
-  Test_tools_test_support.with_context ~temp_prefix:"crush-tools-search"
-    ~allowed_tools:[ "ls"; "glob"; "grep" ]
+  Test_tools_test_support.with_context ~allowed_tools:[ "ls"; "glob"; "grep" ]
 
 let check_ls_skips_generated_trees () =
-  with_context @@ fun env root context ->
-  write_file env (Filename.concat root "src/a.ml") "let needle = 1\n";
-  write_file env (Filename.concat root ".env") "secret\n";
-  write_file env (Filename.concat root ".git/ignored.ml") "ignored\n";
-  write_file env (Filename.concat root "_build/generated.ml") "generated\n";
-  write_file env (Filename.concat root "node_modules/dependency.ml") "dependency\n";
+  await @@ with_context
+  @@ fun root context ->
+  write_file (Filename.concat root "src/a.ml") "let needle = 1\n";
+  write_file (Filename.concat root ".env") "secret\n";
+  write_file (Filename.concat root ".git/ignored.ml") "ignored\n";
+  write_file (Filename.concat root "_build/generated.ml") "generated\n";
+  write_file (Filename.concat root "node_modules/dependency.ml") "dependency\n";
   let output = run_tool Tools_search.ls context (json_object []) in
   Alcotest.(check bool)
     "listing includes source file" true
@@ -31,11 +32,12 @@ let check_ls_skips_generated_trees () =
     (Test_support.contains ~needle:"dependency.ml" ~haystack:output.Tool.content)
 
 let check_glob_and_direct_hidden_path () =
-  with_context @@ fun env root context ->
-  write_file env (Filename.concat root "src/a.ml") "a\n";
-  write_file env (Filename.concat root "src/b.ml") "b\n";
-  write_file env (Filename.concat root ".env") "secret\n";
-  write_file env (Filename.concat root ".git/ignored.ml") "ignored\n";
+  await @@ with_context
+  @@ fun root context ->
+  write_file (Filename.concat root "src/a.ml") "a\n";
+  write_file (Filename.concat root "src/b.ml") "b\n";
+  write_file (Filename.concat root ".env") "secret\n";
+  write_file (Filename.concat root ".git/ignored.ml") "ignored\n";
   let output =
     run_tool Tools_search.glob context
       (json_object [ ("pattern", Jsont.Json.string "**/*.ml") ])
@@ -58,12 +60,13 @@ let check_glob_and_direct_hidden_path () =
     (Test_support.contains ~needle:".env" ~haystack:direct.Tool.content)
 
 let check_grep_literal_regex_include_and_binary () =
-  with_context @@ fun env root context ->
-  write_file env (Filename.concat root "src/a.ml") "let needle = 1\nlet other = 2\n";
-  write_file env (Filename.concat root "src/b.txt") "needle in text\n";
-  write_file env (Filename.concat root ".env") "needle secret\n";
-  write_file env (Filename.concat root "src/binary.bin") "needle\000hidden\n";
-  write_file env (Filename.concat root ".git/ignored.ml") "needle ignored\n";
+  await @@ with_context
+  @@ fun root context ->
+  write_file (Filename.concat root "src/a.ml") "let needle = 1\nlet other = 2\n";
+  write_file (Filename.concat root "src/b.txt") "needle in text\n";
+  write_file (Filename.concat root ".env") "needle secret\n";
+  write_file (Filename.concat root "src/binary.bin") "needle\000hidden\n";
+  write_file (Filename.concat root ".git/ignored.ml") "needle ignored\n";
   let literal =
     run_tool Tools_search.grep context
       (json_object
@@ -95,8 +98,9 @@ let check_grep_literal_regex_include_and_binary () =
     (Test_support.contains ~needle:"src/b.txt:1" ~haystack:regex.Tool.content)
 
 let check_grep_limit_footer () =
-  with_context @@ fun env root context ->
-  write_file env (Filename.concat root "a.txt") "needle one\nneedle two\n";
+  await @@ with_context
+  @@ fun root context ->
+  write_file (Filename.concat root "a.txt") "needle one\nneedle two\n";
   let output =
     run_tool Tools_search.grep context
       (json_object
@@ -110,7 +114,8 @@ let check_grep_limit_footer () =
     (Test_support.contains ~needle:"(truncated at 1)" ~haystack:output.Tool.content)
 
 let check_glob_no_match () =
-  with_context @@ fun _env _root context ->
+  await @@ with_context
+  @@ fun _root context ->
   let output =
     run_tool Tools_search.glob context
       (json_object [ ("pattern", Jsont.Json.string "**/*.does-not-exist") ])
@@ -134,10 +139,10 @@ let check_registered_tools () =
 
 let cases =
   [
-    Alcotest.test_case "ls skips generated trees" `Quick check_ls_skips_generated_trees;
-    Alcotest.test_case "glob and hidden paths" `Quick check_glob_and_direct_hidden_path;
-    Alcotest.test_case "grep modes" `Quick check_grep_literal_regex_include_and_binary;
-    Alcotest.test_case "grep limit" `Quick check_grep_limit_footer;
-    Alcotest.test_case "glob no match" `Quick check_glob_no_match;
-    Alcotest.test_case "registered tools" `Quick check_registered_tools;
+    case "ls skips generated trees" `Quick check_ls_skips_generated_trees;
+    case "glob and hidden paths" `Quick check_glob_and_direct_hidden_path;
+    case "grep modes" `Quick check_grep_literal_regex_include_and_binary;
+    case "grep limit" `Quick check_grep_limit_footer;
+    case "glob no match" `Quick check_glob_no_match;
+    case "registered tools" `Quick check_registered_tools;
   ]

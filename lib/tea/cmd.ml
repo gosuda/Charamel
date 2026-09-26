@@ -5,6 +5,7 @@ type 'msg t =
   | Map : ('a -> 'b) * 'a t -> 'b t
   | Msg of 'msg
   | Perform of (unit -> 'msg)
+  | Await of 'msg Lwt.t
   | After of float * (unit -> 'msg)
   | Quit
   | Interrupt
@@ -27,6 +28,7 @@ let seq cmds = Seq cmds
 let map f cmd = Map (f, cmd)
 let msg m = Msg m
 let perform thunk = Perform thunk
+let await promise = Await promise
 let after seconds thunk = After (seconds, thunk)
 let quit = Quit
 let interrupt = Interrupt

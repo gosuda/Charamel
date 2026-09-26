@@ -69,9 +69,9 @@ let key_navigation () =
 
 let cases =
   [
-    Alcotest.test_case "defaults" `Quick defaults;
-    Alcotest.test_case "scroll bounds" `Quick scroll_bounds;
-    Alcotest.test_case "soft wrap and gutter" `Quick soft_wrap_and_gutter;
-    Alcotest.test_case "highlights" `Quick highlights;
-    Alcotest.test_case "key navigation" `Quick key_navigation;
+    Alcotest_lwt.test_case_sync "defaults" `Quick defaults;
+    Alcotest_lwt.test_case_sync "scroll bounds" `Quick scroll_bounds;
+    Alcotest_lwt.test_case_sync "soft wrap and gutter" `Quick soft_wrap_and_gutter;
+    Alcotest_lwt.test_case_sync "highlights" `Quick highlights;
+    Alcotest_lwt.test_case_sync "key navigation" `Quick key_navigation;
   ]

@@ -1,3 +1,5 @@
+open Lwt.Infix
+
 let log_src = Logs.Src.create "charamel.ssh.wish" ~doc:"Charamel SSH wish server"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
@@ -6,33 +8,29 @@ exception Protocol_error of string
 exception Connection_stop of string
 
 type pty = { term : string; rows : int; cols : int }
+type address = [ `Tcp of string * int | `Unix of string ]
 
-type input_flow = {
-  chunks : string option Eio.Stream.t;
-  mutable current : string;
-  mutable offset : int;
-  mutable closed : bool;
-}
+module Flow = Charamel_net.Ssh_server.Flow
 
-type output_flow = { send : string -> unit }
-type output_item = Packet of string | Flush of unit Eio.Promise.u | Stop
+type output_item = Packet of string | Flush of unit Lwt.u | Stop
 
 type connection = {
-  socket : Eio.Flow.two_way_ty Eio.Resource.t;
-  remote_addr : Eio.Net.Sockaddr.stream;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
+  flow : Flow.flow;
+  remote_addr : address;
   idle_timeout : float option;
   public_key_auth : (user:string -> Awa.Hostkey.pub -> bool) option;
   password_auth : (user:string -> string -> bool) option;
   mutable state : unit Awa.Server.t;
-  lock : Eio.Mutex.t;
-  outgoing : output_item Eio.Stream.t;
-  mutable worker_sw : Eio.Switch.t option;
+  lock : Lwt_mutex.t;
+  outgoing : output_item Lwt_stream.t;
+  emit : output_item option -> unit;
+  mutable worker_sw : Lwt_switch.t option;
+  mutable handler : unit Lwt.t option;
   mutable closed : bool;
   mutable channel_id : int32 option;
   mutable handler_started : bool;
   mutable session : session option;
-  endpoint : session -> unit;
+  endpoint : session -> unit Lwt.t;
   banner : string option;
   mutable banner_sent : bool;
 }
@@ -44,95 +42,80 @@ and session = {
   mutable command_words : string list;
   mutable terminal : pty option;
   mutable environment : (string * string) list;
-  resize : (int * int) Eio.Stream.t;
-  input_state : input_flow;
-  output_state : output_flow;
-  error_state : output_flow;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
+  resize : (int * int) Lwt_stream.t;
+  resize_to : (int * int) option -> unit;
+  stdin : Lwt_io.input_channel;
+  feed : string option -> unit;
+  stdout : Lwt_io.output_channel;
+  stderr : Lwt_io.output_channel;
   mutable handler_done : bool;
   mutable exit_requested : int option;
   mutable exit_sent : bool;
 }
 
-module Input_source : Eio.Flow.Pi.SOURCE with type t = input_flow = struct
-  type t = input_flow
-
-  let read_methods = []
-
-  let rec await_chunk (t : input_flow) =
-    if t.offset < String.length t.current then ()
-    else if t.closed then raise End_of_file
+(* The peer's input as an [Lwt_io] channel over a chunk queue. One [feed (Some chunk)]
+   makes one more piece readable; [feed None] — an SSH channel EOF — ends the channel,
+   which is what a reader sees as end of input. A read waits for at least one byte,
+   because a keypress is not a line. *)
+let input_channel () =
+  let stream, feed = Lwt_stream.create () in
+  let pending = ref "" in
+  let rec fill () =
+    if not (String.equal !pending "") then Lwt.return_unit
     else
-      match Eio.Stream.take t.chunks with
-      | None ->
-          t.closed <- true;
-          raise End_of_file
+      Lwt_stream.get stream >>= function
+      | None -> Lwt.return_unit
       | Some chunk ->
-          if String.length chunk = 0 then await_chunk t
+          if String.equal chunk "" then fill ()
           else begin
-            t.current <- chunk;
-            t.offset <- 0
+            pending := chunk;
+            Lwt.return_unit
           end
-
-  let single_read t destination =
-    await_chunk t;
-    let available = String.length t.current - t.offset in
-    let count = min available (Cstruct.length destination) in
-    Cstruct.blit_from_string t.current t.offset destination 0 count;
-    t.offset <- t.offset + count;
-    count
-end
-
-module Output_sink : Eio.Flow.Pi.SINK with type t = output_flow = struct
-  type t = output_flow
-
-  let single_write t bufs =
-    if bufs = [] then 0
+  in
+  let read buffer offset length =
+    fill () >>= fun () ->
+    let count = min length (String.length !pending) in
+    if count = 0 then Lwt.return 0
     else begin
-      let written = ref 0 in
-      List.iter
-        (fun buf ->
-          let data = Cstruct.to_string buf in
-          let length = String.length data in
-          if length > 0 then begin
-            t.send data;
-            written := !written + length
-          end)
-        bufs;
-      !written
+      Lwt_bytes.blit_from_string !pending 0 buffer offset count;
+      pending := String.sub !pending count (String.length !pending - count);
+      Lwt.return count
     end
+  in
+  (Lwt_io.make ~mode:Lwt_io.Input read, feed)
 
-  let copy t ~src = Eio.Flow.Pi.simple_copy ~single_write t ~src
-end
-
-let source_resource state : Eio.Flow.source_ty Eio.Resource.t =
-  let ops = Eio.Flow.Pi.source (module Input_source) in
-  Eio.Resource.T (state, ops)
-
-let sink_resource state : Eio.Flow.sink_ty Eio.Resource.t =
-  let ops = Eio.Flow.Pi.sink (module Output_sink) in
-  Eio.Resource.T (state, ops)
+(* Session output as an [Lwt_io] channel over one sink callback. The SSH layer never
+   partially accepts output, so every request is answered as fully written. *)
+let output_channel send =
+  let write buffer offset length =
+    let data = Bytes.sub_string (Lwt_bytes.to_bytes buffer) offset length in
+    send data >|= fun () -> length
+  in
+  Lwt_io.make ~mode:Lwt_io.Output write
 
 let unwrap context = function
   | Ok value -> value
   | Error message -> raise (Protocol_error (Fmt.str "%s: %s" context message))
 
-let mtime_now clock =
-  let nanos = Int64.of_float (Eio.Time.now clock *. 1_000_000_000.) in
-  Mtime.of_uint64_ns nanos
+let with_lock connection body = Lwt_mutex.with_lock connection.lock body
 
-let remote_name address = Fmt.str "%a" Eio.Net.Sockaddr.pp address
+let mtime_now () =
+  Int64.of_float (Charamel_os.Time.now Charamel_os.Time.lwt *. 1e9) |> Mtime.of_uint64_ns
+
+let remote_name (address : address) =
+  match address with
+  | `Unix path -> Fmt.str "unix:%s" path
+  | `Tcp (host, port) -> Fmt.str "%s:%d" host port
 
 let session_of_connection connection =
   match connection.session with
   | Some session -> session
   | None -> raise (Protocol_error "session is not initialized")
 
-let enqueue connection item = Eio.Stream.add connection.outgoing item
+let enqueue connection item = connection.emit (Some item)
 
-let rate_key = function
-  | `Unix path -> "unix:" ^ path
-  | `Tcp (ip, _) -> Fmt.str "tcp:%a" Eio.Net.Ipaddr.pp ip
+let rate_key (address : address) =
+  match address with `Unix path -> "unix:" ^ path | `Tcp (host, _) -> "tcp:" ^ host
 
 let recipient_id (state : unit Awa.Server.t) id =
   match Awa.Channel.lookup id state.Awa.Server.channels with
@@ -150,8 +133,9 @@ let emit_many_locked connection messages =
   List.iter (emit_message_locked connection) messages
 
 let send_stdout connection data =
-  if String.length data > 0 && not connection.closed then
-    Eio.Mutex.use_rw ~protect:true connection.lock (fun () ->
+  if String.length data = 0 || connection.closed then Lwt.return_unit
+  else
+    with_lock connection (fun () ->
         match connection.channel_id with
         | None -> raise (Protocol_error "channel output before channel start")
         | Some id ->
@@ -160,30 +144,25 @@ let send_stdout connection data =
                 (Awa.Server.output_channel_data connection.state id data)
             in
             connection.state <- state;
-            emit_many_locked connection messages)
+            emit_many_locked connection messages;
+            Lwt.return_unit)
 
 let send_stderr connection data =
-  if String.length data > 0 && not connection.closed then
-    Eio.Mutex.use_rw ~protect:true connection.lock (fun () ->
+  if String.length data = 0 || connection.closed then Lwt.return_unit
+  else
+    with_lock connection (fun () ->
         match connection.channel_id with
         | None -> raise (Protocol_error "channel error output before channel start")
         | Some id ->
             emit_message_locked connection
               (Awa.Ssh.Msg_channel_extended_data
-                 (recipient_id connection.state id, 1l, data)))
-
-let push_eof (state : input_flow) =
-  if not state.closed then begin
-    state.closed <- true;
-    Eio.Stream.add state.chunks None
-  end
+                 (recipient_id connection.state id, 1l, data));
+            Lwt.return_unit)
 
 let mark_closed connection =
   if not connection.closed then begin
     connection.closed <- true;
-    (match connection.session with
-    | Some session -> push_eof session.input_state
-    | None -> ());
+    (match connection.session with Some session -> session.feed None | None -> ());
     enqueue connection Stop
   end
 
@@ -216,28 +195,30 @@ let send_exit_locked session code =
         (match close_wire with
         | Some wire -> enqueue connection (Packet wire)
         | None -> ());
-        let promise, resolver = Eio.Promise.create () in
+        let promise, resolver = Lwt.wait () in
         enqueue connection (Flush resolver);
         enqueue connection Stop;
         session.exit_sent <- true;
         Some promise
 
+(* The request is recorded under the connection lock; the flush is awaited outside it, so
+   the exit packets reach the wire before the caller releases its own resources. *)
 let request_exit session code =
-  Eio.Cancel.protect (fun () ->
-      let promise =
-        Eio.Mutex.use_rw ~protect:true session.conn.lock (fun () ->
-            if Option.is_none session.exit_requested then
-              session.exit_requested <- Some code;
-            if session.handler_done then
-              Option.bind session.exit_requested (send_exit_locked session)
-            else None)
-      in
-      match promise with Some promise -> Eio.Promise.await promise | None -> ())
+  with_lock session.conn (fun () ->
+      if Option.is_none session.exit_requested then session.exit_requested <- Some code;
+      Lwt.return
+        (if session.handler_done then
+           Option.bind session.exit_requested (fun code -> send_exit_locked session code)
+         else None))
+  >>= function
+  | Some promise -> promise
+  | None -> Lwt.return_unit
 
 let finish_handler session default_code =
-  Eio.Mutex.use_rw ~protect:true session.conn.lock (fun () ->
-      session.handler_done <- true);
-  request_exit session default_code
+  with_lock session.conn (fun () ->
+      session.handler_done <- true;
+      Lwt.return_unit)
+  >>= fun () -> request_exit session default_code
 
 module Session = struct
   type t = session
@@ -250,13 +231,13 @@ module Session = struct
   let env t = t.environment
   let remote_addr t = t.conn.remote_addr
   let resize_events t = t.resize
-  let stdin t = source_resource t.input_state
-  let stdout t = sink_resource t.output_state
-  let stderr t = sink_resource t.error_state
+  let stdin t = t.stdin
+  let stdout t = t.stdout
+  let stderr t = t.stderr
   let exit t code = request_exit t code
 end
 
-type handler = Session.t -> unit
+type handler = Session.t -> unit Lwt.t
 type middleware = handler -> handler
 
 let shell_words command =
@@ -281,8 +262,8 @@ let shell_words command =
         | _, '\\' -> escaped := true
         | Some quote, c when c = quote -> quoted := None
         | Some _, c -> Buffer.add_char token c
-        | None, '\'' | None, '"' -> quoted := Some ch
-        | None, c when c = ' ' || c = '\t' || c = '\r' || c = '\n' -> flush ()
+        | None, (' ' | '\t' | '\r' | '\n' : Char.t) -> flush ()
+        | None, (('\'' | '"') as quote) -> quoted := Some quote
         | None, c -> Buffer.add_char token c)
     command;
   if !escaped then Buffer.add_char token '\\';
@@ -311,7 +292,26 @@ let resize_pty session cols rows =
       let rows = int32_dimension rows in
       let cols = int32_dimension cols in
       session.terminal <- Some { current with rows; cols };
-      Eio.Stream.add session.resize (rows, cols)
+      session.resize_to (Some (rows, cols))
+
+let start_handler connection session =
+  let task =
+    Lwt.try_bind
+      (fun () -> connection.endpoint session)
+      (fun () -> finish_handler session 0)
+      (fun exn -> finish_handler session 1 >>= fun () -> Lwt.fail exn)
+  in
+  connection.handler <- Some task;
+  (match connection.worker_sw with
+  | Some sw ->
+      Lwt_switch.add_hook (Some sw) (fun () ->
+          Lwt.cancel task;
+          Lwt.return_unit)
+  | None -> ());
+  Lwt.async (fun () ->
+      Lwt.catch
+        (fun () -> task)
+        (function Lwt.Canceled -> Lwt.return_unit | exn -> Lwt.fail exn))
 
 let channel_start connection id words =
   if connection.handler_started then
@@ -321,16 +321,9 @@ let channel_start connection id words =
     let session = session_of_connection connection in
     session.command_words <- words;
     connection.handler_started <- true;
-    match connection.worker_sw with
-    | None -> raise (Protocol_error "channel started outside connection switch")
-    | Some sw ->
-        Eio.Fiber.fork ~sw (fun () ->
-            try
-              connection.endpoint session;
-              finish_handler session 0
-            with exn ->
-              finish_handler session 1;
-              raise exn)
+    if Option.is_none connection.worker_sw then
+      raise (Protocol_error "channel started outside connection switch")
+    else start_handler connection session
   end
 
 let authenticate connection username auth =
@@ -388,11 +381,10 @@ let dispatch_event connection = function
       update_environment (session_of_connection connection) key value
   | Awa.Server.Channel_data (id, data) ->
       connection.channel_id <- Some id;
-      let session = session_of_connection connection in
-      if String.length data > 0 then Eio.Stream.add session.input_state.chunks (Some data)
+      if String.length data > 0 then (session_of_connection connection).feed (Some data)
   | Awa.Server.Channel_eof id ->
       connection.channel_id <- Some id;
-      push_eof (session_of_connection connection).input_state
+      (session_of_connection connection).feed None
   | Awa.Server.Start_shell id -> channel_start connection id []
   | Awa.Server.Channel_exec (id, command) ->
       channel_start connection id (shell_words command)
@@ -402,19 +394,14 @@ let dispatch_event connection = function
       mark_closed connection;
       raise (Connection_stop "peer disconnected")
 
-let handle_message (connection : connection) message =
-  let now = mtime_now connection.clock in
+let handle_message connection message =
+  let now = mtime_now () in
   let state, replies, event =
     unwrap "processing SSH message" (Awa.Server.input_msg connection.state message now)
   in
   connection.state <- state;
   emit_many_locked connection replies;
-  (match event with Some event -> dispatch_event connection event | None -> ());
-  match Awa.Server.maybe_rekey connection.state now with
-  | None -> ()
-  | Some (state, message) ->
-      connection.state <- state;
-      emit_message_locked connection message
+  match event with Some event -> dispatch_event connection event | None -> ()
 
 let rec drain_messages connection buffer =
   let state, message, rest =
@@ -429,74 +416,78 @@ let rec drain_messages connection buffer =
         raise (Protocol_error "SSH input buffer is too large");
       drain_messages connection rest
 
-let read_once connection buffer =
-  let chunk = Cstruct.create 16_384 in
-  let read () = Eio.Flow.single_read connection.socket chunk in
-  let count =
+let read_flow connection =
+  let read () =
     match connection.idle_timeout with
-    | None -> read ()
-    | Some timeout -> Eio.Time.with_timeout_exn connection.clock timeout read
+    | None -> Flow.read connection.flow
+    | Some timeout -> Lwt_unix.with_timeout timeout (fun () -> Flow.read connection.flow)
   in
-  let data = Cstruct.to_string ~len:count chunk in
-  buffer ^ data
+  read () >>= function
+  | Ok `Eof -> Lwt.fail End_of_file
+  | Error error -> Lwt.fail (Unix.Unix_error (error, "read", ""))
+  | Ok (`Data chunk) -> Lwt.return (Cstruct.to_string chunk)
 
 let reader connection =
   let rec loop buffer =
-    if connection.closed then raise (Connection_stop "connection closed")
+    if connection.closed then Lwt.fail (Connection_stop "connection closed")
     else
-      let next = read_once connection buffer in
-      let rest =
-        Eio.Mutex.use_rw ~protect:true connection.lock (fun () ->
-            drain_messages connection next)
-      in
-      loop rest
+      read_flow connection >>= fun data ->
+      with_lock connection (fun () ->
+          Lwt.return (drain_messages connection (buffer ^ data)))
+      >>= loop
   in
-  try loop "" with
-  | End_of_file ->
-      mark_closed connection;
-      raise (Connection_stop "peer closed")
-  | Eio.Io _ as exn ->
-      mark_closed connection;
-      raise exn
+  Lwt.catch
+    (fun () -> loop "")
+    (function
+      | End_of_file ->
+          mark_closed connection;
+          Lwt.fail (Connection_stop "peer closed")
+      | (Unix.Unix_error _ | Lwt_unix.Timeout) as exn ->
+          mark_closed connection;
+          Lwt.fail exn
+      | exn -> Lwt.fail exn)
 
 let writer connection =
-  let rec loop () =
-    match Eio.Stream.take connection.outgoing with
-    | Packet data ->
-        if String.length data > 0 then
-          Eio.Flow.write connection.socket [ Cstruct.of_string data ];
-        loop ()
-    | Flush resolver ->
-        Eio.Promise.resolve resolver ();
-        loop ()
-    | Stop -> raise (Connection_stop "session complete")
+  let write data =
+    Flow.write connection.flow (Cstruct.of_string data) >>= function
+    | Ok () -> Lwt.return_unit
+    | Error `Closed ->
+        mark_closed connection;
+        Lwt.fail (Connection_stop "socket closed")
   in
-  try loop () with
-  | Connection_stop _ as exn ->
+  let rec loop () =
+    Lwt_stream.next connection.outgoing >>= function
+    | Packet data -> if String.length data = 0 then loop () else write data >>= loop
+    | Flush resolver ->
+        (match Lwt.wakeup_later resolver () with () -> () | exception _ -> ());
+        loop ()
+    | Stop -> Lwt.fail (Connection_stop "session complete")
+  in
+  Lwt.catch loop (fun exn ->
       mark_closed connection;
-      raise exn
-  | End_of_file ->
-      mark_closed connection;
-      raise (Connection_stop "socket closed")
-  | Eio.Io _ as exn ->
-      mark_closed connection;
-      raise exn
+      match exn with
+      | Connection_stop _ | Unix.Unix_error _ | End_of_file | Lwt_stream.Empty ->
+          Lwt.fail (Connection_stop "writer stopped")
+      | exn -> Lwt.fail exn)
 
-let make_connection ~clock ~idle_timeout ~public_key_auth ~password_auth ~socket
-    ~remote_addr ~state ~banner endpoint =
-  let outgoing = Eio.Stream.create max_int in
+let make_connection ~idle_timeout ~public_key_auth ~password_auth ~flow ~remote_addr
+    ~state ~banner endpoint =
+  let outgoing, emit = Lwt_stream.create () in
+  let stdin, feed = input_channel () in
+  let resize, resize_to = Lwt_stream.create () in
   let connection =
     {
-      socket;
+      flow;
       remote_addr;
       idle_timeout;
       public_key_auth;
       password_auth;
-      clock;
       state;
-      lock = Eio.Mutex.create ();
+      lock = Lwt_mutex.create ();
       outgoing;
+      emit;
       worker_sw = None;
+      handler = None;
       closed = false;
       channel_id = None;
       handler_started = false;
@@ -506,9 +497,6 @@ let make_connection ~clock ~idle_timeout ~public_key_auth ~password_auth ~socket
       banner_sent = false;
     }
   in
-  let input_state =
-    { chunks = Eio.Stream.create max_int; current = ""; offset = 0; closed = false }
-  in
   let session =
     {
       conn = connection;
@@ -517,38 +505,83 @@ let make_connection ~clock ~idle_timeout ~public_key_auth ~password_auth ~socket
       command_words = [];
       terminal = None;
       environment = [];
-      resize = Eio.Stream.create max_int;
-      input_state;
-      output_state = { send = send_stdout connection };
-      error_state = { send = send_stderr connection };
-      clock;
+      resize;
+      resize_to;
+      stdin;
+      feed;
+      stdout = output_channel (send_stdout connection);
+      stderr = output_channel (send_stderr connection);
       handler_done = false;
       exit_requested = None;
       exit_sent = false;
     }
   in
   connection.session <- Some session;
-  (connection, session)
+  connection
 
-let run_connection ~clock ~idle_timeout ~public_key_auth ~password_auth ~max_timeout
-    ~socket ~remote_addr ~host_key ~banner endpoint =
+let report_failure remote_addr = function
+  | Connection_stop _ -> ()
+  | Protocol_error message ->
+      Log.warn (fun log ->
+          log "SSH protocol failure from %s: %s" (remote_name remote_addr) message)
+  | Lwt_unix.Timeout ->
+      Log.warn (fun log ->
+          log "SSH connection from %s timed out" (remote_name remote_addr))
+  | Unix.Unix_error (error, _, _) ->
+      Log.info (fun log ->
+          log "SSH connection from %s failed: %s" (remote_name remote_addr)
+            (Unix.error_message error))
+  | End_of_file -> ()
+  | exn ->
+      Log.warn (fun log ->
+          log "SSH connection from %s raised: %s" (remote_name remote_addr)
+            (Printexc.to_string exn))
+
+let run_connection ~idle_timeout ~public_key_auth ~password_auth ~max_timeout ~flow
+    ~remote_addr ~host_key ~banner endpoint =
   let state, initial_messages = Awa.Server.make host_key in
-  let connection, _session =
-    make_connection ~clock ~idle_timeout ~public_key_auth ~password_auth ~socket
-      ~remote_addr ~state ~banner endpoint
+  let connection =
+    make_connection ~idle_timeout ~public_key_auth ~password_auth ~flow ~remote_addr
+      ~state ~banner endpoint
   in
   let run () =
-    Eio.Switch.run (fun worker_sw ->
+    Lwt_switch.with_switch (fun worker_sw ->
         connection.worker_sw <- Some worker_sw;
-        Eio.Fiber.fork ~sw:worker_sw (fun () -> writer connection);
-        Eio.Mutex.use_rw ~protect:true connection.lock (fun () ->
-            emit_many_locked connection initial_messages);
-        Eio.Fiber.fork ~sw:worker_sw (fun () -> reader connection);
-        Eio.Fiber.await_cancel ())
+        with_lock connection (fun () ->
+            emit_many_locked connection initial_messages;
+            Lwt.return_unit)
+        >>= fun () -> Lwt.pick [ reader connection; writer connection ])
   in
-  match max_timeout with
-  | None -> run ()
-  | Some timeout -> Eio.Time.with_timeout_exn clock timeout run
+  let bounded () =
+    match max_timeout with
+    | None -> run ()
+    | Some timeout -> Lwt_unix.with_timeout timeout run
+  in
+  let report result =
+    match result with Ok () -> () | Error (`Exn exn) -> report_failure remote_addr exn
+  in
+  Lwt.catch
+    (fun () -> bounded () >|= fun () -> Ok ())
+    (fun exn -> Lwt.return (Error (`Exn exn)))
+  >>= fun result ->
+  report result;
+  match connection.handler with
+  | Some task -> Lwt.catch (fun () -> task) (fun _exn -> Lwt.return_unit)
+  | None -> Lwt.return_unit
+
+let listen_address (address : address) =
+  match address with
+  | `Unix path -> (Lwt_unix.PF_UNIX, Lwt_unix.ADDR_UNIX path)
+  | `Tcp (host, port) ->
+      let domain =
+        if String.contains host ':' then Lwt_unix.PF_INET6 else Lwt_unix.PF_INET
+      in
+      (domain, Lwt_unix.ADDR_INET (Unix.inet_addr_of_string host, port))
+
+let peer_address (sockaddr : Unix.sockaddr) : address =
+  match sockaddr with
+  | ADDR_UNIX path -> `Unix path
+  | ADDR_INET (address, port) -> `Tcp (Unix.string_of_inet_addr address, port)
 
 let valid_timeout name value =
   match classify_float value with
@@ -557,40 +590,9 @@ let valid_timeout name value =
       invalid_arg (Fmt.str "%s must be positive" name)
   | FP_zero | FP_normal | FP_subnormal -> value
 
-let serve ~sw ~net ~(clock : float Eio.Time.clock_ty Eio.Resource.t) ~host_key ~addr
-    ?idle_timeout ?max_timeout ?banner
-    ?(public_key_auth : (user:string -> Awa.Hostkey.pub -> bool) option)
-    ?(password_auth : (user:string -> string -> bool) option) (endpoint : handler) : unit
-    =
-  let idle_timeout = Option.map (valid_timeout "idle_timeout") idle_timeout in
-  let max_timeout = Option.map (valid_timeout "max_timeout") max_timeout in
-  let awa_host_key =
-    match Charamel_ssh_keygen.ed25519_seed host_key with
-    | Some seed -> Awa.Keys.of_seed `Ed25519 seed
-    | None -> invalid_arg "wish requires an Ed25519 host key with awa 0.6.1"
-  in
-  let listener = Eio.Net.listen ~reuse_addr:true ~backlog:128 ~sw net addr in
-  let on_error exn =
-    Log.warn (fun message -> message "SSH connection failed: %a" Eio.Exn.pp exn)
-  in
-  let connection (socket : [> `Generic ] Eio.Net.stream_socket_ty Eio.Resource.t)
-      remote_addr =
-    try
-      run_connection ~clock ~idle_timeout ~public_key_auth ~password_auth ~max_timeout
-        ~socket:(socket :> Eio.Flow.two_way_ty Eio.Resource.t)
-        ~remote_addr ~host_key:awa_host_key ~banner endpoint
-    with
-    | Connection_stop _ -> ()
-    | Protocol_error message ->
-        Log.warn (fun log ->
-            log "SSH protocol failure from %s: %s" (remote_name remote_addr) message)
-    | Eio.Time.Timeout ->
-        Log.warn (fun log ->
-            log "SSH connection from %s timed out" (remote_name remote_addr))
-  in
-  Eio.Net.run_server listener ~on_error connection
-
-let write_line session text = Eio.Flow.copy_string (text ^ "\n") (Session.stdout session)
+let write_line session text =
+  let output = Session.stdout session in
+  Lwt_io.write output (text ^ "\n") >>= fun () -> Lwt_io.flush output
 
 let tea ~env make _next session =
   let size () =
@@ -605,72 +607,78 @@ let tea ~env make _next session =
         Option.map (fun ({ term; _ } : Session.pty) -> term) (Session.pty session)
     | None -> None
   in
-  let resize_callbacks = Eio.Stream.create max_int in
-  let worker_sw =
-    match session.conn.worker_sw with
-    | Some sw -> sw
-    | None -> invalid_arg "wish.tea called outside an SSH connection"
+  let notifications, notify = Lwt_stream.create () in
+  let relay =
+    let rec loop () =
+      Lwt_stream.get (Session.resize_events session) >>= function
+      | None -> Lwt.return_unit
+      | Some (_rows, _cols) ->
+          notify (Some Fun.id);
+          loop ()
+    in
+    loop ()
   in
-  Eio.Fiber.fork ~sw:worker_sw (fun () ->
-      try
-        while not session.conn.closed do
-          ignore (Eio.Stream.take (Session.resize_events session));
-          Eio.Stream.add resize_callbacks (fun () -> ())
-        done
-      with Eio.Cancel.Cancelled _ -> ());
   let terminal =
-    Charamel_tea.Terminal.custom ~input:(Session.stdin session)
-      ~output:(Session.stdout session) ~size ~on_resize:(Some resize_callbacks)
+    Charamel_tea.Terminal.custom
+      ~input:(Charamel_os.Console_input.of_channel (Session.stdin session))
+      ~output:(Session.stdout session) ~size ~on_resize:(Some notifications)
       ~env:environment
       ~is_tty:(Option.is_some (Session.pty session))
   in
-  match Charamel_tea.run ~terminal ~clock:(Eio.Stdenv.clock env) (make session) env with
-  | Ok _ -> Session.exit session 0
-  | Error `Interrupted -> Session.exit session 130
-  | Error `Killed -> Session.exit session 137
-  | Error (`Exn (exn, _)) ->
-      Eio.Flow.copy_string
-        (Fmt.str "tea: %s\n" (Printexc.to_string exn))
-        (Session.stderr session);
-      Session.exit session 1
+  let report_error exn =
+    let output = Session.stderr session in
+    Lwt_io.write output (Fmt.str "tea: %s\n" (Printexc.to_string exn)) >>= fun () ->
+    Lwt_io.flush output
+  in
+  Lwt.finalize
+    (fun () ->
+      Charamel_tea.run ~terminal ~clock:env.Charamel_cli.Env.clock (make session)
+      >>= function
+      | Ok _ -> Session.exit session 0
+      | Error `Interrupted -> Session.exit session 130
+      | Error `Killed -> Session.exit session 137
+      | Error (`Exn (exn, _)) -> report_error exn >>= fun () -> Session.exit session 1)
+    (fun () ->
+      Lwt.cancel relay;
+      Lwt.return_unit)
 
 let active_term next session =
   match Session.pty session with
   | Some _ -> next session
   | None ->
-      write_line session "Requires an active PTY";
-      Session.exit session 1
+      write_line session "Requires an active PTY" >>= fun () -> Session.exit session 1
 
 let access_control ~authorized next session =
   match Session.public_key session with
   | Some public_key when List.exists (Awa.Hostkey.pub_eq public_key) authorized ->
       next session
-  | _ ->
-      write_line session "Access denied";
-      Session.exit session 1
+  | _ -> write_line session "Access denied" >>= fun () -> Session.exit session 1
 
 let logging next (session : session) =
-  let started = Eio.Time.now session.clock in
+  let started = Charamel_os.Time.now Charamel_os.Time.lwt in
   let address = remote_name (Session.remote_addr session) in
   let command () = String.concat " " (Session.command session) in
-  let pty () =
+  let term, rows, cols =
     match Session.pty session with
     | None -> ("-", 0, 0)
     | Some { term; rows; cols } -> (term, rows, cols)
   in
-  let term, rows, cols = pty () in
   Log.info (fun log ->
       log "connect user=%S remote=%S public_key=%B command=%S term=%S rows=%d cols=%d"
         (Session.user session) address
         (Option.is_some (Session.public_key session))
         (command ()) term rows cols);
-  Fun.protect
-    ~finally:(fun () ->
-      let duration = Eio.Time.now session.clock -. started in
-      Log.info (fun log ->
-          log "disconnect user=%S remote=%S duration=%.3fs" (Session.user session) address
-            duration))
+  let disconnect () =
+    let duration = Charamel_os.Time.now Charamel_os.Time.lwt -. started in
+    Log.info (fun log ->
+        log "disconnect user=%S remote=%S duration=%.3fs" (Session.user session) address
+          duration)
+  in
+  Lwt.finalize
     (fun () -> next session)
+    (fun () ->
+      disconnect ();
+      Lwt.return_unit)
 
 let rate_limit ~per_second ~burst =
   (match classify_float per_second with
@@ -680,10 +688,10 @@ let rate_limit ~per_second ~burst =
   | FP_zero | FP_normal | FP_subnormal -> ());
   if burst <= 0 then invalid_arg "burst must be positive";
   let buckets = Hashtbl.create 16 in
-  let lock = Eio.Mutex.create () in
-  let allow (session : session) =
-    Eio.Mutex.use_rw ~protect:true lock (fun () ->
-        let now = Eio.Time.now session.clock in
+  let lock = Lwt_mutex.create () in
+  let allow session =
+    Lwt_mutex.with_lock lock (fun () ->
+        let now = Charamel_os.Time.now Charamel_os.Time.lwt in
         let key = rate_key (Session.remote_addr session) in
         let tokens, last =
           match Hashtbl.find_opt buckets key with
@@ -693,26 +701,87 @@ let rate_limit ~per_second ~burst =
         let replenished =
           min (float_of_int burst) (tokens +. (max 0. (now -. last) *. per_second))
         in
-        if replenished >= 1. then begin
-          Hashtbl.replace buckets key (replenished -. 1., now);
-          true
-        end
-        else begin
-          Hashtbl.replace buckets key (replenished, now);
-          false
-        end)
+        let allowed = replenished >= 1. in
+        let tokens = if allowed then replenished -. 1. else replenished in
+        Hashtbl.replace buckets key (tokens, now);
+        Lwt.return allowed)
   in
   fun next session ->
-    if allow session then next session
-    else begin
-      write_line session "rate limit exceeded, please try again later";
-      Session.exit session 1
-    end
+    allow session >>= function
+    | true -> next session
+    | false ->
+        write_line session "rate limit exceeded, please try again later" >>= fun () ->
+        Session.exit session 1
 
 let elapsed next (session : session) =
-  let started = Eio.Time.now session.clock in
-  Fun.protect
-    ~finally:(fun () ->
-      let duration = max 0. (Eio.Time.now session.clock -. started) in
-      write_line session (Fmt.str "elapsed time: %.3fs" duration))
+  let started = Charamel_os.Time.now Charamel_os.Time.lwt in
+  let report () =
+    let duration = max 0. (Charamel_os.Time.now Charamel_os.Time.lwt -. started) in
+    write_line session (Fmt.str "elapsed time: %.3fs" duration)
+  in
+  Lwt.finalize
     (fun () -> next session)
+    (fun () -> report () >>= fun () -> Lwt.return_unit)
+
+let serve ?stop ~host_key ~addr ?idle_timeout ?max_timeout ?banner
+    ?(public_key_auth : (user:string -> Awa.Hostkey.pub -> bool) option)
+    ?(password_auth : (user:string -> string -> bool) option) (endpoint : handler) () =
+  let idle_timeout = Option.map (valid_timeout "idle_timeout") idle_timeout in
+  let max_timeout = Option.map (valid_timeout "max_timeout") max_timeout in
+  let awa_host_key =
+    match Charamel_ssh_keygen.ed25519_seed host_key with
+    | Some seed -> Awa.Keys.of_seed `Ed25519 seed
+    | None -> invalid_arg "wish requires an Ed25519 host key with awa 0.6.1"
+  in
+  let domain, sockaddr = listen_address addr in
+  let listener = Lwt_unix.socket domain Lwt_unix.SOCK_STREAM 0 in
+  let connections = ref [] in
+  let serve_one fd remote_addr =
+    let flow = Flow.create fd in
+    Lwt.finalize
+      (fun () ->
+        run_connection ~idle_timeout ~public_key_auth ~password_auth ~max_timeout ~flow
+          ~remote_addr ~host_key:awa_host_key ~banner endpoint)
+      (fun () -> Flow.close flow)
+  in
+  let rec accept_forever () =
+    Lwt.catch
+      (fun () ->
+        Lwt_unix.accept listener >>= fun (fd, peer) ->
+        let connection = serve_one fd (peer_address peer) in
+        connections := connection :: !connections;
+        Lwt.async (fun () ->
+            Lwt.catch
+              (fun () -> connection)
+              (function Lwt.Canceled -> Lwt.return_unit | exn -> Lwt.fail exn));
+        accept_forever ())
+      (function
+        | Lwt.Canceled | Unix.Unix_error _ -> Lwt.return_unit | exn -> Lwt.fail exn)
+  in
+  (* Reached twice on an ordinary shutdown — once from the switch hook, once when the accept
+     loop ends — so the descriptor is released at most once. *)
+  let listener_open = ref true in
+  let close_listener () =
+    if not !listener_open then Lwt.return_unit
+    else begin
+      listener_open := false;
+      Lwt_unix.close listener
+    end
+  in
+  let stop_all running =
+    Lwt.cancel running;
+    Lwt_list.iter_p
+      (fun connection ->
+        Lwt.cancel connection;
+        Lwt.catch (fun () -> connection) (fun _exn -> Lwt.return_unit))
+      !connections
+    >>= fun () -> close_listener ()
+  in
+  Lwt_unix.setsockopt listener Lwt_unix.SO_REUSEADDR true;
+  Lwt_unix.bind listener sockaddr >>= fun () ->
+  Lwt_unix.listen listener 128;
+  let running = accept_forever () in
+  (match stop with
+  | None -> ()
+  | Some switch -> Lwt_switch.add_hook (Some switch) (fun () -> stop_all running));
+  running >>= fun () -> stop_all running

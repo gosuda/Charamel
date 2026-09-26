@@ -40,8 +40,8 @@ let rendering () =
 
 let cases =
   [
-    Alcotest.test_case "values" `Quick values;
-    Alcotest.test_case "tab values" `Quick tab_values;
-    Alcotest.test_case "navigation" `Quick navigation;
-    Alcotest.test_case "rendering" `Quick rendering;
+    Alcotest_lwt.test_case_sync "values" `Quick values;
+    Alcotest_lwt.test_case_sync "tab values" `Quick tab_values;
+    Alcotest_lwt.test_case_sync "navigation" `Quick navigation;
+    Alcotest_lwt.test_case_sync "rendering" `Quick rendering;
   ]

@@ -4,7 +4,7 @@
  (libraries
   charamel.lipgloss
   charamel.colorprofile
-  eio
+  charamel.os
   logs
   fmt
   ptime

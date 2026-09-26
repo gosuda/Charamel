@@ -88,7 +88,7 @@ let default_styles =
 type directory_state = { selected : int; min_idx : int; max_idx : int }
 
 type t = {
-  fs : Eio.Fs.dir_ty Eio.Path.t;
+  root : string;
   path : string;
   current_directory : string;
   allowed_types : string list;
@@ -110,12 +110,12 @@ type t = {
   error : string option;
 }
 
-let v ~fs ?(current_directory = ".") ?(allowed_types = []) ?(show_permissions = true)
+let v ~root ?(current_directory = ".") ?(allowed_types = []) ?(show_permissions = true)
     ?(show_size = true) ?(show_hidden = false) ?(dir_allowed = false)
     ?(file_allowed = true) ?(auto_height = true) ?(height = 0) ?(cursor = ">")
     ?(keymap = default_keymap) ?(styles = default_styles) () =
   {
-    fs;
+    root;
     path = "";
     current_directory;
     allowed_types;
@@ -142,6 +142,11 @@ let path_join dir name =
   else if String.ends_with ~suffix:"/" dir then dir ^ name
   else dir ^ "/" ^ name
 
+let resolve root path =
+  if path = "" || path = "." then root
+  else if Filename.is_relative path then Filename.concat root path
+  else path
+
 let parent_directory path =
   if path = "/" then "/"
   else
@@ -152,24 +157,18 @@ let parent_directory path =
         let parent = String.sub path 0 i in
         if parent = "" then "/" else parent
 
-let io_error path = function
-  | Eio.Fs.Already_exists _ -> Fmt.str "%s: already exists" path
-  | Eio.Fs.Not_found _ -> Fmt.str "%s: not found" path
-  | Eio.Fs.Permission_denied _ -> Fmt.str "%s: permission denied" path
-  | Eio.Fs.File_too_large -> Fmt.str "%s: file too large" path
-  | Eio.Fs.Not_native message -> Fmt.str "%s: %s" path message
+let io_error path message = Fmt.str "%s: %s" path message
 
 let permission_string kind perm =
   let type_char =
     match kind with
-    | `Directory -> 'd'
-    | `Symbolic_link -> 'l'
-    | `Block_device -> 'b'
-    | `Character_special -> 'c'
-    | `Fifo -> 'p'
-    | `Socket -> 's'
-    | `Regular_file -> '-'
-    | `Unknown -> '?'
+    | Unix.S_DIR -> 'd'
+    | Unix.S_LNK -> 'l'
+    | Unix.S_BLK -> 'b'
+    | Unix.S_CHR -> 'c'
+    | Unix.S_FIFO -> 'p'
+    | Unix.S_SOCK -> 's'
+    | Unix.S_REG -> '-'
   in
   let chars = Array.make 10 '-' in
   chars.(0) <- type_char;
@@ -191,30 +190,30 @@ let permission_string kind perm =
     bits;
   Bytes.to_string (Bytes.init 10 (fun i -> chars.(i)))
 
-let entry_of_name fs current_directory (kind, name) =
-  let path = Eio.Path.(fs / path_join current_directory name) in
-  let lstat = Eio.Path.stat ~follow:false path in
-  let is_symlink = kind = `Symbolic_link || lstat.Eio.File.Stat.kind = `Symbolic_link in
-  let target = if is_symlink then Eio.Path.read_link path else "" in
-  let stat = if is_symlink then Eio.Path.stat ~follow:true path else lstat in
-  let is_dir = stat.Eio.File.Stat.kind = `Directory in
+let entry_of_name root current_directory name =
+  let path = resolve root (path_join current_directory name) in
+  let lstat = Unix.lstat path in
+  let is_symlink = lstat.Unix.st_kind = Unix.S_LNK in
+  let target = if is_symlink then Unix.readlink path else "" in
+  let stat = if is_symlink then Unix.stat path else lstat in
+  let is_dir = stat.Unix.st_kind = Unix.S_DIR in
   {
     name;
     is_dir;
     is_symlink;
     symlink_target = target;
-    perm = permission_string lstat.Eio.File.Stat.kind lstat.Eio.File.Stat.perm;
-    size = Optint.Int63.to_int lstat.Eio.File.Stat.size;
+    perm = permission_string lstat.Unix.st_kind lstat.Unix.st_perm;
+    size = lstat.Unix.st_size;
   }
 
 let read_directory m path =
   try
-    let raw = Eio.Path.read_dir_entries Eio.Path.(m.fs / path) in
+    let raw = Array.to_list (Sys.readdir (resolve m.root path)) in
     let visible =
       if m.show_hidden then raw
-      else Stdlib.List.filter (fun (_, name) -> name = "" || name.[0] <> '.') raw
+      else Stdlib.List.filter (fun name -> name = "" || name.[0] <> '.') raw
     in
-    let entries = Stdlib.List.map (entry_of_name m.fs path) visible in
+    let entries = Stdlib.List.map (entry_of_name m.root path) visible in
     let entries =
       Stdlib.List.sort
         (fun left right ->
@@ -225,7 +224,9 @@ let read_directory m path =
         entries
     in
     Ok entries
-  with Eio.Io (Eio.Fs.E error, _) -> Error (io_error path error)
+  with
+  | Sys_error message -> Error (io_error path message)
+  | Unix.Unix_error (kind, _, _) -> Error (io_error path (Unix.error_message kind))
 
 let read_command m path =
   Cmd.perform (fun () ->

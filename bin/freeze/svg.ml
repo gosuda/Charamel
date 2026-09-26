@@ -314,11 +314,26 @@ let render_runs ~char_width ~line_height ~x ~y ~tab_width runs =
     runs;
   (Buffer.contents backgrounds, Buffer.contents text)
 
-let read_font fs config =
+let read_font_bytes path =
+  let ic = open_in_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr ic)
+    (fun () ->
+      let length = in_channel_length ic in
+      let bytes = Bytes.create length in
+      really_input ic bytes 0 length;
+      Bytes.unsafe_to_string bytes)
+
+let read_font ~fs_root config =
   if config.Config.font.Config.file = "" then Ok ""
   else
+    let path =
+      if Filename.is_relative config.Config.font.Config.file then
+        Filename.concat fs_root config.Config.font.Config.file
+      else config.Config.font.Config.file
+    in
     try
-      let bytes = Eio.Path.(load (fs / config.Config.font.Config.file)) in
+      let bytes = read_font_bytes path in
       let encoded = Base64.encode_string bytes in
       let extension =
         String.lowercase_ascii (Filename.extension config.Config.font.Config.file)
@@ -339,13 +354,14 @@ let read_font fs config =
              (xml_escape config.Config.font.Config.family)
              format encoded format)
     with
-    | Eio.Io _ -> Error (Fmt.str "could not read font %s" config.Config.font.Config.file)
+    | Sys_error _ ->
+        Error (Fmt.str "could not read font %s" config.Config.font.Config.file)
     | Unix.Unix_error (error, function_name, argument) ->
         Error
           (Fmt.str "could not read font %s: %s (%s %s)" config.Config.font.Config.file
              (Unix.error_message error) function_name argument)
 
-let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
+let render ~fs_root ~(config : Config.t) ~language ~text ~is_ansi =
   let source =
     if is_ansi then text
     else
@@ -444,7 +460,7 @@ let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
     and terminal_height = max 1. terminal_height in
     let terminal_x = max margin.(3) (border_width /. 2.) in
     let terminal_y = max margin.(0) (border_width /. 2.) in
-    let font_css = read_font fs config in
+    let font_css = read_font ~fs_root config in
     match font_css with
     | Error _ as error -> error
     | Ok font_css ->

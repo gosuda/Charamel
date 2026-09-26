@@ -1,3 +1,4 @@
+module Env = Charamel_cli.Env
 open Result.Syntax
 
 type error =
@@ -267,66 +268,85 @@ let make_app model =
     subscriptions;
   }
 
-let write_result env ~separator row =
+let write_result (env : Charamel_cli.Env.t) ~separator row =
   let text = Csv.write_row ~separator row in
-  Eio.Flow.copy_string text env#stdout
+  Lwt_io.write env.Env.stdout text
 
-let read_input env (options : options) =
+let read_input (env : Charamel_cli.Env.t) (options : options) =
   if options.file <> "" then
-    try Ok (Eio.Path.load Eio.Path.(env#fs / options.file))
-    with Eio.Io _ -> Error (Fmt.str "could not render file: %s" options.file)
+    let resolved =
+      if Filename.is_relative options.file then Filename.concat env.Env.cwd options.file
+      else options.file
+    in
+    Lwt.catch
+      (fun () ->
+        Lwt.map
+          (fun text -> Ok text)
+          (Lwt_io.with_file ~mode:Lwt_io.Input resolved Lwt_io.read))
+      (function
+        | Unix.Unix_error _ | Sys_error _ ->
+            Lwt.return (Error (Fmt.str "could not render file: %s" options.file))
+        | exn -> Lwt.fail exn)
   else
-    match Gum_io.read_stdin ~strip_ansi:false env with
-    | Ok text -> Ok text
-    | Error `Empty -> Error "no data provided"
-    | Error (`Read text) -> Ok text
+    Lwt.map
+      (function
+        | Ok text -> Ok text
+        | Error `Empty -> Error "no data provided"
+        | Error (`Read text) -> Ok text)
+      (Gum_io.read_stdin ~strip_ansi:false env)
 
 let run env (options : options) =
-  let input =
-    match read_input env options with
-    | Ok input -> input
-    | Error message -> Charamel_cli.error message
-  in
-  let headers, rows =
-    match parse_input options input with
-    | Ok value -> value
-    | Error error -> Charamel_cli.error (error_message error)
-  in
-  if options.print then
-    match render_static options ~headers ~rows with
-    | Ok rendered -> Gum_io.println env rendered
-    | Error error -> Charamel_cli.error (error_message error)
-  else
-    let padding =
-      match Gum_flag.parse_padding options.padding with
-      | Ok value -> value
-      | Error (`Msg message) -> Charamel_cli.error message
-    in
-    let model = make_model options ~headers ~rows ~padding in
-    let model =
-      try
-        Gum_run.run ?timeout:options.timeout env (make_app model) ~finished:(fun model ->
-            match model.status with
-            | Selected _ -> Gum_run.Submitted
-            | Quit -> Gum_run.Quit
-            | Aborted -> Gum_run.Aborted
-            | Running -> Gum_run.Quit)
-      with Gum_io.No_tty -> Charamel_cli.error "table: requires a terminal"
-    in
-    match model.status with
-    | Selected row ->
-        let separator = Result.get_ok (separator_char options.separator) in
-        let row =
-          if options.return_column = 0 then row
-          else if options.return_column > 0 && options.return_column <= List.length row
-          then [ List.nth row (options.return_column - 1) ]
-          else
-            Charamel_cli.error
-              (error_message (`Invalid_return_column options.return_column))
+  Lwt.bind (read_input env options) (fun input_result ->
+      let input =
+        match input_result with
+        | Ok input -> input
+        | Error message -> Charamel_cli.error message
+      in
+      let headers, rows =
+        match parse_input options input with
+        | Ok value -> value
+        | Error error -> Charamel_cli.error (error_message error)
+      in
+      if options.print then
+        match render_static options ~headers ~rows with
+        | Ok rendered -> Gum_io.println env rendered
+        | Error error -> Charamel_cli.error (error_message error)
+      else
+        let padding =
+          match Gum_flag.parse_padding options.padding with
+          | Ok value -> value
+          | Error (`Msg message) -> Charamel_cli.error message
         in
-        write_result env ~separator row
-    | Quit | Running -> Charamel_cli.error "nothing selected"
-    | Aborted -> Charamel_cli.exit 130
+        let model = make_model options ~headers ~rows ~padding in
+        Lwt.bind
+          (Lwt.catch
+             (fun () ->
+               Gum_run.run ?timeout:options.timeout env (make_app model)
+                 ~finished:(fun model ->
+                   match model.status with
+                   | Selected _ -> Gum_run.Submitted
+                   | Quit -> Gum_run.Quit
+                   | Aborted -> Gum_run.Aborted
+                   | Running -> Gum_run.Quit))
+             (function
+               | Gum_io.No_tty -> Charamel_cli.error "table: requires a terminal"
+               | exn -> Lwt.fail exn))
+          (fun model ->
+            match model.status with
+            | Selected row ->
+                let separator = Result.get_ok (separator_char options.separator) in
+                let row =
+                  if options.return_column = 0 then row
+                  else if
+                    options.return_column > 0 && options.return_column <= List.length row
+                  then [ List.nth row (options.return_column - 1) ]
+                  else
+                    Charamel_cli.error
+                      (error_message (`Invalid_return_column options.return_column))
+                in
+                write_result env ~separator row
+            | Quit | Running -> Charamel_cli.error "nothing selected"
+            | Aborted -> Charamel_cli.exit 130))
 
 let options separator columns widths height print file border show_help hide_count
     lazy_quotes fields_per_record return_column timeout padding border_style cell_style

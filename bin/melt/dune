@@ -12,10 +12,10 @@
   melt_core
   charamel.cli
   charamel-ssh.keygen
-  eio
-  eio.unix
+  charamel.os
+  lwt
+  lwt.unix
   unix
-  eio_main
   cmdliner
   fmt
   mirage-crypto-rng.unix))

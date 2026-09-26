@@ -79,10 +79,11 @@ let keymap () =
 
 let cases =
   [
-    Alcotest.test_case "multiline and unicode" `Quick multiline_and_unicode;
-    Alcotest.test_case "insertion and bounds" `Quick insertion_and_bounds;
-    Alcotest.test_case "selection and replacement" `Quick selection_and_replacement;
-    Alcotest.test_case "pointer selection" `Quick pointer_selection;
-    Alcotest.test_case "view and real cursor" `Quick view_and_real_cursor;
-    Alcotest.test_case "keymap" `Quick keymap;
+    Alcotest_lwt.test_case_sync "multiline and unicode" `Quick multiline_and_unicode;
+    Alcotest_lwt.test_case_sync "insertion and bounds" `Quick insertion_and_bounds;
+    Alcotest_lwt.test_case_sync "selection and replacement" `Quick
+      selection_and_replacement;
+    Alcotest_lwt.test_case_sync "pointer selection" `Quick pointer_selection;
+    Alcotest_lwt.test_case_sync "view and real cursor" `Quick view_and_real_cursor;
+    Alcotest_lwt.test_case_sync "keymap" `Quick keymap;
   ]

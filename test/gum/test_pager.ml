@@ -8,6 +8,6 @@ let find_lines () =
 
 let cases =
   [
-    Alcotest.test_case "sanitize backspaces" `Quick sanitize_backspaces;
-    Alcotest.test_case "find search lines" `Quick find_lines;
+    Alcotest_lwt.test_case_sync "sanitize backspaces" `Quick sanitize_backspaces;
+    Alcotest_lwt.test_case_sync "find search lines" `Quick find_lines;
   ]

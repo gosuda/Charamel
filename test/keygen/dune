@@ -4,7 +4,10 @@
  (modules test_keygen)
  (libraries
   alcotest
+  alcotest-lwt
   charamel-ssh.keygen
-  eio
+  lwt
+  lwt.unix
   mirage-crypto-rng.unix
-  test_support))
+  test_support
+  unix))

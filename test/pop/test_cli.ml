@@ -38,7 +38,7 @@ let test_preview_does_not_add_bcc_header () =
 
 let cases =
   [
-    Alcotest.test_case "recipient parsing" `Quick test_recipient_values;
-    Alcotest.test_case "preview does not leak Bcc" `Quick
+    Alcotest_lwt.test_case_sync "recipient parsing" `Quick test_recipient_values;
+    Alcotest_lwt.test_case_sync "preview does not leak Bcc" `Quick
       test_preview_does_not_add_bcc_header;
   ]

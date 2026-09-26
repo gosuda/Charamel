@@ -187,7 +187,7 @@ let emit_line ~format ~styles ~time_format ~report_timestamp ~report_caller ~clo
     ~level ~src ~header ~tags message =
   let ts =
     if report_timestamp then
-      Option.map time_format (Ptime.of_float_s (Eio.Time.now clock))
+      Option.map time_format (Ptime.of_float_s (Charamel_os.Time.wall clock))
     else None
   in
   let caller = if report_caller then header else None in

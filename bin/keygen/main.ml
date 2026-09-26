@@ -1,5 +1,7 @@
 module Key = Charamel_ssh_keygen
 module Keygen = Keygen_core.Keygen
+module Env = Charamel_cli.Env
+open Lwt.Infix
 
 let run env algorithm path comment force =
   let path_result =
@@ -8,9 +10,10 @@ let run env algorithm path comment force =
   match path_result with
   | Error error -> Charamel_cli.error (Fmt.str "%a" Keygen.pp_error error)
   | Ok path -> (
-      match Keygen.generate ~fs:(fst env#fs) ~path ~algorithm ~comment ~force () with
+      Keygen.generate ~fs_root:env.Env.fs_root ~path ~algorithm ~comment ~force ()
+      >>= function
       | Error error -> Charamel_cli.error (Fmt.str "%a" Keygen.pp_error error)
-      | Ok fingerprint -> Eio.Flow.copy_string (fingerprint ^ "\n") env#stdout)
+      | Ok fingerprint -> Lwt_io.write env.Env.stdout (fingerprint ^ "\n"))
 
 let algorithm_arg () =
   let open Cmdliner in

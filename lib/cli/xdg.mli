@@ -5,7 +5,7 @@
     variable, or the [$HOME] fallback when the variable does not qualify. A variable
     qualifies only when it is set to a nonempty absolute path. The functions read the
     process environment and touch no file. The caller creates directories as needed, for
-    example through [Eio.Path]. *)
+    example through {!Charamel_os.Fs}. *)
 
 val config_dir : app:string -> string
 (** [config_dir ~app] is the directory in which [app] stores configuration,

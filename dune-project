@@ -14,8 +14,6 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  (eio (>= 1.5))
-  eio_main
   (cmdliner (>= 2.1))
   fmt
   logs
@@ -28,8 +26,6 @@
   ptime
   digestif
   base64
-  cohttp-eio
-  tls-eio
   ca-certs
   mirage-crypto-rng
   uri
@@ -49,7 +45,8 @@
   (awa-mirage (>= 0.6.1))
   (ctypes (and (>= 0.24.0) (= :os "win32")))
   (ctypes-foreign (and (>= 0.24.0) (= :os "win32")))
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))
 
 (package
  (name charamel-ssh)
@@ -57,8 +54,6 @@
  (depends
   (ocaml (>= 5.4))
   (dune (>= 3.24))
-  (eio (>= 1.5))
-  eio_main
   (cmdliner (>= 2.1))
   fmt
   logs
@@ -73,7 +68,8 @@
   digestif
   cstruct
   mtime
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))
 
 (package
  (name gum)
@@ -83,14 +79,13 @@
   (dune (>= 3.24))
   charamel
   cmdliner
-  eio
   fmt
   logs
   re
   ptime
   cstruct
-  (eio_main :with-test)
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))
 
 (package
  (name glow)
@@ -99,19 +94,16 @@
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charamel
-  eio
-  eio_main
   cmdliner
   fmt
   jsont
-  cohttp-eio
   cohttp
-  tls-eio
   ca-certs
   uri
   domain-name
   re
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))
 
 (package
  (name freeze)
@@ -120,14 +112,13 @@
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charamel
-  eio
-  eio_main
   cmdliner
   jsont
   cstruct
   base64
   fmt
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))
 
 (package
  (name sequin)
@@ -137,10 +128,9 @@
   (dune (>= 3.24))
   charamel
   fmt
-  eio
-  eio_main
   cmdliner
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))
 
 (package
  (name pop)
@@ -149,15 +139,12 @@
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charamel
-  cohttp-eio
-  tls-eio
   ca-certs
   cmarkit
   cohttp
   http
   tls
   domain-name
-  eio
   fmt
   jsont
   base64
@@ -165,9 +152,9 @@
   ptime
   uri
   cmdliner
-  eio_main
   mirage-crypto-rng
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))
 
 (package
  (name skate)
@@ -176,13 +163,12 @@
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charamel
-  eio
   fmt
   jsont
   base64
   cmdliner
-  (eio_main :with-test)
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))
 
 (package
  (name melt)
@@ -193,12 +179,11 @@
   charamel
   charamel-ssh
   digestif
-  eio
-  eio_main
   cmdliner
   mirage-crypto-rng
   fmt
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))
 
 (package
  (name keygen)
@@ -208,12 +193,11 @@
   (dune (>= 3.24))
   charamel
   charamel-ssh
-  eio
   fmt
-  eio_main
   cmdliner
   mirage-crypto-rng
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))
 
 (package
  (name hotdiva2000)
@@ -224,10 +208,9 @@
   charamel
   fmt
   cmdliner
-  eio
-  eio_main
   mirage-crypto-rng
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))
 
 (package
  (name crush)
@@ -236,10 +219,7 @@
   (ocaml (>= 5.4))
   (dune (>= 3.24))
   charamel
-  cohttp-eio
-  tls-eio
   ca-certs
-  eio
   jsont
   bytesrw
   re
@@ -256,7 +236,7 @@
   domain-name
   cstruct
   cmdliner
-  eio_main
   optint
   ipaddr
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (alcotest-lwt (and (>= 1.9.1) :with-test))))

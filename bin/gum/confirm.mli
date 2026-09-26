@@ -40,8 +40,8 @@ val answer : model -> bool
 val submitted : model -> bool
 (** [submitted model] is [true] after an answer was submitted or cancelled. *)
 
-val run : Eio_unix.Stdenv.base -> options -> unit
+val run : Charamel_cli.Env.t -> options -> unit Lwt.t
 (** [run env options] accepts a piped answer or runs the terminal UI. *)
 
-val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
+val cmd : Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t
 (** [cmd env] is the [gum confirm] command. *)

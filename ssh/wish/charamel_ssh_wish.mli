@@ -1,11 +1,17 @@
-(** SSH session middleware and an Eio-backed SSH server.
+(** SSH session middleware and an SSH server.
 
-    The server terminates the SSH protocol with [awa], then exposes one typed session to a
-    middleware chain. A session can run an interactive shell or a single exec request, and
-    its byte streams are suitable for {!Charamel_tea.Terminal.custom}. *)
+    The server terminates the SSH protocol with [awa] over {!Charamel_net.Ssh_server},
+    then exposes one typed session to a middleware chain. A session can run an interactive
+    shell or a single exec request, and its byte streams are suitable for
+    {!Charamel_tea.Terminal.custom}. *)
 
 type pty = { term : string; rows : int; cols : int }
 (** The terminal requested by the client. *)
+
+type address = [ `Tcp of string * int | `Unix of string ]
+(** The type for a listen or peer address. [`Tcp] names the host as its textual address —
+    an IPv6 host contains a colon and binds to an [inet6] socket, anything else binds to
+    [inet] — and the port. [`Unix] names a filesystem socket path. *)
 
 module Session : sig
   type nonrec pty = pty
@@ -31,36 +37,38 @@ module Session : sig
   val env : t -> (string * string) list
   (** [env t] is the environment requested by the client. *)
 
-  val remote_addr : t -> Eio.Net.Sockaddr.stream
+  val remote_addr : t -> address
   (** [remote_addr t] is the peer address. *)
 
-  val resize_events : t -> (int * int) Eio.Stream.t
-  (** [resize_events t] receives [(rows, cols)] after every window change. *)
+  val resize_events : t -> (int * int) Lwt_stream.t
+  (** [resize_events t] receives [(rows, cols)] after every window change. It is a
+      single-consumer stream: exactly one reader, normally {!val:Charamel_ssh_wish.tea},
+      may take from it. *)
 
-  val stdin : t -> Eio.Flow.source_ty Eio.Resource.t
+  val stdin : t -> Lwt_io.input_channel
   (** [stdin t] is the channel input source. It reaches EOF after the client sends SSH
       channel EOF. *)
 
-  val stdout : t -> Eio.Flow.sink_ty Eio.Resource.t
+  val stdout : t -> Lwt_io.output_channel
   (** [stdout t] is the channel output sink. *)
 
-  val stderr : t -> Eio.Flow.sink_ty Eio.Resource.t
+  val stderr : t -> Lwt_io.output_channel
   (** [stderr t] is the channel extended-data sink. *)
 
-  val exit : t -> int -> unit
+  val exit : t -> int -> unit Lwt.t
   (** [exit t code] requests the SSH exit status, EOF, and close exactly once. The packets
       are sent after the endpoint has returned, so outer middlewares can append final
-      output. *)
+      output; the returned promise resolves once they have reached the wire. *)
 end
 
-type handler = Session.t -> unit
+type handler = Session.t -> unit Lwt.t
 (** A middleware endpoint. *)
 
 type middleware = handler -> handler
 (** A middleware wraps an endpoint and may reject or decorate a session. *)
 
 val tea :
-  env:Eio_unix.Stdenv.base -> (Session.t -> ('model, 'msg) Charamel_tea.app) -> middleware
+  env:Charamel_cli.Env.t -> (Session.t -> ('model, 'msg) Charamel_tea.app) -> middleware
 (** [tea ~env make] runs the application returned by [make] over the session's SSH streams
     and current PTY size. Window-change requests are delivered through the custom
     terminal's resize stream. [env] supplies the process capabilities required by the
@@ -87,21 +95,20 @@ val elapsed : middleware
     handler returns. *)
 
 val serve :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  clock:float Eio.Time.clock_ty Eio.Resource.t ->
+  ?stop:Lwt_switch.t ->
   host_key:Charamel_ssh_keygen.t ->
-  addr:Eio.Net.Sockaddr.stream ->
+  addr:address ->
   ?idle_timeout:float ->
   ?max_timeout:float ->
   ?banner:string ->
   ?public_key_auth:(user:string -> Awa.Hostkey.pub -> bool) ->
   ?password_auth:(user:string -> string -> bool) ->
   handler ->
-  unit
-(** [serve ~sw ~net ~clock ~host_key ~addr handler] listens on [addr] and serves
-    authenticated SSH connections until [sw] is released. [idle_timeout] and [max_timeout]
-    are disabled by default; when present they are in seconds, and an idle or total
-    timeout closes the connection. [banner] is sent during user authentication. Missing
-    authentication callbacks reject that method. Only Ed25519 host keys are accepted by
-    [awa 0.6.1]. *)
+  unit ->
+  unit Lwt.t
+(** [serve ?stop ~host_key ~addr handler ()] listens on [addr] and serves authenticated
+    SSH connections until the promise is cancelled or [stop] is turned off, which also
+    ends the live connections. [idle_timeout] and [max_timeout] are disabled by default;
+    when present they are in seconds, and an idle or total timeout closes the connection.
+    [banner] is sent during user authentication. Missing authentication callbacks reject
+    that method. Only Ed25519 host keys are accepted by [awa 0.6.1]. *)

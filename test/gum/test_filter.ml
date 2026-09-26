@@ -50,8 +50,8 @@ let non_tty_shortcut () =
 
 let cases =
   [
-    Alcotest.test_case "exact matching" `Quick exact_matching;
-    Alcotest.test_case "fuzzy script" `Quick fuzzy_script;
-    Alcotest.test_case "matching ranges" `Quick matching_ranges;
-    Alcotest.test_case "non-tty sole match" `Quick non_tty_shortcut;
+    Alcotest_lwt.test_case_sync "exact matching" `Quick exact_matching;
+    Alcotest_lwt.test_case_sync "fuzzy script" `Quick fuzzy_script;
+    Alcotest_lwt.test_case_sync "matching ranges" `Quick matching_ranges;
+    Alcotest_lwt.test_case_sync "non-tty sole match" `Quick non_tty_shortcut;
   ]

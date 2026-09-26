@@ -37,6 +37,6 @@ let metadata () =
 
 let cases =
   [
-    Alcotest.test_case "agent schema" `Quick schema_contract;
-    Alcotest.test_case "agent metadata" `Quick metadata;
+    Test_tools_test_support.case "agent schema" `Quick schema_contract;
+    Test_tools_test_support.case "agent metadata" `Quick metadata;
   ]

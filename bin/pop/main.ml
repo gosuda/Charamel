@@ -1,4 +1,5 @@
 open Pop_core
+open Charamel_cli
 
 let string_list_option names doc =
   Cmdliner.Arg.(value (opt_all string [] (info names ~doc ~docv:"ADDRESS")))
@@ -124,24 +125,26 @@ let options_of_cli (cli : cli) : Pop_lib.options =
     unsafe_html = cli.unsafe_html;
   }
 
-let form_values_of_options ~cwd (options : Pop_lib.options) : Forms.values =
-  let body =
+let form_values_of_options ~cwd (options : Pop_lib.options) =
+  let body_lwt =
     match (options.Pop_lib.body, options.Pop_lib.body_file) with
-    | Some body, _ -> body
-    | None, None -> ""
-    | None, Some path -> (
-        match Pop_lib.read_file ~cwd path with
-        | Ok body -> body
-        | Error error -> Charamel_cli.error (error_message Pop_lib.pp_error error))
+    | Some body, _ -> Lwt.return body
+    | None, None -> Lwt.return ""
+    | None, Some path ->
+        Lwt.bind (Pop_lib.read_file ~cwd path) (function
+          | Ok body -> Lwt.return body
+          | Error error -> Charamel_cli.error (error_message Pop_lib.pp_error error))
   in
-  {
-    to_ = String.concat ", " (Pop_lib.split_addresses options.Pop_lib.to_);
-    cc = String.concat ", " (Pop_lib.split_addresses options.Pop_lib.cc);
-    bcc = String.concat ", " (Pop_lib.split_addresses options.Pop_lib.bcc);
-    from = Option.value options.Pop_lib.from ~default:"";
-    subject = Option.value options.Pop_lib.subject ~default:"";
-    body;
-  }
+  Lwt.bind body_lwt (fun body ->
+      Lwt.return
+        {
+          Forms.to_ = String.concat ", " (Pop_lib.split_addresses options.Pop_lib.to_);
+          cc = String.concat ", " (Pop_lib.split_addresses options.Pop_lib.cc);
+          bcc = String.concat ", " (Pop_lib.split_addresses options.Pop_lib.bcc);
+          from = Option.value options.Pop_lib.from ~default:"";
+          subject = Option.value options.Pop_lib.subject ~default:"";
+          body;
+        })
 
 let options_of_form (options : Pop_lib.options) (values : Forms.values) : Pop_lib.options
     =
@@ -156,60 +159,54 @@ let options_of_form (options : Pop_lib.options) (values : Forms.values) : Pop_li
     body_file = None;
   }
 
-let prepare_with_form ~sw env options =
-  match Pop_lib.prepare ~sw ~clock:env#clock ~cwd:env#cwd ~stdin:env#stdin options with
-  | Ok prepared -> Ok prepared
-  | Error (`Missing _) -> (
-      match
-        Forms.run ~clock:env#clock env
-          ~initial:(form_values_of_options ~cwd:env#cwd options)
-      with
-      | Error error -> Error (`Form error)
-      | Ok values -> (
-          let options = options_of_form options values in
-          match
-            Pop_lib.prepare ~sw ~clock:env#clock ~cwd:env#cwd ~stdin:env#stdin options
-          with
-          | Ok prepared -> Ok prepared
-          | Error error -> Error (`Compose error)))
-  | Error error -> Error (`Compose error)
+let prepare_with_form (env : Charamel_cli.Env.t) options =
+  Lwt.bind (Pop_lib.prepare ~cwd:env.Env.cwd ~stdin:env.Env.stdin options) (function
+    | Ok prepared -> Lwt.return (Ok prepared)
+    | Error (`Missing _) ->
+        Lwt.bind (form_values_of_options ~cwd:env.Env.cwd options) (fun initial ->
+            Lwt.bind
+              (Forms.run ~clock:env.Env.clock ~fs_root:env.Env.fs_root
+                 ~temp_dir:env.Env.fs_root ~initial) (function
+              | Error error -> Lwt.return (Error (`Form error))
+              | Ok values ->
+                  let options = options_of_form options values in
+                  Lwt.bind (Pop_lib.prepare ~cwd:env.Env.cwd ~stdin:env.Env.stdin options)
+                    (function
+                    | Ok prepared -> Lwt.return (Ok prepared)
+                    | Error error -> Lwt.return (Error (`Compose error)))))
+    | Error error -> Lwt.return (Error (`Compose error)))
 
 let summary message =
   let recipients = List.map Mime.Address.addr message.Mime.to_ in
   Fmt.str "Email %S sent to %s\n" message.Mime.subject (String.concat ", " recipients)
 
-let run env cli =
+let run (env : Charamel_cli.Env.t) cli =
   let options = options_of_cli cli in
-  Eio.Switch.run (fun sw ->
-      match prepare_with_form ~sw env options with
-      | Error (`Form error) ->
-          Charamel_cli.error
-            ~code:(match error with `Timeout -> 124 | `Aborted -> 130)
-            (error_message Forms.pp_error error)
-      | Error (`Compose error) ->
-          Charamel_cli.error (error_message Pop_lib.pp_error error)
-      | Ok prepared -> (
-          if cli.preview then Preview.write env#stdout prepared.Pop_lib.message
-          else
-            let resend_key =
-              match Sys.getenv_opt "RESEND_API_KEY" with
-              | Some key when String.trim key <> "" -> Some (String.trim key)
-              | _ -> None
-            in
-            let smtp =
-              match resend_key with
-              | Some _ -> None
-              | None -> (
-                  match Pop_lib.config_of_env ~env:Sys.getenv_opt with
-                  | Ok config -> Some config
-                  | Error error ->
-                      Charamel_cli.error (error_message Pop_lib.pp_error error))
-            in
-            match
-              Send.deliver ~sw ~clock:env#clock ~net:env#net ~resend_key ~smtp
-                prepared.Pop_lib.message
-            with
-            | Ok () -> Eio.Flow.copy_string (summary prepared.Pop_lib.message) env#stdout
+  Lwt.bind (prepare_with_form env options) (function
+    | Error (`Form error) ->
+        Charamel_cli.error
+          ~code:(match error with `Timeout -> 124 | `Aborted -> 130)
+          (error_message Forms.pp_error error)
+    | Error (`Compose error) -> Charamel_cli.error (error_message Pop_lib.pp_error error)
+    | Ok prepared ->
+        if cli.preview then Preview.write env.Env.stdout prepared.Pop_lib.message
+        else
+          let resend_key =
+            match Sys.getenv_opt "RESEND_API_KEY" with
+            | Some key when String.trim key <> "" -> Some (String.trim key)
+            | _ -> None
+          in
+          let smtp =
+            match resend_key with
+            | Some _ -> None
+            | None -> (
+                match Pop_lib.config_of_env ~env:Sys.getenv_opt with
+                | Ok config -> Some config
+                | Error error -> Charamel_cli.error (error_message Pop_lib.pp_error error)
+                )
+          in
+          Lwt.bind (Send.deliver ~resend_key ~smtp prepared.Pop_lib.message) (function
+            | Ok () -> Lwt_io.write env.Env.stdout (summary prepared.Pop_lib.message)
             | Error error -> Charamel_cli.error (error_message Send.pp_error error)))
 
 let default env =

@@ -1,32 +1,38 @@
-let write_flow flow text = Eio.Flow.copy_string text flow
+open Charamel_cli
 
-let root_for_path (env : Eio_unix.Stdenv.base) (path : string) : Eio.Fs.dir_ty Eio.Path.t
-    =
-  if Filename.is_relative path then env#cwd else env#fs
+let write_flow channel text = Lwt_io.write channel text
 
-let path_for env path = Eio.Path.(root_for_path env path / path)
+let read_line_opt channel =
+  Lwt.catch
+    (fun () -> Lwt.bind (Lwt_io.read_line channel) (fun line -> Lwt.return (Some line)))
+    (function End_of_file -> Lwt.return None | exn -> Lwt.fail exn)
 
 let prompt ~input ~output label current parse =
-  write_flow output (Fmt.str "%s [%s]: " label current);
-  match Eio.Buf_read.line input with
-  | exception End_of_file -> current
-  | value when String.trim value = "" -> current
-  | value -> Option.value (parse (String.trim value)) ~default:current
+  Lwt.bind
+    (write_flow output (Fmt.str "%s [%s]: " label current))
+    (fun () ->
+      Lwt.bind (read_line_opt input) (function
+        | None -> Lwt.return current
+        | Some value when String.trim value = "" -> Lwt.return current
+        | Some value ->
+            Lwt.return (Option.value (parse (String.trim value)) ~default:current)))
 
-let interactive_config (env : Eio_unix.Stdenv.base) (config : Freeze_core.Config.t) =
-  let input = Eio.Buf_read.of_flow ~max_size:65_536 env#stdin in
-  let output = env#stderr in
-  let background =
-    prompt ~input ~output "Background" config.Freeze_core.Config.background Option.some
-  in
-  let theme = prompt ~input ~output "Theme" config.Freeze_core.Config.theme Option.some in
-  let language =
-    prompt ~input ~output "Language" config.Freeze_core.Config.language Option.some
-  in
-  let output_path =
-    prompt ~input ~output "Output" config.Freeze_core.Config.output Option.some
-  in
-  { config with background; theme; language; output = output_path }
+let interactive_config (env : Env.t) (config : Freeze_core.Config.t) =
+  let input = env.Env.stdin in
+  let output = env.Env.stderr in
+  Lwt.bind
+    (prompt ~input ~output "Background" config.Freeze_core.Config.background Option.some)
+    (fun background ->
+      Lwt.bind (prompt ~input ~output "Theme" config.Freeze_core.Config.theme Option.some)
+        (fun theme ->
+          Lwt.bind
+            (prompt ~input ~output "Language" config.Freeze_core.Config.language
+               Option.some) (fun language ->
+              Lwt.bind
+                (prompt ~input ~output "Output" config.Freeze_core.Config.output
+                   Option.some) (fun output_path ->
+                  Lwt.return
+                    { config with background; theme; language; output = output_path }))))
 
 let output_error (error : Freeze_core.Pty.error) =
   match error with
@@ -41,26 +47,31 @@ let output_error (error : Freeze_core.Pty.error) =
   | `Timeout output ->
       if output = "" then "command timed out" else Fmt.str "command timed out\n%s" output
 
-let with_status (env : Eio_unix.Stdenv.base) path =
-  write_flow env#stdout (Fmt.str "WROTE %s\n" path)
+let with_status (env : Env.t) path = write_flow env.Env.stdout (Fmt.str "WROTE %s\n" path)
 
-let save_svg (env : Eio_unix.Stdenv.base) path svg =
-  try
-    Eio.Cancel.protect (fun () ->
-        Eio.Path.save ~create:(`Or_truncate 0o644) (path_for env path) svg);
-    Ok ()
-  with
-  | Eio.Io _ as exception_ ->
-      Error (Fmt.str "could not write output %s: %a" path Eio.Exn.pp exception_)
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (Fmt.str "could not write output %s: %s (%s %s)" path (Unix.error_message error)
-           function_name argument)
+let save_svg (env : Env.t) path svg =
+  let resolved =
+    if Filename.is_relative path then Filename.concat env.Env.cwd path else path
+  in
+  Lwt.catch
+    (fun () ->
+      Lwt.bind
+        (Charamel_os.Fs.with_open_out ~perm:0o644 resolved (fun channel ->
+             Lwt_io.write channel svg))
+        (fun () -> Lwt.return (Ok ())))
+    (function
+      | Charamel_os.Fs.E _ ->
+          Lwt.return (Error (Fmt.str "could not write output %s" path))
+      | Unix.Unix_error (error, function_name, argument) ->
+          Lwt.return
+            (Error
+               (Fmt.str "could not write output %s: %s (%s %s)" path
+                  (Unix.error_message error) function_name argument))
+      | exn -> Lwt.fail exn)
 
 let default_output = "freeze.png"
 
-let run_render (env : Eio_unix.Stdenv.base) ~sw (config : Freeze_core.Config.t) ~path ~raw
-    =
+let run_render (env : Env.t) (config : Freeze_core.Config.t) ~path ~raw =
   if raw = "" then Charamel_cli.error "No input"
   else
     let render_config : Freeze_core.Config.t =
@@ -68,7 +79,6 @@ let run_render (env : Eio_unix.Stdenv.base) ~sw (config : Freeze_core.Config.t) 
         { config with output = default_output }
       else config
     in
-
     let ansi =
       Freeze_core.Input.is_ansi ~language:render_config.Freeze_core.Config.language raw
     in
@@ -78,14 +88,9 @@ let run_render (env : Eio_unix.Stdenv.base) ~sw (config : Freeze_core.Config.t) 
     if (not ansi) && Option.is_none language then
       Charamel_cli.error "Language Unknown: specify a language with the --language flag"
     else
-      let svg_fs =
-        if render_config.Freeze_core.Config.font.Freeze_core.Config.file = "" then env#cwd
-        else
-          root_for_path env render_config.Freeze_core.Config.font.Freeze_core.Config.file
-      in
       match
-        Freeze_core.Svg.render ~fs:svg_fs ~config:render_config ~language ~text:raw
-          ~is_ansi:ansi
+        Freeze_core.Svg.render ~fs_root:env.Env.cwd ~config:render_config ~language
+          ~text:raw ~is_ansi:ansi
       with
       | Error message -> Charamel_cli.error message
       | Ok ({ svg; _ } : Freeze_core.Svg.rendered) -> (
@@ -95,82 +100,79 @@ let run_render (env : Eio_unix.Stdenv.base) ~sw (config : Freeze_core.Config.t) 
             else None
           in
           match output with
-          | None -> write_flow env#stdout svg
-          | Some path when Filename.check_suffix path ".png" -> (
-              match
-                Freeze_core.Png.convert ~sw ~process_mgr:env#process_mgr ~svg ~output:path
-              with
-              | Ok () -> with_status env path
-              | Error message -> Charamel_cli.error message)
-          | Some path when Filename.check_suffix path ".svg" -> (
-              match save_svg env path svg with
-              | Ok () -> with_status env path
-              | Error message -> Charamel_cli.error message)
+          | None -> write_flow env.Env.stdout svg
+          | Some path when Filename.check_suffix path ".png" ->
+              Lwt.bind (Freeze_core.Png.convert ~svg ~output:path) (function
+                | Ok () -> with_status env path
+                | Error message -> Charamel_cli.error message)
+          | Some path when Filename.check_suffix path ".svg" ->
+              Lwt.bind (save_svg env path svg) (function
+                | Ok () -> with_status env path
+                | Error message -> Charamel_cli.error message)
           | Some _ -> Charamel_cli.error "unsupported output format")
 
-let run (env : Eio_unix.Stdenv.base) (cli : Freeze_core.Config.cli) =
-  let config_fs =
-    if cli.Freeze_core.Config.config = "user" then env#fs
-    else root_for_path env cli.Freeze_core.Config.config
-  in
-  match Freeze_core.Config.load ~fs:config_fs ~name:cli.Freeze_core.Config.config with
-  | Error message -> Charamel_cli.error message
-  | Ok (base : Freeze_core.Config.t) ->
-      let config : Freeze_core.Config.t = Freeze_core.Config.apply_cli base cli in
-      let config : Freeze_core.Config.t =
-        if config.Freeze_core.Config.interactive then interactive_config env config
-        else config
-      in
-      (if
-         config.Freeze_core.Config.interactive
-         && cli.Freeze_core.Config.config = "default"
-       then
-         match Freeze_core.Config.save_user ~fs:env#fs config with
-         | Ok () -> ()
-         | Error message -> Charamel_cli.error message);
-      Eio.Switch.run (fun sw ->
-          let execute = String.trim config.Freeze_core.Config.execute in
-          if execute <> "" then
-            match
-              Freeze_core.Pty.execute ~sw ~clock:env#clock ~process_mgr:env#process_mgr
-                ~env:(Unix.environment ())
-                ?width:
-                  (if config.Freeze_core.Config.width > 0. then
-                     Some (int_of_float config.Freeze_core.Config.width)
-                   else None)
-                ?height:
-                  (if config.Freeze_core.Config.height > 0. then
-                     Some (int_of_float config.Freeze_core.Config.height)
-                   else None)
-                ~timeout:config.Freeze_core.Config.execute_timeout execute
-            with
-            | Error (`Timeout output) ->
-                Charamel_cli.error ~code:124 (output_error (`Timeout output))
-            | Error error -> Charamel_cli.error (output_error error)
-            | Ok output ->
-                if output = "" then Charamel_cli.error "no command output"
-                else
-                  let config = { config with language = "ansi" } in
-                  run_render env ~sw config ~path:None ~raw:output
+let run_execute (env : Env.t) (config : Freeze_core.Config.t) execute =
+  Lwt.bind
+    (Freeze_core.Pty.execute ~env:(Unix.environment ())
+       ?width:
+         (if config.Freeze_core.Config.width > 0. then
+            Some (int_of_float config.Freeze_core.Config.width)
+          else None)
+       ?height:
+         (if config.Freeze_core.Config.height > 0. then
+            Some (int_of_float config.Freeze_core.Config.height)
+          else None)
+       ~timeout:config.Freeze_core.Config.execute_timeout execute)
+    (function
+      | Error (`Timeout output) ->
+          Charamel_cli.error ~code:124 (output_error (`Timeout output))
+      | Error error -> Charamel_cli.error (output_error error)
+      | Ok output ->
+          if output = "" then Charamel_cli.error "no command output"
           else
-            let source =
-              if
-                config.Freeze_core.Config.input = ""
-                || config.Freeze_core.Config.input = "-"
-              then Freeze_core.Input.Stdin
-              else Freeze_core.Input.File config.Freeze_core.Config.input
-            in
-            let input_fs =
-              match source with
-              | Freeze_core.Input.File path -> root_for_path env path
-              | Freeze_core.Input.Stdin | Freeze_core.Input.Execute _ -> env#cwd
-            in
-            match Freeze_core.Input.read ~fs:input_fs ~stdin:env#stdin source with
-            | Error message -> Charamel_cli.error message
-            | Ok ({ text; path } : Freeze_core.Input.loaded) ->
-                run_render env ~sw config ~path ~raw:text)
+            let config = { config with language = "ansi" } in
+            run_render env config ~path:None ~raw:output)
 
-let default (env : Eio_unix.Stdenv.base) =
+let run_from_source (env : Env.t) (config : Freeze_core.Config.t) =
+  let source =
+    if config.Freeze_core.Config.input = "" || config.Freeze_core.Config.input = "-" then
+      Freeze_core.Input.Stdin
+    else Freeze_core.Input.File config.Freeze_core.Config.input
+  in
+  Lwt.bind (Freeze_core.Input.read ~fs_root:env.Env.cwd ~stdin:env.Env.stdin source)
+    (function
+    | Error message -> Charamel_cli.error message
+    | Ok ({ text; path } : Freeze_core.Input.loaded) ->
+        run_render env config ~path ~raw:text)
+
+let run (env : Env.t) (cli : Freeze_core.Config.cli) =
+  Lwt.bind
+    (Freeze_core.Config.load ~fs_root:env.Env.cwd ~name:cli.Freeze_core.Config.config)
+    (function
+    | Error message -> Charamel_cli.error message
+    | Ok (base : Freeze_core.Config.t) ->
+        let config = Freeze_core.Config.apply_cli base cli in
+        let configured =
+          if config.Freeze_core.Config.interactive then interactive_config env config
+          else Lwt.return config
+        in
+        Lwt.bind configured (fun (config : Freeze_core.Config.t) ->
+            let saved =
+              if
+                config.Freeze_core.Config.interactive
+                && cli.Freeze_core.Config.config = "default"
+              then
+                Lwt.bind (Freeze_core.Config.save_user config) (function
+                  | Ok () -> Lwt.return_unit
+                  | Error message -> Charamel_cli.error message)
+              else Lwt.return_unit
+            in
+            Lwt.bind saved (fun () ->
+                let execute = String.trim config.Freeze_core.Config.execute in
+                if execute <> "" then run_execute env config execute
+                else run_from_source env config)))
+
+let default (env : Env.t) =
   let action = run env in
   Cmdliner.Term.(const action $ Freeze_core.Config.cli_term)
 

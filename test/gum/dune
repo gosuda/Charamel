@@ -22,15 +22,16 @@
  (libraries
   gum_core
   alcotest
+  alcotest-lwt
   charamel.ansi
   charamel.cli
+  charamel.os
   charamel.bubbles
   charamel.lipgloss
   charamel.tea
   cmdliner
-  eio
-  eio.unix
-  eio_main
+  lwt
+  lwt.unix
   fmt
   logs
   re

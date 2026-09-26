@@ -1,5 +1,5 @@
 let () =
-  Alcotest.run "bubbles"
+  Test_support.run_lwt "bubbles"
     [
       ("key binding", Test_key_binding.cases);
       ("fuzzy", Test_fuzzy.cases);

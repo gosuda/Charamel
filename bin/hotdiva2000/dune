@@ -12,9 +12,8 @@
   hotdiva_core
   charamel.cli
   cmdliner
-  eio
-  eio.unix
-  eio_main
+  lwt
+  lwt.unix
   fmt
   mirage-crypto-rng
   mirage-crypto-rng.unix

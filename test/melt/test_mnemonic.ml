@@ -50,7 +50,7 @@ let encode_result = Alcotest.result words error
 let decode_result = Alcotest.result seed error
 
 let official_vectors =
-  Alcotest.test_case "official BIP-39 vectors" `Quick (fun () ->
+  Alcotest_lwt.test_case_sync "official BIP-39 vectors" `Quick (fun () ->
       List.iter
         (fun (entropy_hex, mnemonic) ->
           let seed_bytes = seed_of_hex entropy_hex in
@@ -62,7 +62,7 @@ let official_vectors =
         vectors)
 
 let roundtrip_arbitrary_seeds =
-  Alcotest.test_case "round-trips seeds outside the vector set" `Quick (fun () ->
+  Alcotest_lwt.test_case_sync "round-trips seeds outside the vector set" `Quick (fun () ->
       let seeds =
         [
           String.init 32 (fun i -> Char.chr i);
@@ -82,7 +82,8 @@ let roundtrip_arbitrary_seeds =
         seeds)
 
 let wordlist_shape =
-  Alcotest.test_case "wordlist is the full sorted 2048-word BIP-39 list" `Quick (fun () ->
+  Alcotest_lwt.test_case_sync "wordlist is the full sorted 2048-word BIP-39 list" `Quick
+    (fun () ->
       Alcotest.(check int) "2048 words" 2048 (Array.length Wordlist.words);
       Array.iteri
         (fun i w -> Alcotest.(check (option int)) w (Some i) (Wordlist.find_index w))
@@ -98,7 +99,7 @@ let wordlist_shape =
       Alcotest.(check (option int)) "unknown word" None (Wordlist.find_index "notaword"))
 
 let rejects_wrong_seed_length =
-  Alcotest.test_case "rejects a seed whose length is not 32" `Quick (fun () ->
+  Alcotest_lwt.test_case_sync "rejects a seed whose length is not 32" `Quick (fun () ->
       Alcotest.check encode_result "empty"
         (Error (`Wrong_seed_length 0))
         (Mnemonic.encode "");
@@ -110,7 +111,8 @@ let rejects_wrong_seed_length =
         (Mnemonic.encode (String.make 33 'a')))
 
 let rejects_wrong_word_count =
-  Alcotest.test_case "rejects a mnemonic whose length is not 24" `Quick (fun () ->
+  Alcotest_lwt.test_case_sync "rejects a mnemonic whose length is not 24" `Quick
+    (fun () ->
       let full_words = words_of_string (snd (List.hd vectors)) in
       Alcotest.check decode_result "empty"
         (Error (`Wrong_word_count 0))
@@ -123,7 +125,8 @@ let rejects_wrong_word_count =
         (Mnemonic.decode (full_words @ [ "abandon" ])))
 
 let rejects_unknown_word =
-  Alcotest.test_case "rejects a mnemonic containing a non-BIP-39 word" `Quick (fun () ->
+  Alcotest_lwt.test_case_sync "rejects a mnemonic containing a non-BIP-39 word" `Quick
+    (fun () ->
       let full_words = words_of_string (snd (List.hd vectors)) in
       let corrupted =
         List.mapi (fun i w -> if i = 3 then "zzznotaword" else w) full_words
@@ -133,7 +136,8 @@ let rejects_unknown_word =
         (Mnemonic.decode corrupted))
 
 let rejects_bad_checksum =
-  Alcotest.test_case "rejects a mnemonic with a broken checksum" `Quick (fun () ->
+  Alcotest_lwt.test_case_sync "rejects a mnemonic with a broken checksum" `Quick
+    (fun () ->
       let full_words = words_of_string (snd (List.hd vectors)) in
       let corrupted =
         List.mapi

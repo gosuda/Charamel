@@ -67,9 +67,9 @@ val single_option : options -> (string option, string) result
 val submitted : model -> bool
 (** [submitted model] is [true] after Enter or Ctrl-Q submitted the model. *)
 
-val run : Eio_unix.Stdenv.base -> options -> unit
+val run : Charamel_cli.Env.t -> options -> unit Lwt.t
 (** [run env options] reads options, runs the terminal UI when required, and prints the
     selected values. *)
 
-val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
+val cmd : Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t
 (** [cmd env] is the [gum choose] command. *)

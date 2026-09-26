@@ -49,11 +49,9 @@ val pp_error : error Fmt.t
 (** [pp_error ppf error] formats an agent failure for a user-facing diagnostic. *)
 
 type deps = {
-  sw : Eio.Switch.t;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
-  fs : Eio.Fs.dir_ty Eio.Path.t;
-  net : Eio_unix.Net.t;
-  proc_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
+  sw : Lwt_switch.t;
+  clock : Charamel_os.Time.clock;
+  fs_root : string;
   random : int -> string;
   env : string -> string option;
   cwd : string;
@@ -71,10 +69,11 @@ type deps = {
   ask :
     (Tool.question list -> (Tool.answer list, [ `Aborted | `Not_interactive ]) result)
     option;
-  events : event -> unit;
+  events : event -> unit Lwt.t;
 }
-(** The capabilities and policy captured by an agent. The event sink preserves event order
-    and may apply bounded backpressure. *)
+(** The capabilities and policy captured by an agent. [sw] bounds the agent's background
+    work and outlives any single turn; each turn runs under its own switch. The event sink
+    preserves event order and may apply bounded backpressure. *)
 
 type t
 (** The type for one session agent. *)
@@ -84,9 +83,9 @@ val create :
   session:Session.t ->
   large:Models.resolved ->
   small:Models.resolved ->
-  (t, error) result
+  (t, error) result Lwt.t
 (** [create deps ~session ~large ~small] is an idle agent attached to [session] with the
-    selected large and small models. *)
+    selected large and small models, once its session-start hooks have run. *)
 
 val session : t -> Session.t
 (** [session t] is the session owned by [t]. *)
@@ -102,19 +101,25 @@ val busy : t -> bool
 
 val cancel : t -> unit
 (** [cancel t] interrupts the current turn and causes it to finish as [`Interrupted]. It
-    does not cancel an outer switch. *)
+    turns off that turn's switch, which cancels the in-flight provider stream and any tool
+    job that has not started running yet. A tool already running runs to completion, and
+    the turn stops at the next checkpoint; a subagent launched by that tool is interrupted
+    with it. It does not cancel [deps.sw]. *)
 
 val prompt :
-  t -> ?attachments:(string * string * string) list -> string -> (finish, error) result
+  t ->
+  ?attachments:(string * string * string) list ->
+  string ->
+  (finish, error) result Lwt.t
 (** [prompt t ?attachments text] sends [text] to the provider and executes its tool calls.
     Attachment data is already wire-encoded and is passed directly to the provider.
     Attachments are MIME, data, and optional-name triples. A prompt submitted while
     another prompt is active returns [`Busy]. *)
 
-val compact : t -> (unit, error) result
+val compact : t -> (unit, error) result Lwt.t
 (** [compact t] compacts the current session through the small model. *)
 
-val set_plan_mode : t -> bool -> unit
+val set_plan_mode : t -> bool -> unit Lwt.t
 (** [set_plan_mode t enabled] changes the permission policy and records the mode change in
     the session. *)
 

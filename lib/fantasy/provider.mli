@@ -3,7 +3,7 @@
 
     A provider bundles base URL, authentication mode, and headers. Its [stream] resolves
     the request into a codec, drives the transport, and yields the seven approved stream
-    events into a bounded Eio stream with exactly one terminal [Finish]. *)
+    events into an Lwt stream with exactly one terminal [Finish]. *)
 
 type t
 (** The type for a provider handle. *)
@@ -34,9 +34,8 @@ val google : ?base_url:string -> auth:auth -> unit -> t
 
 val stream :
   t ->
-  sw:Eio.Switch.t ->
-  clock:_ Eio.Time.clock ->
-  net:_ Eio.Net.t ->
+  ?stop:Lwt_switch.t ->
+  clock:Charamel_os.Time.clock ->
   model:Model.t ->
   ?system:string list ->
   ?tools:Tool.t list ->
@@ -45,14 +44,18 @@ val stream :
   ?reasoning:[ `Off | `Low | `Medium | `High ] ->
   ?on_error:(Error.t -> unit) ->
   Message.t list ->
-  Stream_part.t Eio.Stream.t
-(** [stream t ~sw ~clock ~net ~model ?system ?tools ?max_tokens ?temperature ?reasoning
-     ?on_error messages] starts one streaming call and returns the bounded event stream.
+  Stream_part.t Lwt_stream.t
+(** [stream t ?stop ~clock ~model ?system ?tools ?max_tokens ?temperature ?reasoning
+     ?on_error messages] starts one streaming call and returns its event stream.
 
     [system] defaults to [[]], [tools] to [[]], [max_tokens] to the model's default,
     [temperature] to the provider default, and [reasoning] to [`Off]. [on_error] defaults
     to ignoring typed HTTP, transport, and OAuth failures; when supplied it is called once
     per request before the corresponding terminal error. The returned stream ends with
     exactly one terminal [Finish]; failures surface as [Finish (`Error _)] after the
-    transport's retry policy is exhausted. Cancellation of [sw] propagates as cancellation
-    and is never retried. *)
+    transport's retry policy is exhausted.
+
+    The stream is single-consumer: [Lwt_stream] hands each element to exactly one reader,
+    so one loop owns it. [Lwt_stream] has no blocking push, so a slow consumer buffers the
+    response instead of throttling the connection; turning [stop] off cancels the calling
+    fiber, closes the stream, and is never retried. *)

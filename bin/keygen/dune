@@ -1,7 +1,7 @@
 (library
  (name keygen_core)
  (modules keygen)
- (libraries charamel-ssh.keygen eio fmt))
+ (libraries charamel-ssh.keygen charamel.os lwt lwt.unix unix fmt))
 
 (executable
  (name main)
@@ -12,9 +12,9 @@
   keygen_core
   charamel.cli
   charamel-ssh.keygen
-  eio
-  eio.unix
-  eio_main
+  lwt
+  lwt.unix
+  unix
   cmdliner
   fmt
   mirage-crypto-rng.unix))

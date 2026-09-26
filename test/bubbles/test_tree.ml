@@ -75,8 +75,8 @@ let multiline_cursor_and_viewport () =
 
 let cases =
   [
-    Alcotest.test_case "node shape and size" `Quick node_shape_and_size;
-    Alcotest.test_case "navigation boundaries" `Quick navigation_boundaries;
-    Alcotest.test_case "keymap and help" `Quick keymap_and_help;
-    Alcotest.test_case "multiline viewport" `Quick multiline_cursor_and_viewport;
+    Alcotest_lwt.test_case_sync "node shape and size" `Quick node_shape_and_size;
+    Alcotest_lwt.test_case_sync "navigation boundaries" `Quick navigation_boundaries;
+    Alcotest_lwt.test_case_sync "keymap and help" `Quick keymap_and_help;
+    Alcotest_lwt.test_case_sync "multiline viewport" `Quick multiline_cursor_and_viewport;
   ]

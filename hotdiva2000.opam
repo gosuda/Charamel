@@ -12,10 +12,9 @@ depends: [
   "charamel"
   "fmt"
   "cmdliner"
-  "eio"
-  "eio_main"
   "mirage-crypto-rng"
   "alcotest" {with-test}
+  "alcotest-lwt" {>= "1.9.1" & with-test}
   "odoc" {with-doc}
 ]
 build: [

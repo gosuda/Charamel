@@ -138,41 +138,46 @@ let app options : (model, msg) Charamel_tea.app =
   }
 
 let piped_answer env =
-  if Gum_io.stdin_is_empty env then None
-  else
-    match Gum_io.read_stdin ~single_line:true env with
-    | Error `Empty -> None
-    | Error (`Read value) -> Some value
-    | Ok value -> Some value
+  Lwt.bind (Gum_io.stdin_is_empty env) (fun empty ->
+      if empty then Lwt.return None
+      else
+        Lwt.map
+          (function
+            | Error `Empty -> None
+            | Error (`Read value) -> Some value
+            | Ok value -> Some value)
+          (Gum_io.read_stdin ~single_line:true env))
 
 let print_answer env (options : options) confirmation =
   if options.show_output then
     let label = if confirmation then options.affirmative else options.negative in
     Gum_io.print_raw env (options.prompt ^ " " ^ label)
+  else Lwt.return_unit
 
 let run env (options : options) =
-  match piped_answer env with
-  | Some value ->
-      let confirmation = value = "yes" || value = "y" in
-      print_answer env options confirmation;
-      if confirmation then () else Charamel_cli.exit 1
-  | None ->
-      let execute () =
-        let model =
-          Gum_run.run_tui ~name:"confirm" env (app options) ~finished:(fun model ->
-              if submitted model then Gum_run.Submitted else Gum_run.Quit)
+  Lwt.bind (piped_answer env) (function
+    | Some value ->
+        let confirmation = value = "yes" || value = "y" in
+        Lwt.bind (print_answer env options confirmation) (fun () ->
+            if confirmation then Lwt.return_unit else Charamel_cli.exit 1)
+    | None ->
+        let execute () =
+          Lwt.map answer
+            (Gum_run.run_tui ~name:"confirm" env (app options) ~finished:(fun model ->
+                 if submitted model then Gum_run.Submitted else Gum_run.Quit))
         in
-        answer model
-      in
-      let confirmation =
-        match options.timeout with
-        | Some seconds when seconds > 0. -> (
-            try Eio.Time.with_timeout_exn env#clock seconds execute
-            with Eio.Time.Timeout -> options.default)
-        | _ -> execute ()
-      in
-      print_answer env options confirmation;
-      if confirmation then () else Charamel_cli.exit 1
+        let confirmation_lwt =
+          match options.timeout with
+          | Some seconds when seconds > 0. ->
+              Lwt.catch
+                (fun () -> Lwt_unix.with_timeout seconds execute)
+                (function
+                  | Lwt_unix.Timeout -> Lwt.return options.default | exn -> Lwt.fail exn)
+          | _ -> execute ()
+        in
+        Lwt.bind confirmation_lwt (fun confirmation ->
+            Lwt.bind (print_answer env options confirmation) (fun () ->
+                if confirmation then Lwt.return_unit else Charamel_cli.exit 1)))
 
 let cmd env =
   let open Cmdliner in

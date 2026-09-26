@@ -39,11 +39,7 @@ val readme_candidates : host:string -> owner:string -> repo:string -> string lis
     a repository API does not expose a download URL. *)
 
 val read :
-  env:Eio_unix.Stdenv.base ->
-  clock:_ Eio.Time.clock ->
-  net:_ Eio.Net.t ->
-  location ->
-  (document, error) result
-(** [read ~env ~clock ~net location] reads a bounded local or network source. Network
-    operations have a finite deadline, a five-redirect limit, and a ten-megabyte response
-    limit. *)
+  cwd:string -> stdin:Lwt_io.input_channel -> location -> (document, error) result Lwt.t
+(** [read ~cwd ~stdin location] reads a bounded local or network source, resolving a
+    relative [File] path against [cwd]. Network operations have a thirty-second overall
+    deadline, a five-redirect limit, and a ten-megabyte response limit. *)

@@ -13,8 +13,8 @@
   sequin_core
   charamel.ansi
   charamel.cli
-  eio
-  eio.unix
-  eio_main
+  lwt
+  lwt.unix
+  unix
   cmdliner
   fmt))

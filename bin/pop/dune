@@ -6,16 +6,16 @@
   charamel.cli
   charamel.huh
   charamel.glamour
+  charamel.net
+  charamel.os
   cmarkit
-  cohttp-eio
   cohttp
-  http
   tls
-  tls-eio
+  tls-lwt
   ca-certs
   domain-name
-  eio
-  eio.unix
+  lwt
+  lwt.unix
   fmt
   jsont
   jsont.bytesrw
@@ -35,8 +35,7 @@
   charamel.cli
   charamel.huh
   cmdliner
-  eio
-  eio.unix
-  eio_main
+  lwt
+  lwt.unix
   fmt
   mirage-crypto-rng.unix))

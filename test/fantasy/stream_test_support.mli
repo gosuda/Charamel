@@ -27,13 +27,19 @@ val single_finish :
 (** [single_finish ps] extracts the only finish reason in [ps], failing the current
     Alcotest case when there is not exactly one. *)
 
-val drain : Stream_part.t Eio.Stream.t -> Stream_part.t list
-(** [drain stream] takes events until the first terminal [Finish]. *)
+val drain : Stream_part.t Lwt_stream.t -> Stream_part.t list Lwt.t
+(** [drain stream] takes events until the first terminal [Finish]. It is the one reader of
+    [stream], which [Lwt_stream] allows exactly once. *)
 
-val drain_queued : Stream_part.t Eio.Stream.t -> Stream_part.t list
+val with_fixture : (Fixture_http.t -> 'a Lwt.t) -> 'a Lwt.t
+(** [with_fixture body] runs [body] against a fresh loopback fixture and answers whatever
+    it answered, after the listener has stopped. {!val:Fixture_http.with_server} itself
+    answers [unit], which a case that inspects the response cannot use. *)
+
+val drain_queued : Stream_part.t Lwt_stream.t -> Stream_part.t list Lwt.t
 (** [drain_queued stream] is every event already queued in [stream], collected without
-    waiting. Once the producing switch has closed, this is the complete tail emitted after
-    the consumer stopped taking. *)
+    waiting. Once the producing fiber has been stopped, this is the complete tail emitted
+    after the consumer stopped taking. *)
 
 val parse_body : string option -> Jsont.json
 (** [parse_body body] is the JSON value decoded from [body]. *)

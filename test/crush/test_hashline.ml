@@ -1,15 +1,15 @@
 module Hashline = Crush_core.Hashline
 
 let digest name expected data seed =
-  Alcotest.test_case name `Quick (fun () ->
+  Test_tools_test_support.case name `Quick (fun () ->
       Alcotest.check Alcotest.int32 name expected (Hashline.xxh32 data seed))
 
 let normalized name expected data =
-  Alcotest.test_case name `Quick (fun () ->
+  Test_tools_test_support.case name `Quick (fun () ->
       Alcotest.check Alcotest.string name expected (Hashline.normalize data))
 
 let tagged name expected data =
-  Alcotest.test_case name `Quick (fun () ->
+  Test_tools_test_support.case name `Quick (fun () ->
       Alcotest.check Alcotest.string name expected (Hashline.tag data))
 
 let boundary_data =
@@ -93,7 +93,7 @@ let boundary_vectors =
   ]
 
 let boundary_case =
-  Alcotest.test_case "all byte lengths through four blocks" `Quick (fun () ->
+  Test_tools_test_support.case "all byte lengths through four blocks" `Quick (fun () ->
       List.iter
         (fun (length, expected) ->
           let data = String.sub boundary_data 0 length in

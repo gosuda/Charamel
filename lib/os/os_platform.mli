@@ -66,6 +66,16 @@ module Tty : sig
       The size is read on every call, so a resize is observed without restarting the
       process. *)
 
+  val size_of_output : [ `Stdout | `Stderr ] -> (int * int) option
+  (** [(rows, cols)] of the console the selected standard output points at, or [None] when
+      it is not a console or the size cannot be read. A [Unix.file_descr] is abstract and
+      converts to no number in either direction, so the selection is by role, not by
+      descriptor. POSIX issues [ioctl TIOCGWINSZ] on descriptor 1 or 2 after [Unix.isatty]
+      accepts it; Windows reads the visible window of [GetConsoleScreenBufferInfo] for
+      [GetStdHandle(STD_OUTPUT_HANDLE)] or [GetStdHandle(STD_ERROR_HANDLE)] respectively.
+      Like {!size_stdout}, the size is read on every call, so a resize is observed without
+      restarting the process. *)
+
   val enter_raw : unit -> saved
   (** Put the standard input in raw mode and return the state needed to undo it. POSIX
       applies the [cfmakeraw(3)] setting to [Unix.stdin]. Windows enables

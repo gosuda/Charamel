@@ -51,7 +51,7 @@ let rejects_nonfinite () =
 
 let cases =
   [
-    Alcotest.test_case "expected vectors" `Quick expected_vectors;
-    Alcotest.test_case "fraction and sign" `Quick trimmed_fraction_and_sign;
-    Alcotest.test_case "non-finite values" `Quick rejects_nonfinite;
+    Alcotest_lwt.test_case_sync "expected vectors" `Quick expected_vectors;
+    Alcotest_lwt.test_case_sync "fraction and sign" `Quick trimmed_fraction_and_sign;
+    Alcotest_lwt.test_case_sync "non-finite values" `Quick rejects_nonfinite;
   ]

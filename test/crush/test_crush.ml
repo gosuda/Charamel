@@ -30,4 +30,4 @@ let suites =
     ("ui", Test_ui.cases);
   ]
 
-let () = Alcotest.run "crush" suites
+let () = Test_support.run_lwt "crush" suites

@@ -6,8 +6,10 @@
   melt_core
   charamel-ssh.keygen
   alcotest
+  alcotest-lwt
   fmt
-  eio
+  lwt
+  lwt.unix
   test_support
   mirage-crypto-rng.unix
   unix)

@@ -22,6 +22,6 @@ let toggle_answer () =
 
 let cases =
   [
-    Alcotest.test_case "negative answer" `Quick negative_answer;
-    Alcotest.test_case "toggle answer" `Quick toggle_answer;
+    Alcotest_lwt.test_case_sync "negative answer" `Quick negative_answer;
+    Alcotest_lwt.test_case_sync "toggle answer" `Quick toggle_answer;
   ]

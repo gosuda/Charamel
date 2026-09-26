@@ -10,13 +10,12 @@ depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.24"}
   "charamel"
-  "eio"
   "fmt"
   "jsont"
   "base64"
   "cmdliner"
-  "eio_main" {with-test}
   "alcotest" {with-test}
+  "alcotest-lwt" {>= "1.9.1" & with-test}
   "odoc" {with-doc}
 ]
 build: [

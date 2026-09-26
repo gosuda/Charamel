@@ -20,11 +20,8 @@ type answer = { header : string; selected : string list; text : string option }
 (** The type for one answer returned by the interactive question boundary. *)
 
 type ctx = {
-  sw : Eio.Switch.t;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
-  fs : Eio.Fs.dir_ty Eio.Path.t;
-  net : Eio_unix.Net.t;
-  proc_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
+  clock : Charamel_os.Time.clock;
+  fs_root : string;
   random : int -> string;
   env : string -> string option;
   cwd : string;
@@ -133,10 +130,6 @@ val request :
 (** [request ctx ~read_only ~tool ~action ~path ~description] authorizes one decoded
     operation through [ctx.permission]. [read_only] is supplied by trusted tool code
     rather than model JSON. *)
-
-val with_timeout : ctx -> float -> (unit -> 'a) -> ('a, error) result
-(** [with_timeout ctx seconds f] runs [f] for at most [seconds] seconds using [ctx.clock].
-    A deadline expiry is returned as [`Timeout seconds]. *)
 
 val schema_object : ?required:string list -> (string * Jsont.json) list -> Jsont.json
 (** [schema_object ?required fields] is a JSON object schema with [fields] as properties.

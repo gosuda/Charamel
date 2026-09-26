@@ -24,13 +24,13 @@ val split : Session.event array -> keep_tokens:int -> int * Session.event list
     UTF-8 bytes divided by four. A result of [-1] means that no event is replaced. *)
 
 val run :
-  sw:Eio.Switch.t ->
-  clock:_ Eio.Time.clock ->
-  net:Eio_unix.Net.t ->
+  sw:Lwt_switch.t ->
+  clock:Charamel_os.Time.clock ->
   small:Models.resolved ->
   auth:Charamel_fantasy.Provider.auth ->
   Session.t ->
-  (string, [ `Provider of string | `Session of Session.error ]) result
-(** [run ~sw ~clock ~net ~small ~auth session] summarizes the replaced prefix of [session]
-    with [small] and appends the summary. The provider stream is consumed in order and all
-    text deltas are retained. *)
+  (string, [ `Provider of string | `Session of Session.error ]) result Lwt.t
+(** [run ~sw ~clock ~small ~auth session] summarizes the replaced prefix of [session] with
+    [small] and appends the summary. The provider stream is consumed in order and all text
+    deltas are retained. Turning [sw] off ends the stream early and is reported as a
+    provider failure; the session is left untouched. *)

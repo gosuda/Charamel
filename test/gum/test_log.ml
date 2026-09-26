@@ -1,3 +1,5 @@
+open Lwt.Syntax
+
 let printf_verbs () =
   let value =
     Log.format_message "name=%s count=%d value=%v quoted=%q %%"
@@ -26,42 +28,65 @@ let time_presets () =
     "custom year" "2026/09/16"
     (Log.time_formatter "2006/01/02" time)
 
+let default_env () =
+  {
+    Charamel_cli.Env.cwd = Unix.getcwd ();
+    fs_root = "/";
+    stdin = Lwt_io.stdin;
+    stdout = Lwt_io.stdout;
+    stderr = Lwt_io.stderr;
+    clock = Charamel_os.Time.lwt;
+  }
+
+let read_file path =
+  let channel = open_in_bin path in
+  let length = in_channel_length channel in
+  let content = really_input_string channel length in
+  close_in channel;
+  content
+
 let with_file ?(structured = false) formatter level fields =
   let path = Fmt.str "/tmp/gum-log-test-%d" (Unix.getpid ()) in
   (try Unix.unlink path with Unix.Unix_error _ -> ());
-  Eio_main.run (fun env ->
-      Log.emit ~file:path ~formatter ~level ~structured ~prefix:"app" env fields;
-      let output = Eio.Path.(load (env#fs / path)) in
-      (try Unix.unlink path with Unix.Unix_error _ -> ());
-      output)
+  let* () =
+    Log.emit ~file:path ~formatter ~level ~structured ~prefix:"app" (default_env ())
+      fields
+  in
+  let output = read_file path in
+  (try Unix.unlink path with Unix.Unix_error _ -> ());
+  Lwt.return output
 
 let reporter_formats () =
-  let text = with_file Log.Text Log.Info [ "hello" ] in
-  let logfmt =
+  let* text = with_file Log.Text Log.Info [ "hello" ] in
+  let* logfmt =
     with_file ~structured:true Log.Logfmt Log.Info [ "hello"; "key"; "value" ]
   in
-  let json = with_file ~structured:true Log.Json Log.Info [ "hello"; "key"; "value" ] in
+  let* json = with_file ~structured:true Log.Json Log.Info [ "hello"; "key"; "value" ] in
   Alcotest.(check string) "text output" "INFO  app: hello\n" text;
   Alcotest.(check string)
     "logfmt output" "level=info prefix=app msg=hello key=value\n" logfmt;
   Alcotest.(check string)
     "json output"
-    "{\"level\":\"info\",\"prefix\":\"app\",\"msg\":\"hello\",\"key\":\"value\"}\n" json
+    "{\"level\":\"info\",\"prefix\":\"app\",\"msg\":\"hello\",\"key\":\"value\"}\n" json;
+  Lwt.return_unit
 
 let minimum_filters () =
   let path = Fmt.str "/tmp/gum-log-filter-%d" (Unix.getpid ()) in
   (try Unix.unlink path with Unix.Unix_error _ -> ());
-  Eio_main.run (fun env ->
-      Log.emit ~file:path ~level:Log.Info ~min_level:"error" env [ "hidden" ];
-      Alcotest.(check bool)
-        "filtered record does not create output" false (Sys.file_exists path);
-      try Unix.unlink path with Unix.Unix_error _ -> ())
+  let* () =
+    Log.emit ~file:path ~level:Log.Info ~min_level:"error" (default_env ()) [ "hidden" ]
+  in
+  Alcotest.(check bool)
+    "filtered record does not create output" false (Sys.file_exists path);
+  (try Unix.unlink path with Unix.Unix_error _ -> ());
+  Lwt.return_unit
 
 let cases =
   [
-    Alcotest.test_case "printf verbs" `Quick printf_verbs;
-    Alcotest.test_case "unknown verbs" `Quick unknown_verbs_stay_literal;
-    Alcotest.test_case "time presets" `Quick time_presets;
-    Alcotest.test_case "reporter formats" `Quick reporter_formats;
-    Alcotest.test_case "minimum level" `Quick minimum_filters;
+    Alcotest_lwt.test_case_sync "printf verbs" `Quick printf_verbs;
+    Alcotest_lwt.test_case_sync "unknown verbs" `Quick unknown_verbs_stay_literal;
+    Alcotest_lwt.test_case_sync "time presets" `Quick time_presets;
+    Alcotest_lwt.test_case "reporter formats" `Quick (fun _switch () ->
+        reporter_formats ());
+    Alcotest_lwt.test_case "minimum level" `Quick (fun _switch () -> minimum_filters ());
   ]

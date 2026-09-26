@@ -1,6 +1,11 @@
-open Result.Syntax
+open Lwt.Infix
+open Lwt_result.Syntax
 
-exception User_cancel
+type interrupt = Idle | User_cancel | External_cancel of exn
+
+exception Interrupted of interrupt
+
+type turn = { switch : Lwt_switch.t; mutable interrupt : interrupt }
 
 type event =
   | Text_delta of string
@@ -44,11 +49,9 @@ and error =
   | `Tool of string ]
 
 type deps = {
-  sw : Eio.Switch.t;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
-  fs : Eio.Fs.dir_ty Eio.Path.t;
-  net : Eio_unix.Net.t;
-  proc_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
+  sw : Lwt_switch.t;
+  clock : Charamel_os.Time.clock;
+  fs_root : string;
   random : int -> string;
   env : string -> string option;
   cwd : string;
@@ -66,10 +69,10 @@ type deps = {
   ask :
     (Tool.question list -> (Tool.answer list, [ `Aborted | `Not_interactive ]) result)
     option;
-  events : event -> unit;
+  events : event -> unit Lwt.t;
 }
 
-type budget = { limit : int; mutable used : int; mutex : Eio.Mutex.t }
+type budget = { limit : int; mutable used : int }
 
 type call = {
   id : string;
@@ -107,7 +110,7 @@ type scheduled = {
   input : Jsont.json;
   tool : Tool.t option;
   invalid : bool;
-  mutable promise : execution Eio.Promise.or_exn option;
+  mutable promise : execution Lwt.t option;
 }
 
 type turn_state = {
@@ -130,7 +133,7 @@ type t = {
   read_tracker : (string, int) Hashtbl.t;
   run_child : prompt:string -> (string, string) result;
   busy_state : bool ref;
-  turn_cancel : Eio.Cancel.t option ref;
+  turn : turn option ref;
   usage : Charamel_fantasy.Usage.t ref;
   cost_usd : float ref;
   context_tokens : int ref;
@@ -151,79 +154,103 @@ let pp_error ppf = function
   | `Auth message -> Fmt.pf ppf "auth: %s" message
   | `Tool message -> Fmt.pf ppf "tool: %s" message
 
-let now_ms t = int_of_float (Eio.Time.now t.deps.clock *. 1000.)
+let now_ms t = int_of_float (Charamel_os.Time.now t.deps.clock *. 1000.)
 
-let append t event : (unit, error) result =
-  match Session.append t.session ~clock:t.deps.clock event with
-  | Ok () -> Ok ()
-  | Error error -> Error (`Session error)
+let checkpoint t =
+  match !(t.turn) with
+  | Some { interrupt = User_cancel; _ } -> Lwt.fail (Interrupted User_cancel)
+  | Some { interrupt = External_cancel error; _ } ->
+      Lwt.fail (Interrupted (External_cancel error))
+  | Some { interrupt = Idle; _ } | None -> Lwt.return_unit
+
+let interrupt_turn turn reason =
+  turn.interrupt <- reason;
+  Lwt.async (fun () ->
+      Lwt.catch (fun () -> Lwt_switch.turn_off turn.switch) (fun _ -> Lwt.return_unit))
+
+let link_child_cancel parent child =
+  match !(parent.turn) with
+  | None -> ()
+  | Some { switch; _ } ->
+      Lwt_direct.await
+        (Lwt_switch.add_hook_or_exec (Some switch) (fun () ->
+             (match !(child.turn) with
+             | Some child_turn -> interrupt_turn child_turn User_cancel
+             | None -> ());
+             Lwt.return_unit))
+
+let append t event : (unit, error) result Lwt.t =
+  Session.append t.session ~clock:t.deps.clock event
+  >|= Result.map_error (fun error -> `Session error)
 
 let append_logged t event =
-  match append t event with
+  append t event >|= function
   | Ok () -> ()
   | Error error -> Log.err (fun m -> m "session append failed: %a" pp_error error)
 
 let emit t event = t.deps.events event
 let decode_json text = Jsont_bytesrw.decode_string Jsont.json text
+let git_output_limit = 65_536
+let git_timeout = 5.
 
-let git_command t turn_sw args =
-  let run () =
-    let source, sink = Eio.Process.pipe ~sw:turn_sw t.deps.proc_mgr in
-    Fun.protect
-      ~finally:(fun () ->
-        Eio.Resource.close source;
-        Eio.Resource.close sink)
-      (fun () ->
-        let process =
-          Eio.Process.spawn ~sw:turn_sw t.deps.proc_mgr ~stdout:sink ~stderr:Eio.Flow.null
-            args
-        in
-        Eio.Resource.close sink;
-        let reader = Eio.Buf_read.of_flow ~max_size:65_536 source in
-        let output = Eio.Buf_read.take_all reader in
-        ignore (Eio.Process.await process);
-        String.trim output)
+let read_bounded channel limit =
+  let buffer = Buffer.create 4096 in
+  let rec pump total =
+    Lwt_io.read ~count:4096 channel >>= function
+    | "" -> Lwt.return (Some (Buffer.contents buffer))
+    | text when total + String.length text > limit -> Lwt.return_none
+    | text ->
+        Buffer.add_string buffer text;
+        pump (total + String.length text)
   in
-  match
-    Eio.Time.with_timeout t.deps.clock 5. (fun () ->
-        try Ok (Some (run ()))
-        with Eio.Io _ | Unix.Unix_error _ | Sys_error _ | Failure _ -> Ok None)
-  with
-  | Ok output -> output
-  | Error `Timeout -> None
+  pump 0
 
-let environment_block t turn_sw =
+let git_command args =
+  let run () =
+    let process = Charamel_os.Process.spawn ~stdout:`Pipe ~stderr:`Null args in
+    let stdout = Charamel_os.Process.stdout_r process in
+    Lwt.finalize
+      (fun () ->
+        read_bounded stdout git_output_limit >>= function
+        | None -> Lwt.return_none
+        | Some output ->
+            Charamel_os.Process.await process >|= fun _ -> Some (String.trim output))
+      (fun () ->
+        if Charamel_os.Process.alive process then Charamel_os.Process.kill_tree process;
+        Lwt.catch (fun () -> Lwt_io.close stdout) (fun _ -> Lwt.return_unit))
+  in
+  Lwt.catch
+    (fun () ->
+      Lwt_unix.with_timeout git_timeout (fun () ->
+          Lwt.catch run (function
+            | Unix.Unix_error _ | Sys_error _ | Failure _ -> Lwt.return_none
+            | exn -> Lwt.fail exn)))
+    (function Lwt_unix.Timeout -> Lwt.return_none | exn -> Lwt.fail exn)
+
+let environment_block t =
   let context = Rules.context_text t.deps.rules in
   let skills = Skills.index_text t.deps.skills in
-  let lsp =
-    match t.deps.lsp with
-    | None -> ""
-    | Some lsp -> String.concat "," (List.map fst (Lsp.servers lsp))
-  in
+  (match t.deps.lsp with None -> Lwt.return [] | Some server -> Lsp.servers server)
+  >>= fun servers ->
+  let lsp = String.concat "," (List.map fst servers) in
   let mcp = String.concat "," (List.map fst (Mcp.states t.deps.mcp)) in
   let todos = Todos.render (Todos.get t.todos) in
   let date =
-    let tm = Unix.gmtime (Eio.Time.now t.deps.clock) in
+    let tm = Unix.gmtime (Charamel_os.Time.wall t.deps.clock) in
     Fmt.str "%04d-%02d-%02d" (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
   in
-  let branch =
-    Option.value ~default:"unknown"
-      (git_command t turn_sw
-         [ "git"; "-C"; t.deps.cwd; "rev-parse"; "--abbrev-ref"; "HEAD" ])
-  in
-  let status =
-    git_command t turn_sw [ "git"; "-C"; t.deps.cwd; "status"; "--porcelain" ]
-  in
+  git_command [ "git"; "-C"; t.deps.cwd; "rev-parse"; "--abbrev-ref"; "HEAD" ]
+  >>= fun branch ->
+  git_command [ "git"; "-C"; t.deps.cwd; "status"; "--porcelain" ] >>= fun status ->
+  git_command [ "git"; "-C"; t.deps.cwd; "log"; "--oneline"; "-5" ] >>= fun recent ->
+  let branch = Option.value ~default:"unknown" branch in
   let changed =
     match status with
     | None -> "status unavailable"
     | Some status when status = "" -> "0"
     | Some status -> string_of_int (List.length (String.split_on_char '\n' status))
   in
-  let recent =
-    Option.value ~default:"unavailable"
-      (git_command t turn_sw [ "git"; "-C"; t.deps.cwd; "log"; "--oneline"; "-5" ])
-  in
+  let recent = Option.value ~default:"unavailable" recent in
   let context_files = if context = "" then "" else "loaded" in
   let fields =
     [
@@ -242,15 +269,15 @@ let environment_block t turn_sw =
     ]
   in
   let fields = String.concat "\n" fields in
-  if skills = "" then fields ^ "\n" else fields ^ "\nSkills:\n" ^ skills ^ "\n"
+  Lwt.return
+    (if skills = "" then fields ^ "\n" else fields ^ "\nSkills:\n" ^ skills ^ "\n")
 
-let system_prompt t turn_sw =
-  let pieces =
-    [ Prompt_coder.text; environment_block t turn_sw; Rules.context_text t.deps.rules ]
-  in
+let system_prompt t =
+  environment_block t >>= fun environment ->
+  let pieces = [ Prompt_coder.text; environment; Rules.context_text t.deps.rules ] in
   let skills = Skills.index_text t.deps.skills in
   let pieces = if skills = "" then pieces else pieces @ [ "Skills:\n" ^ skills ] in
-  String.concat "\n\n" (List.filter (fun value -> value <> "") pieces)
+  Lwt.return (String.concat "\n\n" (List.filter (fun value -> value <> "") pieces))
 
 let add_delta items kind text =
   if text = "" then ()
@@ -313,7 +340,8 @@ let record_usage t (model : Models.resolved) usage =
          cost_usd = cost;
          total_cost_usd = !(t.cost_usd);
          context_tokens = !(t.context_tokens);
-       });
+       })
+  >>= fun () ->
   append t
     (Session.Usage
        {
@@ -327,67 +355,56 @@ let record_usage t (model : Models.resolved) usage =
            };
        })
 
-let refresh_model ?(force = false) ?rejected t turn_sw role :
-    (Models.resolved * Charamel_fantasy.Provider.auth, error) result =
+let refresh_model ?(force = false) ?rejected t role :
+    (Models.resolved * Charamel_fantasy.Provider.auth, error) result Lwt.t =
   let model = match role with `Large -> !(t.large_model) | `Small -> !(t.small_model) in
-  let refresh : (Charamel_fantasy.Provider.auth, [ `Auth of string ]) result =
+  let to_auth_result = function
+    | Error (`Disabled reason) -> Error (`Auth reason)
+    | Error `No_credential ->
+        Error (`Auth ("no credential for " ^ model.Models.provider_id))
+    | Error (`Refresh provider_error) ->
+        Error (`Auth (Charamel_fantasy.Error.message provider_error))
+    | Error error -> Error (`Auth (Fmt.str "%a" Auth.pp_refresh_error error))
+    | Ok provider_auth -> Ok provider_auth
+  in
+  let refresh : (Charamel_fantasy.Provider.auth, [ `Auth of string ]) result Lwt.t =
     if force then
       match rejected with
-      | None -> Error (`Auth "missing rejected credential for forced refresh")
-      | Some rejected -> (
-          match
-            Auth.refresh ~sw:turn_sw ~net:t.deps.net ~config:t.deps.config ~env:t.deps.env
-              t.deps.auth ~provider:model.Models.provider_id ~rejected
-          with
-          | Error (`Disabled reason) -> Error (`Auth reason)
-          | Error `No_credential ->
-              Error (`Auth ("no credential for " ^ model.Models.provider_id))
-          | Error (`Refresh provider_error) ->
-              Error (`Auth (Charamel_fantasy.Error.message provider_error))
-          | Error error -> Error (`Auth (Fmt.str "%a" Auth.pp_refresh_error error))
-          | Ok provider_auth -> Ok provider_auth)
+      | None ->
+          Lwt.return (Error (`Auth "missing rejected credential for forced refresh"))
+      | Some rejected ->
+          Auth.refresh ~config:t.deps.config ~env:t.deps.env t.deps.auth
+            ~provider:model.Models.provider_id ~rejected
+          >|= to_auth_result
     else
-      match
-        Auth.ensure_fresh ~sw:turn_sw ~net:t.deps.net ~config:t.deps.config
-          ~env:t.deps.env t.deps.auth ~provider:model.Models.provider_id
-      with
-      | Error (`Disabled reason) -> Error (`Auth reason)
-      | Error `No_credential ->
-          Error (`Auth ("no credential for " ^ model.Models.provider_id))
-      | Error (`Refresh provider_error) ->
-          Error (`Auth (Charamel_fantasy.Error.message provider_error))
-      | Error error -> Error (`Auth (Fmt.str "%a" Auth.pp_refresh_error error))
-      | Ok provider_auth -> Ok provider_auth
+      Auth.ensure_fresh ~config:t.deps.config ~env:t.deps.env t.deps.auth
+        ~provider:model.Models.provider_id
+      >|= to_auth_result
   in
-  match refresh with
-  | Error (`Auth message) -> Error (`Auth message)
+  refresh >>= function
+  | Error (`Auth message) -> Lwt.return (Error (`Auth message))
   | Ok provider_auth -> (
-      match
-        Models.with_auth ~fs:t.deps.fs t.deps.config ~env:t.deps.env model provider_auth
-      with
-      | Error error -> Error (`Models error)
+      Models.with_auth ~fs_root:t.deps.fs_root t.deps.config ~env:t.deps.env model
+        provider_auth
+      >>= function
+      | Error error -> Lwt.return (Error (`Models error))
       | Ok resolved ->
           (match role with
           | `Large -> t.large_model := resolved
           | `Small -> t.small_model := resolved);
-          Ok (resolved, provider_auth))
+          Lwt.return (Ok (resolved, provider_auth)))
 
 let take_child_budget t =
   if not t.is_subagent then true
-  else
-    Eio.Mutex.use_rw ~protect:true t.budget.mutex (fun () ->
-        if t.budget.used >= t.budget.limit then false
-        else (
-          t.budget.used <- t.budget.used + 1;
-          true))
+  else if t.budget.used >= t.budget.limit then false
+  else (
+    t.budget.used <- t.budget.used + 1;
+    true)
 
-let tool_context t ~sw ~call_id : Tool.ctx =
+let tool_context t ~call_id : Tool.ctx =
   {
-    sw;
     clock = t.deps.clock;
-    fs = t.deps.fs;
-    net = t.deps.net;
-    proc_mgr = t.deps.proc_mgr;
+    fs_root = t.deps.fs_root;
     random = t.deps.random;
     env = t.deps.env;
     cwd = t.deps.cwd;
@@ -411,20 +428,22 @@ let tool_context t ~sw ~call_id : Tool.ctx =
   }
 
 let rebuild_tools t =
-  let ctx_template = tool_context t ~sw:t.deps.sw ~call_id:"" in
+  let ctx_template = tool_context t ~call_id:"" in
   t.tools <-
     Toolset.build ~ctx_template ~mcp_tools:(Mcp.tools t.deps.mcp) ~subagent:t.is_subagent
 
 let consume_stream t turn_sw (model : Models.resolved) provider_auth messages state =
   rebuild_tools t;
-  if not (take_child_budget t) then Result.Error (`Tool "subagent budget exhausted")
+  if not (take_child_budget t) then
+    Lwt.return (Result.Error (`Tool "subagent budget exhausted"))
   else
+    system_prompt t >>= fun system ->
+    checkpoint t >>= fun () ->
     let typed_error = ref None in
     let emitted = ref false in
     let stream =
-      Charamel_fantasy.Provider.stream model.Models.provider ~sw:turn_sw
-        ~clock:t.deps.clock ~net:t.deps.net ~model:model.Models.model
-        ~system:[ system_prompt t turn_sw ]
+      Charamel_fantasy.Provider.stream model.Models.provider ~stop:turn_sw
+        ~clock:t.deps.clock ~model:model.Models.model ~system:[ system ]
         ~tools:(Toolset.fantasy t.tools) ~max_tokens:model.Models.max_tokens
         ~reasoning:model.Models.reasoning
         ~on_error:(fun error -> typed_error := Some error)
@@ -433,94 +452,102 @@ let consume_stream t turn_sw (model : Models.resolved) provider_auth messages st
     let items = ref [] in
     let calls = ref [] in
     let latest_usage = ref Charamel_fantasy.Usage.zero in
+    let result finish =
+      let calls = List.rev !calls in
+      List.iter (fun call -> ignore (decode_call call)) calls;
+      state.parts <- parts_of_items !items;
+      let latest = !latest_usage in
+      t.context_tokens := Charamel_fantasy.Usage.total latest;
+      Ok
+        {
+          finish;
+          calls;
+          parts = state.parts;
+          prompt_tokens =
+            latest.Charamel_fantasy.Usage.input + latest.Charamel_fantasy.Usage.cache_read
+            + latest.Charamel_fantasy.Usage.cache_write;
+          completion_tokens = latest.Charamel_fantasy.Usage.output;
+          typed_error = !typed_error;
+          emitted = !emitted;
+        }
+    in
     let rec consume () =
-      match Eio.Stream.take stream with
-      | Charamel_fantasy.Stream_part.Text_delta text ->
+      checkpoint t >>= fun () ->
+      Lwt_stream.get stream >>= fun (item : Charamel_fantasy.Stream_part.t option) ->
+      match item with
+      | None -> checkpoint t >|= fun () -> result `Stop
+      | Some (Text_delta text) ->
           emitted := true;
           add_delta items `Text text;
           state.parts <- parts_of_items !items;
-          emit t (Text_delta text);
-          consume ()
-      | Reasoning_delta text ->
+          emit t (Text_delta text) >>= consume
+      | Some (Reasoning_delta text) ->
           emitted := true;
           add_delta items `Reasoning text;
           state.parts <- parts_of_items !items;
-          emit t (Reasoning_delta text);
-          consume ()
-      | Tool_call_start { id; name } ->
+          emit t (Reasoning_delta text) >>= consume
+      | Some (Tool_call_start { id; name }) ->
           emitted := true;
           let call = { id; name; raw = Buffer.create 128; decoded = None } in
           calls := call :: !calls;
           items := Call_item call :: !items;
           state.parts <- parts_of_items !items;
           consume ()
-      | Tool_input_delta { id; delta } ->
+      | Some (Tool_input_delta { id; delta }) ->
           emitted := true;
           (match call_by_id calls id with
           | Some call -> Buffer.add_string call.raw delta
           | None -> ());
           state.parts <- parts_of_items !items;
           consume ()
-      | Tool_call_end _ ->
+      | Some (Tool_call_end _) ->
           emitted := true;
           consume ()
-      | Usage usage -> (
+      | Some (Usage usage) -> (
           emitted := true;
           latest_usage := Charamel_fantasy.Usage.add !latest_usage usage;
-          match record_usage t model usage with
+          record_usage t model usage >>= function
           | Ok () -> consume ()
-          | Error error -> Result.Error error)
-      | Finish finish ->
-          let calls = List.rev !calls in
-          List.iter (fun call -> ignore (decode_call call)) calls;
-          state.parts <- parts_of_items !items;
-          let latest = !latest_usage in
-          t.context_tokens := Charamel_fantasy.Usage.total latest;
-          Ok
-            {
-              finish;
-              calls;
-              parts = state.parts;
-              prompt_tokens =
-                latest.Charamel_fantasy.Usage.input
-                + latest.Charamel_fantasy.Usage.cache_read
-                + latest.Charamel_fantasy.Usage.cache_write;
-              completion_tokens = latest.Charamel_fantasy.Usage.output;
-              typed_error = !typed_error;
-              emitted = !emitted;
-            }
+          | Error error -> Lwt.return (Result.Error error))
+      | Some (Finish finish) -> Lwt.return (result finish)
     in
     ignore provider_auth;
     consume ()
 
 let result_output error = Tool.fail (Fmt.str "%a" Tool.pp_error error)
 
-let run_tool t turn_sw (call : call) input (tool : Tool.t) =
-  let started = Eio.Time.now t.deps.clock in
-  let ctx = tool_context t ~sw:turn_sw ~call_id:call.id in
-  let output, stop_turn, hook_input =
-    match
-      Hooks.pre_tool t.deps.hooks ~session:(Session.id t.session) ~tool:tool.Tool.name
-        ~input
-    with
-    | Hooks.Deny reason -> (result_output (`Denied reason), true, input)
+let run_tool t (call : call) input (tool : Tool.t) : execution Lwt.t =
+  let started = Charamel_os.Time.now t.deps.clock in
+  let ctx = tool_context t ~call_id:call.id in
+  ( Hooks.pre_tool t.deps.hooks ~session:(Session.id t.session) ~tool:tool.Tool.name ~input
+  >>= function
+    | Hooks.Deny reason -> Lwt.return (result_output (`Denied reason), true, input)
     | Hooks.Allow input' -> (
-        match tool.Tool.run ctx input' with
-        | Ok output -> (output, false, input')
-        | Error (`Denied _ as error) -> (result_output error, true, input')
-        | Error error -> (result_output error, false, input'))
+        Lwt_direct.spawn (fun () -> tool.Tool.run ctx input') >>= function
+        | Ok output -> Lwt.return (output, false, input')
+        | Error (`Denied _ as error) -> Lwt.return (result_output error, true, input')
+        | Error error -> Lwt.return (result_output error, false, input')) )
+  >>= fun (output, stop_turn, hook_input) ->
+  let elapsed_ms =
+    int_of_float ((Charamel_os.Time.now t.deps.clock -. started) *. 1000.)
   in
-  let elapsed_ms = int_of_float ((Eio.Time.now t.deps.clock -. started) *. 1000.) in
   Hooks.post_tool t.deps.hooks ~session:(Session.id t.session) ~tool:tool.Tool.name
-    ~input:hook_input ~output:output.Tool.content ~is_error:output.Tool.is_error;
+    ~input:hook_input ~output:output.Tool.content ~is_error:output.Tool.is_error
+  >|= fun () ->
   { id = call.id; name = call.name; input = hook_input; output; elapsed_ms; stop_turn }
 
-let schedule_call ?(invalid = false) t _turn_sw (call : call) input =
+let schedule_call ?(invalid = false) t (call : call) input =
   let tool = Toolset.find t.tools call.name in
-  emit t (Tool_started { id = call.id; name = call.name; input });
   { call; input; tool; invalid; promise = None }
 
 let read_only job = match job.tool with Some tool -> tool.Tool.read_only | None -> false
+
+let start_job t pool job tool =
+  job.promise <-
+    Some
+      (Lwt.catch
+         (fun () -> Lwt_pool.use pool (fun () -> run_tool t job.call job.input tool))
+         Lwt.fail)
 
 let execute_calls t turn_sw calls =
   let jobs =
@@ -529,24 +556,28 @@ let execute_calls t turn_sw calls =
         match decode_call call with
         | Error _ ->
             let input = Jsont.Json.object' [] in
-            Some (schedule_call ~invalid:true t turn_sw call input)
-        | Ok input -> Some (schedule_call t turn_sw call input))
+            Some (schedule_call ~invalid:true t call input)
+        | Ok input -> Some (schedule_call t call input))
       calls
   in
-  let semaphore = Eio.Semaphore.make 8 in
+  let pool = Lwt_pool.create 8 (fun () -> Lwt.return_unit) in
+  checkpoint t >>= fun () ->
+  if Lwt_switch.is_on turn_sw then
+    Lwt_switch.add_hook (Some turn_sw) (fun () ->
+        List.iter
+          (fun job ->
+            match job.promise with Some promise -> Lwt.cancel promise | None -> ())
+          jobs;
+        Lwt.return_unit);
+  Lwt_list.iter_s
+    (fun job ->
+      emit t (Tool_started { id = job.call.id; name = job.call.name; input = job.input }))
+    jobs
+  >>= fun () ->
   List.iter
     (fun job ->
       if (not job.invalid) && read_only job then
-        match job.tool with
-        | None -> ()
-        | Some tool ->
-            job.promise <-
-              Some
-                (Eio.Fiber.fork_promise ~sw:turn_sw (fun () ->
-                     Eio.Semaphore.acquire semaphore;
-                     Fun.protect
-                       ~finally:(fun () -> Eio.Semaphore.release semaphore)
-                       (fun () -> run_tool t turn_sw job.call job.input tool)))
+        match job.tool with Some tool -> start_job t pool job tool | None -> ()
       else ())
     jobs;
   let window_add name input output =
@@ -567,36 +598,40 @@ let execute_calls t turn_sw calls =
       0 next
     >= 5
   in
+  let invalid_execution job =
+    {
+      id = job.call.id;
+      name = job.call.name;
+      input = job.input;
+      output = Tool.fail "invalid JSON input";
+      elapsed_ms = 0;
+      stop_turn = false;
+    }
+  in
+  let unknown_execution job =
+    {
+      id = job.call.id;
+      name = job.call.name;
+      input = job.input;
+      output = Tool.fail (job.call.name ^ ": unknown tool");
+      elapsed_ms = 0;
+      stop_turn = false;
+    }
+  in
   let rec fold pending results stop_turn loop_detected =
     match pending with
-    | [] -> (List.rev results, stop_turn, loop_detected)
+    | [] -> Lwt.return (List.rev results, stop_turn, loop_detected)
     | job :: rest ->
-        let execution =
-          if job.invalid then
-            {
-              id = job.call.id;
-              name = job.call.name;
-              input = job.input;
-              output = Tool.fail "invalid JSON input";
-              elapsed_ms = 0;
-              stop_turn = false;
-            }
-          else
-            match job.promise with
-            | Some promise -> Eio.Promise.await_exn promise
-            | None -> (
-                match job.tool with
-                | Some tool -> run_tool t turn_sw job.call job.input tool
-                | None ->
-                    {
-                      id = job.call.id;
-                      name = job.call.name;
-                      input = job.input;
-                      output = Tool.fail (job.call.name ^ ": unknown tool");
-                      elapsed_ms = 0;
-                      stop_turn = false;
-                    })
-        in
+        checkpoint t >>= fun () ->
+        (if job.invalid then Lwt.return (invalid_execution job)
+         else
+           match job.promise with
+           | Some promise -> promise
+           | None -> (
+               match job.tool with
+               | Some tool -> run_tool t job.call job.input tool
+               | None -> Lwt.return (unknown_execution job)))
+        >>= fun (execution : execution) ->
         emit t
           (Tool_finished
              {
@@ -604,7 +639,8 @@ let execute_calls t turn_sw calls =
                name = execution.name;
                output = execution.output;
                elapsed_ms = execution.elapsed_ms;
-             });
+             })
+        >>= fun () ->
         let output_text =
           match Tool.to_result execution.output with `Text text | `Error text -> text
         in
@@ -613,7 +649,7 @@ let execute_calls t turn_sw calls =
         in
         let stop_turn = stop_turn || execution.stop_turn in
         if loop_detected || stop_turn then
-          (List.rev (execution :: results), stop_turn, loop_detected)
+          Lwt.return (List.rev (execution :: results), stop_turn, loop_detected)
         else fold rest (execution :: results) stop_turn false
   in
   fold jobs [] false false
@@ -625,33 +661,31 @@ let session_output output =
 
 let persist_executions t executions =
   let rec loop = function
-    | [] -> Ok ()
+    | [] -> Lwt.return (Ok ())
     | (execution : execution) :: rest -> (
-        match
-          append t
-            (Session.Tool_call
-               {
-                 ms = now_ms t;
-                 id = execution.id;
-                 name = execution.name;
-                 input = execution.input;
-               })
-        with
-        | Error error -> Result.Error error
+        append t
+          (Session.Tool_call
+             {
+               ms = now_ms t;
+               id = execution.id;
+               name = execution.name;
+               input = execution.input;
+             })
+        >>= function
+        | Error error -> Lwt.return (Result.Error error)
         | Ok () -> (
-            match
-              append t
-                (Session.Tool_result
-                   {
-                     ms = now_ms t;
-                     id = execution.id;
-                     name = execution.name;
-                     output = session_output execution.output;
-                     elapsed_ms = execution.elapsed_ms;
-                     artifact = execution.output.Tool.artifact;
-                   })
-            with
-            | Error error -> Result.Error error
+            append t
+              (Session.Tool_result
+                 {
+                   ms = now_ms t;
+                   id = execution.id;
+                   name = execution.name;
+                   output = session_output execution.output;
+                   elapsed_ms = execution.elapsed_ms;
+                   artifact = execution.output.Tool.artifact;
+                 })
+            >>= function
+            | Error error -> Lwt.return (Result.Error error)
             | Ok () -> loop rest))
   in
   loop executions
@@ -679,67 +713,76 @@ let add_attachments text attachments =
     parts = Charamel_fantasy.Message.Text text :: files;
   }
 
-let post_metadata t turn_sw first_prompt state =
-  if t.is_subagent then ()
+let post_metadata t sw first_prompt state =
+  if t.is_subagent then Lwt.return_unit
   else (
     t.turn_count := !(t.turn_count) + 1;
-    (if !(t.turn_count) = 1 && Session.title t.session = "" then
-       match refresh_model t turn_sw `Small with
-       | Error _ -> ()
-       | Ok (small, _) -> (
-           match
-             Title.generate ~sw:turn_sw ~clock:t.deps.clock ~net:t.deps.net ~small
-               ~first_prompt
-           with
-           | Error (`Provider message) ->
-               Log.warn (fun m -> m "title generation failed: %s" message)
-           | Ok title when title <> "" -> (
-               match Session.set_title t.session ~title with
-               | Ok () -> emit t (Title title)
-               | Error error ->
-                   Log.warn (fun m ->
-                       m "title persistence failed: %a" Session.pp_error error))
-           | Ok _ -> ()));
-    if
-      t.deps.config.Config.options.Config.advisor.Config.enabled
-      && !(t.turn_count)
-         mod max 1 t.deps.config.Config.options.Config.advisor.Config.every_n_turns
-         = 0
-    then
-      let role =
-        match t.deps.config.Config.options.Config.advisor.Config.model with
-        | `Small -> `Small
-        | `Large -> `Large
-      in
-      match refresh_model t turn_sw role with
-      | Error _ -> ()
-      | Ok (model, _) -> (
-          match
-            Advisor.review t.advisor ~sw:turn_sw ~clock:t.deps.clock ~net:t.deps.net model
+    let title () =
+      if !(t.turn_count) = 1 && Session.title t.session = "" then
+        refresh_model t `Small >>= function
+        | Error _ -> Lwt.return_unit
+        | Ok (small, _) -> (
+            Title.generate ~sw ~clock:t.deps.clock ~small ~first_prompt >>= function
+            | Error (`Provider message) ->
+                Log.warn (fun m -> m "title generation failed: %s" message);
+                Lwt.return_unit
+            | Ok title when title <> "" -> (
+                Session.set_title t.session ~title >>= function
+                | Ok () -> emit t (Title title)
+                | Error error ->
+                    Log.warn (fun m ->
+                        m "title persistence failed: %a" Session.pp_error error);
+                    Lwt.return_unit)
+            | Ok _ -> Lwt.return_unit)
+      else Lwt.return_unit
+    in
+    let advisor () =
+      if
+        t.deps.config.Config.options.Config.advisor.Config.enabled
+        && !(t.turn_count)
+           mod max 1 t.deps.config.Config.options.Config.advisor.Config.every_n_turns
+           = 0
+      then
+        let role =
+          match t.deps.config.Config.options.Config.advisor.Config.model with
+          | `Small -> `Small
+          | `Large -> `Large
+        in
+        refresh_model t role >>= function
+        | Error _ -> Lwt.return_unit
+        | Ok (model, _) -> (
+            Advisor.review t.advisor ~sw ~clock:t.deps.clock model
               ~context:(Rules.context_text t.deps.rules)
               ~last_turn:state.last_turn
-          with
-          | Error (`Provider message) ->
-              Log.warn (fun m -> m "advisor failed: %s" message)
-          | Ok None -> ()
-          | Ok (Some verdict) ->
-              let severity =
-                match verdict.Advisor.severity with
-                | `Nit -> "nit"
-                | `Concern -> "concern"
-                | `Blocker -> "blocker"
-              in
-              emit t (Advisor_note { severity; guidance = verdict.Advisor.guidance });
-              append_logged t
-                (Session.Note
-                   {
-                     ms = now_ms t;
-                     text = Fmt.str "advisor %s: %s" severity verdict.Advisor.guidance;
-                   });
-              if verdict.Advisor.severity = `Blocker then
+            >>= function
+            | Error (`Provider message) ->
+                Log.warn (fun m -> m "advisor failed: %s" message);
+                Lwt.return_unit
+            | Ok None -> Lwt.return_unit
+            | Ok (Some verdict) ->
+                let severity =
+                  match verdict.Advisor.severity with
+                  | `Nit -> "nit"
+                  | `Concern -> "concern"
+                  | `Blocker -> "blocker"
+                in
+                emit t (Advisor_note { severity; guidance = verdict.Advisor.guidance })
+                >>= fun () ->
                 append_logged t
-                  (Session.Message
-                     { ms = now_ms t; message = Advisor.steering_message verdict })))
+                  (Session.Note
+                     {
+                       ms = now_ms t;
+                       text = Fmt.str "advisor %s: %s" severity verdict.Advisor.guidance;
+                     })
+                >>= fun () ->
+                if verdict.Advisor.severity = `Blocker then
+                  append_logged t
+                    (Session.Message
+                       { ms = now_ms t; message = Advisor.steering_message verdict })
+                else Lwt.return_unit)
+      else Lwt.return_unit
+    in
+    title () >>= fun () -> advisor ())
 
 let provider_error_message = function
   | None -> "provider returned HTTP 401"
@@ -758,10 +801,11 @@ let run_turn t turn_sw first_prompt user_message attachments state =
   let force_retry_used = ref false in
   state.last_turn <- [ user_message ];
   let rec loop () =
+    checkpoint t >>= fun () ->
     state.assistant_appended <- false;
     state.parts <- [];
     let messages = Session.messages t.session in
-    let* model, provider_auth = refresh_model t turn_sw `Large in
+    let* model, provider_auth = refresh_model t `Large in
     let rec stream_with_recovery (model : Models.resolved) provider_auth =
       let* stream_result = consume_stream t turn_sw model provider_auth messages state in
       let retryable =
@@ -772,21 +816,22 @@ let run_turn t turn_sw first_prompt user_message attachments state =
       in
       if retryable && not !force_retry_used then (
         force_retry_used := true;
-        match refresh_model ~force:true ~rejected:provider_auth t turn_sw `Large with
-        | Error error -> Result.Error error
+        refresh_model ~force:true ~rejected:provider_auth t `Large >>= function
+        | Error error -> Lwt.return (Result.Error error)
         | Ok (fresh_model, fresh_auth) -> stream_with_recovery fresh_model fresh_auth)
       else if retryable then
-        match
-          disable_oauth t model.Models.provider_id provider_auth
-            (provider_error_message stream_result.typed_error)
-        with
-        | Error error -> Result.Error (`Auth (Fmt.str "%a" Auth.pp_error error))
+        disable_oauth t model.Models.provider_id provider_auth
+          (provider_error_message stream_result.typed_error)
+        >>= function
+        | Error error ->
+            Lwt.return (Result.Error (`Auth (Fmt.str "%a" Auth.pp_error error)))
         | Ok () ->
-            Result.Error
-              (`Auth
-                 ("credential rejected by provider; log in again for "
-                ^ model.Models.provider_id))
-      else Result.Ok stream_result
+            Lwt.return
+              (Result.Error
+                 (`Auth
+                    ("credential rejected by provider; log in again for "
+                   ^ model.Models.provider_id)))
+      else Lwt.return (Result.Ok stream_result)
     in
     let* (stream_result : stream_result) = stream_with_recovery model provider_auth in
     let empty_provider_error =
@@ -795,7 +840,7 @@ let run_turn t turn_sw first_prompt user_message attachments state =
       | _ -> None
     in
     match empty_provider_error with
-    | Some message -> Error (`Provider message)
+    | Some message -> Lwt.return (Error (`Provider message))
     | None -> (
         List.iter (fun call -> ignore (decode_call call)) stream_result.calls;
         let assistant = assistant_message stream_result.parts in
@@ -804,14 +849,15 @@ let run_turn t turn_sw first_prompt user_message attachments state =
         state.last_turn <- state.last_turn @ [ assistant ];
         match (stream_result.finish, stream_result.calls) with
         | `Tool_calls, calls when calls <> [] ->
-            let executions, stop_turn, loop_detected = execute_calls t turn_sw calls in
+            execute_calls t turn_sw calls
+            >>= fun (executions, stop_turn, loop_detected) ->
             let results =
               List.map
                 (fun execution ->
                   (execution.id, execution.name, session_output execution.output))
                 executions
             in
-            if results = [] then Ok `Stop
+            if results = [] then Lwt.return (Ok `Stop)
             else
               let tool_message = Charamel_fantasy.Message.tool_results results in
               let* () =
@@ -819,35 +865,31 @@ let run_turn t turn_sw first_prompt user_message attachments state =
               in
               state.last_turn <- state.last_turn @ [ tool_message ];
               let* () = persist_executions t executions in
-              if loop_detected then Ok `Loop_detected
-              else if stop_turn then Ok `Stop
+              if loop_detected then Lwt.return (Ok `Loop_detected)
+              else if stop_turn then Lwt.return (Ok `Stop)
               else if
                 Compaction.needed
                   ~context_window:model.Models.model.Charamel_fantasy.Model.context_window
                   ~prompt_tokens:stream_result.prompt_tokens
                   ~completion_tokens:stream_result.completion_tokens
                   ~disabled:t.deps.config.Config.options.Config.disable_auto_compaction
-              then (
-                let* small, small_auth = refresh_model t turn_sw `Small in
-                match
-                  Compaction.run ~sw:turn_sw ~clock:t.deps.clock ~net:t.deps.net ~small
-                    ~auth:small_auth t.session
-                with
-                | Error (`Provider message) -> Error (`Provider message)
-                | Error (`Session error) -> Error (`Session error)
+              then
+                let* small, small_auth = refresh_model t `Small in
+                Compaction.run ~sw:turn_sw ~clock:t.deps.clock ~small ~auth:small_auth
+                  t.session
+                >>= function
+                | Error (`Provider message) -> Lwt.return (Error (`Provider message))
+                | Error (`Session error) -> Lwt.return (Error (`Session error))
                 | Ok summary ->
-                    emit t (Compacted { summary_chars = String.length summary });
-                    loop ())
+                    emit t (Compacted { summary_chars = String.length summary })
+                    >>= fun () -> loop ()
               else loop ()
-        | `Tool_calls, [] -> Ok `Stop
-        | finish, _ -> finish_result finish)
+        | `Tool_calls, [] -> Lwt.return (Ok `Stop)
+        | finish, _ -> Lwt.return (finish_result finish))
   in
-  let result = loop () in
-  match result with
-  | Ok finish ->
-      post_metadata t turn_sw first_prompt state;
-      Ok finish
-  | Error _ -> result
+  loop () >>= function
+  | Ok finish -> post_metadata t turn_sw first_prompt state >|= fun () -> Ok finish
+  | Error _ as result -> Lwt.return result
 
 let finalize t state result =
   let finish, error =
@@ -855,46 +897,62 @@ let finalize t state result =
     | Ok finish -> (finish, None)
     | Error error -> (`Halted (Fmt.str "%a" pp_error error), Some error)
   in
-  if (not state.assistant_appended) && state.parts <> [] then (
-    let partial = assistant_message state.parts in
-    ignore (append t (Session.Message { ms = now_ms t; message = partial }));
-    ignore (append t (Session.Note { ms = now_ms t; text = "interrupted" })));
+  let persist_partial () =
+    if (not state.assistant_appended) && state.parts <> [] then
+      let partial = assistant_message state.parts in
+      append t (Session.Message { ms = now_ms t; message = partial }) >>= fun _ ->
+      append t (Session.Note { ms = now_ms t; text = "interrupted" }) >>= fun _ ->
+      Lwt.return_unit
+    else Lwt.return_unit
+  in
   let reason =
     match (error, finish) with
     | Some error, _ -> `Error (Fmt.str "%a" pp_error error)
     | None, `Interrupted -> `Interrupted
     | None, _ -> `Stop
   in
-  Hooks.stop t.deps.hooks ~session:(Session.id t.session) ~reason;
-  (match error with Some error -> emit t (Failed error) | None -> ());
-  emit t (Turn_done finish);
-  result
+  persist_partial () >>= fun () ->
+  Hooks.stop t.deps.hooks ~session:(Session.id t.session) ~reason >>= fun () ->
+  (match error with Some error -> emit t (Failed error) | None -> Lwt.return_unit)
+  >>= fun () ->
+  emit t (Turn_done finish) >|= fun () -> result
 
 let prompt t ?(attachments = []) text =
-  if !(t.busy_state) then Error `Busy
+  if !(t.busy_state) then Lwt.return (Error `Busy)
   else (
     t.busy_state := true;
     let state = { assistant_appended = false; parts = []; last_turn = [] } in
+    let switch = Lwt_switch.create () in
+    let turn = { switch; interrupt = Idle } in
     let external_cancel = ref None in
-    let result =
-      try
-        Eio.Switch.run (fun turn_sw ->
-            Eio.Cancel.sub (fun cancel_context ->
-                t.turn_cancel := Some cancel_context;
-                Fun.protect
-                  ~finally:(fun () -> t.turn_cancel := None)
-                  (fun () -> run_turn t turn_sw text text attachments state)))
-      with
-      | Eio.Cancel.Cancelled User_cancel -> Ok `Interrupted
-      | Eio.Cancel.Cancelled exception_ ->
-          external_cancel := Some exception_;
-          Ok `Interrupted
+    t.turn := Some turn;
+    let run () =
+      Lwt.finalize
+        (fun () ->
+          Lwt.catch
+            (fun () -> run_turn t switch text text attachments state)
+            (function
+              | Interrupted User_cancel -> Lwt.return (Ok `Interrupted)
+              | Interrupted (External_cancel error) ->
+                  external_cancel := Some error;
+                  Lwt.return (Ok `Interrupted)
+              | Lwt.Canceled ->
+                  external_cancel := Some Lwt.Canceled;
+                  Lwt.return (Ok `Interrupted)
+              | Lwt_switch.Off -> Lwt.return (Ok `Interrupted)
+              | exception_ -> Lwt.fail exception_))
+        (fun () ->
+          t.turn := None;
+          Lwt.catch (fun () -> Lwt_switch.turn_off switch) (fun _ -> Lwt.return_unit))
+      >>= fun result ->
+      Lwt.protected (finalize t state result) >>= fun result ->
+      match !external_cancel with
+      | Some error -> Lwt.fail error
+      | None -> Lwt.return result
     in
-    let result = Eio.Cancel.protect (fun () -> finalize t state result) in
-    t.busy_state := false;
-    match !external_cancel with
-    | Some exception_ -> raise (Eio.Cancel.Cancelled exception_)
-    | None -> result)
+    Lwt.finalize run (fun () ->
+        t.busy_state := false;
+        Lwt.return_unit))
 
 let rec run_child_agent parent ~prompt:instruction =
   let model = !(parent.large_model) in
@@ -905,30 +963,35 @@ let rec run_child_agent parent ~prompt:instruction =
     "subagent: " ^ prefix
   in
   match
-    Session.create parent.deps.store ~clock:parent.deps.clock ~random:parent.deps.random
-      ~parent:(Session.id parent.session) ~title ~cwd:parent.deps.cwd
-      ~model:
-        {
-          Session.provider = model.Models.provider_id;
-          model = model.Models.model.Charamel_fantasy.Model.id;
-        }
-      ()
+    Lwt_direct.await
+      (Session.create parent.deps.store ~clock:parent.deps.clock
+         ~random:parent.deps.random ~parent:(Session.id parent.session) ~title
+         ~cwd:parent.deps.cwd
+         ~model:
+           {
+             Session.provider = model.Models.provider_id;
+             model = model.Models.model.Charamel_fantasy.Model.id;
+           }
+         ())
   with
   | Error error -> Error (Fmt.str "%a" Session.pp_error error)
   | Ok child_session -> (
       let child_deps = { parent.deps with interactive = false; ask = None } in
-      let child =
-        create_internal ~budget:parent.budget ~is_subagent:true child_deps
-          ~session:child_session ~large:!(parent.large_model) ~small:!(parent.small_model)
-      in
-      match child with
+      match
+        Lwt_direct.await
+          (create_internal ~budget:parent.budget ~is_subagent:true child_deps
+             ~session:child_session ~large:!(parent.large_model)
+             ~small:!(parent.small_model))
+      with
       | Error error -> Error (Fmt.str "%a" pp_error error)
       | Ok child_agent -> (
-          match prompt child_agent instruction with
+          link_child_cancel parent child_agent;
+          match Lwt_direct.await (prompt child_agent instruction) with
           | Error (`Tool message) when String.equal message "subagent budget exhausted" ->
               ignore
-                (Session.append parent.session ~clock:parent.deps.clock
-                   (Session.Note { ms = now_ms parent; text = message }));
+                (Lwt_direct.await
+                   (Session.append parent.session ~clock:parent.deps.clock
+                      (Session.Note { ms = now_ms parent; text = message })));
               Error message
           | Error error -> Error (Fmt.str "%a" pp_error error)
           | Ok _ ->
@@ -953,22 +1016,17 @@ let rec run_child_agent parent ~prompt:instruction =
 
 and create_internal ~budget ~is_subagent deps ~session ~large ~small =
   let artifacts =
-    Artifact.create ~fs:deps.fs
+    Artifact.create ~fs_root:deps.fs_root
       ~dir:(Session.artifacts_dir deps.store ~id:(Session.id session))
   in
-  let jobs =
-    Jobs.create ~sw:deps.sw ~proc_mgr:deps.proc_mgr ~clock:deps.clock ~artifacts
-  in
+  let jobs = Jobs.create ~sw:deps.sw ~artifacts in
   let todos = Todos.create () in
   let read_tracker = Hashtbl.create 32 in
   let run_child_ref = ref (fun ~prompt:_ -> Error "nested subagents are disabled") in
   let ctx_template : Tool.ctx =
     {
-      sw = deps.sw;
       clock = deps.clock;
-      fs = deps.fs;
-      net = deps.net;
-      proc_mgr = deps.proc_mgr;
+      fs_root = deps.fs_root;
       random = deps.random;
       env = deps.env;
       cwd = deps.cwd;
@@ -1011,7 +1069,7 @@ and create_internal ~budget ~is_subagent deps ~session ~large ~small =
       read_tracker;
       run_child = (fun ~prompt -> !run_child_ref ~prompt);
       busy_state = ref false;
-      turn_cancel = ref None;
+      turn = ref None;
       usage = ref usage;
       cost_usd = ref cost;
       context_tokens = ref 0;
@@ -1023,15 +1081,13 @@ and create_internal ~budget ~is_subagent deps ~session ~large ~small =
   (if is_subagent then
      run_child_ref := fun ~prompt:_ -> Error "nested subagents are disabled"
    else run_child_ref := fun ~prompt -> run_child_agent agent ~prompt);
-  Hooks.session_start deps.hooks ~session:(Session.id session);
-  Ok agent
+  Hooks.session_start deps.hooks ~session:(Session.id session) >|= fun () -> Ok agent
 
 let create deps ~session ~large ~small =
   let budget =
     {
       limit = max 0 deps.config.Config.options.Config.budgets.Config.subagent_requests;
       used = 0;
-      mutex = Eio.Mutex.create ();
     }
   in
   create_internal ~budget ~is_subagent:false deps ~session ~large ~small
@@ -1046,28 +1102,25 @@ let set_models t ~large ~small =
 let busy t = !(t.busy_state)
 
 let cancel t =
-  match !(t.turn_cancel) with
-  | None -> ()
-  | Some context -> Eio.Cancel.cancel context User_cancel
+  match !(t.turn) with None -> () | Some turn -> interrupt_turn turn User_cancel
 
 let compact t =
-  if !(t.busy_state) then Error `Busy
+  if !(t.busy_state) then Lwt.return (Error `Busy)
   else
-    Eio.Switch.run (fun turn_sw ->
-        let* small, auth = refresh_model t turn_sw `Small in
-        match
-          Compaction.run ~sw:turn_sw ~clock:t.deps.clock ~net:t.deps.net ~small ~auth
-            t.session
-        with
-        | Error (`Provider message) -> Error (`Provider message)
-        | Error (`Session error) -> Error (`Session error)
-        | Ok summary ->
-            emit t (Compacted { summary_chars = String.length summary });
-            Ok ())
+    let switch = Lwt_switch.create () in
+    let body () =
+      let* small, auth = refresh_model t `Small in
+      Compaction.run ~sw:switch ~clock:t.deps.clock ~small ~auth t.session >>= function
+      | Error (`Provider message) -> Lwt.return (Error (`Provider message))
+      | Error (`Session error) -> Lwt.return (Error (`Session error))
+      | Ok summary ->
+          emit t (Compacted { summary_chars = String.length summary }) >|= fun () -> Ok ()
+    in
+    Lwt.finalize body (fun () -> Lwt_switch.turn_off switch)
 
 let set_plan_mode t enabled =
   Permission.set_plan_mode t.deps.permission enabled;
   let text = if enabled then "plan mode on" else "plan mode off" in
-  ignore (append t (Session.Note { ms = now_ms t; text }))
+  append t (Session.Note { ms = now_ms t; text }) >|= fun _ -> ()
 
 let stats t = (!(t.usage), !(t.cost_usd), !(t.context_tokens))

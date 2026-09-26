@@ -21,7 +21,8 @@ let app : (int, message) Charamel_tea.app =
   }
 
 let main () =
-  Eio_main.run (fun env ->
-      match Charamel_tea.run ~clock:env#clock app env with Ok _ -> () | Error _ -> ())
+  match Lwt_main.run (Charamel_tea.run ~clock:Charamel_os.Time.lwt app) with
+  | Ok _ -> ()
+  | Error _ -> ()
 
 let () = main ()

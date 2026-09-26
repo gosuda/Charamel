@@ -9,8 +9,6 @@ bug-reports: "https://github.com/metaphorics/Charamel/issues"
 depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.24"}
-  "eio" {>= "1.5"}
-  "eio_main"
   "cmdliner" {>= "2.1"}
   "fmt"
   "logs"
@@ -23,8 +21,6 @@ depends: [
   "ptime"
   "digestif"
   "base64"
-  "cohttp-eio"
-  "tls-eio"
   "ca-certs"
   "mirage-crypto-rng"
   "uri"
@@ -45,6 +41,7 @@ depends: [
   "ctypes" {>= "0.24.0" & os = "win32"}
   "ctypes-foreign" {>= "0.24.0" & os = "win32"}
   "alcotest" {with-test}
+  "alcotest-lwt" {>= "1.9.1" & with-test}
   "odoc" {with-doc}
 ]
 build: [

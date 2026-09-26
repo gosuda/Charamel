@@ -1,4 +1,13 @@
 (library
  (name charamel_ssh_keygen)
  (public_name charamel-ssh.keygen)
- (libraries eio fmt mirage-crypto-ec mirage-crypto-rng digestif base64))
+ (libraries
+  base64
+  charamel.os
+  digestif
+  fmt
+  lwt
+  lwt.unix
+  mirage-crypto-ec
+  mirage-crypto-rng
+  unix))

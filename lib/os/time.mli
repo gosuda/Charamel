@@ -5,7 +5,7 @@
     with the monotonic [Mtime_clock.now], so it is immune to the wall clock being moved
     and to time zones; monotonic seconds since an unspecified origin is what a stamp means
     here, which is the right basis for a duration and the wrong one for a calendar line,
-    so formatting a timestamp stays with the wall clock at the call site.
+    so formatting a timestamp uses {!val:wall}.
 
     A simulated clock exists because [Lwt] has no first-party mock clock:
     [Charamel_tea.Test] drives a program's timers without waiting for them, and a test of
@@ -54,10 +54,17 @@ val of_virtual : virtual_clock -> clock
 val sleep : clock -> float -> unit Lwt.t
 (** [sleep clock seconds] waits for [seconds]. On the real clock this yields to the event
     loop; on a simulated clock it registers a deadline and stays pending until an
-    [advance] passes it. A non-positive duration resolves immediately on either clock, and
-    cancelling the promise on a simulated clock drops the deadline. *)
+    [advance] passes it. A non-positive duration yields once and then resolves on either
+    clock, and cancelling the promise on a simulated clock drops the deadline. *)
 
 val now : clock -> float
 (** [now clock] is the clock's current reading in seconds since an unspecified origin:
     monotonic time for the real clock, simulated time for a virtual one. Two calls on a
     simulated clock only differ if somebody advanced it in between. *)
+
+val wall : clock -> float
+(** [wall clock] is the clock's reading on the calendar: POSIX seconds since the Unix
+    epoch, the basis for a calendar line. The real clock reads the system wall clock,
+    which can step when the system adjusts it; {!val:now} is the reading to use for a
+    duration. A simulated clock reports its simulated seconds from the epoch, so a
+    scripted test stamps deterministic calendar time starting at [1970-01-01 00:00:00]. *)

@@ -1,3 +1,6 @@
+open Lwt.Infix
+open Lwt.Syntax
+
 let contains ~needle ~haystack =
   let needle_length = String.length needle in
   let haystack_length = String.length haystack in
@@ -7,130 +10,72 @@ let contains ~needle ~haystack =
   in
   needle_length = 0 || search 0
 
-let spawn ~exe ~argv ~env ~cwd ~stdin_read ~stdout_write ~stderr_write =
-  let previous_cwd = Sys.getcwd () in
-  let restore_cwd () = if Option.is_some cwd then Unix.chdir previous_cwd in
-  Option.iter Unix.chdir cwd;
-  Fun.protect ~finally:restore_cwd (fun () ->
-      match env with
-      | Some env ->
-          Unix.create_process_env exe argv env stdin_read stdout_write stderr_write
-      | None -> Unix.create_process exe argv stdin_read stdout_write stderr_write)
+let feed_stdin channel text =
+  let write () = Lwt_io.write channel text >>= fun () -> Lwt_io.close channel in
+  if text = "" then Lwt_io.close channel
+  else
+    Lwt.catch write (function
+      | Unix.Unix_error ((EPIPE | EBADF), _, _) | Lwt_io.Channel_closed _ ->
+          Lwt.return_unit
+      | exn -> Lwt.fail exn)
 
-let read_chunk ~target ~fd =
-  let chunk = Bytes.create 4096 in
-  let count = Unix.read fd chunk 0 (Bytes.length chunk) in
-  if count = 0 then false
-  else begin
-    Buffer.add_subbytes target chunk 0 count;
-    true
-  end
-
-let write_once ~pending ~fd =
-  match !pending with
-  | None -> true
-  | Some content ->
-      let count = Unix.write_substring fd content 0 (String.length content) in
-      if count >= String.length content then begin
-        pending := None;
-        true
-      end
-      else begin
-        pending := Some (String.sub content count (String.length content - count));
-        false
-      end
-
-let write_available ~pending ~fd =
-  match write_once ~pending ~fd with
-  | done_writing -> done_writing
-  | exception Unix.Unix_error ((EPIPE | EBADF), _, _) ->
-      pending := None;
-      true
-
-let kill_child pid =
-  match Unix.kill pid Sys.sigkill with
-  | () -> ()
-  | exception Unix.Unix_error (ESRCH, _, _) -> ()
+let exit_status = function
+  | Unix.WEXITED code -> code
+  | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal
 
 let run_cli ~exe ?env ?cwd ?(timeout = 10.) ?(stdin = "") args =
   ignore (Sys.set_signal Sys.sigpipe Sys.Signal_ignore);
   let argv = Array.of_list (exe :: args) in
-  let stdin_read, stdin_write = Unix.pipe ~cloexec:true () in
-  let stdout_read, stdout_write = Unix.pipe ~cloexec:true () in
-  let stderr_read, stderr_write = Unix.pipe ~cloexec:true () in
-  let pid = spawn ~exe ~argv ~env ~cwd ~stdin_read ~stdout_write ~stderr_write in
-  Unix.close stdin_read;
-  Unix.close stdout_write;
-  Unix.close stderr_write;
-  let stdout_buffer = Buffer.create 256 in
-  let stderr_buffer = Buffer.create 128 in
-  let open_reads = ref [ stdout_read; stderr_read ] in
-  let pending_stdin = ref (if String.length stdin = 0 then None else Some stdin) in
-  let stdin_open = ref true in
-  let close_stdin () =
-    if !stdin_open then begin
-      stdin_open := false;
-      Unix.close stdin_write
-    end
-  in
-  let handle_read fd =
-    let target = if fd = stdout_read then stdout_buffer else stderr_buffer in
-    if read_chunk ~target ~fd then ()
-    else begin
-      Unix.close fd;
-      open_reads := List.filter (fun open_fd -> open_fd <> fd) !open_reads
-    end
-  in
-  if !pending_stdin = None then close_stdin ();
-  let deadline = Unix.gettimeofday () +. timeout in
-  let rec pump () =
-    let remaining = deadline -. Unix.gettimeofday () in
-    if remaining <= 0. then `Timeout
-    else if !open_reads = [] && !pending_stdin = None then `Streams_done
-    else begin
-      let writable = if Option.is_some !pending_stdin then [ stdin_write ] else [] in
-      let ready_read, ready_write, _ =
-        Unix.select !open_reads writable [] (min remaining 0.1)
+  Lwt_process.with_process_full ?env ?cwd (exe, argv) (fun process ->
+      let collect =
+        Lwt.protected (Lwt.both (Lwt_io.read process#stdout) (Lwt_io.read process#stderr))
       in
-      List.iter handle_read ready_read;
-      List.iter
-        (fun _ ->
-          if write_available ~pending:pending_stdin ~fd:stdin_write then close_stdin ())
-        ready_write;
-      pump ()
-    end
-  in
-  let timed_out = match pump () with `Timeout -> true | `Streams_done -> false in
-  close_stdin ();
-  let rec reap () =
-    match Unix.waitpid [ Unix.WNOHANG ] pid with
-    | 0, _ ->
-        if timed_out then begin
-          kill_child pid;
-          snd (Unix.waitpid [] pid)
-        end
-        else begin
-          ignore (Unix.select [] [] [] 0.05);
-          reap ()
-        end
-    | _, status -> status
-  in
-  let status =
-    match reap () with
-    | Unix.WEXITED code -> code
-    | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal
-  in
-  (status, Buffer.contents stdout_buffer, Buffer.contents stderr_buffer)
+      let* () = feed_stdin process#stdin stdin in
+      let* () =
+        Lwt.catch
+          (fun () -> Lwt_unix.with_timeout timeout (fun () -> Lwt.map ignore collect))
+          (function
+            | Lwt_unix.Timeout ->
+                process#kill Sys.sigkill;
+                Lwt.return_unit
+            | exn -> Lwt.fail exn)
+      in
+      let* stdout_text, stderr_text = collect in
+      let* status = process#status in
+      Lwt.return (exit_status status, stdout_text, stderr_text))
+
+let entry_kind path =
+  match try Some (Unix.lstat path) with Unix.Unix_error _ -> None with
+  | None -> `Missing
+  | Some { Unix.st_kind = Unix.S_DIR; _ } -> `Directory
+  | Some _ -> `File
+
+let try_unix action = match action () with () -> () | exception Unix.Unix_error _ -> ()
+
+let rec remove_tree path =
+  match entry_kind path with
+  | `Missing -> ()
+  | `File -> try_unix (fun () -> Unix.unlink path)
+  | `Directory ->
+      let names =
+        match try Some (Sys.readdir path) with Unix.Unix_error _ -> None with
+        | Some names -> names
+        | None -> [||]
+      in
+      Array.iter (fun name -> remove_tree (Filename.concat path name)) names;
+      try_unix (fun () -> Unix.rmdir path)
 
 let with_temp_dir f =
-  Eio_main.run (fun env ->
-      let path = Filename.temp_file "charamel-test-" ".dir" in
-      Sys.remove path;
-      let dir = Eio.Path.(env#fs / path) in
-      Eio.Path.mkdir ~perm:0o700 dir;
-      Fun.protect
-        ~finally:(fun () -> Eio.Path.rmtree ~missing_ok:true dir)
-        (fun () -> f dir))
+  let path = Filename.temp_file "charamel-test-" ".dir" in
+  try_unix (fun () -> Unix.unlink path);
+  Unix.mkdir path 0o700;
+  Lwt.finalize
+    (fun () -> f path)
+    (fun () ->
+      remove_tree path;
+      Lwt.return_unit)
+
+let run_lwt name suites = Lwt_main.run (Alcotest_lwt.run name suites)
 
 let corpus =
   [

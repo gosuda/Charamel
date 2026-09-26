@@ -1,4 +1,11 @@
 (test
  (name test_colorprofile)
  (package charamel)
- (libraries charamel.colorprofile charamel.ansi eio alcotest))
+ (libraries
+  charamel.colorprofile
+  charamel.ansi
+  alcotest
+  alcotest-lwt
+  lwt
+  lwt.unix
+  test_support))

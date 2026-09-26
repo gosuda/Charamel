@@ -25,6 +25,6 @@ let toggle_and_view () =
 
 let cases =
   [
-    Alcotest.test_case "transitions" `Quick transitions;
-    Alcotest.test_case "toggle and view" `Quick toggle_and_view;
+    Alcotest_lwt.test_case_sync "transitions" `Quick transitions;
+    Alcotest_lwt.test_case_sync "toggle and view" `Quick toggle_and_view;
   ]

@@ -75,16 +75,14 @@ module Anthropic : sig
 
   val exchange :
     ?now_ms:int ->
-    sw:Eio.Switch.t ->
-    clock:_ Eio.Time.clock ->
-    net:_ Eio.Net.t ->
+    clock:Charamel_os.Time.clock ->
     redirect_uri:string ->
     login:login ->
     code:string ->
     unit ->
-    (Credential.t, error) result
-  (** [exchange ?now_ms ~sw ~clock ~net ~redirect_uri ~login ~code ()] swaps an
-      authorization code for a credential.
+    (Credential.t, error) result Lwt.t
+  (** [exchange ?now_ms ~clock ~redirect_uri ~login ~code ()] swaps an authorization code
+      for a credential.
 
       The request carries [grant_type=authorization_code], the client id, redirect URI,
       PKCE verifier, and state. The redirect URI must match the pending login. The token
@@ -93,22 +91,16 @@ module Anthropic : sig
 
   val refresh :
     ?now_ms:int ->
-    sw:Eio.Switch.t ->
-    clock:_ Eio.Time.clock ->
-    net:_ Eio.Net.t ->
+    clock:Charamel_os.Time.clock ->
     Credential.t ->
-    (Credential.t, error) result
-  (** [refresh ?now_ms ~sw ~clock ~net credential] rotates [credential].
+    (Credential.t, error) result Lwt.t
+  (** [refresh ?now_ms ~clock credential] rotates [credential].
 
       The request carries the Claude Code OAuth beta header and SDK user agent. The stored
       account identifier is preserved. [now_ms] defaults to the supplied clock. *)
 
   val ensure_fresh :
-    sw:Eio.Switch.t ->
-    clock:_ Eio.Time.clock ->
-    net:_ Eio.Net.t ->
-    Credential.t ->
-    (Credential.t, error) result
-  (** [ensure_fresh ~sw ~clock ~net credential] refreshes [credential] when it expires
-      within 60 seconds. Otherwise it returns [credential] unchanged. *)
+    clock:Charamel_os.Time.clock -> Credential.t -> (Credential.t, error) result Lwt.t
+  (** [ensure_fresh ~clock credential] refreshes [credential] when it expires within 60
+      seconds. Otherwise it returns [credential] unchanged. *)
 end

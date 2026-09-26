@@ -399,43 +399,45 @@ let app options : (model, msg) Charamel_tea.app =
   }
 
 let read_text env (options : options) =
-  match Gum_io.read_stdin ~strip_ansi:options.strip_ansi env with
-  | Ok value -> value
-  | Error `Empty -> ""
-  | Error (`Read value) -> value
+  Lwt.map
+    (function Ok value -> value | Error `Empty -> "" | Error (`Read value) -> value)
+    (Gum_io.read_stdin ~strip_ansi:options.strip_ansi env)
 
 let normalized_options env (options : options) =
-  let input = read_text env options in
-  let positional = options.options in
-  let options, selected =
-    if positional = [] then
-      let values =
-        if input = "" then [] else Gum_io.split ~delimiter:options.input_delimiter input
+  Lwt.map
+    (fun input ->
+      let positional = options.options in
+      let options, selected =
+        if positional = [] then
+          let values =
+            if input = "" then []
+            else Gum_io.split ~delimiter:options.input_delimiter input
+          in
+          ({ options with options = values }, options.selected)
+        else if options.selected = [] && input <> "" then
+          (options, Gum_io.split ~delimiter:options.input_delimiter input)
+        else (options, options.selected)
       in
-      ({ options with options = values }, options.selected)
-    else if options.selected = [] && input <> "" then
-      (options, Gum_io.split ~delimiter:options.input_delimiter input)
-    else (options, options.selected)
-  in
-  { options with selected }
+      { options with selected })
+    (read_text env options)
 
 let run env (options : options) =
-  let options = normalized_options env options in
-  if options.options = [] then
-    Charamel_cli.error "no options provided, see `gum choose --help`";
-  match single_option options with
-  | Error message -> Charamel_cli.error message
-  | Ok (Some value) -> Gum_io.print_raw env value
-  | Ok None ->
-      let model =
-        Gum_run.run_tui ~name:"choose" ?timeout:options.timeout env (app options)
-          ~finished:(fun model ->
-            if submitted model then Gum_run.Submitted else Gum_run.Quit)
-      in
-      if not (submitted model) then Charamel_cli.error "nothing selected";
-      let values = selected model in
-      if values = [] then Charamel_cli.error "nothing selected"
-      else Gum_io.println env (String.concat options.output_delimiter values)
+  Lwt.bind (normalized_options env options) (fun (options : options) ->
+      if options.options = [] then
+        Charamel_cli.error "no options provided, see `gum choose --help`";
+      match single_option options with
+      | Error message -> Charamel_cli.error message
+      | Ok (Some value) -> Gum_io.print_raw env value
+      | Ok None ->
+          Lwt.bind
+            (Gum_run.run_tui ~name:"choose" ?timeout:options.timeout env (app options)
+               ~finished:(fun model ->
+                 if submitted model then Gum_run.Submitted else Gum_run.Quit))
+            (fun model ->
+              if not (submitted model) then Charamel_cli.error "nothing selected";
+              let values = selected model in
+              if values = [] then Charamel_cli.error "nothing selected"
+              else Gum_io.println env (String.concat options.output_delimiter values)))
 
 let cmd env =
   let open Cmdliner in

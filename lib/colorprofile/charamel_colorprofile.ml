@@ -1,3 +1,5 @@
+open Lwt.Infix
+
 type t = No_tty | Ascii | Ansi | Ansi256 | True_color
 type profile = t
 
@@ -82,7 +84,7 @@ module Writer = struct
 
   type nonrec t = {
     profile : profile;
-    sink : Eio.Flow.sink_ty Eio.Resource.t;
+    sink : Lwt_io.output_channel;
     mutable pending : pending option;
     mutable utf8_remaining : int;
   }
@@ -372,13 +374,14 @@ module Writer = struct
         end
 
   let create ~profile sink = { profile; sink; pending = None; utf8_remaining = 0 }
+  let send t text = Lwt_io.write t.sink text >>= fun () -> Lwt_io.flush t.sink
 
   let write t text =
-    if t.profile = True_color then Eio.Flow.copy_string text t.sink
+    if t.profile = True_color then send t text
     else begin
       let output = Buffer.create (String.length text) in
       String.iter (fun byte -> process_byte t output (Char.code byte)) text;
-      if Buffer.length output > 0 then
-        Eio.Flow.copy_string (Buffer.contents output) t.sink
+      if Buffer.length output > 0 then send t (Buffer.contents output)
+      else Lwt.return_unit
     end
 end

@@ -8,4 +8,6 @@ let suites =
     ("program", Test_program.cases);
   ]
 
-let () = Alcotest.run "tea" suites
+let () =
+  if Array.mem "--tea-pty-child" Sys.argv then Test_terminal.run_pty_child ()
+  else Alcotest.run "tea" suites

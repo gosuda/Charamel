@@ -4,13 +4,16 @@
  (modules test_wish)
  (libraries
   alcotest
+  alcotest-lwt
   charamel-ssh.wish
   charamel-ssh.keygen
   charamel.tea
+  charamel.net
+  charamel.os
+  charamel.cli
   awa
-  eio
-  eio.unix
-  eio_main
+  lwt
+  lwt.unix
   mirage-crypto-rng.unix
   cstruct
   fmt

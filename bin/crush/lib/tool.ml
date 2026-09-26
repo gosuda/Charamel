@@ -1,4 +1,4 @@
-type diagnostic = Lsp.diagnostic
+open Lwt_direct
 
 type question = {
   header : string;
@@ -11,11 +11,8 @@ type question = {
 type answer = { header : string; selected : string list; text : string option }
 
 type ctx = {
-  sw : Eio.Switch.t;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
-  fs : Eio.Fs.dir_ty Eio.Path.t;
-  net : Eio_unix.Net.t;
-  proc_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
+  clock : Charamel_os.Time.clock;
+  fs_root : string;
   random : int -> string;
   env : string -> string option;
   cwd : string;
@@ -37,6 +34,8 @@ type ctx = {
   run_subagent : (prompt:string -> (string, string) result) option;
   read_tracker : (string, int) Hashtbl.t;
 }
+
+type diagnostic = Lsp.diagnostic
 
 type output = {
   content : string;
@@ -167,20 +166,23 @@ let unix_error path operation exception_ =
   | Sys_error message -> Error (`Io (path, Fmt.str "%s: %s" operation message))
   | Invalid_argument message ->
       Error (`Invalid_input (Fmt.str "%s: %s" operation message))
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found path)
-  | Eio.Io (Eio.Fs.E _, _) as exception_ ->
-      Error (`Io (path, Fmt.str "%s: %a" operation Eio.Exn.pp exception_))
-  | Eio.Io _ as exception_ ->
-      Error (`Io (path, Fmt.str "%s: %a" operation Eio.Exn.pp exception_))
+  | Charamel_os.Fs.E (error, target) ->
+      let name =
+        match error with
+        | `Not_found -> "not found"
+        | `Already_exists -> "already exists"
+        | `Permission_denied -> "permission denied"
+        | `Is_directory -> "is a directory"
+      in
+      Error (`Io (path, Fmt.str "%s: %s (%s)" operation name target))
   | exception_ -> Printexc.raise_with_backtrace exception_ (Printexc.get_raw_backtrace ())
 
 let canonical ctx path =
   let path = absolute ctx path in
-  try Ok (Eio_unix.run_in_systhread (fun () -> Unix.realpath path)) with
+  try Ok (await (Lwt_preemptive.detach Unix.realpath path)) with
   | Unix.Unix_error _ as exception_ -> unix_error path "realpath" exception_
   | Sys_error _ as exception_ -> unix_error path "realpath" exception_
   | Invalid_argument _ as exception_ -> unix_error path "realpath" exception_
-  | Eio.Io _ as exception_ -> unix_error path "realpath" exception_
 
 let canonical_parent ctx path =
   let path = absolute ctx path in
@@ -203,13 +205,6 @@ let request ctx ~read_only ~tool ~action ~path ~description =
   match Permission.resolve ctx.permission request with
   | Permission.Allowed -> Ok ()
   | Permission.Denied message -> Error (`Denied message)
-
-let with_timeout ctx seconds f =
-  if seconds < 0. then Error (`Invalid_input "timeout must not be negative")
-  else
-    match Eio.Time.with_timeout ctx.clock seconds (fun () -> Ok (f ())) with
-    | Ok value -> Ok value
-    | Error `Timeout -> Error (`Timeout seconds)
 
 let json_member name value = Jsont.Json.mem (Jsont.Json.name name) value
 let json_string value = Jsont.Json.string value

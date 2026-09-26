@@ -88,8 +88,8 @@ val index_jsont : index_entry list Jsont.t
 type store
 (** The project-scoped session store. *)
 
-val store : fs:Eio.Fs.dir_ty Eio.Path.t -> cwd:string -> store
-(** [store ~fs ~cwd] points at the Crush data directory for the SHA-256 project key
+val store : fs_root:string -> cwd:string -> store
+(** [store ~fs_root ~cwd] points at the Crush data directory for the SHA-256 project key
     derived from [cwd]. It does not create directories. *)
 
 val root : store -> string
@@ -111,28 +111,28 @@ val pp_error : error Fmt.t
 
 val create :
   store ->
-  clock:_ Eio.Time.clock ->
+  clock:Charamel_os.Time.clock ->
   random:(int -> string) ->
   ?parent:string ->
   ?title:string ->
   cwd:string ->
   model:model_ref ->
   unit ->
-  (t, error) result
+  (t, error) result Lwt.t
 (** [create store ~clock ~random ?parent ?title ~cwd ~model ()] allocates a ULID, writes
     its header, and adds an index row. [title] defaults to the empty string. *)
 
-val open_ : store -> id:string -> (t, error) result
+val open_ : store -> id:string -> (t, error) result Lwt.t
 (** [open_ store ~id] replays a session. A malformed final event line is treated as a
-    killed-process partial append: only that line is removed under cancellation
-    protection. A malformed non-final line, a missing header, or a header/file id mismatch
-    is [Session_corrupt]. *)
+    killed-process partial append: only that line is removed, and the rewrite is atomic. A
+    malformed non-final line, a missing header, or a header/file id mismatch is
+    [Session_corrupt]. *)
 
-val last : store -> (t, error) result
+val last : store -> (t, error) result Lwt.t
 (** [last store] opens the newest indexed session, or returns [`Not_found ""] when the
     index has no rows. *)
 
-val list : store -> (index_entry list, error) result
+val list : store -> (index_entry list, error) result Lwt.t
 (** [list store] reads [sessions.json] and returns rows newest first. *)
 
 val id : t -> string
@@ -150,12 +150,12 @@ val events : t -> event array
 val path : t -> string
 (** [path session] is the absolute JSONL path. *)
 
-val append : t -> clock:_ Eio.Time.clock -> event -> (unit, error) result
+val append : t -> clock:Charamel_os.Time.clock -> event -> (unit, error) result Lwt.t
 (** [append session ~clock event] serializes and appends one newline-terminated event
     while holding the session mutex. The in-memory events and atomic index row change only
     after the complete write succeeds. *)
 
-val set_title : t -> title:string -> (unit, error) result
+val set_title : t -> title:string -> (unit, error) result Lwt.t
 (** [set_title session ~title] updates the indexed title without adding an event. *)
 
 val messages : t -> Charamel_fantasy.Message.t list
@@ -166,7 +166,7 @@ val messages : t -> Charamel_fantasy.Message.t list
 val usage_total : t -> Charamel_fantasy.Usage.t * float
 (** [usage_total session] sums all usage events and their dollar costs. *)
 
-val delete : store -> id:string -> (unit, error) result
+val delete : store -> id:string -> (unit, error) result Lwt.t
 (** [delete store ~id] removes the session file and its artifact directory and atomically
     removes its index row. *)
 

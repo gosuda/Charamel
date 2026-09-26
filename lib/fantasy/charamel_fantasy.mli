@@ -3,7 +3,7 @@
     [Charamel_fantasy] speaks to Anthropic, OpenAI-compatible, OpenAI Responses, and
     Google endpoints. A provider is constructed from a base URL and an authentication
     mode; [Provider.stream] drives one request and yields the seven approved event kinds
-    into a bounded Eio stream ending with exactly one terminal [Finish]. *)
+    into an Lwt stream ending with exactly one terminal [Finish]. *)
 
 module Error = Error
 (** Shared provider errors. *)
@@ -68,36 +68,28 @@ module Oauth : sig
 
     val exchange :
       ?now_ms:int ->
-      sw:Eio.Switch.t ->
-      clock:_ Eio.Time.clock ->
-      net:_ Eio.Net.t ->
+      clock:Charamel_os.Time.clock ->
       redirect_uri:string ->
       login:login ->
       code:string ->
       unit ->
-      (Credential.t, error) result
-    (** [exchange ?now_ms ~sw ~clock ~net ~redirect_uri ~login ~code ()] exchanges [code]
-        for a credential. [redirect_uri] must match the pending login. [now_ms] defaults
-        to the supplied clock in milliseconds. *)
+      (Credential.t, error) result Lwt.t
+    (** [exchange ?now_ms ~clock ~redirect_uri ~login ~code ()] exchanges [code] for a
+        credential. [redirect_uri] must match the pending login. [now_ms] defaults to the
+        supplied clock in milliseconds. *)
 
     val refresh :
       ?now_ms:int ->
-      sw:Eio.Switch.t ->
-      clock:_ Eio.Time.clock ->
-      net:_ Eio.Net.t ->
+      clock:Charamel_os.Time.clock ->
       Credential.t ->
-      (Credential.t, error) result
-    (** [refresh ~sw ~clock ~net credential] rotates [credential] and preserves its
-        account identifier. [now_ms] defaults to the supplied clock in milliseconds. *)
+      (Credential.t, error) result Lwt.t
+    (** [refresh ~clock credential] rotates [credential] and preserves its account
+        identifier. [now_ms] defaults to the supplied clock in milliseconds. *)
 
     val ensure_fresh :
-      sw:Eio.Switch.t ->
-      clock:_ Eio.Time.clock ->
-      net:_ Eio.Net.t ->
-      Credential.t ->
-      (Credential.t, error) result
-    (** [ensure_fresh ~sw ~clock ~net credential] refreshes [credential] if its expiry is
-        within 60 seconds. Otherwise it is [Ok credential]. *)
+      clock:Charamel_os.Time.clock -> Credential.t -> (Credential.t, error) result Lwt.t
+    (** [ensure_fresh ~clock credential] refreshes [credential] if its expiry is within 60
+        seconds. Otherwise it is [Ok credential]. *)
   end
 end
 

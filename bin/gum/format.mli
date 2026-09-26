@@ -19,5 +19,5 @@ val render :
     [pink], [language] to the empty language, and [strip_ansi] only affects callers that
     choose to strip input before calling this pure function. *)
 
-val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
+val cmd : Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t
 (** [cmd env] is the [format] subcommand evaluated with [env]. *)

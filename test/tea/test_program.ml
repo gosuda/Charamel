@@ -119,29 +119,11 @@ let test_quit_cancels_long_command () =
   let count, _ = Test.run app ~events:[] ~size:(4, 20) in
   Alcotest.(check int) "quit cancels pending commands" 0 count
 
-let open_input =
-  let module Open = struct
-    type t = unit
-
-    let read_methods = []
-    let single_read () _ = Eio.Promise.await (fst (Eio.Promise.create ()))
-  end in
-  let ops = Eio.Flow.Pi.source (module Open) in
-  Eio.Resource.T ((), ops)
-
 let rendered_bytes app =
-  Eio_main.run (fun env ->
-      let output = Buffer.create 256 in
-      let terminal =
-        Terminal.custom ~input:open_input ~output:(Eio.Flow.buffer_sink output)
-          ~size:(fun () -> (4, 20))
-          ~on_resize:None
-          ~env:(fun _ -> None)
-          ~is_tty:false
-      in
-      match run ~terminal ~fps:120 ~clock:env#clock app env with
-      | Ok _ -> Buffer.contents output
-      | Error _ -> Alcotest.fail "program did not finish normally")
+  let buffer = Buffer.create 256 in
+  let output = Test_terminal.buffer_output buffer in
+  let _, _ = Test.run ~output app ~events:[] ~size:(4, 20) in
+  Buffer.contents buffer
 
 let test_every_frame_reaches_terminal () =
   let word = function 0 -> "alpha" | 1 -> "bravo" | _ -> "charlie" in

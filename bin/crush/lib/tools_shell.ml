@@ -1,4 +1,5 @@
 open Result.Syntax
+open Lwt_direct
 
 type bash_params = {
   command : string;
@@ -281,7 +282,7 @@ let is_read_only command =
 
 let output_with_artifact (ctx : Tool.ctx) text =
   let content, artifact =
-    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
+    await (Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text)
   in
   Tool.ok ?artifact content
 
@@ -289,93 +290,59 @@ let output_with_status ctx ~status text =
   let output = output_with_artifact ctx text in
   match status with `Ok -> output | `Error -> { output with is_error = true }
 
-let append_chunk ~mutex ~buffer ~captured ~truncated chunk =
-  let data = Cstruct.to_string chunk in
-  Eio.Mutex.use_rw ~protect:true mutex @@ fun () ->
-  let available = 10_485_760 - !captured in
-  let keep = min available (String.length data) in
-  if keep > 0 then (
-    Buffer.add_substring buffer data 0 keep;
-    captured := !captured + keep);
-  if keep < String.length data then truncated := true
-
 let drain source ~mutex ~buffer ~captured ~truncated =
-  let chunk = Cstruct.create 65_536 in
+  let open Lwt.Infix in
   let rec loop () =
-    match Eio.Flow.single_read source chunk with
-    | count when count > 0 ->
-        append_chunk ~mutex ~buffer ~captured ~truncated (Cstruct.sub chunk 0 count);
-        loop ()
-    | _ -> loop ()
-    | exception End_of_file -> ()
+    Lwt_io.read ~count:65_536 source >>= fun chunk ->
+    if chunk = "" then Lwt.return_unit
+    else
+      Lwt_mutex.with_lock mutex (fun () ->
+          let available = 10_485_760 - !captured in
+          let keep = min available (String.length chunk) in
+          if keep > 0 then (
+            Buffer.add_substring buffer chunk 0 keep;
+            captured := !captured + keep);
+          if keep < String.length chunk then truncated := true;
+          Lwt.return_unit)
+      >>= loop
   in
   loop ()
 
-let signal_group pid signal =
-  try Unix.kill (-pid) signal with Unix.Unix_error (Unix.ESRCH, _, _) -> ()
-
-let fd_of_sink sink =
-  match Eio_unix.Resource.fd_opt sink with
-  | Some fd -> fd
-  | None -> invalid_arg "shell pipe is not backed by a Unix file descriptor"
-
-let run_foreground (ctx : Tool.ctx) ~cwd ~command =
-  Eio.Switch.run @@ fun process_sw ->
-  let stdout_r, stdout_w = Eio.Process.pipe ~sw:process_sw ctx.Tool.proc_mgr in
-  let stderr_r, stderr_w = Eio.Process.pipe ~sw:process_sw ctx.Tool.proc_mgr in
-  let null_unix =
-    Eio_unix.run_in_systhread (fun () -> Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0)
+let collect_output process =
+  let open Lwt.Infix in
+  let buffer = Buffer.create 256 in
+  let mutex = Lwt_mutex.create () in
+  let captured = ref 0 in
+  let truncated = ref false in
+  Lwt.join
+    [
+      drain (Charamel_os.Process.stdout_r process) ~mutex ~buffer ~captured ~truncated;
+      drain (Charamel_os.Process.stderr_r process) ~mutex ~buffer ~captured ~truncated;
+    ]
+  >>= fun () ->
+  Charamel_os.Process.await process >|= fun code ->
+  let text = Buffer.contents buffer in
+  let output =
+    if !truncated then text ^ "\n[output truncated after 10485760 bytes]\n" else text
   in
-  let null_stdin = Eio_unix.Fd.of_unix ~sw:process_sw ~close_unix:true null_unix in
-  let process =
-    Eio_unix.Process.spawn_unix ~sw:process_sw ctx.Tool.proc_mgr
-      ~cwd:Eio.Path.(ctx.Tool.fs / cwd)
-      ~pgid:0
-      ~fds:
-        [
-          (0, null_stdin, `Blocking);
-          (1, fd_of_sink stdout_w, `Blocking);
-          (2, fd_of_sink stderr_w, `Blocking);
-        ]
-      ~executable:"/bin/sh" [ "sh"; "-c"; command ]
-  in
-  Eio.Flow.close stdout_w;
-  Eio.Flow.close stderr_w;
-  let alive = ref true in
-  let cleanup () =
-    if !alive then (
-      Eio.Process.signal process Sys.sigterm;
-      signal_group (Eio.Process.pid process) Sys.sigterm;
-      Eio.Process.signal process Sys.sigkill;
-      signal_group (Eio.Process.pid process) Sys.sigkill)
-  in
-  Fun.protect
-    ~finally:(fun () -> Eio.Cancel.protect cleanup)
-    (fun () ->
-      let buffer = Buffer.create 256 in
-      let mutex = Eio.Mutex.create () in
-      let captured = ref 0 in
-      let truncated = ref false in
-      Eio.Fiber.both
-        (fun () -> drain stdout_r ~mutex ~buffer ~captured ~truncated)
-        (fun () -> drain stderr_r ~mutex ~buffer ~captured ~truncated);
-      let status = Eio.Process.await process in
-      alive := false;
-      let output =
-        let text = Buffer.contents buffer in
-        if !truncated then text ^ "\n[output truncated after 10485760 bytes]\n" else text
-      in
-      match status with
-      | `Exited 0 -> `Ok output
-      | `Exited code -> `Error (output, Fmt.str "Exit code %d" code)
-      | `Signaled signal -> `Error (output, Fmt.str "Terminated by signal %d" signal))
+  if code = 0 then `Ok output
+  else if code > 128 then `Error (output, Fmt.str "Terminated by signal %d" (code - 128))
+  else `Error (output, Fmt.str "Exit code %d" code)
 
 let run_foreground_with_timeout ctx ~cwd ~command ~timeout_s =
+  let process =
+    Charamel_os.Process.spawn ~cwd ~stdin:`Null ~stdout:`Pipe ~stderr:`Pipe
+      [ "/bin/sh"; "-c"; command ]
+  in
+  let work = collect_output process in
   match
-    Tool.with_timeout ctx (float_of_int timeout_s) (fun () ->
-        run_foreground ctx ~cwd ~command)
+    try Ok (await (Lwt_unix.with_timeout (float_of_int timeout_s) (fun () -> work)))
+    with Lwt_unix.Timeout -> Error (`Timeout (float_of_int timeout_s))
   with
-  | Error error -> Error error
+  | Error error ->
+      Charamel_os.Process.terminate process;
+      Charamel_os.Process.kill_tree process;
+      Error error
   | Ok (`Ok output) ->
       Ok
         (output_with_status ctx ~status:`Ok
@@ -432,8 +399,6 @@ let bash =
             Ok (output_with_artifact ctx (Fmt.str "started %s" job_id))
           else
             try run_foreground_with_timeout ctx ~cwd ~command ~timeout_s with
-            | Eio.Io _ as exception_ ->
-                Error (`Io (cwd, Fmt.str "%a" Eio.Exn.pp exception_))
             | Unix.Unix_error (error, operation, argument) ->
                 Error
                   (`Io
@@ -469,8 +434,9 @@ let job_output =
               ~description:(Fmt.str "Read output for %s" job_id)
           in
           match
-            Jobs.output ctx.Tool.jobs ~id:job_id
-              ~wait:(Option.value params.wait ~default:false)
+            await
+              (Jobs.output ctx.Tool.jobs ~id:job_id
+                 ~wait:(Option.value params.wait ~default:false))
           with
           | Error (`Not_found id) -> Error (`Not_found id)
           | Ok (captured, status) ->
@@ -504,7 +470,7 @@ let job_kill =
             Tool.request ctx ~read_only:false ~tool:"job_kill" ~action:job_id ~path:""
               ~description:(Fmt.str "Terminate %s" job_id)
           in
-          match Jobs.kill ctx.Tool.jobs ~id:job_id with
+          match await (Jobs.kill ctx.Tool.jobs ~id:job_id) with
           | Ok () -> Ok (output_with_artifact ctx (Fmt.str "killed %s" job_id))
           | Error (`Not_found id) -> Error (`Not_found id));
   }

@@ -62,7 +62,7 @@ let booleans () =
 let suite =
   ( "config",
     [
-      Alcotest.test_case "precedence" `Quick precedence;
-      Alcotest.test_case "flags win" `Quick flags_win;
-      Alcotest.test_case "booleans" `Quick booleans;
+      Alcotest_lwt.test_case_sync "precedence" `Quick precedence;
+      Alcotest_lwt.test_case_sync "flags win" `Quick flags_win;
+      Alcotest_lwt.test_case_sync "booleans" `Quick booleans;
     ] )

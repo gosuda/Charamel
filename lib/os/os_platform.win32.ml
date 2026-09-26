@@ -44,6 +44,12 @@ module Tty = struct
   let is_stdout = Charamel_os_win32.get_console_mode output <> None
   let size_stdout () = Charamel_os_win32.console_screen_size output
 
+  (* The standard handles are read by role: a [Unix.file_descr] is a C runtime
+     descriptor here, and an arbitrary one has no [HANDLE] to query. *)
+  let size_of_output = function
+    | `Stdout -> Charamel_os_win32.console_screen_size output
+    | `Stderr -> Charamel_os_win32.console_screen_size (Charamel_os_win32.std_error ())
+
   let mode handle =
     match Charamel_os_win32.get_console_mode handle with
     | Some mode -> mode

@@ -11,12 +11,11 @@
   test_program)
  (libraries
   charamel.tea
+  charamel.os
   charamel.ansi
   alcotest
-  eio
-  eio.unix
-  eio_main
   fmt
-  cstruct
+  lwt
+  lwt.unix
   test_support
   unix))

@@ -21,8 +21,8 @@ let no_text () =
 
 let cases =
   [
-    Alcotest.test_case "vertical" `Quick vertical_join;
-    Alcotest.test_case "horizontal alignment" `Quick aligned_horizontal;
-    Alcotest.test_case "invalid alignment" `Quick invalid_alignment;
-    Alcotest.test_case "no text" `Quick no_text;
+    Alcotest_lwt.test_case_sync "vertical" `Quick vertical_join;
+    Alcotest_lwt.test_case_sync "horizontal alignment" `Quick aligned_horizontal;
+    Alcotest_lwt.test_case_sync "invalid alignment" `Quick invalid_alignment;
+    Alcotest_lwt.test_case_sync "no text" `Quick no_text;
   ]

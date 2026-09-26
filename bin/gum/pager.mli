@@ -37,8 +37,8 @@ val make : options -> model
 val app : options -> (model, msg) Charamel_tea.app
 (** [app options] is the scripted or terminal pager application. *)
 
-val run : Eio_unix.Stdenv.base -> options -> unit
+val run : Charamel_cli.Env.t -> options -> unit Lwt.t
 (** [run env options] obtains content and runs the pager until quit. *)
 
-val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
+val cmd : Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t
 (** [cmd env] is the [gum pager] command. *)

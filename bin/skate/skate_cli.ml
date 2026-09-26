@@ -1,10 +1,12 @@
 module Store = Skate_core.Store
+module Env = Charamel_cli.Env
+open Lwt.Infix
 
 let max_value_size = 64 * 1024 * 1024
 
 type target = { key : string; db : string option }
 
-let root env = Eio.Path.(env#fs / Charamel_cli.Xdg.data_dir ~app:"skate")
+let root () = Charamel_cli.Xdg.data_dir ~app:"skate"
 
 let store_error = function
   | `No_such_db _ -> "skate: no such database"
@@ -43,13 +45,17 @@ let parse_database argument default =
   if name = "" then Ok default else Ok name
 
 let read_stdin env =
-  try
-    match Eio.Buf_read.parse ~max_size:max_value_size Eio.Buf_read.take_all env#stdin with
-    | Ok value -> Ok value
-    | Error (`Msg message) -> Error message
-  with Eio.Io (Eio.Fs.E _, _) as exn -> Error (Fmt.str "%a" Eio.Exn.pp exn)
+  Lwt.catch
+    (fun () ->
+      Lwt_io.read ~count:(max_value_size + 1) env.Env.stdin >>= fun value ->
+      if String.length value > max_value_size then
+        Lwt.return (Error "stdin exceeds the value size limit")
+      else Lwt.return (Ok value))
+    (function
+      | Lwt.Canceled -> Lwt.fail Lwt.Canceled
+      | exn -> Lwt.return (Error (Printexc.to_string exn)))
 
-let write env data = Eio.Flow.copy_string data env#stdout
+let write env data = Lwt_io.write env.Env.stdout data
 let write_line env data = write env (data ^ "\n")
 
 let render_value ~show_binary = function
@@ -68,8 +74,8 @@ let run_get env ~target ~show_binary =
   | Error message -> Charamel_cli.error message
   | Ok target ->
       let db = Option.value target.db ~default:"default" in
-      let value = unwrap (Store.get ~root:(root env) ~db target.key) in
-      output_get env ~show_binary value
+      Store.get ~root:(root ()) ~db target.key >>= fun value ->
+      output_get env ~show_binary (unwrap value)
 
 let run_set env ~target ~value =
   match parse_key target with
@@ -78,23 +84,26 @@ let run_set env ~target ~value =
       let db = Option.value target.db ~default:"default" in
       let value =
         match value with
-        | Some value when not (String.equal value "-") -> Ok value
+        | Some value when not (String.equal value "-") -> Lwt.return (Ok value)
         | Some _ | None -> read_stdin env
       in
+      value >>= fun value ->
       let value =
         match value with
         | Ok value -> value
         | Error message ->
             Charamel_cli.error (Fmt.str "skate: could not read stdin: %s" message)
       in
-      unwrap (Store.set ~root:(root env) ~db target.key value)
+      Store.set ~root:(root ()) ~db target.key value >>= fun stored ->
+      Lwt.return (unwrap stored)
 
-let run_delete env ~target =
+let run_delete _env ~target =
   match parse_key target with
   | Error message -> Charamel_cli.error message
   | Ok target ->
       let db = Option.value target.db ~default:"default" in
-      unwrap (Store.delete ~root:(root env) ~db target.key)
+      Store.delete ~root:(root ()) ~db target.key >>= fun deleted ->
+      Lwt.return (unwrap deleted)
 
 let run_list env ~database ~keys_only ~values_only ~show_binary =
   if keys_only && values_only then
@@ -103,28 +112,30 @@ let run_list env ~database ~keys_only ~values_only ~show_binary =
     match parse_database database "default" with
     | Error message -> Charamel_cli.error message
     | Ok db ->
-        let entries = unwrap (Store.list ~root:(root env) ~db) in
+        Store.list ~root:(root ()) ~db >>= fun entries ->
+        let entries = unwrap entries in
         let rec emit = function
-          | [] -> ()
+          | [] -> Lwt.return_unit
           | (key, value) :: rest ->
               let line =
                 if keys_only then key
                 else if values_only then render_value ~show_binary value
                 else key ^ "\t" ^ render_value ~show_binary value
               in
-              write_line env line;
-              emit rest
+              write_line env line >>= fun () -> emit rest
         in
         emit entries
 
-let run_delete_db env database =
+let run_delete_db _env database =
   match parse_database (Some database) database with
   | Error message -> Charamel_cli.error message
-  | Ok db -> unwrap (Store.delete_db ~root:(root env) ~db)
+  | Ok db ->
+      Store.delete_db ~root:(root ()) ~db >>= fun deleted -> Lwt.return (unwrap deleted)
 
 let run_dbs env =
-  let names = unwrap (Store.dbs ~root:(root env)) in
-  List.iter (write_line env) names
+  Store.dbs ~root:(root ()) >>= fun names ->
+  let names = unwrap names in
+  Lwt_list.iter_s (write_line env) names
 
 let show_binary_arg () =
   let open Cmdliner in

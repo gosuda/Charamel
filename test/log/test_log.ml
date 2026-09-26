@@ -8,7 +8,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 
 let user_tag = Logs.Tag.def "user" Fmt.string
 let note_tag = Logs.Tag.def "note" Fmt.string
-let clock = Eio_mock.Clock.make ()
+let clock = Charamel_os.Time.of_virtual (fst (Charamel_os.Time.create_virtual ()))
 
 let with_reporter ?format ?styles ?time_format ?report_timestamp ?report_caller
     ?(profile = Charamel_colorprofile.True_color) f =
@@ -80,7 +80,6 @@ let test_text_caller_on () =
     (strip out)
 
 let test_text_timestamp () =
-  Eio_mock.Clock.set_time clock 0.0;
   let out =
     with_reporter ~format:Charamel_log.Text ~report_timestamp:true (fun () ->
         Log.err (fun m -> m "boom"))

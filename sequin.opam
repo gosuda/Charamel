@@ -11,10 +11,9 @@ depends: [
   "dune" {>= "3.24"}
   "charamel"
   "fmt"
-  "eio"
-  "eio_main"
   "cmdliner"
   "alcotest" {with-test}
+  "alcotest-lwt" {>= "1.9.1" & with-test}
   "odoc" {with-doc}
 ]
 build: [

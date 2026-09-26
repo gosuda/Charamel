@@ -1,3 +1,4 @@
+open Lwt.Syntax
 module K = Charamel_ssh_keygen
 
 let err_show = function
@@ -135,9 +136,6 @@ let keytype_of = function
   | K.Ecdsa_p384 -> "ecdsa-sha2-nistp384"
   | K.Ecdsa_p521 -> "ecdsa-sha2-nistp521"
 
-let ( / ) = Eio.Path.( / )
-let of_dir dir name = Eio.Path.of_dir dir / name
-
 let algorithms =
   [
     ("ed25519", K.Ed25519);
@@ -215,7 +213,7 @@ let seed_length_case (label, bytes) () =
   expect_error ("seed of " ^ label) `Malformed (K.of_ed25519_seed bytes)
 
 let parse_case name expected input =
-  Alcotest.test_case name `Quick (fun () ->
+  Alcotest_lwt.test_case_sync name `Quick (fun () ->
       expect_error name expected (K.of_openssh_private (input ())))
 
 let ed25519_pem ?(comment = "") k =
@@ -340,86 +338,101 @@ let tag_typ =
     | `Generated -> Format.pp_print_string fmt "`Generated"
     | `Loaded -> Format.pp_print_string fmt "`Loaded")
 
-let write_ok msg dir path ?comment key =
-  match K.write ~fs:dir ~path ?comment key with
-  | Ok () -> ()
+let load_file path =
+  let ic = open_in_bin path in
+  let length = in_channel_length ic in
+  let body = really_input_string ic length in
+  close_in ic;
+  body
+
+let save_exclusive path perm body =
+  let fd = Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] perm in
+  let out = Unix.out_channel_of_descr fd in
+  output_string out body;
+  close_out out
+
+let write_ok msg fs_root path ?comment key =
+  let* result = K.write ~fs_root ~path ?comment key in
+  match result with
+  | Ok () -> Lwt.return_unit
   | Error e -> Alcotest.failf "%s: %s" msg (err_show e)
 
-let refuse_existing dir path key msg =
-  match K.write ~fs:dir ~path key with
-  | Error (`Already_exists _) -> ()
+let refuse_existing fs_root path key msg =
+  let* result = K.write ~fs_root ~path key in
+  match result with
+  | Error (`Already_exists _) -> Lwt.return_unit
   | Error e -> Alcotest.failf "%s: expected `Already_exists, got %s" msg (err_show e)
   | Ok () -> Alcotest.failf "%s: expected `Already_exists, got Ok" msg
 
 let perms_case () =
   Test_support.with_temp_dir (fun tmp ->
-      let case_dir = tmp / "perms" in
-      Eio.Path.mkdir ~perm:0o700 case_dir;
-      Eio.Path.with_subtree case_dir (fun sub ->
-          let dir = fst sub in
-          let k = K.generate K.Ed25519 in
-          write_ok "write the pair" dir "k" ~comment:"perm-test" k;
-          Alcotest.check Alcotest.int "private key mode" 0o600
-            (Eio.Path.stat ~follow:true (of_dir dir "k")).Eio.File.Stat.perm;
-          Alcotest.check Alcotest.int "public key mode" 0o644
-            (Eio.Path.stat ~follow:true (of_dir dir "k.pub")).Eio.File.Stat.perm;
-          Alcotest.check Alcotest.bool "private key is PEM armored" true
-            (String.starts_with ~prefix:"-----BEGIN OPENSSH PRIVATE KEY-----"
-               (Eio.Path.load (of_dir dir "k")));
-          Alcotest.check Alcotest.string "public key is the authorized_keys line"
-            (K.authorized_key ~comment:"perm-test" k)
-            (String.trim (Eio.Path.load (of_dir dir "k.pub")))))
+      let case_dir = Filename.concat tmp "perms" in
+      Unix.mkdir case_dir 0o700;
+      let k = K.generate K.Ed25519 in
+      let* () = write_ok "write the pair" case_dir "k" ~comment:"perm-test" k in
+      let private_path = Filename.concat case_dir "k" in
+      let public_path = Filename.concat case_dir "k.pub" in
+      Alcotest.check Alcotest.int "private key mode" 0o600
+        (Unix.stat private_path).Unix.st_perm;
+      Alcotest.check Alcotest.int "public key mode" 0o644
+        (Unix.stat public_path).Unix.st_perm;
+      Alcotest.check Alcotest.bool "private key is PEM armored" true
+        (String.starts_with ~prefix:"-----BEGIN OPENSSH PRIVATE KEY-----"
+           (load_file private_path));
+      Alcotest.check Alcotest.string "public key is the authorized_keys line"
+        (K.authorized_key ~comment:"perm-test" k)
+        (String.trim (load_file public_path));
+      Lwt.return_unit)
 
 let load_or_generate_case () =
   Test_support.with_temp_dir (fun tmp ->
-      let case_dir = tmp / "log" in
-      Eio.Path.mkdir ~perm:0o700 case_dir;
-      Eio.Path.with_subtree case_dir (fun sub ->
-          let dir = fst sub in
-          let k, tag =
-            expect_ok "load_or_generate on an absent path"
-              (K.load_or_generate ~fs:dir ~path:"key" K.Ecdsa_p384)
-          in
-          Alcotest.check tag_typ "an absent path is generated" `Generated tag;
-          Alcotest.check Alcotest.int "generated private mode" 0o600
-            (Eio.Path.stat ~follow:true (of_dir dir "key")).Eio.File.Stat.perm;
-          Alcotest.check Alcotest.int "generated public mode" 0o644
-            (Eio.Path.stat ~follow:true (of_dir dir "key.pub")).Eio.File.Stat.perm;
-          let k2, tag2 =
-            expect_ok "load_or_generate on an existing path"
-              (K.load_or_generate ~fs:dir ~path:"key" K.Ecdsa_p384)
-          in
-          Alcotest.check tag_typ "an existing path is loaded" `Loaded tag2;
-          Alcotest.check Alcotest.string "loaded pair matches the generated pair"
-            (K.fingerprint_sha256 k) (K.fingerprint_sha256 k2)))
+      let case_dir = Filename.concat tmp "log" in
+      Unix.mkdir case_dir 0o700;
+      let* result = K.load_or_generate ~fs_root:case_dir ~path:"key" K.Ecdsa_p384 in
+      let k, tag = expect_ok "load_or_generate on an absent path" result in
+      Alcotest.check tag_typ "an absent path is generated" `Generated tag;
+      let private_path = Filename.concat case_dir "key" in
+      let public_path = Filename.concat case_dir "key.pub" in
+      Alcotest.check Alcotest.int "generated private mode" 0o600
+        (Unix.stat private_path).Unix.st_perm;
+      Alcotest.check Alcotest.int "generated public mode" 0o644
+        (Unix.stat public_path).Unix.st_perm;
+      let* result2 = K.load_or_generate ~fs_root:case_dir ~path:"key" K.Ecdsa_p384 in
+      let k2, tag2 = expect_ok "load_or_generate on an existing path" result2 in
+      Alcotest.check tag_typ "an existing path is loaded" `Loaded tag2;
+      Alcotest.check Alcotest.string "loaded pair matches the generated pair"
+        (K.fingerprint_sha256 k) (K.fingerprint_sha256 k2);
+      Lwt.return_unit)
 
 let collision_private_case () =
   Test_support.with_temp_dir (fun tmp ->
-      let case_dir = tmp / "collision-private" in
-      Eio.Path.mkdir ~perm:0o700 case_dir;
-      Eio.Path.with_subtree case_dir (fun sub ->
-          let dir = fst sub in
-          Eio.Path.save ~create:(`Exclusive 0o600) (of_dir dir "k") "stale-private";
-          refuse_existing dir "k" (K.generate K.Ed25519) "existing private key";
-          Alcotest.check Alcotest.string "existing private key left untouched"
-            "stale-private"
-            (Eio.Path.load (of_dir dir "k"));
-          Alcotest.check Alcotest.bool "no public key written" false
-            (Eio.Path.is_file (of_dir dir "k.pub"))))
+      let case_dir = Filename.concat tmp "collision-private" in
+      Unix.mkdir case_dir 0o700;
+      let private_path = Filename.concat case_dir "k" in
+      save_exclusive private_path 0o600 "stale-private";
+      let* () =
+        refuse_existing case_dir "k" (K.generate K.Ed25519) "existing private key"
+      in
+      Alcotest.check Alcotest.string "existing private key left untouched" "stale-private"
+        (load_file private_path);
+      Alcotest.check Alcotest.bool "no public key written" false
+        (Sys.file_exists (Filename.concat case_dir "k.pub"));
+      Lwt.return_unit)
 
 let collision_public_case () =
   Test_support.with_temp_dir (fun tmp ->
-      let case_dir = tmp / "collision-public" in
-      Eio.Path.mkdir ~perm:0o700 case_dir;
-      Eio.Path.with_subtree case_dir (fun sub ->
-          let dir = fst sub in
-          Eio.Path.save ~create:(`Exclusive 0o644) (of_dir dir "k.pub") "stale-public";
-          refuse_existing dir "k" (K.generate K.Ed25519) "existing public key";
-          Alcotest.check Alcotest.string "existing public key left untouched"
-            "stale-public"
-            (Eio.Path.load (of_dir dir "k.pub"));
-          Alcotest.check Alcotest.bool "no private key written" false
-            (Eio.Path.is_file (of_dir dir "k"))))
+      let case_dir = Filename.concat tmp "collision-public" in
+      Unix.mkdir case_dir 0o700;
+      let public_path = Filename.concat case_dir "k.pub" in
+      save_exclusive public_path 0o644 "stale-public";
+      let* () =
+        refuse_existing case_dir "k" (K.generate K.Ed25519) "existing public key"
+      in
+      Alcotest.check Alcotest.string "existing public key left untouched" "stale-public"
+        (load_file public_path);
+      Alcotest.check Alcotest.bool "no private key written" false
+        (Sys.file_exists (Filename.concat case_dir "k"));
+      Lwt.return_unit)
 
 let ssh_keygen_path () =
   match Sys.getenv_opt "PATH" with
@@ -441,57 +454,54 @@ let external_fingerprint_case algo () =
   | None -> Alcotest.skip ()
   | Some ssh ->
       Test_support.with_temp_dir (fun tmp ->
-          let case_dir = tmp / ("external-" ^ K.algorithm_name algo) in
-          Eio.Path.mkdir ~perm:0o700 case_dir;
-          Eio.Path.with_subtree case_dir (fun sub ->
-              let dir = fst sub in
-              let k = K.generate algo in
-              write_ok "write the pair for ssh-keygen" dir "k" k;
-              let status, out, err =
-                Test_support.run_cli ~exe:ssh
-                  [ "-l"; "-f"; Eio.Path.native_exn (case_dir / "k.pub") ]
-              in
-              if status <> 0 then
-                Alcotest.failf "ssh-keygen -l failed (%d): %s" status (String.trim err);
-              let token =
-                match
-                  List.find_opt
-                    (String.starts_with ~prefix:"SHA256:")
-                    (String.split_on_char ' ' out)
-                with
-                | Some t -> String.trim t
-                | None -> Alcotest.failf "ssh-keygen printed no fingerprint: %S" out
-              in
-              Alcotest.check Alcotest.string "ssh-keygen fingerprint matches"
-                (K.fingerprint_sha256 k) token))
+          let case_dir = Filename.concat tmp ("external-" ^ K.algorithm_name algo) in
+          Unix.mkdir case_dir 0o700;
+          let k = K.generate algo in
+          let* () = write_ok "write the pair for ssh-keygen" case_dir "k" k in
+          let* status, out, err =
+            Test_support.run_cli ~exe:ssh [ "-l"; "-f"; Filename.concat case_dir "k.pub" ]
+          in
+          if status <> 0 then
+            Alcotest.failf "ssh-keygen -l failed (%d): %s" status (String.trim err);
+          let token =
+            match
+              List.find_opt
+                (String.starts_with ~prefix:"SHA256:")
+                (String.split_on_char ' ' out)
+            with
+            | Some t -> String.trim t
+            | None -> Alcotest.failf "ssh-keygen printed no fingerprint: %S" out
+          in
+          Alcotest.check Alcotest.string "ssh-keygen fingerprint matches"
+            (K.fingerprint_sha256 k) token;
+          Lwt.return_unit)
 
 let external_pubkey_case () =
   match ssh_keygen_path () with
   | None -> Alcotest.skip ()
   | Some ssh ->
       Test_support.with_temp_dir (fun tmp ->
-          let case_dir = tmp / "external-pubkey" in
-          Eio.Path.mkdir ~perm:0o700 case_dir;
-          Eio.Path.with_subtree case_dir (fun sub ->
-              let dir = fst sub in
-              let k = K.generate K.Ed25519 in
-              write_ok "write the pair for ssh-keygen" dir "k" k;
-              let status, out, err =
-                Test_support.run_cli ~exe:ssh
-                  [ "-y"; "-f"; Eio.Path.native_exn (case_dir / "k") ]
-              in
-              if status <> 0 then
-                Alcotest.failf "ssh-keygen -y failed (%d): %s" status (String.trim err);
-              let expected =
-                match String.split_on_char ' ' (K.authorized_key k) with
-                | keytype :: b64 :: _ -> keytype ^ " " ^ b64
-                | _ -> Alcotest.fail "authorized_key has fewer than two fields"
-              in
-              Alcotest.check Alcotest.string "ssh-keygen parses the written public key"
-                expected (String.trim out)))
+          let case_dir = Filename.concat tmp "external-pubkey" in
+          Unix.mkdir case_dir 0o700;
+          let k = K.generate K.Ed25519 in
+          let* () = write_ok "write the pair for ssh-keygen" case_dir "k" k in
+          let* status, out, err =
+            Test_support.run_cli ~exe:ssh [ "-y"; "-f"; Filename.concat case_dir "k" ]
+          in
+          if status <> 0 then
+            Alcotest.failf "ssh-keygen -y failed (%d): %s" status (String.trim err);
+          let expected =
+            match String.split_on_char ' ' (K.authorized_key k) with
+            | keytype :: b64 :: _ -> keytype ^ " " ^ b64
+            | _ -> Alcotest.fail "authorized_key has fewer than two fields"
+          in
+          Alcotest.check Alcotest.string "ssh-keygen parses the written public key"
+            expected (String.trim out);
+          Lwt.return_unit)
 
 let suites =
-  let case name f = Alcotest.test_case name `Quick f in
+  let case name f = Alcotest_lwt.test_case_sync name `Quick f in
+  let async_case name f = Alcotest_lwt.test_case name `Quick (fun _switch () -> f ()) in
   [
     ( "roundtrip",
       List.map (fun (name, algo) -> case name (roundtrip_case algo)) algorithms );
@@ -509,24 +519,26 @@ let suites =
       openssh_cases @ [ case "a hand-built container loads" handbuilt_loads_case ] );
     ( "filesystem",
       [
-        case "write modes and content" perms_case;
-        case "load_or_generate" load_or_generate_case;
-        case "refuses an existing private key" collision_private_case;
-        case "refuses an existing public key" collision_public_case;
+        async_case "write modes and content" perms_case;
+        async_case "load_or_generate" load_or_generate_case;
+        async_case "refuses an existing private key" collision_private_case;
+        async_case "refuses an existing public key" collision_public_case;
       ] );
     ( "external",
       List.map
         (fun (name, algo) ->
-          case ("ssh-keygen fingerprint for " ^ name) (external_fingerprint_case algo))
+          async_case
+            ("ssh-keygen fingerprint for " ^ name)
+            (external_fingerprint_case algo))
         [
           ("ed25519", K.Ed25519);
           ("ecdsa-p256", K.Ecdsa_p256);
           ("ecdsa-p384", K.Ecdsa_p384);
           ("ecdsa-p521", K.Ecdsa_p521);
         ]
-      @ [ case "ssh-keygen parses the public key" external_pubkey_case ] );
+      @ [ async_case "ssh-keygen parses the public key" external_pubkey_case ] );
   ]
 
 let () =
   Mirage_crypto_rng_unix.use_default ();
-  Alcotest.run ~and_exit:false "charamel-ssh.keygen" suites
+  Test_support.run_lwt "charamel-ssh.keygen" suites

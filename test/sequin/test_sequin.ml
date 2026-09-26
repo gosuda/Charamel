@@ -1,3 +1,5 @@
+open Lwt.Syntax
+
 let executable () =
   let test_path = Unix.realpath Sys.executable_name in
   let test_dir = Filename.dirname test_path in
@@ -5,28 +7,28 @@ let executable () =
   Filename.concat build_dir "bin/sequin/main.exe"
 
 let expect_success ?(stdin = "") name args expected =
-  Alcotest.test_case name `Quick (fun () ->
+  Alcotest_lwt.test_case name `Quick (fun _switch () ->
       let exe = executable () in
-      let status, output, error = Test_support.run_cli ~exe ~stdin args in
+      let* status, output, error = Test_support.run_cli ~exe ~stdin args in
       Alcotest.(check int) "exit status" 0 status;
       Alcotest.(check string) "stderr" "" error;
-      Alcotest.(check string) "stdout" expected output)
+      Alcotest.(check string) "stdout" expected output;
+      Lwt.return_unit)
 
 let expect_failure ?(stdin = "") name args expected_status message =
-  Alcotest.test_case name `Quick (fun () ->
+  Alcotest_lwt.test_case name `Quick (fun _switch () ->
       let exe = executable () in
-      let status, output, error = Test_support.run_cli ~exe ~stdin args in
+      let* status, output, error = Test_support.run_cli ~exe ~stdin args in
       Alcotest.(check int) "exit status" expected_status status;
       Alcotest.(check string) "stdout" "" output;
       Alcotest.(check bool)
         "diagnostic" true
-        (Test_support.contains ~needle:message ~haystack:error))
+        (Test_support.contains ~needle:message ~haystack:error);
+      Lwt.return_unit)
 
 let with_temp_file contents f =
   Test_support.with_temp_dir (fun dir ->
-      let path =
-        Filename.temp_file ~temp_dir:(Eio.Path.native_exn dir) "sequin-" ".ansi"
-      in
+      let path = Filename.temp_file ~temp_dir:dir "sequin-" ".ansi" in
       let channel = open_out_bin path in
       output_string channel contents;
       close_out channel;
@@ -52,13 +54,14 @@ let cases =
     expect_failure "missing file is a command error"
       [ "/definitely/not/a/sequin-input" ]
       1 "no such file or directory";
-    Alcotest.test_case "reads a file argument" `Quick (fun () ->
+    Alcotest_lwt.test_case "reads a file argument" `Quick (fun _switch () ->
         with_temp_file "file input" (fun path ->
             let exe = executable () in
-            let status, output, error = Test_support.run_cli ~exe [ path ] in
+            let* status, output, error = Test_support.run_cli ~exe [ path ] in
             Alcotest.(check int) "exit status" 0 status;
             Alcotest.(check string) "stderr" "" error;
-            Alcotest.(check string) "stdout" "Print \"file input\"\n" output));
+            Alcotest.(check string) "stdout" "Print \"file input\"\n" output;
+            Lwt.return_unit));
   ]
 
-let () = Alcotest.run "sequin" [ ("explain", Test_explain.cases); ("cli", cases) ]
+let () = Test_support.run_lwt "sequin" [ ("explain", Test_explain.cases); ("cli", cases) ]

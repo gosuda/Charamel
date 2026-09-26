@@ -105,6 +105,17 @@ let rec gone_within attempts pid =
 
 (* {1 Time} *)
 
+let wall_is_the_calendar () =
+  Alcotest.(check bool)
+    "the real clock's wall reading is calendar time" true
+    (Charamel_os.Time.wall Charamel_os.Time.lwt > 1_600_000_000.);
+  let clock, advance = Charamel_os.Time.create_virtual () in
+  let t = Charamel_os.Time.of_virtual clock in
+  advance 42.5;
+  Alcotest.(check (float 1e-9))
+    "a virtual clock's wall reading is simulated seconds from the epoch" 42.5
+    (Charamel_os.Time.wall t)
+
 let virtual_clock_drives_sleeps () =
   let clock, advance = Charamel_os.Time.create_virtual () in
   let t = Charamel_os.Time.of_virtual clock in
@@ -139,12 +150,16 @@ let sleepers_wake_in_deadline_order () =
 let durations_that_are_already_over () =
   let clock, _ = Charamel_os.Time.create_virtual () in
   let t = Charamel_os.Time.of_virtual clock in
+  let resolves_without_advance seconds =
+    run (fun () -> Lwt.map (fun () -> true) (Charamel_os.Time.sleep t seconds))
+  in
   Alcotest.(check bool)
-    "a zero sleep is over at once" true
-    (Lwt.state (Charamel_os.Time.sleep t 0.0) = Lwt.Return ());
+    "a zero sleep resolves without advancing the clock" true
+    (resolves_without_advance 0.0);
+  Alcotest.(check bool) "so does a negative one" true (resolves_without_advance (-2.0));
   Alcotest.(check bool)
-    "so is a negative one" true
-    (Lwt.state (Charamel_os.Time.sleep t (-2.0)) = Lwt.Return ())
+    "neither registers a deadline" true
+    (Charamel_os.Time.next_deadline clock = None)
 
 let cancelled_sleepers_are_not_woken () =
   let clock, advance = Charamel_os.Time.create_virtual () in
@@ -870,6 +885,26 @@ let kill_tree_reaches_the_whole_group () =
       gone_within 40 grandchild >|= fun vanished ->
       Alcotest.(check bool) "the whole group is gone" true vanished)
 
+(* [await] hands out the one shared promise the reaper resolves. A race that abandons
+   the wait must leave that promise usable: [Lwt.protected] stops cancellation at the
+   barrier and [Lwt.choose] never cancels the loser — the pattern [Jobs] and the MCP
+   transport depend on. A poisoned promise would answer [Lwt.Canceled] here instead of
+   the child's signal status. *)
+let abandoned_race_keeps_the_shared_await_usable () =
+  posix_only ();
+  run (fun () ->
+      let child = Charamel_os.Process.spawn [ "/bin/sh"; "-c"; "sleep 30" ] in
+      Lwt.choose
+        [
+          (Lwt.protected (Charamel_os.Process.await child) >|= fun code -> Some code);
+          (Lwt_unix.sleep 0.1 >|= fun () -> None);
+        ]
+      >>= fun raced ->
+      Alcotest.(check bool) "the deadline won the race" true (raced = None);
+      Charamel_os.Process.kill_tree child;
+      Charamel_os.Process.await child >|= fun code ->
+      Alcotest.(check int) "the later await still answers" 137 code)
+
 (* {1 Pty} *)
 
 let pty_is_unsupported_on_windows () =
@@ -1001,6 +1036,7 @@ let suites =
         Alcotest.test_case "deadline list shrinks" `Quick
           cancelled_sleepers_leave_the_deadline_list;
         Alcotest.test_case "real clock" `Quick real_clock_sleeps_and_stamps;
+        Alcotest.test_case "wall reads the calendar" `Quick wall_is_the_calendar;
       ] );
     ( "console_input",
       [
@@ -1073,6 +1109,8 @@ let suites =
         Alcotest.test_case "null and inherit" `Quick null_and_inherit_are_not_pipes;
         Alcotest.test_case "missing program" `Quick missing_program_raises_typed_failure;
         Alcotest.test_case "kill tree" `Quick kill_tree_reaches_the_whole_group;
+        Alcotest.test_case "abandoned race keeps await usable" `Quick
+          abandoned_race_keeps_the_shared_await_usable;
       ] );
     ( "pty",
       [

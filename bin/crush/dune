@@ -11,14 +11,17 @@
   charamel.huh
   charamel.tea
   cmdliner
-  eio
-  eio.unix
-  eio_main
+  lwt
+  lwt.unix
+  lwt_direct
+  charamel.os
+  charamel.net
   fmt
   logs
   jsont
   jsont.bytesrw
-  cohttp-eio
+  cohttp-lwt-unix
+  tls-lwt
   uri
   mirage-crypto-rng.unix
   unix))

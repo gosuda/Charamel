@@ -5,24 +5,6 @@ type error =
   | `Signaled of int * string
   | `Timeout of string ]
 
-let read_pty source output =
-  let chunk = Cstruct.create 4096 in
-  let rec loop () =
-    let count = Eio.Flow.single_read source chunk in
-    if count > 0 then begin
-      Buffer.add_string output (Cstruct.to_string (Cstruct.sub chunk 0 count));
-      loop ()
-    end
-    else ()
-  in
-  try loop () with End_of_file | Eio.Io _ -> ()
-
-let terminal_size () =
-  try
-    let size = Eio_unix.Pty.get_window_size Eio_unix.Fd.stdout in
-    (size.Eio_unix.Pty.cols, size.Eio_unix.Pty.rows)
-  with Unix.Unix_error _ -> (80, 24)
-
 let with_term ~env width height =
   let keep entry =
     (not (String.starts_with ~prefix:"TERM=" entry))
@@ -35,57 +17,79 @@ let with_term ~env width height =
   let term = "TERM=xterm-256color" in
   Array.append inherited [| term; columns; rows |]
 
-let execute ~sw ~clock ~process_mgr ~env ?width ?height ~timeout command =
-  if String.trim command = "" then Error (`Invalid_command "empty command")
+let terminal_size () =
+  match Charamel_os.Tty.size_stdout () with
+  | Some (rows, cols) -> (cols, rows)
+  | None -> (80, 24)
+
+let spawn_error message = Lwt.return (Error (`Spawn message))
+
+let execute ~env ?width ?height ~timeout command =
+  if String.trim command = "" then Lwt.return (Error (`Invalid_command "empty command"))
   else
     let detected_width, detected_height = terminal_size () in
-    let width = Option.value width ~default:detected_width |> max 1 in
-    let height = Option.value height ~default:detected_height |> max 1 in
+    let width = max 1 (Option.value width ~default:detected_width) in
+    let height = max 1 (Option.value height ~default:detected_height) in
     let output = Buffer.create 4096 in
-    let child = ref None in
-    let action () =
-      let terminal = Eio_unix.Pty.open_pty ~sw () in
-      let winsize =
-        { Eio_unix.Pty.rows = height; cols = width; xpixel = 0; ypixel = 0 }
-      in
-      Eio_unix.Pty.set_window_size (Eio_unix.Pty.pty terminal) winsize;
-      let process =
-        try
-          let process =
-            Eio_unix.Process.spawn_unix ~sw process_mgr
-              ~login_tty:(Eio_unix.Pty.tty terminal) ~env:(with_term ~env width height)
-              ~fds:[] [ "/bin/sh"; "-c"; command ]
-          in
-          Eio_unix.Fd.close (Eio_unix.Pty.tty terminal);
-          process
-        with Eio.Io _ -> raise (Failure "could not spawn command")
-      in
-      child := Some process;
-      let source = Eio_unix.Pty.source terminal in
-      let status = ref None in
-      Eio.Fiber.all
-        [
-          (fun () -> read_pty source output);
-          (fun () -> status := Some (Eio.Process.await process));
-        ];
-      let status = Option.value !status ~default:(`Exited 1) in
-      match status with
-      | `Exited 0 -> Ok (Buffer.contents output)
-      | `Exited code -> Error (`Exit (code, Buffer.contents output))
-      | `Signaled signal -> Error (`Signaled (signal, Buffer.contents output))
+    let terminal = ref None in
+    let cleanup () =
+      (match !terminal with None -> () | Some pty -> Charamel_os.Pty.close pty);
+      Lwt.return_unit
     in
-    match Eio.Time.with_timeout clock timeout action with
-    | Ok value -> Ok value
-    | Error `Timeout ->
-        (match !child with
-        | Some process -> Eio.Process.signal process Sys.sigkill
-        | None -> ());
-        Error (`Timeout (Buffer.contents output))
-    | Error (`Exit _ as exit_error) -> Error exit_error
-    | Error (`Signaled _ as signaled_error) -> Error signaled_error
-    | exception Failure message -> Error (`Spawn message)
-    | exception Unix.Unix_error (error, function_name, argument) ->
-        Error
-          (`Spawn
-             (Fmt.str "could not create PTY: %s (%s %s)" (Unix.error_message error)
-                function_name argument))
+    let run_exec pty =
+      Lwt.bind
+        (Charamel_os.Pty.exec ~env:(with_term ~env width height) pty
+           [ "/bin/sh"; "-c"; command ])
+        (function
+          | Error (`Error message) -> spawn_error message
+          | Error `Unsupported -> spawn_error "PTY is unsupported on this platform"
+          | Ok pid ->
+              let rec drain () =
+                Lwt.bind (Charamel_os.Pty.read pty 4096) (function
+                  | Ok "" | Error _ -> Lwt.return_unit
+                  | Ok chunk ->
+                      Buffer.add_string output chunk;
+                      drain ())
+              in
+              let status = ref None in
+              let wait () =
+                Lwt.bind (Lwt_unix.waitpid [] pid) (fun (_pid, value) ->
+                    status := Some value;
+                    Lwt.return_unit)
+              in
+              Lwt.bind
+                (Lwt.join [ drain (); wait () ])
+                (fun () ->
+                  match !status with
+                  | Some (Unix.WEXITED 0) -> Lwt.return (Ok (Buffer.contents output))
+                  | Some (Unix.WEXITED code) ->
+                      Lwt.return (Error (`Exit (code, Buffer.contents output)))
+                  | Some (Unix.WSIGNALED signal) ->
+                      Lwt.return (Error (`Signaled (signal, Buffer.contents output)))
+                  | Some (Unix.WSTOPPED _) | None ->
+                      Lwt.return (Ok (Buffer.contents output))))
+    in
+    let run_command () =
+      Lwt.bind (Charamel_os.Pty.create ~rows:height ~cols:width ()) (function
+        | Error (`Error message) -> spawn_error message
+        | Error `Unsupported -> spawn_error "PTY is unsupported on this platform"
+        | Ok pty ->
+            terminal := Some pty;
+            run_exec pty)
+    in
+    Lwt.finalize
+      (fun () ->
+        Lwt.catch
+          (fun () -> Lwt_unix.with_timeout timeout run_command)
+          (function
+            | Lwt_unix.Timeout ->
+                (match !terminal with
+                | Some pty -> Charamel_os.Pty.terminate pty
+                | None -> ());
+                Lwt.return (Error (`Timeout (Buffer.contents output)))
+            | Unix.Unix_error (error, function_name, argument) ->
+                spawn_error
+                  (Fmt.str "could not create PTY: %s (%s %s)" (Unix.error_message error)
+                     function_name argument)
+            | exn -> Lwt.fail exn))
+      cleanup

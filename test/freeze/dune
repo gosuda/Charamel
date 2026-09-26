@@ -6,9 +6,10 @@
   freeze_core
   charamel.ansi
   charamel.highlight
-  eio
-  eio.unix
-  eio_main
   alcotest
+  alcotest-lwt
+  lwt
+  lwt.unix
   fmt
+  unix
   test_support))

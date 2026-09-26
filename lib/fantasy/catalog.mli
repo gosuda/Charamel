@@ -21,11 +21,9 @@ val embedded : Provider_info.t list
 val fetch :
   ?base_url:string ->
   ?etag:string ->
-  net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
   unit ->
-  (Provider_info.t list * string, error) result
-(** [fetch ?base_url ?etag ~net ~clock ()] downloads the catalog.
+  (Provider_info.t list * string, error) result Lwt.t
+(** [fetch ?base_url ?etag ()] downloads the catalog.
 
     [base_url] is the endpoint to refresh from and defaults to
     [https://catwalk.charm.sh/v2/providers]; it is how a caller points the refresh at a
@@ -35,7 +33,7 @@ val fetch :
     the endpoint sent none, ready to be passed back as [?etag] on the next refresh.
 
     A non-[200] status, a body that does not decode as the catalog codec, a body larger
-    than 10 MiB, or a transport failure is reported through the error; none of these
-    raise. The exchange runs under a 30 second deadline. An [https] [base_url] requires a
-    [Mirage_crypto] random generator to be installed, which is the binary's startup duty.
-*)
+    than {!val:Charamel_net.max_http_body}, or a transport failure is reported through the
+    error; none of these raise. The exchange runs under a 30 second deadline. An [https]
+    [base_url] requires a [Mirage_crypto] random generator to be installed, which is the
+    binary's startup duty. *)

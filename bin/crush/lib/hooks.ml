@@ -1,12 +1,7 @@
+open Lwt.Infix
+
 type compiled_hook = { config : Config.hook; matcher : Re.re option }
-
-type t = {
-  hooks : compiled_hook list;
-  proc_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
-  cwd : string;
-}
-
+type t = { hooks : compiled_hook list; cwd : string }
 type pre_tool_outcome = Allow of Jsont.json | Deny of string
 type stream_output = { text : string; truncated : bool }
 
@@ -25,8 +20,7 @@ end
 
 let max_output_size = 1_048_576
 
-let shell_quote value =
-  "'" ^ String.concat "'\\''" (String.split_on_char '\'' value) ^ "'"
+exception Over_limit
 
 let json_object fields =
   Jsont.Json.object'
@@ -35,99 +29,67 @@ let json_object fields =
 let json_string value = Jsont.Json.string value
 let json_bool value = Jsont.Json.bool value
 
-let read_flow flow =
-  match Eio.Buf_read.parse ~max_size:max_output_size Eio.Buf_read.take_all flow with
-  | Ok value -> { text = value; truncated = false }
-  | Error (`Msg _) ->
-      (try Eio.Flow.copy flow Eio.Flow.null with End_of_file -> ());
-      { text = ""; truncated = true }
+let rec drain channel =
+  Lwt_io.read ~count:4096 channel >>= fun chunk ->
+  if String.is_empty chunk then Lwt.return_unit else drain channel
 
-let status_code = function `Exited code -> code | `Signaled signal -> 128 + signal
+let collected buffer = { text = Buffer.contents buffer; truncated = false }
 
-let fd_of_flow flow =
-  match Eio_unix.Resource.fd_opt flow with
-  | Some fd -> fd
-  | None -> invalid_arg "hook process pipe is not backed by a Unix file descriptor"
+let read_channel channel =
+  let buffer = Buffer.create 4096 in
+  let rec pump () =
+    Lwt_io.read ~count:4096 channel >>= fun chunk ->
+    if String.is_empty chunk then Lwt.return_unit
+    else if Buffer.length buffer + String.length chunk > max_output_size then
+      Lwt.fail Over_limit
+    else (
+      Buffer.add_string buffer chunk;
+      pump ())
+  in
+  Lwt.catch
+    (fun () -> pump () >>= fun () -> Lwt.return (collected buffer))
+    (function
+      | Over_limit ->
+          drain channel >>= fun () -> Lwt.return { text = ""; truncated = true }
+      | Unix.Unix_error _ | Sys_error _ | Lwt_io.Channel_closed _ ->
+          Lwt.return (collected buffer)
+      | exn -> Lwt.fail exn)
 
-let signal_group process signal =
-  let pid = Eio.Process.pid process in
-  try Eio_unix.run_in_systhread (fun () -> Unix.kill (-pid) signal)
-  with Unix.Unix_error (Unix.ESRCH, _, _) -> ()
+let unix_message function_name argument error =
+  Fmt.str "%s(%s): %s" function_name argument (Unix.error_message error)
+
+let write_input channel payload =
+  Lwt.finalize (fun () -> Lwt_io.write channel payload) (fun () -> Lwt_io.close channel)
 
 let run_command t ~timeout ~command ~payload =
+  let child = ref None in
+  let kill () = Option.iter Charamel_os.Process.kill_tree !child in
   let body () =
-    Eio.Switch.run (fun sw ->
-        let stdin_r, stdin_w = Eio.Process.pipe ~sw t.proc_mgr in
-        let stdout_r, stdout_w = Eio.Process.pipe ~sw t.proc_mgr in
-        let stderr_r, stderr_w = Eio.Process.pipe ~sw t.proc_mgr in
-        let child_command = "cd -- " ^ shell_quote t.cwd ^ " && " ^ command in
-        let process =
-          Eio_unix.Process.spawn_unix ~sw t.proc_mgr ~pgid:0
-            ~env:(Eio_unix.run_in_systhread Unix.environment)
-            ~fds:
-              [
-                (0, fd_of_flow stdin_r, `Blocking);
-                (1, fd_of_flow stdout_w, `Blocking);
-                (2, fd_of_flow stderr_w, `Blocking);
-              ]
-            ~executable:"/bin/sh"
-            [ "/bin/sh"; "-c"; child_command ]
-        in
-        let finished = ref false in
-        let process_cancelled () =
-          if not !finished then signal_group process Sys.sigkill
-        in
-        Eio.Switch.on_release sw process_cancelled |> ignore;
-        Eio.Flow.close stdin_r;
-        Eio.Flow.close stdout_w;
-        Eio.Flow.close stderr_w;
-        let input_result = ref None in
-        let write_input () =
-          let result =
-            try
-              Fun.protect
-                (fun () ->
-                  Eio.Flow.copy_string payload stdin_w;
-                  Ok ())
-                ~finally:(fun () -> Eio.Flow.close stdin_w)
-            with
-            | Eio.Io (error, _) -> Error (Fmt.str "%a" Eio.Exn.pp_err error)
-            | Unix.Unix_error (error, function_name, argument) ->
-                Error
-                  (Fmt.str "%s(%s): %s" function_name argument (Unix.error_message error))
-          in
-          input_result := Some result
-        in
-        let output = ref None in
-        let read_output () =
-          output :=
-            Some
-              (Eio.Fiber.pair
-                 (fun () -> read_flow stdout_r)
-                 (fun () -> read_flow stderr_r))
-        in
-        (try Eio.Fiber.both write_input read_output
-         with Eio.Cancel.Cancelled _ as ex ->
-           signal_group process Sys.sigkill;
-           raise ex);
-        let stdout, stderr =
-          match !output with
-          | Some output -> output
-          | None -> invalid_arg "hook output reader did not return"
-        in
-        let status = Eio.Process.await process in
-        finished := true;
-        ignore input_result;
-        Done (status_code status, stdout, stderr))
+    let process =
+      Charamel_os.Process.spawn ~cwd:t.cwd ~env:(Unix.environment ()) ~stdin:`Pipe
+        ~stdout:`Pipe ~stderr:`Pipe [ "/bin/sh"; "-c"; command ]
+    in
+    child := Some process;
+    let input =
+      Lwt.catch
+        (fun () -> write_input (Charamel_os.Process.stdin_w process) payload)
+        (fun _ -> Lwt.return_unit)
+    in
+    let stdout = read_channel (Charamel_os.Process.stdout_r process) in
+    let stderr = read_channel (Charamel_os.Process.stderr_r process) in
+    Lwt.both stdout stderr >>= fun (stdout, stderr) ->
+    input >>= fun () ->
+    Charamel_os.Process.await process >|= fun code -> Done (code, stdout, stderr)
   in
-  try
-    match Eio.Time.with_timeout t.clock timeout (fun () -> Ok (body ())) with
-    | Ok result -> result
-    | Error `Timeout -> Timeout
-  with
-  | Eio.Io (error, _) -> Failed (Fmt.str "%a" Eio.Exn.pp_err error)
-  | Unix.Unix_error (error, function_name, argument) ->
-      Failed (Fmt.str "%s(%s): %s" function_name argument (Unix.error_message error))
+  Lwt.catch
+    (fun () -> Lwt_unix.with_timeout timeout body)
+    (function
+      | Lwt_unix.Timeout ->
+          kill ();
+          Lwt.return Timeout
+      | Unix.Unix_error (error, function_name, argument) ->
+          Lwt.return (Failed (unix_message function_name argument error))
+      | exn -> Lwt.fail exn)
 
 let compile_matcher command =
   Option.map (fun pattern ->
@@ -137,7 +99,7 @@ let compile_matcher command =
       | Re.Perl.Not_supported ->
           invalid_arg (Fmt.str "unsupported hook matcher for %s: %s" command pattern))
 
-let create ~config ~proc_mgr ~clock ~cwd =
+let create ~config ~cwd =
   let hooks =
     List.map
       (fun (config : Config.hook) ->
@@ -151,7 +113,7 @@ let create ~config ~proc_mgr ~clock ~cwd =
           (Fmt.str "invalid hook timeout for %s: %d" hook.config.Config.command
              hook.config.Config.timeout_s))
     hooks;
-  { hooks; proc_mgr; clock; cwd }
+  { hooks; cwd }
 
 let event_name = function
   | Config.Pre_tool -> "pre_tool"
@@ -246,70 +208,76 @@ let report_truncation hook stream output =
           stream max_output_size)
 
 let apply_pre_hook t hook ~payload =
-  match run_one t hook payload with
-  | Timeout -> Refuse (Fmt.str "hook %s timed out" hook.config.Config.command)
+  run_one t hook payload >>= function
+  | Timeout ->
+      Lwt.return (Refuse (Fmt.str "hook %s timed out" hook.config.Config.command))
   | Failed detail ->
       log_failure hook detail;
-      Continue
+      Lwt.return Continue
   | Done (0, stdout, _) ->
       report_truncation hook "stdout" stdout;
-      parse_pre_output stdout.text
+      Lwt.return (parse_pre_output stdout.text)
   | Done (2, _, stderr) ->
       report_truncation hook "stderr" stderr;
       let reason = String.trim stderr.text in
-      Refuse (if String.equal reason "" then "denied by hook" else reason)
+      Lwt.return (Refuse (if String.equal reason "" then "denied by hook" else reason))
   | Done (code, _, stderr) ->
       report_truncation hook "stderr" stderr;
       log_failure hook
         (Fmt.str "exited with status %d%s" code
            (if String.equal (String.trim stderr.text) "" then ""
             else ": " ^ String.trim stderr.text));
-      Continue
+      Lwt.return Continue
 
 let pre_tool t ~session ~tool ~input =
   let rec loop current = function
-    | [] -> Allow current
+    | [] -> Lwt.return (Allow current)
     | hook :: rest -> (
         if hook.config.Config.event <> Config.Pre_tool || not (matcher_matches hook tool)
         then loop current rest
         else
           let payload = payload_pre ~session ~cwd:t.cwd ~tool ~input:current in
-          match apply_pre_hook t hook ~payload with
+          apply_pre_hook t hook ~payload >>= function
           | Continue -> loop current rest
           | Replace next -> loop next rest
-          | Refuse reason -> Deny reason)
+          | Refuse reason -> Lwt.return (Deny reason))
   in
   loop input t.hooks
 
 let run_observational t hook payload =
-  match run_one t hook payload with
+  run_one t hook payload >>= function
   | Done (0, stdout, stderr) ->
       report_truncation hook "stdout" stdout;
-      report_truncation hook "stderr" stderr
+      report_truncation hook "stderr" stderr;
+      Lwt.return_unit
   | Done (code, _, stderr) ->
       report_truncation hook "stderr" stderr;
       let suffix = String.trim stderr.text in
       log_failure hook
         (Fmt.str "exited with status %d%s" code
-           (if String.equal suffix "" then "" else ": " ^ suffix))
+           (if String.equal suffix "" then "" else ": " ^ suffix));
+      Lwt.return_unit
   | Timeout ->
-      log_failure hook (Fmt.str "timed out after %ds" hook.config.Config.timeout_s)
-  | Failed detail -> log_failure hook detail
+      log_failure hook (Fmt.str "timed out after %ds" hook.config.Config.timeout_s);
+      Lwt.return_unit
+  | Failed detail ->
+      log_failure hook detail;
+      Lwt.return_unit
+
+let matching t event predicate =
+  List.filter (fun hook -> hook.config.Config.event = event && predicate hook) t.hooks
 
 let post_tool t ~session ~tool ~input ~output ~is_error =
-  List.iter
+  Lwt_list.iter_s
     (fun hook ->
-      if hook.config.Config.event = Config.Post_tool && matcher_matches hook tool then
-        run_observational t hook
-          (payload_post ~session ~cwd:t.cwd ~tool ~input ~output ~is_error))
-    t.hooks
+      run_observational t hook
+        (payload_post ~session ~cwd:t.cwd ~tool ~input ~output ~is_error))
+    (matching t Config.Post_tool (fun hook -> matcher_matches hook tool))
 
 let session_start t ~session =
-  List.iter
-    (fun hook ->
-      if hook.config.Config.event = Config.Session_start then
-        run_observational t hook (payload_session_start ~session ~cwd:t.cwd))
-    t.hooks
+  Lwt_list.iter_s
+    (fun hook -> run_observational t hook (payload_session_start ~session ~cwd:t.cwd))
+    (matching t Config.Session_start (fun _ -> true))
 
 let stop t ~session ~reason =
   let reason_name, message =
@@ -318,12 +286,11 @@ let stop t ~session ~reason =
     | `Interrupted -> ("interrupted", None)
     | `Error message -> ("error", Some message)
   in
-  List.iter
+  Lwt_list.iter_s
     (fun hook ->
-      if hook.config.Config.event = Config.Stop then
-        run_observational t hook
-          (payload_session ~event:(event_name Config.Stop) ~session ~cwd:t.cwd
-             ~reason:(Some reason_name) ~message))
-    t.hooks
+      run_observational t hook
+        (payload_session ~event:(event_name Config.Stop) ~session ~cwd:t.cwd
+           ~reason:(Some reason_name) ~message))
+    (matching t Config.Stop (fun _ -> true))
 
 let has t event = List.exists (fun hook -> hook.config.Config.event = event) t.hooks

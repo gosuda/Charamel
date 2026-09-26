@@ -78,7 +78,8 @@ let dynamic_mcp_name_and_schema () =
 
 let cases =
   [
-    Alcotest.test_case "LSP names and order" `Quick names_and_order;
-    Alcotest.test_case "LSP schemas" `Quick schemas_are_typed;
-    Alcotest.test_case "MCP dynamic registration" `Quick dynamic_mcp_name_and_schema;
+    Test_tools_test_support.case "LSP names and order" `Quick names_and_order;
+    Test_tools_test_support.case "LSP schemas" `Quick schemas_are_typed;
+    Test_tools_test_support.case "MCP dynamic registration" `Quick
+      dynamic_mcp_name_and_schema;
   ]

@@ -25,12 +25,18 @@ let c_uname = Foreign.foreign "uname" (ptr char @-> returning int)
 let c_ioctl =
   Foreign.foreign ~check_errno:true "ioctl" (int @-> ulong @-> ptr void @-> returning int)
 
+(* [~stub:true] gives up the OCaml runtime lock for the duration of the call.
+   {!Pty.read} and {!Pty.write} run these on [Lwt_preemptive] workers precisely because
+   they block until the child speaks; holding the lock across that wait would freeze the
+   scheduler, so a parent that must feed a child's stdin while draining its terminal
+   would deadlock. Both calls touch only C-allocated buffers and never re-enter OCaml,
+   which is what [stub] requires. *)
 let c_read =
-  Foreign.foreign ~check_errno:true "read"
+  Foreign.foreign ~check_errno:true ~stub:true "read"
     (int @-> ptr char @-> size_t @-> returning ssize_t)
 
 let c_write =
-  Foreign.foreign ~check_errno:true "write"
+  Foreign.foreign ~check_errno:true ~stub:true "write"
     (int @-> ptr char @-> size_t @-> returning ssize_t)
 
 let c_close = Foreign.foreign ~check_errno:true "close" (int @-> returning int)
@@ -260,6 +266,14 @@ module Tty = struct
   let is_stdin = Unix.isatty Unix.stdin
   let is_stdout = Unix.isatty Unix.stdout
   let size_stdout () = if is_stdout then window_size stdout_fd else None
+  let is_stderr = Unix.isatty Unix.stderr
+
+  (* The selection is by role because a [Unix.file_descr] is abstract: the numbers
+     below are the descriptors [Unix.stdout] and [Unix.stderr] always name. *)
+  let size_of_output output =
+    match output with
+    | `Stdout -> if is_stdout then window_size stdout_fd else None
+    | `Stderr -> if is_stderr then window_size stderr_fd else None
 
   (* POSIX cfmakeraw(3): clear the input mapping and flow-control flags, clear [OPOST],
      clear [ECHO], [ECHONL], [ICANON] and [ISIG], select eight data bits without parity, and
@@ -494,10 +508,19 @@ module Process = struct
     | None ->
         invalid_arg ("Charamel_os.Process." ^ operation ^ ": that stream was not a pipe")
 
-  let input_channel fd = Lwt_io.of_fd ~mode:Lwt_io.input (Lwt_unix.of_unix_file_descr fd)
+  (* Every descriptor here is a pipe this module opened [O_NONBLOCK], so the blocking
+     mode is already known. Leaving [~blocking] out would make Lwt [fstat] the descriptor
+     as a job on the first I/O and, for anything it guesses to be blocking, run every
+     later read and write on a worker thread — which starves against the [Lwt_preemptive]
+     workers that {!Pty.read} holds while a child waits for its input. [~set_flags:false]
+     skips the redundant [set_nonblock] because the flag is already set. *)
+  let input_channel fd =
+    Lwt_io.of_fd ~mode:Lwt_io.input
+      (Lwt_unix.of_unix_file_descr ~blocking:false ~set_flags:false fd)
 
   let output_channel fd =
-    Lwt_io.of_fd ~mode:Lwt_io.output (Lwt_unix.of_unix_file_descr fd)
+    Lwt_io.of_fd ~mode:Lwt_io.output
+      (Lwt_unix.of_unix_file_descr ~blocking:false ~set_flags:false fd)
 
   let start program arguments nulls handles cwd env paths =
     let additions =

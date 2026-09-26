@@ -44,8 +44,8 @@ let empty_and_view () =
 
 let cases =
   [
-    Alcotest.test_case "items and filter" `Quick items;
-    Alcotest.test_case "selection and pages" `Quick selection_and_pages;
-    Alcotest.test_case "filter states" `Quick filter_states;
-    Alcotest.test_case "empty and view" `Quick empty_and_view;
+    Alcotest_lwt.test_case_sync "items and filter" `Quick items;
+    Alcotest_lwt.test_case_sync "selection and pages" `Quick selection_and_pages;
+    Alcotest_lwt.test_case_sync "filter states" `Quick filter_states;
+    Alcotest_lwt.test_case_sync "empty and view" `Quick empty_and_view;
   ]

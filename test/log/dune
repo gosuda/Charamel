@@ -5,8 +5,7 @@
   charamel.log
   charamel.ansi
   charamel.colorprofile
-  eio
-  eio.mock
+  charamel.os
   logs
   fmt
   jsont

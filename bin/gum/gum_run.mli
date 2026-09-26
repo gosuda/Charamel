@@ -7,10 +7,10 @@ type outcome =
 
 val run :
   ?timeout:float ->
-  Eio_unix.Stdenv.base ->
+  Charamel_cli.Env.t ->
   ('model, 'msg) Charamel_tea.app ->
   finished:('model -> outcome) ->
-  'model
+  'model Lwt.t
 (** [run ?timeout env app ~finished] runs [app] on {!Gum_io.ui_terminal} and returns its
     final model when [finished model] is [Submitted] or [Quit]. [Aborted] and Ctrl-C exit
     with status 130. A positive [timeout] maps expiry to status 124 and the diagnostic
@@ -21,10 +21,10 @@ val run :
 val run_tui :
   name:string ->
   ?timeout:float ->
-  Eio_unix.Stdenv.base ->
+  Charamel_cli.Env.t ->
   ('model, 'msg) Charamel_tea.app ->
   finished:('model -> outcome) ->
-  'model
+  'model Lwt.t
 (** [run_tui ~name ?timeout env app ~finished] runs [app] through {!run} and reports
     ["<name>: requires a terminal"] when no terminal is available. It preserves the
     outcome and timeout exit behavior of {!run}. *)

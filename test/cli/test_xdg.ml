@@ -1,3 +1,4 @@
+open Lwt.Syntax
 module Xdg = Charamel_cli.Xdg
 
 (* Each vector runs the probe in a child process whose environment holds
@@ -27,12 +28,12 @@ let () =
   | _ -> ()
 
 let capture bindings =
-  let status, output, _stderr =
+  let* status, output, _stderr =
     Test_support.run_cli ~exe:Sys.executable_name ~env:(Array.of_list bindings)
       ~timeout:5. [ "--xdg-probe"; "run" ]
   in
   Alcotest.(check int) "probe exit status" 0 status;
-  output
+  Lwt.return output
 
 type vector = { name : string; env : string list; expect : string list }
 
@@ -94,7 +95,9 @@ let vectors =
   ]
 
 let vector_case { name; env; expect } =
-  Alcotest.test_case name `Quick (fun () ->
-      Alcotest.check Alcotest.string name (String.concat "\n" expect ^ "\n") (capture env))
+  Alcotest_lwt.test_case name `Quick (fun _switch () ->
+      let* output = capture env in
+      Alcotest.check Alcotest.string name (String.concat "\n" expect ^ "\n") output;
+      Lwt.return_unit)
 
-let cases : unit Alcotest.test_case list = List.map vector_case vectors
+let cases : unit Alcotest_lwt.test_case list = List.map vector_case vectors
