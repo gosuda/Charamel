@@ -148,7 +148,7 @@ let hardwrap ?(preserve_space = false) ~width:limit s =
             let required =
               if String.length g = 1 && Char.code g.[0] < 0x20 then 1 else w
             in
-            if !column + required > limit then begin
+            if !column > 0 && !column + required > limit then begin
               newline ();
               wrapped := true
             end;
@@ -188,8 +188,10 @@ let wrap_words policy ~breakpoints ~limit s =
     let space_width = ref 0 in
     let breakpoints = Uchar.of_int 0x2d :: break_chars breakpoints in
     let add_space () =
-      Buffer.add_buffer out space;
-      column := !column + !space_width;
+      if !word_width > 0 || !column + !space_width <= limit then begin
+        Buffer.add_buffer out space;
+        column := !column + !space_width
+      end;
       Buffer.clear space;
       space_width := 0
     in
@@ -212,9 +214,13 @@ let wrap_words policy ~breakpoints ~limit s =
       if policy = Split_words && !word_width + w > limit then add_word ();
       Buffer.add_string word g;
       word_width := !word_width + w;
+      let over_wide_at_line_start =
+        !column = 0 && !space_width = 0 && !word_width > limit
+      in
       if
         !column + !word_width + !space_width > limit
         && (policy = Split_words || !word_width < limit)
+        && not over_wide_at_line_start
       then newline ();
       if policy = Split_words && !word_width = limit then add_word ()
     in
