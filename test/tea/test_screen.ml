@@ -166,6 +166,22 @@ let test_cursor_snaps_off_wide_continuation () =
     (sync "\x1b[?1049h\x1b[>1u\x1b[?2004h\x1b[2J\x1b[H漢x\x1b[H")
     (Screen.render screen (View.v ~alt_screen:true ~cursor:(Cursor.v 0 1) "漢x"))
 
+let test_anchor_move_keeps_the_cursor_model () =
+  let screen = Screen.create ~rows:3 ~cols:10 in
+  ignore (Screen.render screen (View.v "ab: x"));
+  Alcotest.(check string)
+    "column start is a return" "\r"
+    (Screen.move_to_anchor screen `Column_start);
+  Alcotest.(check string)
+    "the changed cell repaints at its own column" (sync "\x1b[4Cy")
+    (Screen.render screen (View.v "ab: y"));
+  Alcotest.(check string)
+    "fresh line is a return and a line feed" "\r\n"
+    (Screen.move_to_anchor screen `Fresh_line);
+  Alcotest.(check string)
+    "the model follows a fresh line" (sync "\x1b[A\x1b[4Cz")
+    (Screen.render screen (View.v "ab: z"))
+
 let cases =
   [
     Alcotest.test_case "full and changed frames" `Quick test_full_and_changed_frame;
@@ -181,4 +197,6 @@ let cases =
     Alcotest.test_case "cursor color diff" `Quick test_cursor_color_diff;
     Alcotest.test_case "cursor snaps off wide continuation" `Quick
       test_cursor_snaps_off_wide_continuation;
+    Alcotest.test_case "anchor move keeps the cursor model" `Quick
+      test_anchor_move_keeps_the_cursor_model;
   ]

@@ -508,8 +508,10 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   if not view.View.alt_screen then begin
                     let* () =
                       match current_anchor with
-                      | Fresh_line -> write_output_locked "\r\n"
-                      | Column_start -> write_output_locked "\r"
+                      | Fresh_line ->
+                          write_output_locked (Screen.move_to_anchor screen `Fresh_line)
+                      | Column_start ->
+                          write_output_locked (Screen.move_to_anchor screen `Column_start)
                       | No_anchor -> Lwt.return_unit
                     in
                     if current_anchor <> No_anchor then
@@ -549,8 +551,10 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                   let* anchor = peek_state state (fun () -> state.anchor) in
                   let* () =
                     match anchor with
-                    | Fresh_line -> write_output_locked "\r\n"
-                    | Column_start -> write_output_locked "\r"
+                    | Fresh_line ->
+                        write_output_locked (Screen.move_to_anchor screen `Fresh_line)
+                    | Column_start ->
+                        write_output_locked (Screen.move_to_anchor screen `Column_start)
                     | No_anchor -> Lwt.return_unit
                   in
                   let* () =
