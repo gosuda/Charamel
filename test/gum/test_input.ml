@@ -1,7 +1,4 @@
-let key name =
-  match Charamel_tea.Key.of_string name with
-  | Ok key -> key
-  | Error (`Msg message) -> Alcotest.fail message
+let key = Test_gum_support.key
 
 let scripted_input () =
   let options = { Input.default_options with show_help = false; padding = "0" } in

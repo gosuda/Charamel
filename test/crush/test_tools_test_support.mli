@@ -55,3 +55,8 @@ val case : string -> Alcotest.speed_level -> (unit -> unit) -> unit Alcotest_lwt
 (** [case name speed f] is an Alcotest-Lwt case running direct-style [f] on the suite's
     single Lwt reactor via [Lwt_direct.spawn]. Every Crush test case uses it so
     direct-style code under test can [await] promises. *)
+
+val random_source : unit -> int -> string
+(** [random_source ()] is a deterministic pseudo-random source: each call to the returned
+    function yields the next counting byte sequence, so artifact ids differ per call and
+    reproduce across runs. *)

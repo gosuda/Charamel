@@ -102,6 +102,13 @@ let run_tool tool context value =
 let case name (speed : Alcotest.speed_level) f =
   Alcotest_lwt.test_case name speed (fun _switch () -> Lwt_direct.spawn (fun () -> f ()))
 
+let random_source () =
+  let counter = ref 0 in
+  fun length ->
+    let seed = !counter in
+    incr counter;
+    String.init length (fun index -> Char.chr ((seed + index) land 0xFF))
+
 let with_scratch f =
   let thunk =
     Test_support.with_temp_dir @@ fun root -> Lwt_direct.spawn (fun () -> f root)

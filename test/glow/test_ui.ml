@@ -30,7 +30,18 @@ let scripted_pager () =
     Ui.scripted ~config:Config.default ~content:"# Heading\n\nSome text" ~events
       ~size:(10, 40)
   in
-  Alcotest.(check bool) "rendered heading" true (String.contains frame 'H')
+  Alcotest.(check (list string))
+    "quit frame pins the matched heading"
+    [
+      "                                        ";
+      "   Heading                              ";
+      "                                        ";
+      "                                        ";
+      "  Some text                             ";
+      "                                        ";
+      " match 1/1  100%  ? help  q back ";
+    ]
+    (String.split_on_char '\n' frame)
 
 let suite =
   ( "ui",

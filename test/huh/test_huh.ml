@@ -87,7 +87,7 @@ let test_validation_blocks_navigation () =
         | _ -> false);
       Alcotest.(check bool)
         "error is rendered" true
-        (String.length frame > 0 && String.contains frame '*'))
+        (Test_support.contains ~needle:"input cannot be empty" ~haystack:frame))
 
 let test_abort () =
   with_env (fun form_env ->

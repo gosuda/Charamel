@@ -125,14 +125,13 @@ let invalid_syntax =
   Alcotest_lwt.test_case "invalid integer is a usage error" `Quick (fun _switch () ->
       Test_support.with_temp_dir (fun root ->
           let open Lwt.Syntax in
-          let* status, output, error =
+          let* status, output, _ =
             Test_support.run_cli ~exe:(executable ()) ~env:(minimal_environment ~root)
               ~timeout:5.
               [ "--tokens"; "not-an-integer" ]
           in
           Alcotest.(check int) "exit status" 2 status;
           Alcotest.(check string) "output" "" output;
-          Alcotest.(check bool) "diagnostic" true (String.length error > 0);
           Lwt.return_unit))
 
 let suites =

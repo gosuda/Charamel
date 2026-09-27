@@ -5,13 +5,7 @@ let with_artifact f =
   Test_tools_test_support.with_scratch (fun root ->
       f root (Artifact.create ~fs_root:root ~dir:"artifacts"))
 
-let random_source () =
-  let counter = ref 0 in
-  fun length ->
-    let seed = !counter in
-    incr counter;
-    String.init length (fun index -> Char.chr ((seed + index) land 0xFF))
-
+let random_source = Test_tools_test_support.random_source
 let line number = Fmt.str "line-%03d %s" number (String.make 700 'x')
 
 let threshold_is_inline () =

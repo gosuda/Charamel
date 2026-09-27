@@ -8,7 +8,7 @@ open Lwt.Infix
    library is wrapped, so bare [Model] does not resolve here. *)
 
 let fixture_body path = In_channel.with_open_bin path In_channel.input_all
-let fixture = fixture_body "data/catalog.json"
+let fixture () = fixture_body "data/catalog.json"
 let catalog_codec = Jsont.list Charamel_fantasy.Provider_info.jsont
 
 let decode body =
@@ -97,7 +97,7 @@ let test_embedded_provider_stamping () =
 (* The codec *)
 
 let test_roundtrip () =
-  let providers = decode fixture in
+  let providers = decode (fixture ()) in
   Alcotest.(check int) "4 fixture providers" 4 (List.length providers);
   let again = encode providers in
   Alcotest.(check string) "re-encoding is stable" (encode (decode again)) again;
@@ -129,7 +129,7 @@ let test_fetch_modified =
       Fixture_http.with_server (fun server ->
           Fixture_http.respond server
             ~headers:[ ("etag", "\"6f1a2b3c4d5e6f70\"") ]
-            fixture;
+            (fixture ());
           Charamel_fantasy.Catalog.fetch ~base_url:(base_url server) () >>= fun result ->
           let providers, etag = Result.get_ok result in
           Alcotest.(check int) "the fixture decodes" 4 (List.length providers);

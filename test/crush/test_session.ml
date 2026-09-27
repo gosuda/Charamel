@@ -25,13 +25,7 @@ let write_file path content =
     ~finally:(fun () -> close_out channel)
     (fun () -> output_string channel content)
 
-let random_source () =
-  let counter = ref 0 in
-  fun length ->
-    let seed = !counter in
-    incr counter;
-    String.init length (fun index -> Char.chr ((seed + index) land 0xFF))
-
+let random_source = Test_tools_test_support.random_source
 let text_message text = Charamel_fantasy.Message.text Charamel_fantasy.Message.User text
 
 let json_input =

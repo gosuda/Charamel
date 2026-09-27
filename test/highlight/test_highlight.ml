@@ -582,9 +582,16 @@ let adversarial_tests =
                 expected))
     adversarial_cases
 
-let language_count =
-  Alcotest.test_case "all 26 language specifications" `Quick (fun () ->
-      Alcotest.check Alcotest.int "language count" 26 (List.length H.languages))
+let claim seen name =
+  let key = String.lowercase_ascii name in
+  if Hashtbl.mem seen key then
+    Alcotest.failf "%S is claimed by two language specifications" key
+  else Hashtbl.replace seen key ()
+
+let unique_names =
+  Alcotest.test_case "no language name is claimed twice" `Quick (fun () ->
+      let seen = Hashtbl.create 64 in
+      List.iter (fun (spec : H.spec) -> List.iter (claim seen) spec.H.names) H.languages)
 
 let render_case =
   Alcotest.test_case "render applies styles and preserves empty-theme bytes" `Quick
@@ -738,7 +745,7 @@ let theme_tests = List.map (fun (name, theme) -> theme_case name theme) theme_st
 let () =
   Alcotest.run "highlight"
     [
-      ("languages", language_count :: List.map token_case samples);
+      ("languages", unique_names :: List.map token_case samples);
       ("aliases", alias_tests);
       ("adversarial", adversarial_tests);
       ("themes", [ render_case; identity_case ]);

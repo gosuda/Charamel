@@ -51,7 +51,9 @@ let version_command () =
   | Error (`Msg message) -> Alcotest.fail message);
   match Version_cmd.check ~current:"1.2.3" ">2" with
   | Error (`Msg message) ->
-      Alcotest.(check bool) "mismatch diagnostic" true (String.length message > 0)
+      Alcotest.(check bool)
+        "mismatch diagnostic" true
+        (Test_support.contains ~needle:"is not within given range" ~haystack:message)
   | Ok () -> Alcotest.fail "out-of-range version accepted"
 
 let display_without_constraint () =

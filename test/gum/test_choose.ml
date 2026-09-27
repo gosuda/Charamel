@@ -1,7 +1,4 @@
-let key name =
-  match Charamel_tea.Key.of_string name with
-  | Ok key -> key
-  | Error (`Msg message) -> Alcotest.fail message
+let key = Test_gum_support.key
 
 let parse_options () =
   match Choose.parse_options ~delimiter:":" [ "one:1"; "two:2" ] with

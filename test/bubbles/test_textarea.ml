@@ -61,7 +61,9 @@ let view_and_real_cursor () =
     |> focused
   in
   let rendered = Charamel_ansi.Text.strip (Area.view area) in
-  Alcotest.(check bool) "placeholder rendered" true (String.length rendered > 0);
+  Alcotest.(check bool)
+    "placeholder rendered" true
+    (Test_support.contains ~needle:"hello" ~haystack:rendered);
   let area = Area.set_value "abcdefghijk" area in
   let info = Area.line_info area in
   Alcotest.(check bool) "wrapped width" true ((Area.line_info area).Area.width <= 6);

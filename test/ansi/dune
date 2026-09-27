@@ -1,7 +1,7 @@
 (test
  (name test_ansi)
  (package charamel)
- (libraries charamel.ansi alcotest fmt)
+ (libraries charamel.ansi alcotest fmt qcheck-core qcheck-alcotest)
  (modules
   test_ansi
   test_width
@@ -10,4 +10,5 @@
   test_style
   test_seq
   test_text
-  test_raster))
+  test_raster
+  test_text_properties))

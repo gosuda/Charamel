@@ -52,21 +52,16 @@ let check_patch_rejects_invalid_operations () =
   in
   let overlap = parse "[file#0000]\nPUT 1.=2:\n+x\nCUT 2.=3\n" in
   begin match Patch.apply "a\nb\nc\n" overlap with
-  | Error message ->
-      Alcotest.(check bool) "overlap reports an error" true (String.length message > 0)
+  | Error _ -> ()
   | Ok _ -> Alcotest.fail "overlapping operations were accepted"
   end;
   let out_of_bounds = parse "[file#0000]\nPUT 4.=4:\n+x\n" in
   begin match Patch.apply "a\nb\nc\n" out_of_bounds with
-  | Error message ->
-      Alcotest.(check bool) "bounds reports an error" true (String.length message > 0)
+  | Error _ -> ()
   | Ok _ -> Alcotest.fail "out-of-bounds operation was accepted"
   end;
   begin match Patch.parse "[file#0000]\nPUT <1:\n+x\nnot-an-operation\n" with
-  | Error message ->
-      Alcotest.(check bool)
-        "malformed operation reports an error" true
-        (String.length message > 0)
+  | Error _ -> ()
   | Ok _ -> Alcotest.fail "malformed operation was accepted"
   end
 

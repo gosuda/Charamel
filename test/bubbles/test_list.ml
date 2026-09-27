@@ -40,7 +40,9 @@ let empty_and_view () =
   let model = BList.v ~width:30 ~height:8 ~delegate ~filter_value:(fun item -> item) [] in
   Alcotest.(check (option string)) "empty selection" None (BList.selected_item model);
   let plain = Charamel_ansi.Text.strip (BList.view model) in
-  Alcotest.(check bool) "empty status" true (String.length plain > 0)
+  Alcotest.(check bool)
+    "empty status" true
+    (Test_support.contains ~needle:"No items." ~haystack:plain)
 
 let char_key c = Charamel_tea.Key.v (Charamel_tea.Key.Char (Uchar.of_char c))
 
@@ -146,6 +148,78 @@ let view_cursor () =
       Alcotest.(check int) "the filter line is the first line" 0 cursor.row;
       Alcotest.(check bool) "the column clears the prompt" true (cursor.col > 0)
 
+let status_spinner_help_and_keymap () =
+  let base = make () in
+  let model, _ = BList.new_status_message "building" base in
+  let plain = Charamel_ansi.Text.strip (BList.view model) in
+  Alcotest.(check bool)
+    "the status message renders" true
+    (Test_support.contains ~needle:"building" ~haystack:plain);
+  let dot = List.hd (Charamel_bubbles.Spinner.frames Charamel_bubbles.Spinner.Dot) in
+  let model =
+    BList.set_spinner Charamel_bubbles.Spinner.Dot (BList.start_spinner model)
+  in
+  let spinning = Charamel_ansi.Text.strip (BList.view model) in
+  Alcotest.(check bool)
+    "a started spinner renders a frame" true
+    (Test_support.contains ~needle:dot ~haystack:spinning);
+  let model = BList.stop_spinner model in
+  Alcotest.(check bool)
+    "a stopped spinner disappears" false
+    (Test_support.contains ~needle:dot
+       ~haystack:(Charamel_ansi.Text.strip (BList.view model)));
+  let model = BList.toggle_spinner model in
+  Alcotest.(check bool)
+    "toggle restarts the spinner" true
+    (Test_support.contains ~needle:dot
+       ~haystack:(Charamel_ansi.Text.strip (BList.view model)));
+  let extra = Charamel_bubbles.Key_binding.v ~help:("x", "extra") [ "x" ] in
+  let model = BList.set_additional_short_help_keys [ extra ] model in
+  Alcotest.(check bool)
+    "the short help lists the additional key" true
+    (Test_support.contains ~needle:"x extra"
+       ~haystack:(Charamel_ansi.Text.strip (BList.view model)));
+  let model = BList.set_additional_full_help_keys [ extra ] model in
+  let model, _ = BList.update BList.Toggle_full_help model in
+  Alcotest.(check bool)
+    "the full help lists the additional key" true
+    (Test_support.contains ~needle:"x extra"
+       ~haystack:(Charamel_ansi.Text.strip (BList.view model)));
+  let q = char_key 'q' in
+  Alcotest.(check bool)
+    "quit is bound by default" true
+    (Charamel_bubbles.Key_binding.matches q (BList.keymap base).BList.quit);
+  let disabled = BList.disable_quit_keybindings base in
+  Alcotest.(check bool)
+    "disabling quit unbinds it" false
+    (Charamel_bubbles.Key_binding.matches q (BList.keymap disabled).BList.quit);
+  let paged = BList.set_size ~width:40 ~height:3 base in
+  Alcotest.(check bool)
+    "a short list paginates" true
+    (Charamel_bubbles.Paginator.total_pages (BList.paginator paged) > 1);
+  let second = BList.next_page paged in
+  Alcotest.(check int)
+    "the paginator advances" 1
+    (Charamel_bubbles.Paginator.page (BList.paginator second));
+  let wrapping = BList.set_infinite_scrolling true (BList.select 0 base) in
+  Alcotest.(check bool)
+    "infinite scrolling reports on" true
+    (BList.infinite_scrolling wrapping);
+  Alcotest.(check int)
+    "the cursor wraps backwards to the last item" 2
+    (BList.index (BList.cursor_up wrapping));
+  let finite = BList.set_infinite_scrolling false (BList.select 0 base) in
+  Alcotest.(check int)
+    "without it the cursor clamps at zero" 0
+    (BList.index (BList.cursor_up finite));
+  let loud =
+    BList.set_delegate (BList.default_delegate ~title:(fun item -> item ^ "!") ()) base
+  in
+  Alcotest.(check bool)
+    "set_delegate changes the rendering" true
+    (Test_support.contains ~needle:"foo!"
+       ~haystack:(Charamel_ansi.Text.strip (BList.view loud)))
+
 let cases =
   [
     Alcotest_lwt.test_case_sync "items and filter" `Quick items;
@@ -155,4 +229,6 @@ let cases =
     Alcotest_lwt.test_case_sync "delegate update" `Quick delegate_update;
     Alcotest_lwt.test_case_sync "input darkness" `Quick input_darkness;
     Alcotest_lwt.test_case_sync "view cursor" `Quick view_cursor;
+    Alcotest_lwt.test_case_sync "status, spinner, help, and keymap" `Quick
+      status_spinner_help_and_keymap;
   ]

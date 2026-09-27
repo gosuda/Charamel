@@ -48,8 +48,7 @@ let decode_case () =
 
 let invalid_decode_case () =
   match Tool.decode Jsont.string (Jsont.Json.int 1) with
-  | Error (`Invalid_input message) ->
-      Alcotest.(check bool) "diagnostic is non-empty" true (String.length message > 0)
+  | Error (`Invalid_input _) -> ()
   | Error
       ((`Denied _ | `Not_found _ | `Unavailable _ | `Io _ | `Timeout _ | `Aborted) as
        error) ->

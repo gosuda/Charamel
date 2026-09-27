@@ -1,8 +1,8 @@
 # Charamel
 
-**The Charm terminal ecosystem, re-derived in OCaml.** Fourteen libraries and ten command-line
+**The Charm terminal ecosystem, re-derived in OCaml.** Sixteen libraries and ten command-line
 tools for building terminal software: typed messages instead of Go interfaces, `result` instead of
-`error`, and Eio fibers instead of goroutines.
+`error`, and Lwt fibers instead of goroutines.
 
 Charamel is a re-derivation, not a binding. There is no Go runtime, no CGo, and no C in the
 repository. Nothing is kept for Go compatibility either: flags, environment variables, and file
@@ -10,17 +10,18 @@ formats are re-derived for OCaml, so a Charamel tool is not a drop-in replacemen
 namesake.
 
 - **Pure OCaml** — no `.c` or `.h` files and no `foreign_stubs` stanza anywhere in the tracked
-  tree; only dependencies such as `eio` and `mirage-crypto` carry C.
-- **Fourteen libraries** — twelve under `charamel.*`, two under `charamel-ssh.*`. Each library's
+  tree; only dependencies such as `lwt`, `ctypes`, and `mirage-crypto` carry C.
+- **Sixteen libraries** — fourteen under `charamel.*`, two under `charamel-ssh.*`. Each library's
   `.mli` is its documentation.
 - **Ten tools** — `gum`, `glow`, `freeze`, `sequin`, `pop`, `skate`, `melt`, `keygen`,
   `hotdiva2000`, `crush`.
-- **Tested per unit** — one suite directory for each of the 24 libraries and tools: 25 alcotest
-  suites, 1,274 cases run by `dune runtest --profile release`.
+- **Tested per unit** — one suite directory for each of the 26 libraries and tools, plus the
+  examples and the shared helpers: 30 alcotest executables, 1,694 cases run by
+  `dune runtest --profile release`.
 - **One width model** — grapheme-based measurement shared by every renderer, so East Asian and
   combining text align in tables, borders, and layout.
-- **OCaml >= 5.4** with Eio for concurrency, `jsont` for JSON, `cmarkit` for Markdown, and `re` for
-  data-driven lexers.
+- **OCaml >= 5.4** with Lwt for concurrency, `jsont` for JSON, `cmarkit` for Markdown, and `re`
+  for data-driven lexers.
 
 ## Contents
 
@@ -74,14 +75,16 @@ Compile it by adding `(libraries charamel.lipgloss)` to your `dune` stanza.
 | `charamel.ansi` | Terminal sequences, incremental decoding, colors, styles, and grapheme-based width |
 | `charamel.colorprofile` | Color support detected from the environment, with writers that reduce SGR colors |
 | `charamel.tea` | Elm-style terminal apps: typed messages, commands, subscriptions, per-frame diff |
-| `charamel.lipgloss` | Immutable styles with borders, layout, tables, trees, and lists |
+| `charamel.lipgloss` | Immutable styles with borders, layout, tables, trees, lists, and a layered canvas |
 | `charamel.bubbles` | Seventeen reusable components over `charamel.tea`, from `textinput` to `viewport` |
 | `charamel.huh` | Typed forms with accessible fallbacks |
 | `charamel.glamour` | CommonMark rendered to ANSI with typed themes |
 | `charamel.highlight` | Byte-preserving syntax highlighting from data-driven lexers |
 | `charamel.log` | A styled `Logs` reporter in text, logfmt, or JSON |
 | `charamel.harmonica` | Spring and projectile motion advanced by a fixed time step |
+| `charamel.os` | Terminal control, processes, pseudo-terminals, paths, signals, and virtual clocks on Linux, macOS, and Windows |
 | `charamel.cli` | Application runtime with XDG base directories and styled errors |
+| `charamel.net` | HTTP calls with streaming bodies over pure-OCaml TLS, and the SSH transport |
 | `charamel.fantasy` | Streaming chat completions for Anthropic, OpenAI-compatible, OpenAI Responses, and Google, with a bundled model catalog |
 | `charamel-ssh.keygen` | OpenSSH key pairs and parsing for Ed25519 and NIST P-256, P-384, P-521 |
 | `charamel-ssh.wish` | TUI apps served over SSH through the pure `awa` state machine |
@@ -108,14 +111,17 @@ Run any of them through dune, for example `dune exec gum -- --help`, or from
 
 | Program | Shows |
 |---|---|
-| `tea_counter` | A counter application for the Tea terminal runtime |
-| `tea_inline` | An inline Tea application that prints output above a live view |
+| `bubbletea_examples` | The sixty-three upstream Bubble Tea examples, one module per upstream directory |
 | `huh_burger` | An interactive burger-ordering form |
 | `wish_counter` | A small counter served over SSH |
 | `confetti` | A tiny confetti animation served over SSH |
 
+Each Bubble Tea example has an interactive entry and a scripted smoke. Run one by name, or list
+all sixty-three names:
+
 ```sh
-dune exec examples/tea_counter.exe
+dune exec examples/bubbletea_examples.exe -- simple
+dune exec examples/bubbletea_examples.exe -- --list
 ```
 
 ## Development

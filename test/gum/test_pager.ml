@@ -1,16 +1,10 @@
-let key name =
-  match Charamel_tea.Key.of_string name with
-  | Ok key -> key
-  | Error (`Msg message) -> Alcotest.fail message
+let key = Test_gum_support.key
 
-let contains ~needle haystack =
-  let hl = String.length haystack and nl = String.length needle in
-  let rec at index =
-    index + nl <= hl && (String.sub haystack index nl = needle || at (index + 1))
-  in
-  at 0
+let check ~name ~needle frame =
+  Alcotest.(check bool) name true (Test_support.contains ~needle ~haystack:frame)
 
-let check ~name ~needle frame = Alcotest.(check bool) name true (contains ~needle frame)
+let check_absent ~name ~needle frame =
+  Alcotest.(check bool) name false (Test_support.contains ~needle ~haystack:frame)
 
 let sanitize_backspaces () =
   Alcotest.(check string) "backspace overwrite" "red" (Pager.sanitize "redx\b")
@@ -48,14 +42,10 @@ let search_scrolls_to_each_match () =
   let accepted = [ `Key (key "/"); `Text "needle"; `Key (key "enter") ] in
   let frame = run accepted in
   check ~name:"first match visible" ~needle:"l1 needle" frame;
-  Alcotest.(check bool)
-    "second match off screen" false
-    (contains ~needle:"l8 needle" frame);
+  check_absent ~name:"second match off screen" ~needle:"l8 needle" frame;
   let frame = run (accepted @ [ `Key (key "n") ]) in
   check ~name:"next match scrolled in" ~needle:"l8 needle" frame;
-  Alcotest.(check bool)
-    "previous match scrolled out" false
-    (contains ~needle:"l1 needle" frame)
+  check_absent ~name:"previous match scrolled out" ~needle:"l1 needle" frame
 
 let cases =
   [

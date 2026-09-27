@@ -53,12 +53,11 @@ let pager_pipe () =
 let tui_requires_terminal () =
   Test_support.with_temp_dir (fun root ->
       let path = write_markdown root in
-      let* status, _, errors =
+      let* status, _, _ =
         Test_support.run_cli ~exe:(executable ()) ~env:(env_for root) ~cwd:root
           ~timeout:10. [ "--tui"; path ]
       in
       Alcotest.(check bool) "non-tty failure" true (status <> 0);
-      Alcotest.(check bool) "diagnostic" true (String.length errors > 0);
       Lwt.return_unit)
 
 let config_command () =

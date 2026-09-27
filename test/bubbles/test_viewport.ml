@@ -165,6 +165,37 @@ let visible_rows_fit_the_box () =
     (fun text -> List.iter (row_fits_box text) [ 2; 3; 5; 8; 13; 21 ])
     (samples 40)
 
+let ensure_visible_follows_wrapped_rows () =
+  let viewport =
+    Viewport.v ~width:5 ~height:1 ~soft_wrap:true ()
+    |> Viewport.set_content "abcdefghij\nk"
+  in
+  Alcotest.(check int)
+    "the content wraps to three rows" 3
+    (Viewport.total_line_count viewport);
+  let viewport = Viewport.ensure_visible ~line:1 ~colstart:0 ~colend:1 viewport in
+  Alcotest.(check int)
+    "the offset counts wrapped rows, not logical lines" 2 (Viewport.y_offset viewport);
+  Alcotest.(check (list string))
+    "the second logical line is on screen" [ "k" ]
+    (Viewport.visible_lines viewport)
+
+let ensure_visible_accounts_for_the_gutter () =
+  let viewport =
+    Viewport.v ~width:8 ~height:1 ~soft_wrap:true ~left_gutter:(fun _ -> ">> ") ()
+    |> Viewport.set_content "abcdefghij"
+  in
+  Alcotest.(check int)
+    "the gutter narrows the wrap" 2
+    (Viewport.total_line_count viewport);
+  let viewport = Viewport.ensure_visible ~line:0 ~colstart:0 ~colend:1 viewport in
+  Alcotest.(check int)
+    "the first wrapped row needs no scroll" 0 (Viewport.y_offset viewport);
+  let scrolled = Viewport.scroll_down 1 viewport in
+  Alcotest.(check (list string))
+    "the second wrapped row renders" [ ">> fghij" ]
+    (Viewport.visible_lines scrolled)
+
 let cases =
   [
     Alcotest_lwt.test_case_sync "defaults" `Quick defaults;
@@ -175,4 +206,8 @@ let cases =
     Alcotest_lwt.test_case_sync "grapheme highlights" `Quick grapheme_highlights;
     Alcotest_lwt.test_case_sync "byte offset helper" `Quick byte_offset_helper;
     Alcotest_lwt.test_case_sync "visible rows fit the box" `Quick visible_rows_fit_the_box;
+    Alcotest_lwt.test_case_sync "ensure visible follows wrapped rows" `Quick
+      ensure_visible_follows_wrapped_rows;
+    Alcotest_lwt.test_case_sync "ensure visible accounts for the gutter" `Quick
+      ensure_visible_accounts_for_the_gutter;
   ]

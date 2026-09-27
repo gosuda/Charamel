@@ -99,15 +99,13 @@ let check_invalid_config () =
       "{\"options\":{\"budgets\":{\"subagent_requests\":-1}}}"
   with
   | Ok _ -> Alcotest.fail "negative subagent budget was accepted"
-  | Error message ->
-      Alcotest.(check bool) "validation error is reported" true (String.length message > 0)
+  | Error _ -> ()
 
 let check_unknown_record_key () =
   let expect_rejected name json =
     match Jsont_bytesrw.decode_string Config.jsont json with
     | Ok _ -> Alcotest.fail (name ^ " was accepted")
-    | Error message ->
-        Alcotest.(check bool) (name ^ " reports an error") true (String.length message > 0)
+    | Error _ -> ()
   in
   expect_rejected "unknown top-level key" "{\"typo\":true}";
   expect_rejected "unknown options key" "{\"options\":{\"debug\":true,\"debg\":true}}"

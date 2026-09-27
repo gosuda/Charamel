@@ -9,7 +9,7 @@ let fixture_body path =
   close_in ic;
   s
 
-let sse = fixture_body "data/anthropic_codec.sse"
+let sse () = fixture_body "data/anthropic_codec.sse"
 
 let model =
   {
@@ -34,7 +34,7 @@ let usage ~input ~output ~cache_read ~cache_write =
 
 let base_url server = Uri.to_string (Fixture_http.uri server "")
 
-let call ?(body = sse) ?(auth = api_key) ?(reasoning = `Off) ?temperature ?max_tokens
+let call ?(body = sse ()) ?(auth = api_key) ?(reasoning = `Off) ?temperature ?max_tokens
     ?(system = []) ?(tools = []) ?truncate messages =
   Stream_test_support.with_fixture (fun server ->
       (match truncate with

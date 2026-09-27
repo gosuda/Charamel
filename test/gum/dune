@@ -4,6 +4,7 @@
  (deps %{exe:../../bin/gum/main.exe})
  (modules
   test_gum
+  test_gum_support
   test_format
   test_join
   test_log

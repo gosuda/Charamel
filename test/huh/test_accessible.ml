@@ -63,7 +63,8 @@ let test_validation_and_defaults () =
     (Charamel_huh.Results.get confirmed results);
   Alcotest.(check bool)
     "validation transcript" true
-    (String.length transcript > 0 && String.contains transcript 'I');
+    (Test_support.contains ~needle:"Invalid: must be a number between 1 and 3"
+       ~haystack:transcript);
   Lwt.return_unit
 
 let test_eof_keeps_defaults () =
