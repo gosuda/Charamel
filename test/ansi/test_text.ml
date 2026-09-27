@@ -1037,6 +1037,12 @@ let wrap_vectors =
       expected = "漢\nx";
       width = 1;
     };
+    {
+      name = "overfull_separator_drops_before_a_break";
+      input = "foo -bar";
+      expected = "foo\n-ba\nr";
+      width = 3;
+    };
   ]
 
 let wrap_case (c : wrap_case) =
