@@ -179,7 +179,7 @@ let test_anchor_move_keeps_the_cursor_model () =
     "fresh line is a return and a line feed" "\r\n"
     (Screen.move_to_anchor screen `Fresh_line);
   Alcotest.(check string)
-    "the model follows a fresh line" (sync "\x1b[A\x1b[4Cz")
+    "the frame repaints at the fresh row" (sync "ab: z\x1b[K")
     (Screen.render screen (View.v "ab: z"))
 
 let cases =

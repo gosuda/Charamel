@@ -494,13 +494,15 @@ let render t (view : View.t) =
     ^ Charamel_ansi.Seq.decrst Charamel_ansi.Seq.sync_output
 
 let move_to_anchor t anchor =
-  let row = fst t.inline_pos in
   match anchor with
   | `Column_start ->
-      t.inline_pos <- (row, 0);
+      t.inline_pos <- (fst t.inline_pos, 0);
       "\r"
   | `Fresh_line ->
-      t.inline_pos <- (row + 1, 0);
+      t.inline_grid <- [||];
+      t.h_prev <- 0;
+      t.inline_poison <- true;
+      t.inline_pos <- (0, 0);
       "\r\n"
 
 let clear t =

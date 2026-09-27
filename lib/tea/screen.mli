@@ -60,11 +60,13 @@ val render : t -> View.t -> string
     back onto the glyph itself. *)
 
 val move_to_anchor : t -> [ `Column_start | `Fresh_line ] -> string
-(** [move_to_anchor t anchor] is the escape sequence that moves the terminal to the view's
-    attachment line: [`Column_start] to column 1 of the cursor's row, [`Fresh_line] to
-    column 1 of the next row. [t]'s cursor model follows the move, so the next {!render}
-    or {!clear} places its relative moves correctly. A caller that moves the terminal by
-    other means desynchronizes the model, and the paint then lands at the wrong cells. *)
+(** [move_to_anchor t anchor] is the escape sequence that attaches the inline view.
+    [`Column_start] keeps the view's rows and moves to column 1 of the cursor's row; the
+    diff state stays valid. [`Fresh_line] attaches the view at column 1 of the next row;
+    the diff state resets, so the next {!render} repaints the frame there over rows the
+    old grid no longer describes. [t]'s cursor model follows the move in both cases. A
+    caller that moves the terminal by other means desynchronizes the model, and the paint
+    then lands at the wrong cells. *)
 
 val clear : t -> string
 (** [clear t] is the escape sequence that erases the inline region [t] currently owns and
