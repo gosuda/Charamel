@@ -16,8 +16,8 @@ namesake.
 - **Ten tools** — `gum`, `glow`, `freeze`, `sequin`, `pop`, `skate`, `melt`, `keygen`,
   `hotdiva2000`, `crush`.
 - **Tested per unit** — one suite directory for each of the 26 libraries and tools, plus the
-  examples and the shared helpers: 30 alcotest executables, 1,699 cases run by
-  `dune runtest --profile release`.
+  examples and the shared helpers: 30 alcotest executables, 1,696 cases run by
+  `dune runtest --profile release` (1,698 registered; the 2 Windows-only cases skip on Linux).
 - **One width model** — grapheme-based measurement shared by every renderer, so East Asian and
   combining text align in tables, borders, and layout.
 - **OCaml >= 5.4** with Lwt for concurrency, `jsont` for JSON, `cmarkit` for Markdown, and `re`
