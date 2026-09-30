@@ -72,6 +72,8 @@ let c_posix_openpt =
 let c_grantpt = Foreign.foreign ~check_errno:true "grantpt" (int @-> returning int)
 let c_unlockpt = Foreign.foreign ~check_errno:true "unlockpt" (int @-> returning int)
 let c_ptsname = Foreign.foreign "ptsname" (int @-> returning string)
+let c_ptsname_opt = Foreign.foreign "ptsname" (int @-> returning string_opt)
+let c_ttyname = Foreign.foreign "ttyname" (int @-> returning string_opt)
 
 let c_actions_init =
   Foreign.foreign "posix_spawn_file_actions_init" (ptr void @-> returning int)
@@ -111,8 +113,6 @@ let c_spawn =
     @-> ptr (ptr char)
     @-> ptr (ptr char)
     @-> returning int)
-
-let c_pipe = Foreign.foreign ~check_errno:true "pipe" (ptr int @-> returning int)
 
 let sysname =
   let buffer = allocate_n char ~count:512 in
@@ -280,48 +280,61 @@ let run actions attributes program arguments env =
   ignore (c_attr_destroy attributes);
   if code <> 0 then Error (error_of_spawn code) else Ok !@pid
 
+(* A geometry spawn asks for no wiring at all, so it carries neither file actions nor
+   spawn attributes: plain [posix_spawnp] is the whole mechanism. *)
+let spawn_plain program arguments =
+  let argv', argv_keep = string_array (Array.of_list (program :: arguments)) in
+  let envp, env_keep = string_array (Unix.environment ()) in
+  let pid = allocate_n int ~count:1 in
+  let code = c_spawn pid program null null argv' envp in
+  ignore (argv_keep, env_keep);
+  if code <> 0 then Error (error_of_spawn code) else Ok !@pid
+
+(* The terminal behind an arbitrary descriptor is named by [ttyname]; a pty master
+   answers through [ptsname] when the slave is still unopened or when the master is
+   not itself a tty. *)
+let tty_path fd =
+  match c_ttyname fd with Some path -> Some path | None -> c_ptsname_opt fd
+
+let read_all name =
+  let ic = open_in_bin name in
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr ic)
+    (fun () -> really_input_string ic (in_channel_length ic))
+
 (* Where the ABI makes the variadic [ioctl] uncallable — arm64 Darwin — and no
-   [tc*getwinsize] exists, the last resort is [stty] with the descriptor wired to its
-   standard input: the program performs its own ioctl, so the calling convention never
-   reaches this process. The spawn (never a fork) costs a process, but a geometry call
-   is rare. When [capture] is set, [stty]'s standard output is a pipe whose contents
-   come back in the answer; a failed spawn or a non-zero exit — which is also [stty]'s
-   way of saying the descriptor is no terminal — answers [None]. *)
+   [tc*getwinsize] exists, the last resort is [stty]. Wiring the descriptor to [stty]'s
+   standard input would need the [dup2] file action, which the in-kernel spawner on
+   macOS 26 reports as [ENOENT], so the terminal is reached by name: [stty -f] opens the
+   device itself and performs its own ioctl, and the calling convention never reaches
+   this process. When [capture] is set the answer goes to a file rather than a wired
+   pipe; a failed spawn or a non-zero exit — which is also [stty]'s way of saying the
+   path is no terminal — answers [None]. *)
 let stty_winsize fd arguments capture =
-  let reader, writer =
-    let cell = allocate_n int ~count:2 in
-    if capture && c_pipe cell = 0 then (!@(cell +@ 0), !@(cell +@ 1)) else (-1, -1)
+  let awaited = function
+    | _, Unix.WEXITED 0 -> true
+    | _, (Unix.WEXITED _ | Unix.WSIGNALED _ | Unix.WSTOPPED _) -> false
   in
-  if capture && reader < 0 then None
-  else
-    let close_fd number = try ignore (c_close number) with Unix.Unix_error _ -> () in
-    let dups = (fd, stdin_fd) :: (if writer >= 0 then [ (writer, stdout_fd) ] else []) in
-    match prepare ~dups [] with
-    | Error _ ->
-        if writer >= 0 then (
-          close_fd reader;
-          close_fd writer);
-        None
-    | Ok (actions, attributes) -> (
-        match run actions attributes "stty" arguments None with
-        | Error _ ->
-            if writer >= 0 then (
-              close_fd reader;
-              close_fd writer);
-            None
-        | Ok pid -> (
-            if writer >= 0 then close_fd writer;
-            let report =
-              if reader < 0 then ""
-              else
-                let buffer = allocate_n char ~count:64 in
-                let count = try read_at reader buffer 64 with Unix.Unix_error _ -> 0 in
-                close_fd reader;
-                if count > 0 then string_of_c_buffer buffer count else ""
+  match tty_path fd with
+  | None -> None
+  | Some path -> (
+      if capture then
+        let tmp = Filename.temp_file "charamel-stty" ".size" in
+        Fun.protect
+          ~finally:(fun () -> try Unix.unlink tmp with Unix.Unix_error _ -> ())
+          (fun () ->
+            let command =
+              String.concat " " ("stty" :: "-f" :: Filename.quote path :: arguments)
+              ^ " > " ^ Filename.quote tmp
             in
-            match Unix.waitpid [] pid with
-            | _, Unix.WEXITED 0 -> Some report
-            | _, (Unix.WEXITED _ | Unix.WSIGNALED _ | Unix.WSTOPPED _) -> None))
+            match spawn_plain "/bin/sh" [ "-c"; command ] with
+            | Error _ -> None
+            | Ok pid ->
+                if awaited (Unix.waitpid [] pid) then Some (read_all tmp) else None)
+      else
+        match spawn_plain "stty" ("-f" :: path :: arguments) with
+        | Error _ -> None
+        | Ok pid -> if awaited (Unix.waitpid [] pid) then Some "" else None)
 
 (* [ioctl] reports through [errno], which the binding turns into [Unix_error]; "no size
    for this descriptor" is an ordinary answer — a pipe, a closed master, a device that
@@ -664,14 +677,15 @@ module Process = struct
       (Lwt_unix.of_unix_file_descr ~blocking:false ~set_flags:false fd)
 
   let start program arguments nulls handles cwd env paths =
-    (* A [Null] stream is wired by dup2 of a parent-opened [/dev/null] rather than an
-       [addopen] of the path: the descriptor is already bound when the spawn runs, so no
-       in-kernel open can refuse it, and the duplicated child descriptor is non-cloexec
-       as a standard stream must be. *)
+    (* A [Null] stream is wired by [addopen] of [/dev/null] on macOS — where the
+       [dup2] file action reports [ENOENT] — and by [dup2] of a parent-opened descriptor
+       elsewhere: the descriptor is already bound when the spawn runs, so no in-kernel
+       open can refuse it, and the duplicated child descriptor is non-cloexec as a
+       standard stream must be. *)
     let null_fd =
-      match nulls with
-      | [] -> None
-      | _ :: _ -> Some (c_open "/dev/null" (o_rdwr lor o_cloexec))
+      match (nulls, is_macos) with
+      | [], _ | _ :: _, true -> None
+      | _ :: _, false -> Some (c_open "/dev/null" (o_rdwr lor o_cloexec))
     in
     let dups =
       match null_fd with
@@ -680,6 +694,9 @@ module Process = struct
     in
     let additions =
       List.map (fun (number, path, _) -> (number, path, child_access number)) handles
+      @ List.map
+          (fun number -> (number, "/dev/null", child_access number))
+          (if is_macos then nulls else [])
     in
     let abandon reason =
       close (List.map (fun (_, _, fd) -> fd) handles);

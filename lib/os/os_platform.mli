@@ -147,7 +147,7 @@ module Pty : sig
       [ptsname], and sizes the pair on the master; [rows] defaults to 24 and [cols] to 80.
       The size reaches the kernel through [tcsetwinsize] where the libc exports it,
       [ioctl TIOCSWINSZ] elsewhere, and on macOS — whose ABI forbids a marshalled variadic
-      [ioctl] — a spawned [stty]. Every step happens inside [Lwt_preemptive.detach]
+      [ioctl] — a spawned [stty -f]. Every step happens inside [Lwt_preemptive.detach]
       because [grantpt] may spawn the [pt_chown] helper. Windows returns [`Unsupported].
       @raise Invalid_argument when [rows] or [cols] is less than one. *)
 

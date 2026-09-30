@@ -422,6 +422,8 @@ let tea_with_stream_case () =
   run_connection_case ~name:"stream" ~endpoint:stream_handler ~expect_code:0
     ~expect_text:[ "count: 1" ] ()
 
+let slave_prefix = if Charamel_os__Os_platform.is_macos then "/dev/ttys" else "/dev/pts"
+
 let allocate_pty_case () =
   let endpoint session =
     let report = function
@@ -434,13 +436,13 @@ let allocate_pty_case () =
     >>= fun () -> W.Session.exit session 0
   in
   run_connection_case ~name:"allocate-pty" ~chain:W.allocate_pty ~endpoint ~expect_code:0
-    ~expect_text:[ "/dev/pts"; "status:0"; "emulated:false" ]
+    ~expect_text:[ slave_prefix; "status:0"; "emulated:false" ]
     ()
 
 let tea_exec_case () =
   run_connection_case ~name:"tea-exec" ~chain:W.allocate_pty ~endpoint:exec_handler
     ~expect_code:0
-    ~expect_text:[ "/dev/pts"; "in-session"; "exec:3" ]
+    ~expect_text:[ slave_prefix; "in-session"; "exec:3" ]
     ()
 
 let token_bucket_case () =
