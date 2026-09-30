@@ -311,7 +311,11 @@ let read_all name =
    pipe; a failed spawn or a non-zero exit — which is also [stty]'s way of saying the
    path is no terminal — answers [None]. *)
 let stty_winsize fd arguments capture =
-  let awaited = function
+  let awaited pid =
+    let rec wait () =
+      try Unix.waitpid [] pid with Unix.Unix_error (Unix.EINTR, _, _) -> wait ()
+    in
+    match wait () with
     | _, Unix.WEXITED 0 -> true
     | _, (Unix.WEXITED _ | Unix.WSIGNALED _ | Unix.WSTOPPED _) -> false
   in
@@ -329,12 +333,11 @@ let stty_winsize fd arguments capture =
             in
             match spawn_plain "/bin/sh" [ "-c"; command ] with
             | Error _ -> None
-            | Ok pid ->
-                if awaited (Unix.waitpid [] pid) then Some (read_all tmp) else None)
+            | Ok pid -> if awaited pid then Some (read_all tmp) else None)
       else
         match spawn_plain "stty" ("-f" :: path :: arguments) with
         | Error _ -> None
-        | Ok pid -> if awaited (Unix.waitpid [] pid) then Some "" else None)
+        | Ok pid -> if awaited pid then Some "" else None)
 
 (* [ioctl] reports through [errno], which the binding turns into [Unix_error]; "no size
    for this descriptor" is an ordinary answer — a pipe, a closed master, a device that
@@ -514,12 +517,24 @@ module Pty = struct
         match argv with
         | [] -> io_failure "spawn" "argv is empty"
         | program :: arguments -> (
-            let additions =
-              [
-                (stdin_fd, pty.slave, o_rdwr);
-                (stdout_fd, pty.slave, o_wronly);
-                (stderr_fd, pty.slave, o_wronly);
-              ]
+            (* On macOS the in-kernel spawner refuses to wire a [/dev/] path, so the
+               slave reaches the child's standard descriptors through the shell
+               instead: [exec] opens it in userspace after [setsid] has run, which is
+               exactly the sequence that makes it the controlling terminal. *)
+            let script =
+              "exec <" ^ Filename.quote pty.slave ^ " >" ^ Filename.quote pty.slave
+              ^ " 2>&1; exec \"$0\" \"$@\""
+            in
+            let additions, program, arguments =
+              if is_macos then ([], "/bin/sh", "-c" :: script :: program :: arguments)
+              else
+                ( [
+                    (stdin_fd, pty.slave, o_rdwr);
+                    (stdout_fd, pty.slave, o_wronly);
+                    (stderr_fd, pty.slave, o_wronly);
+                  ],
+                  program,
+                  arguments )
             in
             match prepare ?cwd ~owns_session:true additions with
             | Error reason -> Error reason
@@ -692,11 +707,26 @@ module Process = struct
       | Some fd -> List.map (fun number -> (fd, number)) nulls
       | None -> []
     in
+    (* macOS spawns that need a [Null] stream cannot wire it: the in-kernel spawner
+       answers ENOENT for an [addopen] of a [/dev/] path and for [dup2] outright. The
+       shell wires the stream in userspace instead — [exec </dev/null] opens the
+       device the ordinary way, and the trailing exec replaces the shell image. *)
+    let program, arguments =
+      match (is_macos, nulls) with
+      | false, _ | true, [] -> (program, arguments)
+      | true, _ :: _ ->
+          let redirect number =
+            if number = stdin_fd then "</dev/null"
+            else if number = stdout_fd then ">/dev/null"
+            else "2>/dev/null"
+          in
+          let script =
+            "exec " ^ String.concat " " (List.map redirect nulls) ^ "; exec \"$0\" \"$@\""
+          in
+          ("/bin/sh", "-c" :: script :: program :: arguments)
+    in
     let additions =
       List.map (fun (number, path, _) -> (number, path, child_access number)) handles
-      @ List.map
-          (fun number -> (number, "/dev/null", child_access number))
-          (if is_macos then nulls else [])
     in
     let abandon reason =
       close (List.map (fun (_, _, fd) -> fd) handles);
