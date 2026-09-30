@@ -25,6 +25,25 @@ let c_uname = Foreign.foreign "uname" (ptr char @-> returning int)
 let c_ioctl =
   Foreign.foreign ~check_errno:true "ioctl" (int @-> ulong @-> ptr void @-> returning int)
 
+(* ctypes cannot describe a variadic call, and on arm64 Darwin a variadic argument goes
+   on the stack rather than in a register, so a fixed-arity [ioctl] binding hands the
+   kernel a garbage pointer there. The POSIX.1-2024 [tcgetwinsize]/[tcsetwinsize] entry
+   points are ordinary functions; they are preferred wherever the system exports them
+   (macOS 15.4+, glibc 2.39+), with [ioctl] kept for older libcs. *)
+let c_tcgetwinsize =
+  try
+    Some
+      (Foreign.foreign ~check_errno:true "tcgetwinsize"
+         (int @-> ptr void @-> returning int))
+  with Dl.DL_error _ -> None
+
+let c_tcsetwinsize =
+  try
+    Some
+      (Foreign.foreign ~check_errno:true "tcsetwinsize"
+         (int @-> ptr void @-> returning int))
+  with Dl.DL_error _ -> None
+
 (* [~release_runtime_lock:true] gives up the OCaml runtime lock for the duration of the
    call; [~stub:true] on its own does not. {!Pty.read} and {!Pty.write} run these on
    [Lwt_preemptive] workers precisely because they block until the child speaks; holding
@@ -41,6 +60,10 @@ let c_write =
 
 let c_close = Foreign.foreign ~check_errno:true "close" (int @-> returning int)
 
+(* [open] is variadic only for the mode argument that accompanies [O_CREAT]; opening an
+   existing path needs no mode, so a two-argument binding is ABI-correct everywhere. *)
+let c_open = Foreign.foreign ~check_errno:true "open" (string @-> int @-> returning int)
+
 let c_posix_openpt =
   Foreign.foreign ~check_errno:true "posix_openpt" (int @-> returning int)
 
@@ -55,6 +78,10 @@ let c_actions_addopen =
   Foreign.foreign "posix_spawn_file_actions_addopen"
     (ptr void @-> int @-> string @-> int @-> int @-> returning int)
 
+let c_actions_adddup2 =
+  Foreign.foreign "posix_spawn_file_actions_adddup2"
+    (ptr void @-> int @-> int @-> returning int)
+
 let c_actions_destroy =
   Foreign.foreign "posix_spawn_file_actions_destroy" (ptr void @-> returning int)
 
@@ -63,7 +90,7 @@ let c_actions_addchdir =
     Some
       (Foreign.foreign "posix_spawn_file_actions_addchdir_np"
          (ptr void @-> string @-> returning int))
-  with Failure _ -> None
+  with Dl.DL_error _ -> None
 
 let c_attr_init = Foreign.foreign "posix_spawnattr_init" (ptr void @-> returning int)
 let c_attr_destroy = Foreign.foreign "posix_spawnattr_destroy" (ptr void @-> returning int)
@@ -130,7 +157,11 @@ let voidp buffer = coerce (ptr char) (ptr void) buffer
    terminal — so both directions swallow it rather than raising. *)
 let window_size fd =
   let buffer = allocate_n char ~count:winsize_bytes in
-  match c_ioctl fd (ULong.of_int tiocgwinsz) (voidp buffer) with
+  match
+    match c_tcgetwinsize with
+    | Some tcgetwinsize -> tcgetwinsize fd (voidp buffer)
+    | None -> c_ioctl fd (ULong.of_int tiocgwinsz) (voidp buffer)
+  with
   | exception Unix.Unix_error _ -> None
   | failure when failure <> 0 -> None
   | _ ->
@@ -144,7 +175,11 @@ let set_window_size fd ~rows ~cols =
   put_le16 buffer 2 cols;
   put_le16 buffer 4 0;
   put_le16 buffer 6 0;
-  match c_ioctl fd (ULong.of_int tiocswinsz) (voidp buffer) with
+  match
+    match c_tcsetwinsize with
+    | Some tcsetwinsize -> tcsetwinsize fd (voidp buffer)
+    | None -> c_ioctl fd (ULong.of_int tiocswinsz) (voidp buffer)
+  with
   | exception Unix.Unix_error _ -> false
   | failure -> failure = 0
 
@@ -204,14 +239,19 @@ let error_of_spawn code =
    Every spawn puts the child in a process group of its own so a caller can signal the whole
    tree; [additions] are the [addopen] actions that wire the child's standard descriptors. A
    refused action aborts the preparation rather than spawning with a stream left unwired. *)
-let build_actions actions additions cwd =
-  let wired =
-    List.map
+let build_actions actions additions dups cwd =
+  let opened =
+    List.for_all
       (fun (number, path, access) ->
         c_actions_addopen actions number path access 0o600 = 0)
       additions
   in
-  if not (List.for_all (fun accepted -> accepted) wired) then
+  let dupped =
+    List.for_all
+      (fun (source, number) -> c_actions_adddup2 actions source number = 0)
+      dups
+  in
+  if not (opened && dupped) then
     io_failure "file actions" "a descriptor could not be wired"
   else
     match (cwd, c_actions_addchdir) with
@@ -223,7 +263,7 @@ let build_actions actions additions cwd =
         io_failure "file actions"
           "this system has no posix_spawn working-directory action"
 
-let prepare ?cwd ?(owns_session = false) additions =
+let prepare ?cwd ?(owns_session = false) ?(dups = []) additions =
   if owns_session && spawn_setsid = 0 then
     io_failure "spawn attributes" "this system has no posix_spawn session flag"
   else
@@ -237,7 +277,7 @@ let prepare ?cwd ?(owns_session = false) additions =
     let actions' = voidp actions in
     let attributes' = voidp attributes in
     ignore (c_actions_init actions');
-    match build_actions actions' additions cwd with
+    match build_actions actions' additions dups cwd with
     | Error _ as failure ->
         (* Only the actions object is destroyed here: the attributes have not been
          initialised, so destroying them would be undefined. *)
@@ -308,13 +348,21 @@ module Tty = struct
       c_vtime = 0;
     }
 
+  (* Darwin's [tcgetattr] answers ENODEV rather than the POSIX ENOTTY for a descriptor
+     that is no terminal; normalising keeps the single error callers are told to
+     expect. *)
+  let tcgetattr fd =
+    try Unix.tcgetattr fd
+    with Unix.Unix_error (Unix.ENODEV, label, argument) ->
+      raise (Unix.Unix_error (Unix.ENOTTY, label, argument))
+
   let enter_raw () =
-    let terminal = Unix.tcgetattr Unix.stdin in
+    let terminal = tcgetattr Unix.stdin in
     Unix.tcsetattr Unix.stdin Unix.TCSANOW (raw_of terminal);
     { fd = Unix.stdin; terminal }
 
   let echo_off () =
-    let terminal = Unix.tcgetattr Unix.stdin in
+    let terminal = tcgetattr Unix.stdin in
     Unix.tcsetattr Unix.stdin Unix.TCSANOW { terminal with Unix.c_echo = false };
     { fd = Unix.stdin; terminal }
 
@@ -536,22 +584,41 @@ module Process = struct
       (Lwt_unix.of_unix_file_descr ~blocking:false ~set_flags:false fd)
 
   let start program arguments nulls handles cwd env paths =
+    (* A [Null] stream is wired by dup2 of a parent-opened [/dev/null] rather than an
+       [addopen] of the path: the descriptor is already bound when the spawn runs, so no
+       in-kernel open can refuse it, and the duplicated child descriptor is non-cloexec
+       as a standard stream must be. *)
+    let null_fd =
+      match nulls with
+      | [] -> None
+      | _ :: _ -> Some (c_open "/dev/null" (o_rdwr lor o_cloexec))
+    in
+    let dups =
+      match null_fd with
+      | Some fd -> List.map (fun number -> (fd, number)) nulls
+      | None -> []
+    in
     let additions =
-      List.map (fun number -> (number, "/dev/null", o_rdwr)) nulls
-      @ List.map (fun (number, path, _) -> (number, path, child_access number)) handles
+      List.map (fun (number, path, _) -> (number, path, child_access number)) handles
     in
     let abandon reason =
       close (List.map (fun (_, _, fd) -> fd) handles);
+      (match null_fd with
+      | Some fd -> ( try ignore (c_close fd) with Unix.Unix_error _ -> ())
+      | None -> ());
       remove paths;
       raise reason
     in
-    match prepare ?cwd additions with
+    match prepare ?cwd ~dups additions with
     | Error (`Error reason) ->
         abandon (Unix.Unix_error (Unix.EINVAL, "posix_spawn_file_actions", reason))
     | Ok (actions, attributes) -> (
         match run actions attributes program arguments env with
         | Error code -> abandon (Unix.Unix_error (code, "posix_spawnp", program))
         | Ok child ->
+            (match null_fd with
+            | Some fd -> ( try ignore (c_close fd) with Unix.Unix_error _ -> ())
+            | None -> ());
             let descriptor number =
               match
                 List.assoc_opt number (List.map (fun (n, _, fd) -> (n, fd)) handles)

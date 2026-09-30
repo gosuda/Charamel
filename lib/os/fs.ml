@@ -69,7 +69,6 @@ let read_link path =
       | _ -> Lwt.fail exn)
 
 let stat path = to_result (fun () -> Lwt_unix.stat path)
-let unlink path = to_result (fun () -> Lwt_unix.unlink path)
 
 (* [Filename.dirname] owns the decomposition: it already knows drive roots ([C:\]),
    UNC share roots ([\\server\share]), trailing separators and relative paths, and it
@@ -86,6 +85,13 @@ let is_directory path =
   Lwt.catch
     (fun () -> Lwt_unix.stat path >|= fun stats -> stats.Unix.st_kind = Unix.S_DIR)
     (function Unix.Unix_error _ -> Lwt.return false | exn -> Lwt.fail exn)
+
+(* Darwin refuses a directory's [unlink] with EPERM instead of the POSIX EISDIR, so the
+   kind is asked first and the documented answer does not depend on the platform. *)
+let unlink path =
+  is_directory path >>= function
+  | true -> Lwt.return (Error `Is_directory)
+  | false -> to_result (fun () -> Lwt_unix.unlink path)
 
 let mkdir_one path =
   Lwt.catch
