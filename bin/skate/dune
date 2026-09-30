@@ -1,7 +1,7 @@
 (library
  (name skate_core)
  (modules store)
- (libraries lwt lwt.unix unix fmt jsont jsont.bytesrw base64))
+ (libraries lwt lwt.unix unix fmt jsont jsont.bytesrw base64 charamel.os))
 
 (executable
  (name main)

@@ -21,7 +21,10 @@ let create_dir path =
 let save_path path contents =
   Lwt.catch
     (fun () ->
-      Lwt_unix.openfile path [ O_WRONLY; O_CREAT; O_EXCL ] 0o600 >>= fun fd ->
+      Lwt_unix.openfile path
+        ([ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] @ Charamel_os.Fs.binary_flags)
+        0o600
+      >>= fun fd ->
       let channel = Lwt_io.of_fd ~mode:Lwt_io.Output fd in
       Lwt.finalize
         (fun () -> Lwt_io.write channel contents)

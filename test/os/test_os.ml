@@ -419,7 +419,8 @@ let home_and_tilde () =
         "a bare tilde is home" "Ok /tmp/fake-home"
         (text_result (Charamel_os.Dirs.expand_tilde "~"));
       Alcotest.(check string)
-        "tilde-slash joins" "Ok /tmp/fake-home/notes.md"
+        "tilde-slash joins"
+        ("Ok " ^ Filename.concat "/tmp/fake-home" "notes.md")
         (text_result (Charamel_os.Dirs.expand_tilde "~/notes.md"));
       Alcotest.(check string)
         "an absolute path is untouched" "Ok /etc/hosts"
@@ -465,10 +466,12 @@ let windows_layout () =
     [ ("LOCALAPPDATA", "/tmp/LocalAppData"); ("USERPROFILE", "/tmp/Profile") ]
     (fun () ->
       Alcotest.(check string)
-        "data goes to LocalAppData" "/tmp/LocalAppData/charm"
+        "data goes to LocalAppData"
+        (Filename.concat "/tmp/LocalAppData" "charm")
         (Charamel_os.Dirs.data_dir ~app:"charm");
       Alcotest.(check string)
-        "config goes under the profile" "/tmp/Profile/.config/charm"
+        "config goes under the profile"
+        (Filename.concat (Filename.concat "/tmp/Profile" ".config") "charm")
         (Charamel_os.Dirs.config_dir ~app:"charm"))
 
 let temp_directory_follows_the_environment () =
@@ -689,8 +692,9 @@ let raw_mode_requires_a_terminal () =
     quiet ();
     ())
   else
+    let call = if Sys.win32 then ("GetConsoleMode", "CON") else ("tcgetattr", "") in
     Alcotest.check_raises "enter_raw on a non-terminal fails with ENOTTY"
-      (Unix.Unix_error (Unix.ENOTTY, "tcgetattr", ""))
+      (Unix.Unix_error (Unix.ENOTTY, fst call, snd call))
       (fun () ->
         let restore = Charamel_os.Tty.enter_raw () in
         restore ())

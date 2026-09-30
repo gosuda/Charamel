@@ -16,7 +16,8 @@ let check_replace_and_mode () =
         "complete contents" "first\n"
         (Test_tools_test_support.load_file target);
       Alcotest.(check int)
-        "private mode" 0o600
+        "private mode"
+        (if Sys.win32 then 0o666 else 0o600)
         ((Unix.lstat target).Unix.st_perm land 0o777);
       Alcotest.(check (list string)) "no temporary sibling remains" [] (temp_entries root);
       (match await (State_file.replace target "second\n") with

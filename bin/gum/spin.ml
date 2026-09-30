@@ -54,7 +54,10 @@ let create_capture suffix =
             (fun fd -> { path; fd })
             (Lwt_preemptive.detach
                (fun () ->
-                 Unix.openfile path [ Unix.O_WRONLY; Unix.O_TRUNC; Unix.O_CLOEXEC ] 0o600)
+                 Unix.openfile path
+                   ([ Unix.O_WRONLY; Unix.O_TRUNC; Unix.O_CLOEXEC ]
+                   @ Charamel_os.Fs.binary_flags)
+                   0o600)
                ()))
         (fun exn ->
           Lwt.bind
@@ -118,7 +121,11 @@ let write_capture capture text =
 let read_capture capture =
   Lwt_preemptive.detach
     (fun () ->
-      let fd = Unix.openfile capture.path [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
+      let fd =
+        Unix.openfile capture.path
+          ([ Unix.O_RDONLY; Unix.O_CLOEXEC ] @ Charamel_os.Fs.binary_flags)
+          0
+      in
       Fun.protect
         ~finally:(fun () -> try Unix.close fd with Unix.Unix_error _ -> ())
         (fun () ->

@@ -372,9 +372,11 @@ let perms_case () =
       let* () = write_ok "write the pair" case_dir "k" ~comment:"perm-test" k in
       let private_path = Filename.concat case_dir "k" in
       let public_path = Filename.concat case_dir "k.pub" in
-      Alcotest.check Alcotest.int "private key mode" 0o600
+      Alcotest.check Alcotest.int "private key mode"
+        (if Sys.win32 then 0o666 else 0o600)
         (Unix.stat private_path).Unix.st_perm;
-      Alcotest.check Alcotest.int "public key mode" 0o644
+      Alcotest.check Alcotest.int "public key mode"
+        (if Sys.win32 then 0o666 else 0o644)
         (Unix.stat public_path).Unix.st_perm;
       Alcotest.check Alcotest.bool "private key is PEM armored" true
         (String.starts_with ~prefix:"-----BEGIN OPENSSH PRIVATE KEY-----"

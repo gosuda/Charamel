@@ -106,7 +106,8 @@ let test_set_remove_and_reload () =
         "stable lock file exists" true
         ((Unix.lstat lock).Unix.st_kind = Unix.S_REG);
       Alcotest.(check int)
-        "lock is private" 0o600
+        "lock is private"
+        (if Sys.win32 then 0o666 else 0o600)
         ((Unix.lstat lock).Unix.st_perm land 0o777);
       (match await (Auth.create ~path ~clock ()) with
       | Error error ->

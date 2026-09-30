@@ -15,6 +15,7 @@ type input_record =
   | Ignored
 
 let is_macos = false
+let binary_file_flags = [ Unix.O_BINARY ]
 let default_rows = 24
 let default_cols = 80
 let utf8_code_page = 65001

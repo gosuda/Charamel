@@ -186,7 +186,7 @@ let max_temp_attempts = 8
 
 (* A per-process random tag plus a monotonic counter: not a cryptographic
    requirement, just good enough that [`Exclusive] creation rarely collides.
-   Atomicity itself comes from the filesystem's O_EXCL semantics, not from
+   Atomicity itself comes from the filesystem's Unix.O_EXCL semantics, not from
    this tag being unique: a collision, ours or a second process's, is simply
    retried with a new candidate name. *)
 let process_tag = Random.State.bits (Random.State.make_self_init ())
@@ -205,7 +205,9 @@ let save_atomic dest body =
       let owned = ref false in
       Lwt.catch
         (fun () ->
-          Lwt_unix.openfile tmp [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600
+          Lwt_unix.openfile tmp
+            ([ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] @ Charamel_os.Fs.binary_flags)
+            0o600
           >>= fun fd ->
           owned := true;
           let channel = Lwt_io.of_fd ~mode:Lwt_io.output fd in

@@ -33,10 +33,13 @@ let to_result f =
       | _ -> Lwt.fail exn)
 
 let rename_replace ~src ~dst = raised dst (fun () -> Lwt_unix.rename src dst)
+let binary_flags = Os_platform.binary_file_flags
 
 let with_open_out ~perm path k =
   raised path (fun () ->
-      Lwt_unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] perm
+      Lwt_unix.openfile path
+        ([ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] @ binary_flags)
+        perm
       >|= fun fd -> Lwt_io.of_fd ~mode:Lwt_io.output fd)
   >>= fun channel -> Lwt.finalize (fun () -> k channel) (fun () -> Lwt_io.close channel)
 
@@ -101,6 +104,13 @@ let mkdir_one path =
       | Unix.Unix_error (Unix.EEXIST, _, _) ->
           Lwt.map
             (function true -> Ok () | false -> Error `Already_exists)
+            (is_directory path)
+      | Unix.Unix_error ((Unix.EACCES | Unix.EPERM), _, _) ->
+          (* Windows denies [mkdir] on an existing directory — a drive root
+             reports EACCES rather than EEXIST — so a directory that is already
+             there still counts as made; anything else is a real denial. *)
+          Lwt.map
+            (function true -> Ok () | false -> Error `Permission_denied)
             (is_directory path)
       | Unix.Unix_error (code, _, _) -> (
           match classify code with

@@ -318,7 +318,10 @@ let emit ?file ?(formatter = Text) ?(level = None_) ?(min_level = "") ?(prefix =
               if Filename.is_relative path then Filename.concat env.Env.cwd path else path
             in
             let fd =
-              Unix.openfile resolved [ Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CREAT ] 0o644
+              Unix.openfile resolved
+                ([ Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CREAT ]
+                @ Charamel_os.Fs.binary_flags)
+                0o644
             in
             let oc = Unix.out_channel_of_descr fd in
             Fun.protect

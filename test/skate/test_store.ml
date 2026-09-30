@@ -271,7 +271,9 @@ let atomic_0600 =
           let* result = Store.set ~root ~db:"private" "key" "value" in
           unit_ok result;
           Alcotest.(check int)
-            "mode" 0o600 (Unix.stat (Filename.concat root "private.json")).Unix.st_perm;
+            "mode"
+            (if Sys.win32 then 0o666 else 0o600)
+            (Unix.stat (Filename.concat root "private.json")).Unix.st_perm;
           Lwt.return_unit))
 
 let binary_not_utf8 =

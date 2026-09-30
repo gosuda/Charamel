@@ -48,7 +48,8 @@ let spills_complete_content () =
       end;
       let target = Filename.concat (Filename.concat root "artifacts") (id ^ ".txt") in
       Alcotest.(check int)
-        "private artifact mode" 0o600
+        "private artifact mode"
+        (if Sys.win32 then 0o666 else 0o600)
         ((Unix.lstat target).Unix.st_perm land 0o777))
 
 let long_line_spill_is_bounded () =

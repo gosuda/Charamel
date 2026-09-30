@@ -24,7 +24,7 @@ let exit_status = function
   | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal
 
 let run_cli ~exe ?env ?cwd ?(timeout = 10.) ?(stdin = "") args =
-  ignore (Sys.set_signal Sys.sigpipe Sys.Signal_ignore);
+  if not Sys.win32 then ignore (Sys.set_signal Sys.sigpipe Sys.Signal_ignore);
   let argv = Array.of_list (exe :: args) in
   Lwt_process.with_process_full ?env ?cwd (exe, argv) (fun process ->
       let collect =

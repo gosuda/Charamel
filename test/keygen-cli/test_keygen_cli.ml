@@ -88,8 +88,11 @@ let force_replaces_pair () =
       Alcotest.check Alcotest.string "forced public key matches private key"
         (Key.authorized_key ~comment:"second" key)
         (load_file public_path);
-      Alcotest.check Alcotest.int "private mode" 0o600 (Unix.lstat path).Unix.st_perm;
-      Alcotest.check Alcotest.int "public mode" 0o644
+      Alcotest.check Alcotest.int "private mode"
+        (if Sys.win32 then 0o666 else 0o600)
+        (Unix.lstat path).Unix.st_perm;
+      Alcotest.check Alcotest.int "public mode"
+        (if Sys.win32 then 0o666 else 0o644)
         (Unix.lstat public_path).Unix.st_perm;
       Lwt.return_unit)
 
@@ -119,9 +122,11 @@ let missing_parent_is_created () =
       let fingerprint = expect_ok "key pair with missing parent" result in
       Alcotest.check Alcotest.bool "parent directory exists" true
         (Sys.is_directory deeper);
-      Alcotest.check Alcotest.int "first created directory mode" 0o700
+      Alcotest.check Alcotest.int "first created directory mode"
+        (if Sys.win32 then 0o777 else 0o700)
         (Unix.lstat nested).Unix.st_perm;
-      Alcotest.check Alcotest.int "last created directory mode" 0o700
+      Alcotest.check Alcotest.int "last created directory mode"
+        (if Sys.win32 then 0o777 else 0o700)
         (Unix.lstat deeper).Unix.st_perm;
       let key =
         match Key.of_openssh_private (load_file path) with
@@ -130,8 +135,11 @@ let missing_parent_is_created () =
       in
       Alcotest.check Alcotest.string "generated fingerprint" fingerprint
         (Key.fingerprint_sha256 key);
-      Alcotest.check Alcotest.int "private mode" 0o600 (Unix.lstat path).Unix.st_perm;
-      Alcotest.check Alcotest.int "public mode" 0o644
+      Alcotest.check Alcotest.int "private mode"
+        (if Sys.win32 then 0o666 else 0o600)
+        (Unix.lstat path).Unix.st_perm;
+      Alcotest.check Alcotest.int "public mode"
+        (if Sys.win32 then 0o666 else 0o644)
         (Unix.lstat (path ^ ".pub")).Unix.st_perm;
       Lwt.return_unit)
 
