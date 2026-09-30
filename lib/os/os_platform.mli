@@ -144,9 +144,12 @@ module Pty : sig
   val create : ?rows:int -> ?cols:int -> unit -> (t, [> error ]) result Lwt.t
   (** Allocate a pair of the given geometry, at least one row and one column. POSIX runs
       [posix_openpt] with [O_RDWR | O_NOCTTY | O_CLOEXEC], then [grantpt], [unlockpt] and
-      [ptsname], and sizes the pair with [ioctl TIOCSWINSZ] on the master; [rows] defaults
-      to 24 and [cols] to 80. Every step happens inside [Lwt_preemptive.detach] because
-      [grantpt] may spawn the [pt_chown] helper. Windows returns [`Unsupported].
+      [ptsname], and sizes the pair on the master; [rows] defaults to 24 and [cols] to
+      80. The size reaches the kernel through [tcsetwinsize] where the libc exports it,
+      [ioctl TIOCSWINSZ] elsewhere, and on macOS — whose ABI forbids a marshalled
+      variadic [ioctl] — a spawned [stty]. Every step happens inside
+      [Lwt_preemptive.detach] because [grantpt] may spawn the [pt_chown] helper.
+      Windows returns [`Unsupported].
       @raise Invalid_argument when [rows] or [cols] is less than one. *)
 
   val slave_path : t -> string
@@ -179,12 +182,12 @@ module Pty : sig
       @raise Invalid_argument when [[off, len]] is not a range of [s]. *)
 
   val size : t -> (int * int, [> error ]) result
-  (** [(rows, cols)] read back with [ioctl TIOCGWINSZ] on the master. Windows returns
-      [`Unsupported]. *)
+  (** [(rows, cols)] read back on the master, by the same route as the sizing in
+      {!create}. Windows returns [`Unsupported]. *)
 
   val resize : t -> rows:int -> cols:int -> (unit, [> error ]) result
-  (** Set the size with [ioctl TIOCSWINSZ]; the kernel signals the child's foreground
-      group [SIGWINCH]. Windows returns [`Unsupported]. *)
+  (** Set the size as {!create} does; the kernel signals the child's foreground group
+      [SIGWINCH]. Windows returns [`Unsupported]. *)
 
   val terminate : t -> unit
   (** [SIGKILL] the child's process group, best effort: it may already be gone. Windows
