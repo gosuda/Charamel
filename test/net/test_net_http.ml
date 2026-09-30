@@ -371,18 +371,20 @@ let raw_lines =
 
 let refused =
   Alcotest_lwt.test_case "reports a refused connection" `Quick (fun _switch () ->
-      (* Nothing ever listens on port 1, so the refusal does not depend on how a
-         just-closed listener unwinds — a freed port can keep a SYN retransmitting
-         on Windows rather than resetting. A few bounded attempts cover any stack
-         that still answers slowly. *)
+      (* Nothing listens on port 1. Unix answers a dead port with an immediate
+         refusal; Windows can keep a SYN retransmitting well past the attempt
+         bound, so there a dead port surfaces as a timed-out attempt — a
+         Transport failure either way. *)
       let target = Uri.of_string "http://127.0.0.1:1/" in
-      let rec attempt retries =
-        Charamel_net.call ~timeout:2. ~meth:`GET ~body:None target >>= fun result ->
-        match (result, retries) with
-        | Error (`Transport "request timed out"), n when n > 0 -> attempt (n - 1)
-        | _ -> Net_test_support.check_transport "refused" "connection refused" result
-      in
-      attempt 3)
+      Charamel_net.call ~timeout:2. ~meth:`GET ~body:None target >>= fun result ->
+      match (Sys.win32, result) with
+      | true, Error (`Transport actual) ->
+          Alcotest.(check bool)
+            "refused" true
+            (List.mem actual
+               [ "connection refused"; "connection timed out"; "request timed out" ]);
+          Lwt.return_unit
+      | _ -> Net_test_support.check_transport "refused" "connection refused" result)
 
 let bad_uri =
   Alcotest_lwt.test_case "reports a malformed or unsupported URI" `Quick
