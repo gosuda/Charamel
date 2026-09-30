@@ -395,9 +395,12 @@ let load_or_generate_case () =
       Alcotest.check tag_typ "an absent path is generated" `Generated tag;
       let private_path = Filename.concat case_dir "key" in
       let public_path = Filename.concat case_dir "key.pub" in
-      Alcotest.check Alcotest.int "generated private mode" 0o600
+      let private_mode, public_mode =
+        if Sys.win32 then (0o666, 0o666) else (0o600, 0o644)
+      in
+      Alcotest.check Alcotest.int "generated private mode" private_mode
         (Unix.stat private_path).Unix.st_perm;
-      Alcotest.check Alcotest.int "generated public mode" 0o644
+      Alcotest.check Alcotest.int "generated public mode" public_mode
         (Unix.stat public_path).Unix.st_perm;
       let* result2 = K.load_or_generate ~fs_root:case_dir ~path:"key" K.Ecdsa_p384 in
       let k2, tag2 = expect_ok "load_or_generate on an existing path" result2 in

@@ -225,6 +225,60 @@ module Process = struct
     | None ->
         invalid_arg ("Charamel_os.Process." ^ operation ^ ": that stream was not a pipe")
 
+  (* [Lwt_process] truncates the environment block at its first NUL before
+     [CreateProcess], so an explicit [~env] reaches the child malformed and the
+     spawn fails outright. The environment is applied to the calling process
+     under a lock instead and the child inherits it — safe to restore right
+     after the call because [CreateProcess] snapshots the block at spawn. *)
+  let env_lock = Mutex.create ()
+
+  let env_name entry =
+    match String.index_opt entry '=' with
+    | Some index -> String.sub entry 0 index
+    | None -> entry
+
+  let env_value entry =
+    match String.index_opt entry '=' with
+    | Some index -> String.sub entry (index + 1) (String.length entry - index - 1)
+    | None -> ""
+
+  let apply_env env =
+    let previous =
+      Array.to_list (Unix.environment ())
+      |> List.map (fun entry -> (env_name entry, env_value entry))
+    in
+    let provided = Hashtbl.create 16 in
+    Array.iter (fun entry -> Hashtbl.replace provided (env_name entry) ()) env;
+    let added =
+      Array.fold_left
+        (fun fresh entry ->
+          let name = env_name entry in
+          if
+            Hashtbl.mem provided name
+            && not (List.exists (fun (seen, _) -> String.equal seen name) previous)
+          then name :: fresh
+          else fresh)
+        [] env
+    in
+    List.iter
+      (fun (name, _) -> if not (Hashtbl.mem provided name) then Unix.putenv name "")
+      previous;
+    Array.iter (fun entry -> Unix.putenv (env_name entry) (env_value entry)) env;
+    (previous, added)
+
+  let restore_env (previous, added) =
+    List.iter (fun name -> Unix.putenv name "") added;
+    List.iter (fun (name, value) -> Unix.putenv name value) previous
+
+  let with_env env f =
+    Mutex.lock env_lock;
+    let saved = apply_env env in
+    Fun.protect
+      ~finally:(fun () ->
+        restore_env saved;
+        Mutex.unlock env_lock)
+      f
+
   let spawn ?cwd ?env ?(stdin = `Inherit) ?(stdout = `Inherit) ?(stderr = `Inherit) argv =
     match argv with
     | [] -> invalid_arg "Charamel_os.Process.spawn: argv is empty"
@@ -232,10 +286,13 @@ module Process = struct
         let stdin', stdin_w = input_redir stdin in
         let stdout', stdout_r = output_redir stdout in
         let stderr', stderr_r = output_redir stderr in
-        let process =
+        let create () =
           new Lwt_process.process_none
-            ("", Array.of_list argv)
-            ?cwd ?env ~stdin:stdin' ~stdout:stdout' ~stderr:stderr'
+            (List.hd argv, Array.of_list argv)
+            ?cwd ~stdin:stdin' ~stdout:stdout' ~stderr:stderr'
+        in
+        let process =
+          match env with Some env -> with_env env create | None -> create ()
         in
         {
           process;

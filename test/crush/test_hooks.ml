@@ -7,6 +7,20 @@ let json_string value = Jsont.Json.string value
 let hook ~event ~command ?(matcher = None) ?(timeout_s = 30) () : Config.hook =
   { event; matcher; command; timeout_s }
 
+(* The hook commands run under the platform shell: [echo] prints a payload on
+   both shells, [ping -n] stands in for [sleep] (cmd's [timeout] refuses
+   redirected stdin), and [findstr] is cmd's [cat]. *)
+let emit payload =
+  if Sys.win32 then "echo " ^ payload else "printf '%s' '" ^ payload ^ "'"
+
+let exit_two =
+  if Sys.win32 then "echo denied 1>&2 & exit /b 2" else "printf denied >&2; exit 2"
+
+let long_sleep seconds =
+  if Sys.win32 then "ping -n " ^ string_of_int (seconds + 1) ^ " 127.0.0.1 >nul"
+  else "sleep " ^ string_of_int seconds
+
+let capture file = if Sys.win32 then "findstr \"^\" > " ^ file else "cat > " ^ file
 let with_environment f = Test_tools_test_support.with_scratch (fun root -> f root)
 let runner root config = Hooks.create ~config ~cwd:root
 let read_payload root file = Test_tools_test_support.load_file (Filename.concat root file)
@@ -16,8 +30,7 @@ let rewritten_input () =
       let config =
         [
           hook ~event:Config.Pre_tool ~matcher:(Some "read")
-            ~command:
-              "printf '%s' '{\"decision\":\"allow\",\"input\":{\"path\":\"rewritten\"}}'"
+            ~command:(emit "{\"decision\":\"allow\",\"input\":{\"path\":\"rewritten\"}}")
             ();
         ]
       in
@@ -38,7 +51,8 @@ let matcher_filters_tools () =
       let config =
         [
           hook ~event:Config.Pre_tool ~matcher:(Some "write")
-            ~command:"printf '%s' '{\"decision\":\"deny\",\"reason\":\"blocked\"}'" ();
+            ~command:(emit "{\"decision\":\"deny\",\"reason\":\"blocked\"}")
+            ();
         ]
       in
       let runner = runner root config in
@@ -54,7 +68,8 @@ let denied_input () =
       let config =
         [
           hook ~event:Config.Pre_tool
-            ~command:"printf '%s' '{\"decision\":\"deny\",\"reason\":\"no\"}'" ();
+            ~command:(emit "{\"decision\":\"deny\",\"reason\":\"no\"}")
+            ();
         ]
       in
       let runner = runner root config in
@@ -67,9 +82,7 @@ let denied_input () =
 
 let exit_two_denies_with_stderr () =
   with_environment (fun root ->
-      let config =
-        [ hook ~event:Config.Pre_tool ~command:"printf denied >&2; exit 2" () ]
-      in
+      let config = [ hook ~event:Config.Pre_tool ~command:exit_two () ] in
       let runner = runner root config in
       match
         await
@@ -81,19 +94,23 @@ let exit_two_denies_with_stderr () =
 
 let timeout_denies () =
   with_environment (fun root ->
-      let config = [ hook ~event:Config.Pre_tool ~timeout_s:1 ~command:"sleep 3" () ] in
+      let config =
+        [ hook ~event:Config.Pre_tool ~timeout_s:1 ~command:(long_sleep 3) () ]
+      in
       let runner = runner root config in
       match
         await
         @@ Hooks.pre_tool runner ~session:"s" ~tool:"write" ~input:(Jsont.Json.null ())
       with
       | Hooks.Deny reason ->
-          Alcotest.check Alcotest.string "timeout reason" "hook sleep 3 timed out" reason
+          Alcotest.check Alcotest.string "timeout reason"
+            ("hook " ^ long_sleep 3 ^ " timed out")
+            reason
       | Hooks.Allow _ -> Alcotest.fail "timed out hook was treated as a pass")
 
 let post_payload () =
   with_environment (fun root ->
-      let config = [ hook ~event:Config.Post_tool ~command:"cat > post.json" () ] in
+      let config = [ hook ~event:Config.Post_tool ~command:(capture "post.json") () ] in
       let runner = runner root config in
       await
       @@ Hooks.post_tool runner ~session:"s" ~tool:"read" ~input:(json_string "in")
@@ -105,7 +122,7 @@ let post_payload () =
 
 let stop_payloads () =
   with_environment (fun root ->
-      let config = [ hook ~event:Config.Stop ~command:"cat > stop.json" () ] in
+      let config = [ hook ~event:Config.Stop ~command:(capture "stop.json") () ] in
       let runner = runner root config in
       await (Hooks.stop runner ~session:"s" ~reason:`Stop);
       let stop = read_payload root "stop.json" in
@@ -118,7 +135,9 @@ let stop_payloads () =
 
 let lifecycle_payload () =
   with_environment (fun root ->
-      let config = [ hook ~event:Config.Session_start ~command:"cat > hook.json" () ] in
+      let config =
+        [ hook ~event:Config.Session_start ~command:(capture "hook.json") () ]
+      in
       let runner = runner root config in
       await (Hooks.session_start runner ~session:"session-1");
       let payload = read_payload root "hook.json" in
@@ -128,29 +147,34 @@ let lifecycle_payload () =
       Alcotest.check Alcotest.string "session payload" expected payload)
 
 let descendant_cleanup () =
-  with_environment (fun root ->
-      let config =
-        [
-          hook ~event:Config.Pre_tool ~timeout_s:1
-            ~command:"sleep 30 & echo $! > child.pid; wait" ();
-        ]
-      in
-      let runner = runner root config in
-      (match
-         await
-         @@ Hooks.pre_tool runner ~session:"s" ~tool:"write" ~input:(Jsont.Json.null ())
-       with
-      | Hooks.Deny _ -> ()
-      | Hooks.Allow _ -> Alcotest.fail "descendant hook did not time out");
-      await (Lwt_unix.sleep 0.1);
-      let child_path = Filename.concat root "child.pid" in
-      if Sys.file_exists child_path then
-        let pid =
-          int_of_string (String.trim (Test_tools_test_support.load_file child_path))
+  if Sys.win32 then
+    (* cmd cannot publish a child's pid for [kill]; the tree-kill coverage lives
+       in the jobs tests instead. *)
+    Alcotest.skip ()
+  else
+    with_environment (fun root ->
+        let config =
+          [
+            hook ~event:Config.Pre_tool ~timeout_s:1
+              ~command:"sleep 30 & echo $! > child.pid; wait" ();
+          ]
         in
-        match Unix.kill pid 0 with
-        | () -> Alcotest.fail "timed-out hook left a child process"
-        | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ())
+        let runner = runner root config in
+        (match
+           await
+           @@ Hooks.pre_tool runner ~session:"s" ~tool:"write" ~input:(Jsont.Json.null ())
+         with
+        | Hooks.Deny _ -> ()
+        | Hooks.Allow _ -> Alcotest.fail "descendant hook did not time out");
+        await (Lwt_unix.sleep 0.1);
+        let child_path = Filename.concat root "child.pid" in
+        if Sys.file_exists child_path then
+          let pid =
+            int_of_string (String.trim (Test_tools_test_support.load_file child_path))
+          in
+          match Unix.kill pid 0 with
+          | () -> Alcotest.fail "timed-out hook left a child process"
+          | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ())
 
 let cases =
   [

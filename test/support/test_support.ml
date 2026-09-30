@@ -23,76 +23,57 @@ let exit_status = function
   | Unix.WEXITED code -> code
   | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal
 
-(* Windows needs a working system environment to launch a child at all:
-   CreateProcess resolves console support and system DLLs through variables
-   like SystemRoot and PATH, and a replaced environment that omits them fails
-   with EINVAL before the child runs. POSIX spawns carry no such requirement,
-   so the test's custom environment is used verbatim there. *)
-let windows_inherited =
-  [
-    "APPDATA";
-    "COMSPEC";
-    "HOMEDRIVE";
-    "HOMEPATH";
-    "LOCALAPPDATA";
-    "PATH";
-    "PATHEXT";
-    "PROGRAMDATA";
-    "PUBLIC";
-    "SYSTEMDRIVE";
-    "SYSTEMROOT";
-    "TEMP";
-    "TMP";
-    "USERPROFILE";
-    "WINDIR";
-  ]
-
-let complete_env env =
-  match env with
-  | Some provided when Sys.win32 ->
-      let names provided =
-        Array.map
-          (fun kv ->
-            match String.index_opt kv '=' with
-            | Some i -> String.uppercase_ascii (String.sub kv 0 i)
-            | None -> String.uppercase_ascii kv)
-          provided
-      in
-      let present = names provided in
-      let missing =
-        List.filter_map
-          (fun name ->
-            if Array.exists (String.equal name) present then None
-            else
-              match Sys.getenv_opt name with
-              | Some value -> Some (name ^ "=" ^ value)
-              | None -> None)
-          windows_inherited
-      in
-      Some (Array.append provided (Array.of_list missing))
-  | _ -> env
+(* Windows children spawn through [Charamel_os.Process]: [Lwt_process] hands
+   [CreateProcess] an environment block truncated at its first NUL, so passing
+   env through it fails the spawn outright. *)
+let run_cli_process ~exe ?env ?cwd ~timeout ~stdin args =
+  let process =
+    Charamel_os.Process.spawn ?cwd ?env ~stdin:`Pipe ~stdout:`Pipe ~stderr:`Pipe
+      (exe :: args)
+  in
+  let collect =
+    Lwt.protected
+      (Lwt.both
+         (Lwt_io.read (Charamel_os.Process.stdout_r process))
+         (Lwt_io.read (Charamel_os.Process.stderr_r process)))
+  in
+  let* () = feed_stdin (Charamel_os.Process.stdin_w process) stdin in
+  let* () =
+    Lwt.catch
+      (fun () -> Lwt_unix.with_timeout timeout (fun () -> Lwt.map ignore collect))
+      (function
+        | Lwt_unix.Timeout ->
+            Charamel_os.Process.terminate process;
+            Lwt.return_unit
+        | exn -> Lwt.fail exn)
+  in
+  let* stdout_text, stderr_text = collect in
+  let* code = Charamel_os.Process.await process in
+  Lwt.return (code, stdout_text, stderr_text)
 
 let run_cli ~exe ?env ?cwd ?(timeout = 10.) ?(stdin = "") args =
-  if not Sys.win32 then ignore (Sys.set_signal Sys.sigpipe Sys.Signal_ignore);
-  let env = complete_env env in
-  let argv = Array.of_list (exe :: args) in
-  Lwt_process.with_process_full ?env ?cwd (exe, argv) (fun process ->
-      let collect =
-        Lwt.protected (Lwt.both (Lwt_io.read process#stdout) (Lwt_io.read process#stderr))
-      in
-      let* () = feed_stdin process#stdin stdin in
-      let* () =
-        Lwt.catch
-          (fun () -> Lwt_unix.with_timeout timeout (fun () -> Lwt.map ignore collect))
-          (function
-            | Lwt_unix.Timeout ->
-                process#kill Sys.sigkill;
-                Lwt.return_unit
-            | exn -> Lwt.fail exn)
-      in
-      let* stdout_text, stderr_text = collect in
-      let* status = process#status in
-      Lwt.return (exit_status status, stdout_text, stderr_text))
+  if Sys.win32 then run_cli_process ~exe ?env ?cwd ~timeout ~stdin args
+  else (
+    ignore (Sys.set_signal Sys.sigpipe Sys.Signal_ignore);
+    let argv = Array.of_list (exe :: args) in
+    Lwt_process.with_process_full ?env ?cwd (exe, argv) (fun process ->
+        let collect =
+          Lwt.protected
+            (Lwt.both (Lwt_io.read process#stdout) (Lwt_io.read process#stderr))
+        in
+        let* () = feed_stdin process#stdin stdin in
+        let* () =
+          Lwt.catch
+            (fun () -> Lwt_unix.with_timeout timeout (fun () -> Lwt.map ignore collect))
+            (function
+              | Lwt_unix.Timeout ->
+                  process#kill Sys.sigkill;
+                  Lwt.return_unit
+              | exn -> Lwt.fail exn)
+        in
+        let* stdout_text, stderr_text = collect in
+        let* status = process#status in
+        Lwt.return (exit_status status, stdout_text, stderr_text)))
 
 let entry_kind path =
   match try Some (Unix.lstat path) with Unix.Unix_error _ -> None with

@@ -18,9 +18,12 @@ let always_and_glob_rules () =
       let config = { Config.default with context_paths = [ ".crush/rules" ] } in
       let rules = await (Rules.load ~fs_root:"/" ~cwd:root ~config) in
       let context = Rules.context_text rules in
+      (* [Rules] reports [Path.normalize]d paths — \\ separators become /. *)
       Alcotest.check Alcotest.bool "always context" true
         (String.equal context
-           ("## " ^ rules_dir ^ "/always.md\nAlways inspect before editing.\n\n"));
+           ("## "
+           ^ Crush_core.Path.normalize (rules_dir ^ "/always.md")
+           ^ "\nAlways inspect before editing.\n\n"));
       let attached =
         Rules.attach_text rules ~touched:[ root ^ "/src/main.ml"; root ^ "/src/main.ml" ]
       in

@@ -1,6 +1,20 @@
 module Jobs = Crush_core.Jobs
 open Lwt_direct
 
+(* The job commands run under the platform shell ([sh -c] / [cmd /c]): [set /p]
+   echoes without a newline, [ping -n N] idles ~(N-1)s because [timeout] refuses
+   redirected stdin, and [cd .] is the trivial success. *)
+let both_streams =
+  if Sys.win32 then "(<nul set /p x=hello)&(<nul set /p x=oops 1>&2)"
+  else "printf 'hello'; printf 'oops' >&2"
+
+let long_sleep seconds =
+  if Sys.win32 then "ping -n " ^ string_of_int (seconds + 1) ^ " 127.0.0.1 >nul"
+  else "sleep " ^ string_of_int seconds
+
+let succeed = if Sys.win32 then "cd ." else "true"
+let term_immune_and_sleep = if Sys.win32 then long_sleep 60 else "trap '' TERM; sleep 60"
+
 let with_jobs f =
   Test_tools_test_support.with_scratch (fun root ->
       await
@@ -14,7 +28,7 @@ let output_case () =
       let id =
         Jobs.start jobs
           ~cwd:(Filename.get_temp_dir_name ())
-          ~command:"printf 'hello'; printf 'oops' >&2" ~env:[] ~timeout_s:30
+          ~command:both_streams ~env:[] ~timeout_s:30
       in
       match await (Jobs.output jobs ~id ~wait:true) with
       | Error (`Not_found missing) -> Alcotest.failf "job %s was not retained" missing
@@ -29,7 +43,7 @@ let kill_case () =
       let id =
         Jobs.start jobs
           ~cwd:(Filename.get_temp_dir_name ())
-          ~command:"sleep 30" ~env:[] ~timeout_s:30
+          ~command:(long_sleep 30) ~env:[] ~timeout_s:30
       in
       Lwt_direct.yield ();
       (match await (Jobs.kill jobs ~id) with
@@ -48,7 +62,7 @@ let timeout_case () =
       let id =
         Jobs.start jobs
           ~cwd:(Filename.get_temp_dir_name ())
-          ~command:"sleep 5" ~env:[] ~timeout_s:1
+          ~command:(long_sleep 5) ~env:[] ~timeout_s:1
       in
       match await (Jobs.output jobs ~id ~wait:true) with
       | Error (`Not_found missing) ->
@@ -69,7 +83,7 @@ let timeout_kills_a_term_immune_child_case () =
       let id =
         Jobs.start jobs
           ~cwd:(Filename.get_temp_dir_name ())
-          ~command:"trap '' TERM; sleep 60" ~env:[] ~timeout_s:1
+          ~command:term_immune_and_sleep ~env:[] ~timeout_s:1
       in
       match await (Jobs.output jobs ~id ~wait:true) with
       | Error (`Not_found missing) ->
@@ -79,9 +93,12 @@ let timeout_kills_a_term_immune_child_case () =
           Alcotest.(check bool)
             "deadline killed the child" true
             (match status with Jobs.Killed -> true | _ -> false);
-          Alcotest.(check bool)
-            "SIGTERM was ignored for the whole graceful window" true
-            (Float.compare elapsed 2.5 >= 0);
+          if not Sys.win32 then
+            (* There is no SIGTERM grace window on Windows: kill_tree is one
+               TerminateProcess. *)
+            Alcotest.(check bool)
+              "SIGTERM was ignored for the whole graceful window" true
+              (Float.compare elapsed 2.5 >= 0);
           Alcotest.(check bool)
             "the kill completed promptly" true
             (Float.compare elapsed 15. < 0))
@@ -92,7 +109,7 @@ let retention_case () =
         List.init 130 (fun _ ->
             Jobs.start jobs
               ~cwd:(Filename.get_temp_dir_name ())
-              ~command:"true" ~env:[] ~timeout_s:30)
+              ~command:succeed ~env:[] ~timeout_s:30)
       in
       List.iter
         (fun id ->

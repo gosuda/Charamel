@@ -1,7 +1,15 @@
 (library
  (name test_support)
  (modules test_support)
- (libraries alcotest alcotest-lwt lwt lwt.unix qcheck-core unix fmt))
+ (libraries
+  alcotest
+  alcotest-lwt
+  charamel.os
+  lwt
+  lwt.unix
+  qcheck-core
+  unix
+  fmt))
 
 (test
  (name test_support_checks)

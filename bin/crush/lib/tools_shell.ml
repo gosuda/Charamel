@@ -326,7 +326,7 @@ let collect_output process =
 let run_foreground_with_timeout ctx ~cwd ~command ~timeout_s =
   let process =
     Charamel_os.Process.spawn ~cwd ~stdin:`Null ~stdout:`Pipe ~stderr:`Pipe
-      [ "/bin/sh"; "-c"; command ]
+      (if Sys.win32 then [ "cmd"; "/c"; command ] else [ "/bin/sh"; "-c"; command ])
   in
   let work = collect_output process in
   match

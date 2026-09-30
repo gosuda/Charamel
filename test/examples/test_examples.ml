@@ -8,7 +8,10 @@ let executable () =
 let cli ?env ?cwd ?timeout ?stdin args =
   Test_support.run_cli ?env ?cwd ?timeout ?stdin ~exe:(executable ()) args
 
-let lines text = text |> String.split_on_char '\n' |> List.filter (fun line -> line <> "")
+(* A Windows child writes CRLF to its pipe, so the [\r] goes with the line. *)
+let lines text =
+  text |> String.split_on_char '\n' |> List.map String.trim
+  |> List.filter (fun line -> line <> "")
 
 let registry () =
   let* status, listed, stderr = cli [ "--list" ] in

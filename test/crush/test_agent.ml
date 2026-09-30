@@ -245,7 +245,7 @@ let tool_call_and_stop () =
 let loop_guard () =
   let model_id = "fixture-model" in
   let repeated =
-    tool_response model_id "bash" "{\"command\":\"printf same\",\"description\":\"same\"}"
+    tool_response model_id "bash" "{\"command\":\"echo same\",\"description\":\"same\"}"
   in
   with_agent ~queue:[] ~fallback:repeated (fun agent _session _events ->
       match await (Agent.prompt agent "repeat") with

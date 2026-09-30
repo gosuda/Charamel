@@ -34,6 +34,17 @@ let job_value id =
 
 let job_kill_value id = Jsont.Json.object' [ json_field "job_id" (Jsont.Json.string id) ]
 
+(* Same shell-compatibility layer as the jobs tests. *)
+let emit text = if Sys.win32 then "(<nul set /p x=" ^ text ^ ")" else "printf " ^ text
+
+let both_streams =
+  if Sys.win32 then "(<nul set /p x=out)&(<nul set /p x=err 1>&2)"
+  else "printf out; printf err >&2"
+
+let long_sleep seconds =
+  if Sys.win32 then "ping -n " ^ string_of_int (seconds + 1) ^ " 127.0.0.1 >nul"
+  else "sleep " ^ string_of_int seconds
+
 let make_ctx sw =
   let open Lwt.Syntax in
   let clock = Charamel_os.Time.lwt in
@@ -104,10 +115,7 @@ let test_classifier () =
 let test_foreground_capture () =
   await @@ with_ctx
   @@ fun ctx ->
-  let input =
-    bash_value ~command:"printf out; printf err >&2" ~description:"capture both streams"
-      ()
-  in
+  let input = bash_value ~command:both_streams ~description:"capture both streams" () in
   let output = output_or_fail (Tools_shell.bash.Tool.run ctx input) in
   Alcotest.(check bool)
     "stdout is captured" true
@@ -120,7 +128,9 @@ let test_foreground_capture () =
 let test_timeout () =
   await @@ with_ctx
   @@ fun ctx ->
-  let input = bash_value ~timeout_s:1 ~command:"sleep 5" ~description:"deadline" () in
+  let input =
+    bash_value ~timeout_s:1 ~command:(long_sleep 5) ~description:"deadline" ()
+  in
   match Tools_shell.bash.Tool.run ctx input with
   | Error (`Timeout seconds) -> Alcotest.(check (float 1e-9)) "deadline" 1. seconds
   | Error error -> Alcotest.failf "unexpected timeout result: %a" Tool.pp_error error
@@ -132,7 +142,7 @@ let test_background_lifecycle () =
   let started =
     output_or_fail
       (Tools_shell.bash.Tool.run ctx
-         (bash_value ~timeout_s:5 ~run_in_background:true ~command:"printf background"
+         (bash_value ~timeout_s:5 ~run_in_background:true ~command:(emit "background")
             ~description:"background output" ()))
   in
   let prefix = "started " in
@@ -150,7 +160,7 @@ let test_background_lifecycle () =
   let killed_started =
     output_or_fail
       (Tools_shell.bash.Tool.run ctx
-         (bash_value ~timeout_s:5 ~run_in_background:true ~command:"sleep 30"
+         (bash_value ~timeout_s:5 ~run_in_background:true ~command:(long_sleep 30)
             ~description:"background kill" ()))
   in
   let killed_id =

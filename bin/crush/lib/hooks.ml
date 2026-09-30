@@ -67,7 +67,8 @@ let run_command t ~timeout ~command ~payload =
   let body () =
     let process =
       Charamel_os.Process.spawn ~cwd:t.cwd ~env:(Unix.environment ()) ~stdin:`Pipe
-        ~stdout:`Pipe ~stderr:`Pipe [ "/bin/sh"; "-c"; command ]
+        ~stdout:`Pipe ~stderr:`Pipe
+        (if Sys.win32 then [ "cmd"; "/c"; command ] else [ "/bin/sh"; "-c"; command ])
     in
     child := Some process;
     let input =

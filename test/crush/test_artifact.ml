@@ -147,7 +147,9 @@ let concurrent_saves_are_unique () =
 
 let permission_boundary () =
   with_artifact (fun root store ->
-      if Unix.getuid () = 0 then ()
+      (* Windows does not gate directory writes on the read-only attribute, so
+         the chmod boundary the POSIX branch asserts does not exist there. *)
+      if Sys.win32 || Unix.getuid () = 0 then ()
       else
         let directory = Filename.concat root "artifacts" in
         begin match

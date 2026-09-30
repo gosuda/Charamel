@@ -120,8 +120,9 @@ let smoke () =
       [
         "Pick a file:";
         (* The directory's rendered size is its [st_size], which depends on the
-           filesystem (60B on APFS, 4KiB on ext4), so the needle stops before it. *)
-        "> drwx------";
+           filesystem (60B on APFS, 4KiB on ext4), so the needle stops before it;
+           Windows reports directories 0o777. *)
+        (if Sys.win32 then "> drwxrwxrwx" else "> drwx------");
         "nested";
         "alpha.go";
         "beta.md";

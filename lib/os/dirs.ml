@@ -1,6 +1,15 @@
 type error = [ `No_home ]
 
-let usable value = value <> "" && not (Filename.is_relative value)
+(* A bare [/...] is only absolute relative to the current drive — [is_relative]
+   rejects it, but on Windows it cannot anchor an application directory on its
+   own, so a drive letter or a UNC prefix is required there. *)
+let usable value =
+  if value = "" || Filename.is_relative value then false
+  else if Sys.win32 then
+    (String.length value >= 2 && value.[1] = ':')
+    || (String.length value >= 2 && value.[0] = '/' && value.[1] = '/')
+    || (String.length value >= 2 && value.[0] = '\\' && value.[1] = '\\')
+  else true
 
 let get name =
   match Sys.getenv_opt name with Some value when usable value -> Some value | _ -> None

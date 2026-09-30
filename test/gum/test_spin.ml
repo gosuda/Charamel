@@ -156,6 +156,7 @@ let test_child_timeout () =
    reported on both captured streams, and a real stdin pipe reaching the child's
    [read]. Each [stty] queries its own stream's pty. *)
 let test_pty_geometry () =
+  if Sys.win32 then Alcotest.skip () (* Windows has no pseudo-terminals. *);
   let* result =
     Spin.run_pty_pair ~rows:17 ~cols:53
       ~command:[ "sh"; "-c"; "stty size <&1; stty size <&2 >&2" ]
@@ -174,6 +175,7 @@ let test_pty_geometry () =
   Lwt.return_unit
 
 let test_pty_stdin_passthrough () =
+  if Sys.win32 then Alcotest.skip () (* Windows has no pseudo-terminals. *);
   let* result =
     Spin.run_pty_pair ~rows:17 ~cols:53 ~stdin_text:"hello-from-real-stdin\n"
       ~command:[ "sh"; "-c"; "read line; printf 'GOT:%s' \"$line\"" ]

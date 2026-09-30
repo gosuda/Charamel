@@ -1,5 +1,6 @@
 module Lsp = Crush_core.Lsp
 module Config = Crush_core.Config
+module Path = Crush_core.Path
 
 let source_text = "a\240\159\152\128b\n"
 
@@ -97,8 +98,9 @@ let with_lsp ?(cwd = Filename.get_temp_dir_name ()) script f =
       Lwt_direct.await (Lsp.stop_all lsp);
       try Sys.remove path with Sys_error _ -> ())
 
+(* [Lsp] reports [Path.normalize]d locations — \\ separators become /. *)
 let check_location expected (actual : Lsp.location) =
-  Alcotest.(check string) "location path" expected actual.Lsp.path;
+  Alcotest.(check string) "location path" (Path.normalize expected) actual.Lsp.path;
   Alcotest.(check int) "location line" 1 actual.Lsp.line;
   Alcotest.(check int) "location column" 1 actual.Lsp.col
 
@@ -122,7 +124,8 @@ let protocol_round_trip () =
       (match Lwt_direct.await (Lsp.document_symbols lsp ~path) with
       | Error error -> Alcotest.failf "symbols failed: %a" Lsp.pp_error error
       | Ok [ symbol ] ->
-          Alcotest.(check string) "symbol path fallback" path symbol.Lsp.range.Lsp.path;
+          Alcotest.(check string)
+            "symbol path fallback" (Path.normalize path) symbol.Lsp.range.Lsp.path;
           Alcotest.(check string) "symbol kind" "Function" symbol.Lsp.kind
       | Ok _ -> Alcotest.fail "unexpected symbols");
       (match Lwt_direct.await (Lsp.find_symbol lsp ~path ~name:"fixture") with
@@ -135,7 +138,7 @@ let protocol_round_trip () =
       with
       | Error error -> Alcotest.failf "rename failed: %a" Lsp.pp_error error
       | Ok [ (changed_path, [ edit ]) ] ->
-          Alcotest.(check string) "rename path" path changed_path;
+          Alcotest.(check string) "rename path" (Path.normalize path) changed_path;
           Alcotest.(check string) "rename text" "z" edit.Lsp.new_text
       | Ok _ -> Alcotest.fail "unexpected rename edits")
 
@@ -148,7 +151,7 @@ let unicode_edit () =
   (match Lwt_direct.await (Lsp.apply_edits ~cwd:(Sys.getcwd ()) [ (path, [ edit ]) ]) with
   | Error error -> Alcotest.failf "unicode edit failed: %a" Lsp.pp_error error
   | Ok [ changed ] ->
-      Alcotest.(check string) "changed path" path changed;
+      Alcotest.(check string) "changed path" (Path.normalize path) changed;
       Alcotest.(check string)
         "unicode edit" "aXb\n"
         (Test_tools_test_support.load_file path)
@@ -174,6 +177,7 @@ let malformed_frame () =
           Alcotest.failf "unexpected malformed server state count %d" (List.length values))
 
 let root_slash_matches () =
+  if Sys.win32 then Alcotest.skip () (* A bare [/] names no Windows root. *);
   with_lsp ~cwd:"/" fixture_script (fun lsp path ->
       Alcotest.(check (option string))
         "fixture handle under root" (Some "fixture") (Lsp.handles lsp ~path))

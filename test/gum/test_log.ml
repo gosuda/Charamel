@@ -46,7 +46,9 @@ let read_file path =
   content
 
 let with_file ?(structured = false) formatter level fields =
-  let path = Fmt.str "/tmp/gum-log-test-%d" (Unix.getpid ()) in
+  (* [Filename.temp_file] lands in the platform temp dir: a literal [/tmp] is a
+     drive-relative path on Windows and its parent may not exist there. *)
+  let path = Filename.temp_file "gum-log-test" "" in
   (try Unix.unlink path with Unix.Unix_error _ -> ());
   let* () =
     Log.emit ~file:path ~formatter ~level ~structured ~prefix:"app" (default_env ())

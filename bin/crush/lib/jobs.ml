@@ -195,7 +195,8 @@ let settle t job process captured code =
 let spawn cwd command env =
   Charamel_os.Process.spawn ~cwd ~env:(merged_environment env) ~stdin:`Inherit
     ~stdout:`Pipe ~stderr:`Pipe
-    [ "/bin/sh"; "-c"; "( " ^ command ^ " ) 2>&1" ]
+    (if Sys.win32 then [ "cmd"; "/c"; command ^ " 2>&1" ]
+     else [ "/bin/sh"; "-c"; "( " ^ command ^ " ) 2>&1" ])
 
 let report_spawn t job message =
   append_spawn_error t job message >>= fun () ->

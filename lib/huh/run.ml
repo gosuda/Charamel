@@ -94,6 +94,10 @@ let echo_off ~is_tty = if is_tty then Some (Charamel_os.Tty.echo_off ()) else No
 
 let run_accessible ?timeout ~env ~is_tty form =
   let output text = Lwt_io.write Lwt_io.stdout text in
+  if Sys.win32 then
+    (* [Lwt] polls readiness with [select], which Windows only supports on
+       sockets — a blocking [stdin] reads straight through instead. *)
+    Lwt_unix.set_blocking Lwt_unix.stdin true;
   let reader =
     Accessible.reader_of_channel ~stdin:Lwt_io.stdin ~echo_off:(echo_off ~is_tty)
   in
