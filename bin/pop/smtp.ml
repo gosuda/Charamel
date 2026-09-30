@@ -286,7 +286,15 @@ let connect ~host ~port ~security ?hostname ?(timeout = 30.) ?tls_config () =
       Lwt_unix.with_timeout timeout (fun () ->
           let* family, sockaddr = resolve host port in
           let fd = Lwt_unix.socket family Unix.SOCK_STREAM 0 in
-          Lwt.bind (Lwt_unix.connect fd sockaddr) (fun () ->
+          (* A refused, cancelled, or timed-out connect must not leak the descriptor. *)
+          Lwt.bind
+            (Lwt.catch
+               (fun () -> Lwt_unix.connect fd sockaddr)
+               (fun exn ->
+                 Lwt.bind
+                   (Lwt.catch (fun () -> Lwt_unix.close fd) (fun _ -> Lwt.return_unit))
+                   (fun () -> Lwt.fail exn)))
+            (fun () ->
               let ic =
                 Lwt_io.of_fd ~mode:Lwt_io.Input ~close:(fun () -> Lwt.return_unit) fd
               in

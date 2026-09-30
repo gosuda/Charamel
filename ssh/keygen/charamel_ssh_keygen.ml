@@ -278,7 +278,7 @@ let entry_of_line line =
 let parse_authorized_keys text =
   let entry line =
     let line = String.trim line in
-    if String.is_empty line || String.starts_with ~prefix:{|#|} line then None
+    if String.length line = 0 || String.starts_with ~prefix:{|#|} line then None
     else entry_of_line line
   in
   List.filter_map entry (String.split_on_char '\n' text)
@@ -320,7 +320,7 @@ let read_capped channel limit =
     if remaining <= 0 then Lwt.return_unit
     else
       Lwt_io.read ~count:remaining channel >>= fun chunk ->
-      if String.is_empty chunk then Lwt.return_unit
+      if String.length chunk = 0 then Lwt.return_unit
       else begin
         Buffer.add_string buffer chunk;
         go ()

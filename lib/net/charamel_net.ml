@@ -206,11 +206,16 @@ let attempt ~timeout ~headers ?body meth uri =
 
 let read_error_body ~timeout stream : (string, [> error ]) result Lwt.t =
   let buffer = Buffer.create 1024 in
+  let deadline = Unix.gettimeofday () +. timeout in
   let rec loop () =
+    let remaining = deadline -. Unix.gettimeofday () in
     if Buffer.length buffer > max_error_body then
       return (Ok "<response body omitted: too large>")
+    else if remaining <= 0. then
+      return (transport "timed out reading HTTP error response")
     else
-      next_chunk ~timeout ~timeout_message:"timed out reading HTTP error response" stream
+      next_chunk ~timeout:remaining
+        ~timeout_message:"timed out reading HTTP error response" stream
       >>= function
       | Error error -> return (Error error)
       | Ok None -> return (Ok (Buffer.contents buffer))
@@ -263,6 +268,32 @@ let watch_truncation response stream =
               return (Some chunk)
           | None -> if !received < expected then Lwt.fail End_of_file else return None)
 
+(* The stream owns its connection: draining it to the end or a stream failure releases
+   the socket, and the collector's finaliser is the last resort so a stream dropped
+   unread does not hold the descriptor for the process lifetime. *)
+let close_with conn stream =
+  let closed = ref false in
+  let close () =
+    if not !closed then (
+      closed := true;
+      Connection.close conn)
+  in
+  let wrapped =
+    Lwt_stream.from (fun () ->
+        Lwt.catch
+          (fun () -> Lwt_stream.get stream)
+          (fun exn ->
+            close ();
+            Lwt.fail exn)
+        >>= function
+        | Some chunk -> return (Some chunk)
+        | None ->
+            close ();
+            return None)
+  in
+  Gc.finalise (fun _ -> close ()) wrapped;
+  wrapped
+
 let call ?(timeout = attempt_timeout) ?(headers = []) ~meth ~body uri :
     (Cohttp.Response.t * string Lwt_stream.t, [> error ]) result Lwt.t =
   attempt ~timeout ~headers ?body meth uri >>= function
@@ -271,7 +302,8 @@ let call ?(timeout = attempt_timeout) ?(headers = []) ~meth ~body uri :
       let status = Cohttp.Code.code_of_status (Cohttp.Response.status response) in
       if not (status_ok status) then error_response ~timeout conn response status body
       else
-        return (Ok (response, watch_truncation response (Cohttp_lwt.Body.to_stream body)))
+        let stream = watch_truncation response (Cohttp_lwt.Body.to_stream body) in
+        return (Ok (response, close_with conn stream))
 
 let input_channel ?close stream =
   let pending = ref "" in
@@ -318,17 +350,22 @@ let call_raw ?(timeout = attempt_timeout) ?(headers = []) ~meth ~body uri :
 
 let read_body ?(timeout = attempt_timeout) stream : (string, [> error ]) result Lwt.t =
   let buffer = Buffer.create 8192 in
+  let deadline = Unix.gettimeofday () +. timeout in
   let rec loop () =
-    next_chunk ~timeout ~timeout_message:"timed out reading HTTP response body" stream
-    >>= function
-    | Error error -> return (Error error)
-    | Ok None -> return (Ok (Buffer.contents buffer))
-    | Ok (Some chunk) ->
-        if Buffer.length buffer + String.length chunk > max_http_body then
-          return (transport "HTTP response body exceeds 10 MiB")
-        else (
-          Buffer.add_string buffer chunk;
-          loop ())
+    let remaining = deadline -. Unix.gettimeofday () in
+    if remaining <= 0. then return (transport "timed out reading HTTP response body")
+    else
+      next_chunk ~timeout:remaining
+        ~timeout_message:"timed out reading HTTP response body" stream
+      >>= function
+      | Error error -> return (Error error)
+      | Ok None -> return (Ok (Buffer.contents buffer))
+      | Ok (Some chunk) ->
+          if Buffer.length buffer + String.length chunk > max_http_body then
+            return (transport "HTTP response body exceeds 10 MiB")
+          else (
+            Buffer.add_string buffer chunk;
+            loop ())
   in
   loop ()
 

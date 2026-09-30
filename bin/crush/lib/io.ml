@@ -45,7 +45,7 @@ let read_bounded path ~max =
   let buffer = Buffer.create 4096 in
   let rec pump channel =
     Lwt_io.read ~count:4096 channel >>= fun chunk ->
-    if String.is_empty chunk then Lwt.return_some (Buffer.contents buffer)
+    if String.length chunk = 0 then Lwt.return_some (Buffer.contents buffer)
     else if Buffer.length buffer + String.length chunk > max then Lwt.return_none
     else (
       Buffer.add_string buffer chunk;

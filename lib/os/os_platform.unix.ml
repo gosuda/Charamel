@@ -25,18 +25,18 @@ let c_uname = Foreign.foreign "uname" (ptr char @-> returning int)
 let c_ioctl =
   Foreign.foreign ~check_errno:true "ioctl" (int @-> ulong @-> ptr void @-> returning int)
 
-(* [~stub:true] gives up the OCaml runtime lock for the duration of the call.
-   {!Pty.read} and {!Pty.write} run these on [Lwt_preemptive] workers precisely because
-   they block until the child speaks; holding the lock across that wait would freeze the
-   scheduler, so a parent that must feed a child's stdin while draining its terminal
-   would deadlock. Both calls touch only C-allocated buffers and never re-enter OCaml,
-   which is what [stub] requires. *)
+(* [~release_runtime_lock:true] gives up the OCaml runtime lock for the duration of the
+   call; [~stub:true] on its own does not. {!Pty.read} and {!Pty.write} run these on
+   [Lwt_preemptive] workers precisely because they block until the child speaks; holding
+   the lock across that wait would freeze the scheduler, so a parent that must feed a
+   child's stdin while draining its terminal would deadlock. Both calls touch only
+   C-allocated buffers and never re-enter OCaml, which is what lock release requires. *)
 let c_read =
-  Foreign.foreign ~check_errno:true ~stub:true "read"
+  Foreign.foreign ~check_errno:true ~stub:true ~release_runtime_lock:true "read"
     (int @-> ptr char @-> size_t @-> returning ssize_t)
 
 let c_write =
-  Foreign.foreign ~check_errno:true ~stub:true "write"
+  Foreign.foreign ~check_errno:true ~stub:true ~release_runtime_lock:true "write"
     (int @-> ptr char @-> size_t @-> returning ssize_t)
 
 let c_close = Foreign.foreign ~check_errno:true "close" (int @-> returning int)
@@ -105,10 +105,12 @@ let tiocgwinsz = if is_bsd then 0x40087468 else 0x5413
 let tiocswinsz = if is_bsd then 0x80087467 else 0x5414
 let spawn_setpgroup = 2
 
-(* [POSIX_SPAWN_SETSID]: glibc documents it as 1 lsl 6, Apple's spawn.h as 0x100. It is asked
-   for only by {!Pty.exec}, whose child must become a session leader so that opening the slave
-   makes it the controlling terminal. *)
-let spawn_setsid = if is_bsd then 0x100 else 0x40
+(* [POSIX_SPAWN_SETSID] is a vendor extension, not a POSIX flag: glibc and musl define it
+   as 0x80, Apple's spawn.h as 0x400, and FreeBSD, OpenBSD and NetBSD do not implement it
+   at all. It is asked for only by {!Pty.exec}, whose child must become a session leader so
+   that opening the slave makes it the controlling terminal; [0] marks the platforms where
+   that request cannot be honoured. *)
+let spawn_setsid = if is_macos then 0x400 else if is_bsd then 0 else 0x80
 let winsize_bytes = 8
 let opaque_bytes = 1024
 let default_rows = 24
@@ -222,32 +224,37 @@ let build_actions actions additions cwd =
           "this system has no posix_spawn working-directory action"
 
 let prepare ?cwd ?(owns_session = false) additions =
-  let flags =
-    if owns_session then spawn_setpgroup lor spawn_setsid else spawn_setpgroup
-  in
-  let actions = allocate_n char ~count:opaque_bytes in
-  let attributes = allocate_n char ~count:opaque_bytes in
-  let actions' = voidp actions in
-  let attributes' = voidp attributes in
-  ignore (c_actions_init actions');
-  match build_actions actions' additions cwd with
-  | Error _ as failure ->
-      (* Only the actions object is destroyed here: the attributes have not been
+  if owns_session && spawn_setsid = 0 then
+    io_failure "spawn attributes" "this system has no posix_spawn session flag"
+  else
+    (* A session-owning spawn asks for [SETSID] alone: [setsid] already makes the child a
+       process-group leader, and glibc applies the session attribute before the group
+       one, so a [SETPGROUP] would then ask a fresh session leader to change its group —
+       which [setpgid] refuses. *)
+    let flags = if owns_session then spawn_setsid else spawn_setpgroup in
+    let actions = allocate_n char ~count:opaque_bytes in
+    let attributes = allocate_n char ~count:opaque_bytes in
+    let actions' = voidp actions in
+    let attributes' = voidp attributes in
+    ignore (c_actions_init actions');
+    match build_actions actions' additions cwd with
+    | Error _ as failure ->
+        (* Only the actions object is destroyed here: the attributes have not been
          initialised, so destroying them would be undefined. *)
-      ignore (c_actions_destroy actions');
-      failure
-  | Ok () ->
-      ignore (c_attr_init attributes');
-      if c_attr_setflags attributes' (UInt16.of_int flags) <> 0 then (
         ignore (c_actions_destroy actions');
-        ignore (c_attr_destroy attributes');
-        io_failure "spawn attributes"
-          "the system refused the process-group or session request")
-      else if c_attr_setpgroup attributes' 0 <> 0 then (
-        ignore (c_actions_destroy actions');
-        ignore (c_attr_destroy attributes');
-        io_failure "spawn attributes" "the system refused the process-group number")
-      else Ok (actions', attributes')
+        failure
+    | Ok () ->
+        ignore (c_attr_init attributes');
+        if c_attr_setflags attributes' (UInt16.of_int flags) <> 0 then (
+          ignore (c_actions_destroy actions');
+          ignore (c_attr_destroy attributes');
+          io_failure "spawn attributes"
+            "the system refused the process-group or session request")
+        else if c_attr_setpgroup attributes' 0 <> 0 then (
+          ignore (c_actions_destroy actions');
+          ignore (c_attr_destroy attributes');
+          io_failure "spawn attributes" "the system refused the process-group number")
+        else Ok (actions', attributes')
 
 let run actions attributes program arguments env =
   let argv', argv_keep = string_array (Array.of_list (program :: arguments)) in
@@ -445,6 +452,7 @@ module Process = struct
     stdout_r : Lwt_io.input_channel option;
     stderr_r : Lwt_io.input_channel option;
     code : int Lwt.t;
+    signal : int option Lwt.t;
   }
 
   let counter = ref 0
@@ -501,6 +509,11 @@ module Process = struct
     | Unix.WEXITED code -> code
     | Unix.WSIGNALED signal -> 128 + Sys.signal_to_int signal
     | Unix.WSTOPPED signal -> 128 + Sys.signal_to_int signal
+
+  let signal_of status =
+    match status with
+    | Unix.WSIGNALED signal -> Some (Sys.signal_to_int signal)
+    | Unix.WEXITED _ | Unix.WSTOPPED _ -> None
 
   let get stream operation =
     match stream with
@@ -561,6 +574,7 @@ module Process = struct
                   (fun exn ->
                     remove paths;
                     Lwt.fail exn);
+              signal = (wait >|= fun (_, status, _) -> signal_of status);
             })
 
   let spawn ?cwd ?env ?(stdin = `Inherit) ?(stdout = `Inherit) ?(stderr = `Inherit) argv =
@@ -582,6 +596,7 @@ module Process = struct
   let stdout_r { stdout_r; _ } = get stdout_r "stdout_r"
   let stderr_r { stderr_r; _ } = get stderr_r "stderr_r"
   let await { code; _ } = code
+  let signal { signal; _ } = signal
 
   let terminate { pid; _ } =
     try Unix.kill pid Sys.sigterm with Unix.Unix_error (Unix.ESRCH, _, _) -> ()

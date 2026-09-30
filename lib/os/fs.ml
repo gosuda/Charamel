@@ -71,30 +71,16 @@ let read_link path =
 let stat path = to_result (fun () -> Lwt_unix.stat path)
 let unlink path = to_result (fun () -> Lwt_unix.unlink path)
 
-(* A Windows path is absolute under a drive letter ([C:foo]) or a leading separator
-   ([\\server\\share]); [Filename.is_relative] already knows both, so it decides rather than a
-   Unix-shaped first-character test that would treat [C:] as one relative component. *)
+(* [Filename.dirname] owns the decomposition: it already knows drive roots ([C:\]),
+   UNC share roots ([\\server\share]), trailing separators and relative paths, and it
+   answers each parent in the spelling the filesystem expects. The climb stops where the
+   parent stops changing, which is exactly the root — [.] for a relative path. *)
 let prefixes path =
-  let absolute = String.length path > 0 && not (Filename.is_relative path) in
-  let slashes =
-    String.map (fun character -> if character = '\\' then '/' else character) path
+  let rec climb dir acc =
+    let parent = Filename.dirname dir in
+    if String.equal parent dir then dir :: acc else climb parent (dir :: acc)
   in
-  let parts =
-    List.filter (fun part -> part <> "" && part <> ".") (String.split_on_char '/' slashes)
-  in
-  let root =
-    if not absolute then Filename.current_dir_name
-    else if path.[0] = '/' || path.[0] = '\\' then Filename.dir_sep
-    else String.sub path 0 2
-  in
-  let _, found =
-    List.fold_left
-      (fun (here, acc) part ->
-        let next = Filename.concat here part in
-        (next, next :: acc))
-      (root, []) parts
-  in
-  List.rev found
+  climb path []
 
 let is_directory path =
   Lwt.catch

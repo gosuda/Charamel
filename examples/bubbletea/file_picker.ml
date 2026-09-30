@@ -119,7 +119,10 @@ let smoke () =
     Smoke.expect app []
       [
         "Pick a file:";
-        "> drwx------    60B nested";
+        (* The directory's rendered size is its [st_size], which depends on the
+           filesystem (60B on APFS, 4KiB on ext4), so the needle stops before it. *)
+        "> drwx------";
+        "nested";
         "alpha.go";
         "beta.md";
         "gamma.txt";

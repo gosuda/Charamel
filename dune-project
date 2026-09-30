@@ -43,8 +43,8 @@
   cohttp-lwt-unix
   (tls-lwt (>= 2.1.3))
   (awa-mirage (>= 0.6.1))
-  (ctypes (and (>= 0.24.0) (= :os "win32")))
-  (ctypes-foreign (and (>= 0.24.0) (= :os "win32")))
+  (ctypes (>= 0.24.0))
+  (ctypes-foreign (>= 0.24.0))
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)

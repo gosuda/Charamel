@@ -141,10 +141,46 @@ let path_join dir name =
   else if String.ends_with ~suffix:"/" dir then dir ^ name
   else dir ^ "/" ^ name
 
+exception Outside_root
+
+let separators path =
+  (* Windows accepts either separator, so a stored spelling folds to '/' before any
+     lexical check; on POSIX a '\' is an ordinary name character and stays. *)
+  if Sys.win32 then String.map (fun c -> if c = '\\' then '/' else c) path else path
+
+(* Every directory or metadata access passes through [resolve]: the candidate is made
+   absolute, folded lexically — [.] and empties dropped, [..] popped against real
+   components — and compared with the similarly normalized [root]; anything landing
+   outside it is refused, which is the confinement the sandbox directory used to
+   provide. *)
+let normalize path =
+  let flat = separators path in
+  let rec go stack = function
+    | ".." :: rest -> go (match stack with _ :: tl -> tl | [] -> []) rest
+    | ("." | "") :: rest -> go stack rest
+    | part :: rest -> go (part :: stack) rest
+    | [] -> Stdlib.List.rev stack
+  in
+  let parts = go [] (String.split_on_char '/' flat) in
+  let joined = String.concat "/" parts in
+  if String.length flat > 0 && flat.[0] = '/' then "/" ^ joined else joined
+
+let absolute path =
+  if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
+
+let within_root ~root ~path =
+  let base = normalize (absolute root) in
+  let candidate = normalize (absolute path) in
+  String.equal base candidate || String.starts_with ~prefix:(base ^ "/") candidate
+
+let under_root root path =
+  if Filename.is_relative path then Filename.concat root path else path
+
 let resolve root path =
   if path = "" || path = "." then root
-  else if Filename.is_relative path then Filename.concat root path
-  else path
+  else
+    let effective = under_root root path in
+    if within_root ~root ~path:effective then effective else raise Outside_root
 
 let parent_directory path =
   if path = "/" then "/"
@@ -194,7 +230,17 @@ let entry_of_name root current_directory name =
   let lstat = Unix.lstat path in
   let is_symlink = lstat.Unix.st_kind = Unix.S_LNK in
   let target = if is_symlink then Unix.readlink path else "" in
-  let stat = if is_symlink then Unix.stat path else lstat in
+  (* A link resolved outside [root] is listed by name only: following it for metadata or
+     navigation would make the confinement meaningless. *)
+  let inside =
+    is_symlink
+    && within_root ~root
+         ~path:
+           (if Filename.is_relative target then
+              under_root root (path_join current_directory target)
+            else target)
+  in
+  let stat = if is_symlink && inside then Unix.stat path else lstat in
   let is_dir = stat.Unix.st_kind = Unix.S_DIR in
   {
     name;
@@ -224,6 +270,7 @@ let read_directory m path =
     in
     Ok entries
   with
+  | Outside_root -> Error (io_error path "outside the picker root")
   | Sys_error message -> Error (io_error path message)
   | Unix.Unix_error (kind, _, _) -> Error (io_error path (Unix.error_message kind))
 

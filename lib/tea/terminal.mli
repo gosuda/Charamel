@@ -50,9 +50,9 @@ val local : ?output:[ `Stdout | `Stderr ] -> unit -> t
     so [~output:`Stderr] keeps painting at the real size while stdout carries data.
     [enter] and [leave] save and restore the raw-mode attributes of standard input through
     {!Charamel_os.Tty.enter_raw} and do nothing when [is_tty] is [false]. [env] reads the
-    process environment. [on_resize] is [None]; the runtime watches SIGWINCH itself, which
-    is why a transport over another process's terminal must supply [on_resize] of its own.
-    [local] is [true]. *)
+    process environment. [on_resize] is [None] on POSIX, where the runtime watches
+    SIGWINCH itself, and a stream fed by {!Charamel_os.Tty.on_resize} polling the console
+    on Windows, which has no such signal. [local] is [true]. *)
 
 val custom :
   input:Charamel_os.Console_input.console_input ->

@@ -41,7 +41,6 @@ let create ~sw ~artifacts =
   }
 
 let status_is_running = function Running -> true | Exited _ | Killed -> false
-let signal_to_status code = if code > 128 then Killed else Exited code
 
 let append_capped buffer bytes_seen overflow text =
   let length = String.length text in
@@ -185,7 +184,13 @@ let settle t job process captured code =
      over, so no trailing byte lands after the status is set. *)
   Lwt.join [ captured; teardown ] >>= fun () ->
   was_kill_requested t job >>= fun requested ->
-  finish t job (if requested then Killed else signal_to_status code)
+  if requested then finish t job Killed
+  else
+    (* An exit code of [128 + n] alone cannot tell a signal death from a deliberate
+       [exit (128 + n)]; {!Charamel_os.Process.signal} keeps the two apart. *)
+    Charamel_os.Process.signal process >>= function
+    | Some _ -> finish t job Killed
+    | None -> finish t job (Exited code)
 
 let spawn cwd command env =
   Charamel_os.Process.spawn ~cwd ~env:(merged_environment env) ~stdin:`Inherit

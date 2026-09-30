@@ -626,11 +626,25 @@ let exit_code = function
 
 let wait_exit_code pid = Lwt_unix.waitpid [] pid >|= fun (_, status) -> exit_code status
 
+let env_key value =
+  match String.index_opt value '=' with
+  | Some index -> String.sub value 0 index
+  | None -> value
+
+(* Each appended [KEY=value] first evicts every earlier entry with the same key, so the
+   last spelling of a variable is also the only one — [getenv] answers the first match,
+   and a bare append would leave the inherited value winning. *)
 let command_env session extra =
-  Array.of_list
-    (Array.to_list (Unix.environment ())
-    @ List.map (fun (key, value) -> Fmt.str "%s=%s" key value) (Session.env session)
-    @ extra)
+  let overrides =
+    List.map (fun (key, value) -> Fmt.str "%s=%s" key value) (Session.env session) @ extra
+  in
+  let merge entries entry =
+    List.filter
+      (fun existing -> String.compare (env_key existing) (env_key entry) <> 0)
+      entries
+    @ [ entry ]
+  in
+  Array.of_list (List.fold_left merge (Array.to_list (Unix.environment ())) overrides)
 
 let rec copy_pty session pty =
   Charamel_os.Pty.read pty 4096 >>= function
@@ -648,7 +662,7 @@ let rec write_pty pty text off =
 
 let rec pump_input session pty =
   Lwt_io.read ~count:4096 (Session.stdin session) >>= fun data ->
-  if String.is_empty data then Lwt.return_unit
+  if String.length data = 0 then Lwt.return_unit
   else write_pty pty data 0 >>= fun () -> pump_input session pty
 
 let pty_failure = function

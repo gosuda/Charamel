@@ -49,18 +49,36 @@ let local ?(output = `Stdout) () =
   let getenv name = Sys.getenv_opt name in
   let restore = ref None in
   let enter () = if is_tty then restore := Some (Charamel_os.Tty.enter_raw ()) in
+  let unsubscribe_resize = ref (fun () -> ()) in
+  let on_resize =
+    if Sys.win32 then begin
+      (* A Windows console raises no signal when its buffer changes size: the stream is
+         fed by [Charamel_os.Tty.watch_resizes] polling the output handle, and [leave]
+         ends that subscription with the console state it restores. *)
+      let stream, push = Lwt_stream.create () in
+      Lwt.async (fun () ->
+          Lwt.bind
+            (Charamel_os.Tty.on_resize (fun () -> push (Some (fun () -> ()))))
+            (fun unsubscribe ->
+              unsubscribe_resize := unsubscribe;
+              Lwt.return_unit));
+      Some stream
+    end
+    else None
+  in
   let leave () =
-    match !restore with
+    (match !restore with
     | Some restore_mode ->
         restore_mode ();
         restore := None
-    | None -> ()
+    | None -> ());
+    !unsubscribe_resize ()
   in
   {
     input;
     output = output_channel;
     size = size ~env:getenv ~output;
-    on_resize = None;
+    on_resize;
     env = getenv;
     is_tty;
     local = true;

@@ -2,4 +2,12 @@
  (name test_os)
  (package charamel)
  (modules test_os)
- (libraries alcotest charamel.os lwt lwt.unix test_support unix))
+ (libraries
+  alcotest
+  charamel.os
+  ctypes
+  ctypes.foreign
+  lwt
+  lwt.unix
+  test_support
+  unix))

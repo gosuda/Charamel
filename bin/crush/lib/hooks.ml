@@ -31,7 +31,7 @@ let json_bool value = Jsont.Json.bool value
 
 let rec drain channel =
   Lwt_io.read ~count:4096 channel >>= fun chunk ->
-  if String.is_empty chunk then Lwt.return_unit else drain channel
+  if String.length chunk = 0 then Lwt.return_unit else drain channel
 
 let collected buffer = { text = Buffer.contents buffer; truncated = false }
 
@@ -39,7 +39,7 @@ let read_channel channel =
   let buffer = Buffer.create 4096 in
   let rec pump () =
     Lwt_io.read ~count:4096 channel >>= fun chunk ->
-    if String.is_empty chunk then Lwt.return_unit
+    if String.length chunk = 0 then Lwt.return_unit
     else if Buffer.length buffer + String.length chunk > max_output_size then
       Lwt.fail Over_limit
     else (

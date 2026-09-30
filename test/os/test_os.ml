@@ -39,11 +39,22 @@ let text_result : (string, [< failure ]) result -> string = function
   | Ok text -> "Ok " ^ text
   | Error failure -> "Error " ^ show_failure failure
 
+(* [Unix.unsetenv] only exists from OCaml 5.5, so the removal is bound like the
+   library's own foreign calls: POSIX [unsetenv] deletes the variable, and on Windows a
+   bare [_putenv "NAME"] does the same. *)
+let unsetenv =
+  if Sys.win32 then
+    let putenv = Foreign.foreign "_putenv" Ctypes.(string @-> returning int) in
+    fun name -> ignore (putenv name : int)
+  else
+    let unsetenv = Foreign.foreign "unsetenv" Ctypes.(string @-> returning int) in
+    fun name -> ignore (unsetenv name : int)
+
 let with_environment : 'a. (string * string) list -> (unit -> 'a) -> 'a =
  fun bindings f ->
   let previous = List.map (fun (name, _) -> (name, Sys.getenv_opt name)) bindings in
   let undo (name, value) =
-    match value with Some text -> Unix.putenv name text | None -> Unix.unsetenv name
+    match value with Some text -> Unix.putenv name text | None -> unsetenv name
   in
   List.iter (fun (name, value) -> Unix.putenv name value) bindings;
   Fun.protect ~finally:(fun () -> List.iter undo previous) f
@@ -52,9 +63,9 @@ let without_environment : 'a. string list -> (unit -> 'a) -> 'a =
  fun names f ->
   let previous = List.map (fun name -> (name, Sys.getenv_opt name)) names in
   let undo (name, value) =
-    match value with Some text -> Unix.putenv name text | None -> Unix.unsetenv name
+    match value with Some text -> Unix.putenv name text | None -> unsetenv name
   in
-  List.iter Unix.unsetenv names;
+  List.iter unsetenv names;
   Fun.protect ~finally:(fun () -> List.iter undo previous) f
 
 let counter = ref 0

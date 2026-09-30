@@ -1054,21 +1054,22 @@ let run_core ~(terminal : Terminal.t) ~fps ~filter ~clock ~now ~exec ~suspend ~s
                     old_handlers := (signal, previous) :: !old_handlers
                   end
                   else begin
-                    (* Register with the event loop first, then capture the pre-program
-                       disposition with a placeholder that forwards to
-                       [Lwt_unix.handle_signal]. That call is thread-safe and notifies
-                       every Lwt subscriber for the signal, so capturing never silences
-                       another watcher (a resize subscription, say), the action is never
-                       run inside the raw signal handler, and a signal arriving in the
-                       installation window is delivered rather than dropped. *)
+                    (* Capture the pre-program disposition first: [Sys.signal] answers
+                       what it replaced while installing the forwarder that hands the
+                       signal to [Lwt_unix.handle_signal], so the saved behavior is what
+                       the program found — never Lwt's dispatcher. The Lwt subscription
+                       is registered after; that call is thread-safe and notifies every
+                       Lwt subscriber for the signal, so capturing never silences
+                       another watcher (a resize subscription, say) and the action is
+                       never run inside the raw signal handler. *)
+                    let previous =
+                      Sys.signal signal
+                        (Sys.Signal_handle (fun _ -> Lwt_unix.handle_signal number))
+                    in
                     signal_watchers :=
                       Lwt_unix.on_signal number (fun _ -> Lwt.async action)
                       :: !signal_watchers;
-                    old_handlers :=
-                      ( signal,
-                        Sys.signal signal
-                          (Sys.Signal_handle (fun _ -> Lwt_unix.handle_signal number)) )
-                      :: !old_handlers
+                    old_handlers := (signal, previous) :: !old_handlers
                   end
                 end
               in

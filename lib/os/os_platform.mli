@@ -245,6 +245,11 @@ module Process : sig
       callers expect. Reaping also deletes the named pipes. Calling it more than once is
       safe: the wait starts at {!spawn} and its result is shared. *)
 
+  val signal : t -> int option Lwt.t
+  (** [signal t] settles with the child, like {!await}: [Some n] when signal [n] stopped
+      it and [None] when it exited on its own — disambiguating the cases {!await} folds
+      into [128 + n]. *)
+
   val terminate : t -> unit
   (** Ask the child to stop: [SIGTERM] on POSIX, [TerminateProcess] on Windows. A child
       that already exited is not an error. *)

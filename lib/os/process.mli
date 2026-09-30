@@ -80,6 +80,11 @@ val await : t -> int Lwt.t
     since [wait4] only observes a stop when [WUNTRACED] was asked for and it is not.
     Calling it repeatedly is safe; the wait began at {!val:spawn}. *)
 
+val signal : t -> int option Lwt.t
+(** [signal t] settles with the child, like {!val:await}: [Some n] when signal [n] stopped
+    it and [None] when it exited on its own — disambiguating the cases {!val:await} folds
+    into [128 + n]. *)
+
 val terminate : t -> unit
 (** Ask the child to stop: [SIGTERM] to the child itself on POSIX, [TerminateProcess] with
     exit code 1 on Windows, where [TerminateProcess] is the only one of the two that

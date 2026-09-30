@@ -188,6 +188,7 @@ module Process = struct
     stdout_r : Lwt_io.input_channel option;
     stderr_r : Lwt_io.input_channel option;
     code : int Lwt.t;
+    signal : int option Lwt.t;
   }
 
   let exit_code status =
@@ -195,6 +196,11 @@ module Process = struct
     | Unix.WEXITED code -> code
     | Unix.WSIGNALED signal -> 128 + Sys.signal_to_int signal
     | Unix.WSTOPPED signal -> 128 + Sys.signal_to_int signal
+
+  let signal_of status =
+    match status with
+    | Unix.WSIGNALED signal -> Some (Sys.signal_to_int signal)
+    | Unix.WEXITED _ | Unix.WSTOPPED _ -> None
 
   (* [Lwt_process] handles the Windows process and thread handles, the [NUL] device and the
      inheritable-versus-close-on-exec decision for the pipe ends it creates, which is why
@@ -231,13 +237,21 @@ module Process = struct
             ("", Array.of_list argv)
             ?cwd ?env ~stdin:stdin' ~stdout:stdout' ~stderr:stderr'
         in
-        { process; stdin_w; stdout_r; stderr_r; code = Lwt.map exit_code process#status }
+        {
+          process;
+          stdin_w;
+          stdout_r;
+          stderr_r;
+          code = Lwt.map exit_code process#status;
+          signal = Lwt.map signal_of process#status;
+        }
 
   let pid { process; _ } = process#pid
   let stdin_w { stdin_w; _ } = get stdin_w "stdin_w"
   let stdout_r { stdout_r; _ } = get stdout_r "stdout_r"
   let stderr_r { stderr_r; _ } = get stderr_r "stderr_r"
   let await { code; _ } = code
+  let signal { signal; _ } = signal
   let terminate { process; _ } = process#terminate
   let kill_tree { process; _ } = process#terminate
   let alive { process; _ } = process#state = Lwt_process.Running

@@ -108,8 +108,11 @@ val call :
 
     A 2xx response yields [(response, stream)]; any other status yields
     [Error (`Http http_error)] after reading at most {!val:max_error_body} body bytes, and
-    the connection is closed. [timeout] defaults to {!val:attempt_timeout} and bounds the
-    attempt, not the stream.
+    the connection is closed. On 2xx the stream owns the connection: draining it to the
+    end or a stream failure releases the socket, and a stream dropped unread is released
+    by the collector. A caller that knows it will stop reading early should prefer
+    {!val:call_raw}, whose channel close releases the connection immediately. [timeout]
+    defaults to {!val:attempt_timeout} and bounds the attempt, not the stream.
 
     @raise Invalid_argument
       when [timeout] is not positive and finite. A malformed URI, a TLS setup failure, and

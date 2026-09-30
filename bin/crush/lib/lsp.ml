@@ -299,7 +299,7 @@ let read_exact channel length =
 let read_frame channel =
   let rec read_headers length =
     Lwt_io.read_line channel >>= fun line ->
-    if String.is_empty line then
+    if String.length line = 0 then
       match length with
       | Some length -> Lwt.return_ok length
       | None -> Lwt.return_error "missing Content-Length"

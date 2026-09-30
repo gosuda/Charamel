@@ -151,7 +151,8 @@ module Writer = struct
   let rgb r g b = Charamel_ansi.Color.Rgb (r, g, b)
 
   let colour_at parameters index =
-    let open Option.Syntax in
+    let ( let* ) = Option.bind in
+    let ( let+ ) value f = Option.map f value in
     let parameter = parameters.(index) in
     let at offset =
       if index + offset < Array.length parameters then

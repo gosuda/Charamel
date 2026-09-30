@@ -107,13 +107,14 @@ let le32u buffer index =
   if value < 0 then value + 0x1_0000_0000 else value
 
 let console_screen_size handle =
-  (* CONSOLE_SCREEN_BUFFER_INFO is 24 bytes: dwSize, dwCursorPosition, wAttributes plus
-     padding, srWindow as Left, Top, Right, Bottom, then dwMaximumWindowSize. *)
+  (* CONSOLE_SCREEN_BUFFER_INFO packs to 22 bytes: dwSize and dwCursorPosition at 0 and 4,
+     wAttributes at 8, srWindow as Left, Top, Right, Bottom at 10 through 16, then
+     dwMaximumWindowSize at 18. *)
   let info = allocate_n char ~count:24 in
   if c_screen_buffer_info handle (coerce (ptr char) (ptr void) info) = 0 then None
   else
-    let cols = le16 info 16 - le16 info 12 + 1 in
-    let rows = le16 info 18 - le16 info 14 + 1 in
+    let cols = le16 info 14 - le16 info 10 + 1 in
+    let rows = le16 info 16 - le16 info 12 + 1 in
     if rows <= 0 || cols <= 0 then None else Some (rows, cols)
 
 let get_console_cp () = UInt32.to_int (c_get_console_cp ())
