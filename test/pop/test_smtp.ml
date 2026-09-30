@@ -1,23 +1,53 @@
 open Pop_core
 open Lwt.Infix
 
+(* The farewell reply is held back so the mock only answers QUIT after every client
+   command has been drained; a newline-terminated script's last line therefore starts
+   after its second-to-last newline — scanning from the final newline itself would
+   find an empty "last line" and send everything eagerly. *)
 let split_final replies =
-  match String.rindex_opt replies '\n' with
-  | None -> (replies, None)
-  | Some index ->
-      let prior = String.sub replies 0 (index + 1) in
-      let last = String.sub replies (index + 1) (String.length replies - index - 1) in
-      if String.starts_with ~prefix:"221" last then (prior, Some last) else (replies, None)
+  let length = String.length replies in
+  let search_from =
+    if length > 0 && replies.[length - 1] = '\n' then length - 2 else length - 1
+  in
+  if search_from < 0 then (replies, None)
+  else
+    match String.rindex_from_opt replies search_from '\n' with
+    | Some index ->
+        let prior = String.sub replies 0 (index + 1) in
+        let last = String.sub replies (index + 1) (length - index - 1) in
+        if String.starts_with ~prefix:"221" last then (prior, Some last)
+        else (replies, None)
+    | None ->
+        if String.starts_with ~prefix:"221" replies then ("", Some replies)
+        else (replies, None)
 
 let swallow_io body =
   Lwt.catch body (function
     | End_of_file | Lwt.Canceled | Unix.Unix_error _ -> Lwt.return_unit
     | exn -> Lwt.fail exn)
 
+let write_all fd data =
+  let length = String.length data in
+  let raw_fd = Lwt_unix.unix_file_descr fd in
+  let raw = Bytes.unsafe_of_string data in
+  let rec loop offset =
+    if offset >= length then Lwt.return_unit
+    else
+      match Unix.write raw_fd raw offset (length - offset) with
+      | written -> loop (offset + written)
+      | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) ->
+          Lwt_unix.wait_write fd >>= fun () -> loop offset
+  in
+  loop 0
+
 let serve ~earlier ~final writes fd =
-  let ic = Lwt_io.of_fd ~mode:Lwt_io.Input fd in
-  let oc = Lwt_io.of_fd ~mode:Lwt_io.Output fd in
-  let send value = Lwt_io.write oc value >>= fun () -> Lwt_io.flush oc in
+  let ic = Lwt_io.of_fd ~mode:Lwt_io.Input ~close:(fun () -> Lwt.return_unit) fd in
+  (* Replies go through [write_all] — a raw [Unix.write] loop — rather than an
+     [Lwt_io] output channel so they reach the wire eagerly: a buffered channel
+     may hold the farewell back past the point where the client stops waiting
+     for it. *)
+  let send value = write_all fd value in
   Lwt.finalize
     (fun () ->
       send earlier >>= fun () ->
@@ -26,11 +56,15 @@ let serve ~earlier ~final writes fd =
         released := true;
         match final with Some reply -> send reply | None -> Lwt.return_unit
       in
+      (* [read_into] answers as soon as any bytes are available and answers 0 only
+         at end-of-file; [Lwt_io.read] would hold the callback until the peer
+         closes, so a deferred farewell could never be triggered mid-dialogue. *)
+      let piece = Bytes.create 4096 in
       let rec drain () =
-        Lwt_io.read ic >>= fun chunk ->
-        if chunk = "" then Lwt.return_unit
+        Lwt_io.read_into ic piece 0 (Bytes.length piece) >>= fun count ->
+        if count = 0 then Lwt.return_unit
         else (
-          Buffer.add_string writes chunk;
+          Buffer.add_substring writes (Bytes.unsafe_to_string piece) 0 count;
           (if !released then Lwt.return_unit
            else
              let sent = Buffer.contents writes in
@@ -42,7 +76,7 @@ let serve ~earlier ~final writes fd =
           >>= drain)
       in
       swallow_io drain)
-    (fun () -> swallow_io (fun () -> Lwt_io.close ic >>= fun () -> Lwt_io.close oc))
+    (fun () -> swallow_io (fun () -> Lwt_io.close ic >>= fun () -> Lwt_unix.close fd))
 
 let run_mock ?(timeout = 30.) replies f =
   let writes = Buffer.create 1024 in

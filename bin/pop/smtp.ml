@@ -148,7 +148,9 @@ let read_reply t =
 
 let write_raw t data =
   with_deadline t (fun () ->
-      Lwt.bind (Lwt_io.write t.oc data) (fun () -> Lwt.return (Ok ())))
+      Lwt.bind
+        (Lwt.bind (Lwt_io.write t.oc data) (fun () -> Lwt_io.flush t.oc))
+        (fun () -> Lwt.return (Ok ())))
 
 let write_command t command = write_raw t (command ^ "\r\n")
 

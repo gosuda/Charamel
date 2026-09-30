@@ -793,10 +793,13 @@ let a_file_in_the_way_is_a_collision () =
 let exit_codes () =
   posix_only ();
   run (fun () ->
-      let child = Charamel_os.Process.spawn [ "/bin/sh"; "-c"; "exit 3" ] in
+      let living = Charamel_os.Process.spawn [ "/bin/sh"; "-c"; "sleep 30" ] in
       Alcotest.(check bool)
         "a fresh child is alive" true
-        (Charamel_os.Process.alive child);
+        (Charamel_os.Process.alive living);
+      Charamel_os.Process.terminate living;
+      Charamel_os.Process.await living >>= fun _terminated ->
+      let child = Charamel_os.Process.spawn [ "/bin/sh"; "-c"; "exit 3" ] in
       Charamel_os.Process.await child >|= fun code ->
       Alcotest.(check int) "the status passes through" 3 code)
 
