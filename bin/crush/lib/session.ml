@@ -486,7 +486,7 @@ let index_path store = Filename.concat store.root "sessions.json"
 let session_path store id = Filename.concat (sessions_dir store) (id ^ ".jsonl")
 
 let write_channel path flags perm contents =
-  Lwt_unix.openfile path (flags @ Charamel_os.Fs.binary_flags) perm >>= fun fd ->
+  Lwt_unix.openfile path flags perm >>= fun fd ->
   let channel = Lwt_io.of_fd ~mode:Lwt_io.Output fd in
   Lwt.finalize (fun () -> Lwt_io.write channel contents) (fun () -> Lwt_io.close channel)
 

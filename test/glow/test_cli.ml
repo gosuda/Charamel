@@ -23,7 +23,7 @@ let env_for root =
 
 let write_markdown root =
   let path = Filename.concat root "README.md" in
-  let channel = open_out path in
+  let channel = open_out_bin path in
   output_string channel "# Heading\n\nBody text\n";
   close_out channel;
   path

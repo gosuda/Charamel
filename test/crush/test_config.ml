@@ -37,7 +37,7 @@ let check_search_paths () =
 let write path body =
   Test_tools_test_support.mkdir_p (Filename.dirname path);
   let channel =
-    open_out_gen [ Open_wronly; Open_creat; Open_trunc; Open_text ] 0o600 path
+    open_out_gen [ Open_wronly; Open_creat; Open_trunc; Open_binary ] 0o600 path
   in
   Fun.protect
     ~finally:(fun () -> close_out channel)

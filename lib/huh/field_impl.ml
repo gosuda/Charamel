@@ -424,7 +424,7 @@ let text_init ctx state =
   (state, Charamel_tea.Cmd.none)
 
 let read_whole_file path =
-  match Stdlib.open_in path with
+  match Stdlib.open_in_bin path with
   | exception Sys_error _ -> None
   | channel -> (
       match

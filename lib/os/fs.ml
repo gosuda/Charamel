@@ -33,13 +33,10 @@ let to_result f =
       | _ -> Lwt.fail exn)
 
 let rename_replace ~src ~dst = raised dst (fun () -> Lwt_unix.rename src dst)
-let binary_flags = Os_platform.binary_file_flags
 
 let with_open_out ~perm path k =
   raised path (fun () ->
-      Lwt_unix.openfile path
-        ([ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] @ binary_flags)
-        perm
+      Lwt_unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] perm
       >|= fun fd -> Lwt_io.of_fd ~mode:Lwt_io.output fd)
   >>= fun channel -> Lwt.finalize (fun () -> k channel) (fun () -> Lwt_io.close channel)
 

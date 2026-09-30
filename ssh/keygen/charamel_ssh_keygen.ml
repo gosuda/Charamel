@@ -342,9 +342,7 @@ let write_pair p path_name pub_p pub_name private_body pub_body =
   let save dest name perm body =
     Lwt.catch
       (fun () ->
-        Lwt_unix.openfile dest
-          ([ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] @ Charamel_os.Fs.binary_flags)
-          perm
+        Lwt_unix.openfile dest [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] perm
         >>= fun fd ->
         created := dest :: !created;
         let channel = Lwt_io.of_fd ~mode:Lwt_io.output fd in
@@ -379,10 +377,7 @@ let remove q =
 let write_temp dest suffix perm body =
   let q = temp_of dest suffix in
   io_of (fun () ->
-      Lwt_unix.openfile q
-        ([ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] @ Charamel_os.Fs.binary_flags)
-        perm
-      >>= fun fd ->
+      Lwt_unix.openfile q [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] perm >>= fun fd ->
       let channel = Lwt_io.of_fd ~mode:Lwt_io.output fd in
       Lwt_io.write channel body >>= fun () -> Lwt_io.close channel)
   >>= function

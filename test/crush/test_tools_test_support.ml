@@ -77,7 +77,7 @@ let rec mkdir_p dir =
 let write_file path content =
   mkdir_p (Filename.dirname path);
   let channel =
-    open_out_gen [ Open_wronly; Open_creat; Open_trunc; Open_text ] 0o644 path
+    open_out_gen [ Open_wronly; Open_creat; Open_trunc; Open_binary ] 0o644 path
   in
   Fun.protect
     ~finally:(fun () -> close_out channel)

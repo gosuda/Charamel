@@ -205,9 +205,7 @@ let save_atomic dest body =
       let owned = ref false in
       Lwt.catch
         (fun () ->
-          Lwt_unix.openfile tmp
-            ([ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] @ Charamel_os.Fs.binary_flags)
-            0o600
+          Lwt_unix.openfile tmp [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600
           >>= fun fd ->
           owned := true;
           let channel = Lwt_io.of_fd ~mode:Lwt_io.output fd in

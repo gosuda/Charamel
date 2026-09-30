@@ -34,7 +34,7 @@ let check_symlink_destination_is_replaced_not_followed () =
       let original = Filename.concat root "original" in
       let alias = Filename.concat root "alias" in
       let channel =
-        open_out_gen [ Open_wronly; Open_creat; Open_excl; Open_text ] 0o600 original
+        open_out_gen [ Open_wronly; Open_creat; Open_excl; Open_binary ] 0o600 original
       in
       output_string channel "keep\n";
       close_out channel;

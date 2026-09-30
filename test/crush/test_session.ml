@@ -19,7 +19,7 @@ let with_store f =
 
 let write_file path content =
   let channel =
-    open_out_gen [ Open_wronly; Open_creat; Open_trunc; Open_text ] 0o600 path
+    open_out_gen [ Open_wronly; Open_creat; Open_trunc; Open_binary ] 0o600 path
   in
   Fun.protect
     ~finally:(fun () -> close_out channel)
@@ -188,7 +188,7 @@ let index_and_concurrent_append () =
 let append_line session line =
   let channel =
     open_out_gen
-      [ Open_append; Open_creat; Open_wronly; Open_text ]
+      [ Open_append; Open_creat; Open_wronly; Open_binary ]
       0o600 (Session.path session)
   in
   Fun.protect

@@ -38,11 +38,6 @@ val rename_replace : src:string -> dst:string -> unit Lwt.t
       with [Not_found] when [src] or its directory is missing, [Permission_denied] when
       the directory refuses, and [Is_directory] when either side names a directory. *)
 
-val binary_flags : Unix.open_flag list
-(** The [openfile] flags a file channel needs for byte-exact I/O: [[Unix.O_BINARY]] on
-    Windows, where a descriptor opens in text mode by default and translates line endings,
-    and [[]] on POSIX, where every descriptor is binary already. *)
-
 val with_open_out :
   perm:int -> string -> (Lwt_io.output_channel -> unit Lwt.t) -> unit Lwt.t
 (** [with_open_out ~perm path k] truncates or creates [path] with mode [perm], hands the

@@ -201,9 +201,7 @@ let release_file_lock fd =
 
 let lock_file t =
   let fd =
-    Unix.openfile t.lock_path
-      ([ Unix.O_CREAT; Unix.O_RDWR; Unix.O_CLOEXEC ] @ Charamel_os.Fs.binary_flags)
-      0o600
+    Unix.openfile t.lock_path [ Unix.O_CREAT; Unix.O_RDWR; Unix.O_CLOEXEC ] 0o600
   in
   let rec attempt () =
     try

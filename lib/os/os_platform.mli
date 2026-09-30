@@ -16,11 +16,6 @@ val is_macos : bool
 (** Whether the system is macOS. The POSIX variant reads the [sysname] field of [uname];
     the Windows variant answers [false]. *)
 
-val binary_file_flags : Unix.open_flag list
-(** The [openfile] flags a file channel needs for byte-exact I/O: [[Unix.O_BINARY]] on
-    Windows, where a descriptor opens in text mode by default and translates line endings,
-    and [[]] on POSIX, where every descriptor is binary already. *)
-
 (** {1 Console records} *)
 
 type key_event = {

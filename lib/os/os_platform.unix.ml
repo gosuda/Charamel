@@ -132,7 +132,6 @@ let o_rdwr = 2
 let o_noctty = if is_bsd then 0x20000 else 0o400
 let o_cloexec = if is_bsd then 0x01000000 else 0o2000000
 let is_macos = sysname = "Darwin"
-let binary_file_flags = []
 let tiocgwinsz = if is_bsd then 0x40087468 else 0x5413
 let tiocswinsz = if is_bsd then 0x80087467 else 0x5414
 let spawn_setpgroup = 2

@@ -17,13 +17,13 @@ let discover_hidden () =
       Unix.mkdir ignored_dir 0o700;
       let hidden = Filename.concat hidden_dir "secret.md" in
       let ignored = Filename.concat ignored_dir "ignored.md" in
-      let channel = open_out visible in
+      let channel = open_out_bin visible in
       output_string channel "# visible";
       close_out channel;
-      let channel = open_out hidden in
+      let channel = open_out_bin hidden in
       output_string channel "# hidden";
       close_out channel;
-      let channel = open_out ignored in
+      let channel = open_out_bin ignored in
       output_string channel "# ignored";
       close_out channel;
       let normal = Source.discover_markdown ~root ~show_hidden:false in
