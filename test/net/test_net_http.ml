@@ -376,8 +376,16 @@ let refused =
           target := Fixture_http.uri fixture "/v1/gone";
           Lwt.return_unit)
       >>= fun () ->
-      Charamel_net.call ~meth:`GET ~body:None !target >>= fun result ->
-      Net_test_support.check_transport "refused" "connection refused" result)
+      (* A listener that has only just closed can take a moment to refuse again —
+         Windows can leave a freed port retransmitting rather than resetting — so
+         the first connect attempts are allowed to time out before the verdict. *)
+      let rec attempt retries =
+        Charamel_net.call ~timeout:2. ~meth:`GET ~body:None !target >>= fun result ->
+        match (result, retries) with
+        | Error (`Transport "request timed out"), n when n > 0 -> attempt (n - 1)
+        | _ -> Net_test_support.check_transport "refused" "connection refused" result
+      in
+      attempt 3)
 
 let bad_uri =
   Alcotest_lwt.test_case "reports a malformed or unsupported URI" `Quick
