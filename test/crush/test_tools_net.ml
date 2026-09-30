@@ -24,7 +24,7 @@ let fetch_value ?format ?timeout_s url =
 let make_ctx sw =
   let open Lwt.Syntax in
   let clock = Charamel_os.Time.lwt in
-  let cwd = "/tmp" in
+  let cwd = Filename.get_temp_dir_name () in
   let config = Config.default in
   let permission =
     Permission.create ~config:config.Config.permissions ~yolo:true ~cwd
@@ -34,7 +34,7 @@ let make_ctx sw =
   let* mcp = Mcp.create ~cwd ~config in
   let artifacts = Artifact.create ~fs_root:"/" ~dir:"tmp/crush-net-test-artifacts" in
   let jobs = Jobs.create ~sw ~artifacts in
-  let+ skills = Skills.load ~fs_root:"/" ~config ~home:"/tmp" in
+  let+ skills = Skills.load ~fs_root:"/" ~config ~home:cwd in
   {
     Tool.clock;
     fs_root = "/";

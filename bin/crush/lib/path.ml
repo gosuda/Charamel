@@ -105,9 +105,7 @@ let resolve windows cwd path =
     | None -> path
     | Some cwd ->
         let cwd = unify windows cwd in
-        if cwd = "" || cwd = "." then path
-        else if is_absolute ~windows cwd then Filename.concat cwd path
-        else String.concat "/" [ cwd; path ]
+        if cwd = "" || cwd = "." then path else String.concat "/" [ cwd; path ]
 
 let clamp components =
   let rec walk stack = function
@@ -174,3 +172,27 @@ let relative ?(windows = Sys.win32) ~root path =
     when String.equal root path && is_prefix root_parts path_parts ->
       Some (String.concat "/" (drop (List.length root_parts) path_parts))
   | _ -> None
+
+(* [root] is a sandbox prefix: relative paths join it as-is, and an absolute
+   [path] keeps only its components — the mirror of [C:\a\b] under [root] is
+   [root\a\b], the same shape POSIX gets from plain concatenation
+   ("/root" + "/a/b" is "/root/a/b"). A bare [root] — "/" or a drive root —
+   names the real filesystem, so absolute paths pass through, which is what
+   "fs_root is /" has always meant on POSIX. *)
+let under ?(windows = Sys.win32) ~root path =
+  let is_sep character = Char.equal character '/' || Char.equal character '\\' in
+  let past_separators value =
+    let length = String.length value in
+    let rec walk index =
+      if index < length && is_sep value.[index] then walk (index + 1) else index
+    in
+    walk 0
+  in
+  if not (is_absolute ~windows path) then Filename.concat root path
+  else
+    let root_rest = strip_root windows (unify windows root) in
+    if past_separators root_rest = String.length root_rest then path
+    else
+      let rest = strip_root windows path in
+      let index = past_separators rest in
+      Filename.concat root (String.sub rest index (String.length rest - index))

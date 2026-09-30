@@ -5,7 +5,7 @@ type indexed_rule = { value : rule; patterns : Re.re list }
 type t = { cwd : string; rules : indexed_rule list }
 
 let max_file_bytes = 65_536
-let path_of fs_root path = Filename.concat fs_root path
+let path_of fs_root path = Path.under ~root:fs_root path
 
 let kind path =
   Lwt.catch

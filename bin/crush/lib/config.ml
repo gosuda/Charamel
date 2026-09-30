@@ -751,7 +751,7 @@ let absolute_path path =
 
 let exists fs_root path =
   Lwt.catch
-    (fun () -> Lwt_unix.lstat (Filename.concat fs_root path) >|= fun _ -> true)
+    (fun () -> Lwt_unix.lstat (Path.under ~root:fs_root path) >|= fun _ -> true)
     (function Unix.Unix_error _ | Sys_error _ -> Lwt.return_false | exn -> Lwt.fail exn)
 
 let rec find_git_root fs_root cwd =
@@ -773,7 +773,7 @@ let io_message exn =
   | exn -> Printexc.raise_with_backtrace exn (Printexc.get_raw_backtrace ())
 
 let read_file fs_root path =
-  let file = Filename.concat fs_root path in
+  let file = Path.under ~root:fs_root path in
   Lwt.catch
     (fun () ->
       Lwt_unix.stat file >>= fun stats ->

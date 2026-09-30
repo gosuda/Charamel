@@ -6,7 +6,7 @@ type t = { skills : skill list }
 let max_file_bytes = 65_536
 let max_name_bytes = 256
 let max_description_bytes = 8_192
-let path_of fs_root path = Filename.concat fs_root path
+let path_of fs_root path = Path.under ~root:fs_root path
 
 let kind path =
   Lwt.catch

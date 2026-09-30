@@ -57,8 +57,8 @@ let with_size_env columns lines f =
 let test_local_transport () =
   let terminal = Terminal.local () in
   Alcotest.(check bool)
-    "local transport has no resize stream" true
-    (Option.is_none terminal.Terminal.on_resize);
+    "local transport resize stream matches the platform" true
+    ((if Sys.win32 then Option.is_some else Option.is_none) terminal.Terminal.on_resize);
   Alcotest.(check bool)
     "local tty flag matches the descriptors"
     (Charamel_os.Tty.is_tty_stdin && Charamel_os.Tty.is_tty_stdout)

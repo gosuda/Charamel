@@ -18,12 +18,9 @@ let check_search_paths () =
   in
   Alcotest.(check (list string))
     "ordered paths"
-    [
-      "/home/test/.config/crush/crush.json";
-      "/repo/crush.json";
-      "/repo/src/crush.json";
-      "/repo/src/lib/crush.json";
-    ]
+    (List.map
+       (fun dir -> Filename.concat dir "crush.json")
+       [ "/home/test/.config/crush"; "/repo"; "/repo/src"; "/repo/src/lib" ])
     paths;
   let paths =
     Config.search_paths ~cwd:"/repo/src" ~git_root:None
@@ -31,7 +28,7 @@ let check_search_paths () =
   in
   Alcotest.(check (list string))
     "home and cwd without git root"
-    [ "/home/test/crush.json"; "/repo/src/crush.json" ]
+    [ "/home/test/crush.json"; Filename.concat "/repo/src" "crush.json" ]
     paths
 
 let write path body =

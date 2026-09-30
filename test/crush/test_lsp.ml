@@ -80,11 +80,13 @@ let config_with_server script =
   }
 
 let lsp_temp_path prefix =
-  Fmt.str "/tmp/%s-%d-%d.ml" prefix (Unix.getpid ()) (Random.bits ())
+  Fmt.str "%s%s%s-%d-%d.ml"
+    (Filename.get_temp_dir_name ())
+    Filename.dir_sep prefix (Unix.getpid ()) (Random.bits ())
 
 let clock = Charamel_os.Time.lwt
 
-let with_lsp ?(cwd = "/tmp") script f =
+let with_lsp ?(cwd = Filename.get_temp_dir_name ()) script f =
   let path = lsp_temp_path "crush-lsp" in
   Test_tools_test_support.write_file path source_text;
   let sw = Lwt_switch.create () in
@@ -180,7 +182,7 @@ let handles_respects_cwd () =
   with_lsp fixture_script (fun lsp _path ->
       Alcotest.(check (option string))
         "inside cwd" (Some "fixture")
-        (Lsp.handles lsp ~path:"/tmp/crush-lsp-inside.ml");
+        (Lsp.handles lsp ~path:(lsp_temp_path "crush-lsp-inside"));
       Alcotest.(check (option string))
         "outside cwd" None
         (Lsp.handles lsp ~path:"/home/foo.ml"))

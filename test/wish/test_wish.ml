@@ -181,21 +181,41 @@ let run_connection_case ~name ?(chain = Fun.id) ?(endpoint = counter_handler)
   let unlink_if_present () =
     try Unix.unlink path with Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   in
-  unlink_if_present ();
+  let domain, sockaddr, cleanup =
+    if Sys.win32 then (
+      (* Windows has no Unix-domain sockets: the server and client meet on an
+         ephemeral loopback port instead. *)
+      let probe = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+      Unix.bind probe (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
+      let port =
+        match Unix.getsockname probe with
+        | Unix.ADDR_INET (_, port) -> port
+        | _ -> assert false
+      in
+      Unix.close probe;
+      (Lwt_unix.PF_INET, Lwt_unix.ADDR_INET (Unix.inet_addr_loopback, port), fun () -> ()))
+    else (
+      unlink_if_present ();
+      (Lwt_unix.PF_UNIX, Lwt_unix.ADDR_UNIX path, unlink_if_present))
+  in
+  let addr =
+    match sockaddr with
+    | Unix.ADDR_INET (host, port) -> `Tcp (Unix.string_of_inet_addr host, port)
+    | Unix.ADDR_UNIX path -> `Unix path
+  in
   Lwt.finalize
     (fun () ->
       let switch = Lwt_switch.create () in
       let (_ : unit Lwt.t) =
-        W.serve ~stop:switch ~host_key:server_key ~addr:(`Unix path) ?banner_handler
+        W.serve ~stop:switch ~host_key:server_key ~addr ?banner_handler
           ~public_key_auth:(fun ~user:_ public_key ->
             Awa.Hostkey.pub_eq public_key (Awa.Hostkey.pub_of_priv client_awa))
           (chain endpoint) ()
       in
       let rec connect_when_ready () =
-        let fd = Lwt_unix.socket Lwt_unix.PF_UNIX Lwt_unix.SOCK_STREAM 0 in
+        let fd = Lwt_unix.socket domain Lwt_unix.SOCK_STREAM 0 in
         Lwt.catch
-          (fun () ->
-            Lwt_unix.connect fd (Lwt_unix.ADDR_UNIX path) >>= fun () -> Lwt.return fd)
+          (fun () -> Lwt_unix.connect fd sockaddr >>= fun () -> Lwt.return fd)
           (fun exn ->
             Lwt_unix.close fd >>= fun () ->
             match exn with
@@ -235,7 +255,7 @@ let run_connection_case ~name ?(chain = Fun.id) ?(endpoint = counter_handler)
       >>= fun () ->
       Lwt_switch.turn_off switch >>= fun () -> Lwt.return_unit)
     (fun () ->
-      unlink_if_present ();
+      cleanup ();
       Lwt.return_unit)
 
 let authenticated_case () =

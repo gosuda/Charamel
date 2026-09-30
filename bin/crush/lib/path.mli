@@ -53,3 +53,9 @@ val relative : ?windows:bool -> root:string -> string -> string option
 (** [relative ~windows ~root path] is [path] expressed from [root] — the components after
     [root]'s, joined by [/] — or [None] when {!val:within} does not hold. [path] equal to
     [root] gives [""]. *)
+
+val under : ?windows:bool -> root:string -> string -> string
+(** [under ~root path] resolves [path] inside a sandbox [root]: relative paths join [root]
+    as-is, and an absolute [path] keeps only its components — the mirror of [C:\a\b] under
+    [root] is [root\a\b], the shape POSIX gets from plain concatenation. A bare [root]
+    ("/" or a drive root) names the real filesystem and absolute paths pass through. *)

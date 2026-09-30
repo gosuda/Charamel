@@ -12,8 +12,9 @@ let with_jobs f =
 let output_case () =
   with_jobs (fun jobs ->
       let id =
-        Jobs.start jobs ~cwd:"/tmp" ~command:"printf 'hello'; printf 'oops' >&2" ~env:[]
-          ~timeout_s:30
+        Jobs.start jobs
+          ~cwd:(Filename.get_temp_dir_name ())
+          ~command:"printf 'hello'; printf 'oops' >&2" ~env:[] ~timeout_s:30
       in
       match await (Jobs.output jobs ~id ~wait:true) with
       | Error (`Not_found missing) -> Alcotest.failf "job %s was not retained" missing
@@ -25,7 +26,11 @@ let output_case () =
 
 let kill_case () =
   with_jobs (fun jobs ->
-      let id = Jobs.start jobs ~cwd:"/tmp" ~command:"sleep 30" ~env:[] ~timeout_s:30 in
+      let id =
+        Jobs.start jobs
+          ~cwd:(Filename.get_temp_dir_name ())
+          ~command:"sleep 30" ~env:[] ~timeout_s:30
+      in
       Lwt_direct.yield ();
       (match await (Jobs.kill jobs ~id) with
       | Error (`Not_found missing) -> Alcotest.failf "job %s was not retained" missing
@@ -40,7 +45,11 @@ let kill_case () =
 
 let timeout_case () =
   with_jobs (fun jobs ->
-      let id = Jobs.start jobs ~cwd:"/tmp" ~command:"sleep 5" ~env:[] ~timeout_s:1 in
+      let id =
+        Jobs.start jobs
+          ~cwd:(Filename.get_temp_dir_name ())
+          ~command:"sleep 5" ~env:[] ~timeout_s:1
+      in
       match await (Jobs.output jobs ~id ~wait:true) with
       | Error (`Not_found missing) ->
           Alcotest.failf "job %s was removed too early" missing
@@ -58,7 +67,9 @@ let timeout_kills_a_term_immune_child_case () =
   with_jobs (fun jobs ->
       let started = Unix.gettimeofday () in
       let id =
-        Jobs.start jobs ~cwd:"/tmp" ~command:"trap '' TERM; sleep 60" ~env:[] ~timeout_s:1
+        Jobs.start jobs
+          ~cwd:(Filename.get_temp_dir_name ())
+          ~command:"trap '' TERM; sleep 60" ~env:[] ~timeout_s:1
       in
       match await (Jobs.output jobs ~id ~wait:true) with
       | Error (`Not_found missing) ->
@@ -79,7 +90,9 @@ let retention_case () =
   with_jobs (fun jobs ->
       let ids =
         List.init 130 (fun _ ->
-            Jobs.start jobs ~cwd:"/tmp" ~command:"true" ~env:[] ~timeout_s:30)
+            Jobs.start jobs
+              ~cwd:(Filename.get_temp_dir_name ())
+              ~command:"true" ~env:[] ~timeout_s:30)
       in
       List.iter
         (fun id ->

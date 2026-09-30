@@ -5,7 +5,7 @@ type t = { fs_root : string; dir : string; mutex : Lwt_mutex.t }
 let max_inline_bytes = 65_536
 let head_lines = 50
 let tail_lines = 20
-let path t name = Filename.concat (Filename.concat t.fs_root t.dir) name
+let path t name = Filename.concat (Path.under ~root:t.fs_root t.dir) name
 
 let create_dir path =
   Lwt.catch
@@ -43,7 +43,7 @@ let id_of_random random =
 
 let save t ~random contents =
   Lwt_mutex.with_lock t.mutex (fun () ->
-      let directory = Filename.concat t.fs_root t.dir in
+      let directory = Path.under ~root:t.fs_root t.dir in
       Io.trap t.dir (fun () -> create_dir directory) >>= function
       | Error (`Not_found path) ->
           Lwt.return_error (`Io (path, "artifact directory does not exist"))

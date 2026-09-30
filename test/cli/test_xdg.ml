@@ -35,14 +35,25 @@ let capture bindings =
   Alcotest.(check int) "probe exit status" 0 status;
   Lwt.return output
 
+(* The fake root must qualify as absolute on the platform under test: "/probe"
+   is only absolute on POSIX, so Windows vectors hang off a drive letter. *)
+let probe_root = if Sys.win32 then "C:\\probe" else "/probe"
+let root sub = Filename.concat probe_root sub
+let probe_home = root "home"
+
+(* [Xdg] builds each answer the same way the vectors expect it, so the
+   expectations are computed with the library's own joins rather than
+   literal strings — the same literals read differently across platforms. *)
+let dir name base = name ^ "=" ^ Filename.concat base app
+
 type vector = { name : string; env : string list; expect : string list }
 
 let home_only =
   [
-    "config=/probe/home/.config/probeapp";
-    "data=/probe/home/.local/share/probeapp";
-    "state=/probe/home/.local/state/probeapp";
-    "cache=/probe/home/.cache/probeapp";
+    dir "config" (Filename.concat probe_home ".config");
+    dir "data" (Filename.concat probe_home ".local/share");
+    dir "state" (Filename.concat probe_home ".local/state");
+    dir "cache" (Filename.concat probe_home ".cache");
   ]
 
 let every_dir_errors = [ "config=!error"; "data=!error"; "state=!error"; "cache=!error" ]
@@ -53,42 +64,42 @@ let vectors =
       name = "qualifying variables win over home";
       env =
         [
-          "HOME=/probe/home";
-          "XDG_CONFIG_HOME=/probe/cfg";
-          "XDG_DATA_HOME=/probe/data";
-          "XDG_STATE_HOME=/probe/state";
-          "XDG_CACHE_HOME=/probe/cache";
+          "HOME=" ^ probe_home;
+          "XDG_CONFIG_HOME=" ^ root "cfg";
+          "XDG_DATA_HOME=" ^ root "data";
+          "XDG_STATE_HOME=" ^ root "state";
+          "XDG_CACHE_HOME=" ^ root "cache";
         ];
       expect =
         [
-          "config=/probe/cfg/probeapp";
-          "data=/probe/data/probeapp";
-          "state=/probe/state/probeapp";
-          "cache=/probe/cache/probeapp";
+          dir "config" (root "cfg");
+          dir "data" (root "data");
+          dir "state" (root "state");
+          dir "cache" (root "cache");
         ];
     };
-    { name = "home fallback leaves"; env = [ "HOME=/probe/home" ]; expect = home_only };
+    { name = "home fallback leaves"; env = [ "HOME=" ^ probe_home ]; expect = home_only };
     {
       name = "relative variable is ignored";
-      env = [ "HOME=/probe/home"; "XDG_CONFIG_HOME=probe/relative" ];
+      env = [ "HOME=" ^ probe_home; "XDG_CONFIG_HOME=probe/relative" ];
       expect = home_only;
     };
     {
       name = "empty variable is ignored";
-      env = [ "HOME=/probe/home"; "XDG_DATA_HOME="; "XDG_CACHE_HOME=/probe/cache" ];
+      env = [ "HOME=" ^ probe_home; "XDG_DATA_HOME="; "XDG_CACHE_HOME=" ^ root "cache" ];
       expect =
         [
-          "config=/probe/home/.config/probeapp";
-          "data=/probe/home/.local/share/probeapp";
-          "state=/probe/home/.local/state/probeapp";
-          "cache=/probe/cache/probeapp";
+          dir "config" (Filename.concat probe_home ".config");
+          dir "data" (Filename.concat probe_home ".local/share");
+          dir "state" (Filename.concat probe_home ".local/state");
+          dir "cache" (root "cache");
         ];
     };
     {
       name = "variable qualifies without home";
-      env = [ "XDG_CONFIG_HOME=/probe/cfg" ];
+      env = [ "XDG_CONFIG_HOME=" ^ root "cfg" ];
       expect =
-        [ "config=/probe/cfg/probeapp"; "data=!error"; "state=!error"; "cache=!error" ];
+        [ dir "config" (root "cfg"); "data=!error"; "state=!error"; "cache=!error" ];
     };
     { name = "no home and no variables"; env = []; expect = every_dir_errors };
     { name = "empty home"; env = [ "HOME=" ]; expect = every_dir_errors };

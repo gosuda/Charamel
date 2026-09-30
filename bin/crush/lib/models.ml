@@ -62,7 +62,7 @@ let catalog_json json =
   | _ -> Error "providers cache must be an object"
 
 let cache_size_limit = 10 * 1024 * 1024
-let cache_path fs_root = Filename.concat fs_root (catalog_cache_path ())
+let cache_path fs_root = Path.under ~root:fs_root (catalog_cache_path ())
 
 let read_cache_file path =
   Lwt.catch

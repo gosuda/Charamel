@@ -37,17 +37,18 @@ let job_kill_value id = Jsont.Json.object' [ json_field "job_id" (Jsont.Json.str
 let make_ctx sw =
   let open Lwt.Syntax in
   let clock = Charamel_os.Time.lwt in
-  let cwd = "/tmp" in
+  let cwd = Filename.get_temp_dir_name () in
   let config = Config.default in
   let permission =
     Permission.create ~config:config.Config.permissions ~yolo:true ~cwd
-      ~plans_dir:"/tmp/.crush/plans" ()
+      ~plans_dir:(Filename.concat cwd ".crush/plans")
+      ()
   in
   let hooks = Hooks.create ~config:[] ~cwd in
   let* mcp = Mcp.create ~cwd ~config in
   let artifacts = Artifact.create ~fs_root:"/" ~dir:"tmp/crush-shell-test-artifacts" in
   let jobs = Jobs.create ~sw ~artifacts in
-  let+ skills = Skills.load ~fs_root:"/" ~config ~home:"/tmp" in
+  let+ skills = Skills.load ~fs_root:"/" ~config ~home:cwd in
   {
     Tool.clock;
     fs_root = "/";
@@ -65,7 +66,7 @@ let make_ctx sw =
     jobs;
     todos = Todos.create ();
     skills;
-    log_path = "/tmp/crush-shell-test.log";
+    log_path = Filename.concat cwd "crush-shell-test.log";
     interactive = false;
     is_subagent = false;
     ask = None;

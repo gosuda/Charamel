@@ -23,8 +23,58 @@ let exit_status = function
   | Unix.WEXITED code -> code
   | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal
 
+(* Windows needs a working system environment to launch a child at all:
+   CreateProcess resolves console support and system DLLs through variables
+   like SystemRoot and PATH, and a replaced environment that omits them fails
+   with EINVAL before the child runs. POSIX spawns carry no such requirement,
+   so the test's custom environment is used verbatim there. *)
+let windows_inherited =
+  [
+    "APPDATA";
+    "COMSPEC";
+    "HOMEDRIVE";
+    "HOMEPATH";
+    "LOCALAPPDATA";
+    "PATH";
+    "PATHEXT";
+    "PROGRAMDATA";
+    "PUBLIC";
+    "SYSTEMDRIVE";
+    "SYSTEMROOT";
+    "TEMP";
+    "TMP";
+    "USERPROFILE";
+    "WINDIR";
+  ]
+
+let complete_env env =
+  match env with
+  | Some provided when Sys.win32 ->
+      let names provided =
+        Array.map
+          (fun kv ->
+            match String.index_opt kv '=' with
+            | Some i -> String.uppercase_ascii (String.sub kv 0 i)
+            | None -> String.uppercase_ascii kv)
+          provided
+      in
+      let present = names provided in
+      let missing =
+        List.filter_map
+          (fun name ->
+            if Array.exists (String.equal name) present then None
+            else
+              match Sys.getenv_opt name with
+              | Some value -> Some (name ^ "=" ^ value)
+              | None -> None)
+          windows_inherited
+      in
+      Some (Array.append provided (Array.of_list missing))
+  | _ -> env
+
 let run_cli ~exe ?env ?cwd ?(timeout = 10.) ?(stdin = "") args =
   if not Sys.win32 then ignore (Sys.set_signal Sys.sigpipe Sys.Signal_ignore);
+  let env = complete_env env in
   let argv = Array.of_list (exe :: args) in
   Lwt_process.with_process_full ?env ?cwd (exe, argv) (fun process ->
       let collect =

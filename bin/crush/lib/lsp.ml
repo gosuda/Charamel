@@ -202,13 +202,14 @@ let extension path =
 
 let marker_matches fs_root directory marker =
   try
+    let inside = Path.under ~root:fs_root directory in
     if String.starts_with ~prefix:"*." marker then
       let suffix = String.sub marker 1 (String.length marker - 1) in
       Array.exists
         (fun entry ->
           String.length entry >= String.length suffix && String.ends_with ~suffix entry)
-        (Sys.readdir (Filename.concat fs_root directory))
-    else Sys.file_exists (Filename.concat (Filename.concat fs_root directory) marker)
+        (Sys.readdir inside)
+    else Sys.file_exists (Filename.concat inside marker)
   with Unix.Unix_error _ | Sys_error _ -> false
 
 let has_root_marker t server =

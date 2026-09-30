@@ -480,7 +480,7 @@ let pp_error ppf = function
   | `Index message -> Fmt.pf ppf "session index: %s" message
 
 let now_ms clock = int_of_float (Charamel_os.Time.now clock *. 1000.)
-let fs_path fs_root name = Filename.concat fs_root name
+let fs_path fs_root name = Path.under ~root:fs_root name
 let sessions_dir store = Filename.concat store.root "sessions"
 let index_path store = Filename.concat store.root "sessions.json"
 let session_path store id = Filename.concat (sessions_dir store) (id ^ ".jsonl")

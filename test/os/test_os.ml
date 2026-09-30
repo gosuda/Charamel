@@ -463,15 +463,15 @@ let xdg_precedence () =
 let windows_layout () =
   windows_only ();
   with_environment
-    [ ("LOCALAPPDATA", "/tmp/LocalAppData"); ("USERPROFILE", "/tmp/Profile") ]
+    [ ("LOCALAPPDATA", "C:\\fake\\LocalAppData"); ("USERPROFILE", "C:\\fake\\Profile") ]
     (fun () ->
       Alcotest.(check string)
         "data goes to LocalAppData"
-        (Filename.concat "/tmp/LocalAppData" "charm")
+        (Filename.concat "C:\\fake\\LocalAppData" "charm")
         (Charamel_os.Dirs.data_dir ~app:"charm");
       Alcotest.(check string)
         "config goes under the profile"
-        (Filename.concat (Filename.concat "/tmp/Profile" ".config") "charm")
+        (Filename.concat (Filename.concat "C:\\fake\\Profile" ".config") "charm")
         (Charamel_os.Dirs.config_dir ~app:"charm"))
 
 let temp_directory_follows_the_environment () =
