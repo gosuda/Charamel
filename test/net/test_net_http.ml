@@ -371,16 +371,13 @@ let raw_lines =
 
 let refused =
   Alcotest_lwt.test_case "reports a refused connection" `Quick (fun _switch () ->
-      let target = ref (Uri.of_string "http://127.0.0.1:1/") in
-      Fixture_http.with_server (fun fixture ->
-          target := Fixture_http.uri fixture "/v1/gone";
-          Lwt.return_unit)
-      >>= fun () ->
-      (* A listener that has only just closed can take a moment to refuse again —
-         Windows can leave a freed port retransmitting rather than resetting — so
-         the first connect attempts are allowed to time out before the verdict. *)
+      (* Nothing ever listens on port 1, so the refusal does not depend on how a
+         just-closed listener unwinds — a freed port can keep a SYN retransmitting
+         on Windows rather than resetting. A few bounded attempts cover any stack
+         that still answers slowly. *)
+      let target = Uri.of_string "http://127.0.0.1:1/" in
       let rec attempt retries =
-        Charamel_net.call ~timeout:2. ~meth:`GET ~body:None !target >>= fun result ->
+        Charamel_net.call ~timeout:2. ~meth:`GET ~body:None target >>= fun result ->
         match (result, retries) with
         | Error (`Transport "request timed out"), n when n > 0 -> attempt (n - 1)
         | _ -> Net_test_support.check_transport "refused" "connection refused" result
