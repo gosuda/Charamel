@@ -29,7 +29,9 @@ let c_ioctl =
    on the stack rather than in a register, so a fixed-arity [ioctl] binding hands the
    kernel a garbage pointer there. The POSIX.1-2024 [tcgetwinsize]/[tcsetwinsize] entry
    points are ordinary functions; they are preferred wherever the system exports them
-   (macOS 15.4+, glibc 2.39+), with [ioctl] kept for older libcs. *)
+   (glibc 2.39+, recent FreeBSD), with [ioctl] kept for the systems where the ABI lets
+   this process issue one. macOS exports neither the new calls nor a callable [ioctl],
+   so [window_size]/[set_window_size] fall back to a spawned [stty] there. *)
 let c_tcgetwinsize =
   try
     Some
@@ -110,6 +112,8 @@ let c_spawn =
     @-> ptr (ptr char)
     @-> returning int)
 
+let c_pipe = Foreign.foreign ~check_errno:true "pipe" (ptr int @-> returning int)
+
 let sysname =
   let buffer = allocate_n char ~count:512 in
   if c_uname buffer <> 0 then ""
@@ -151,37 +155,6 @@ let put_le16 buffer index value =
   buffer +@ (index + 1) <-@ Char.chr ((value lsr 8) land 0xff)
 
 let voidp buffer = coerce (ptr char) (ptr void) buffer
-
-(* [ioctl] reports through [errno], which the binding turns into [Unix_error]; "no size for
-   this descriptor" is an ordinary answer — a pipe, a closed master, a device that is no
-   terminal — so both directions swallow it rather than raising. *)
-let window_size fd =
-  let buffer = allocate_n char ~count:winsize_bytes in
-  match
-    match c_tcgetwinsize with
-    | Some tcgetwinsize -> tcgetwinsize fd (voidp buffer)
-    | None -> c_ioctl fd (ULong.of_int tiocgwinsz) (voidp buffer)
-  with
-  | exception Unix.Unix_error _ -> None
-  | failure when failure <> 0 -> None
-  | _ ->
-      let rows = le16 buffer 0 in
-      let cols = le16 buffer 2 in
-      if rows = 0 || cols = 0 then None else Some (rows, cols)
-
-let set_window_size fd ~rows ~cols =
-  let buffer = allocate_n char ~count:winsize_bytes in
-  put_le16 buffer 0 rows;
-  put_le16 buffer 2 cols;
-  put_le16 buffer 4 0;
-  put_le16 buffer 6 0;
-  match
-    match c_tcsetwinsize with
-    | Some tcsetwinsize -> tcsetwinsize fd (voidp buffer)
-    | None -> c_ioctl fd (ULong.of_int tiocswinsz) (voidp buffer)
-  with
-  | exception Unix.Unix_error _ -> false
-  | failure -> failure = 0
 
 let c_string text =
   let length = String.length text in
@@ -307,6 +280,109 @@ let run actions attributes program arguments env =
   ignore (c_attr_destroy attributes);
   if code <> 0 then Error (error_of_spawn code) else Ok !@pid
 
+(* Where the ABI makes the variadic [ioctl] uncallable — arm64 Darwin — and no
+   [tc*getwinsize] exists, the last resort is [stty] with the descriptor wired to its
+   standard input: the program performs its own ioctl, so the calling convention never
+   reaches this process. The spawn (never a fork) costs a process, but a geometry call
+   is rare. When [capture] is set, [stty]'s standard output is a pipe whose contents
+   come back in the answer; a failed spawn or a non-zero exit — which is also [stty]'s
+   way of saying the descriptor is no terminal — answers [None]. *)
+let stty_winsize fd arguments capture =
+  let reader, writer =
+    let cell = allocate_n int ~count:2 in
+    if capture && c_pipe cell = 0 then (!@(cell +@ 0), !@(cell +@ 1)) else (-1, -1)
+  in
+  if capture && reader < 0 then None
+  else
+    let close_fd number = try ignore (c_close number) with Unix.Unix_error _ -> () in
+    let dups = (fd, stdin_fd) :: (if writer >= 0 then [ (writer, stdout_fd) ] else []) in
+    match prepare ~dups [] with
+    | Error _ ->
+        if writer >= 0 then (
+          close_fd reader;
+          close_fd writer);
+        None
+    | Ok (actions, attributes) -> (
+        match run actions attributes "stty" arguments None with
+        | Error _ ->
+            if writer >= 0 then (
+              close_fd reader;
+              close_fd writer);
+            None
+        | Ok pid -> (
+            if writer >= 0 then close_fd writer;
+            let report =
+              if reader < 0 then ""
+              else
+                let buffer = allocate_n char ~count:64 in
+                let count = try read_at reader buffer 64 with Unix.Unix_error _ -> 0 in
+                close_fd reader;
+                if count > 0 then string_of_c_buffer buffer count else ""
+            in
+            match Unix.waitpid [] pid with
+            | _, Unix.WEXITED 0 -> Some report
+            | _, (Unix.WEXITED _ | Unix.WSIGNALED _ | Unix.WSTOPPED _) -> None))
+
+(* [ioctl] reports through [errno], which the binding turns into [Unix_error]; "no size
+   for this descriptor" is an ordinary answer — a pipe, a closed master, a device that
+   is no terminal — so both directions swallow it rather than raising. macOS skips
+   [ioctl] outright: its variadic argument cannot be marshalled on arm64, so the call
+   would corrupt the heap or refuse, and a spawned [stty] stands in. *)
+let window_size fd =
+  match c_tcgetwinsize with
+  | Some tcgetwinsize -> (
+      let buffer = allocate_n char ~count:winsize_bytes in
+      match tcgetwinsize fd (voidp buffer) with
+      | exception Unix.Unix_error _ -> None
+      | failure when failure <> 0 -> None
+      | _ ->
+          let rows = le16 buffer 0 in
+          let cols = le16 buffer 2 in
+          if rows = 0 || cols = 0 then None else Some (rows, cols))
+  | None when is_macos -> (
+      match stty_winsize fd [ "size" ] true with
+      | Some report -> (
+          match
+            List.filter_map int_of_string_opt
+              (String.split_on_char ' ' (String.trim report))
+          with
+          | [ rows; cols ] when rows > 0 && cols > 0 -> Some (rows, cols)
+          | _ -> None)
+      | None -> None)
+  | None -> (
+      let buffer = allocate_n char ~count:winsize_bytes in
+      match c_ioctl fd (ULong.of_int tiocgwinsz) (voidp buffer) with
+      | exception Unix.Unix_error _ -> None
+      | failure when failure <> 0 -> None
+      | _ ->
+          let rows = le16 buffer 0 in
+          let cols = le16 buffer 2 in
+          if rows = 0 || cols = 0 then None else Some (rows, cols))
+
+let set_window_size fd ~rows ~cols =
+  match c_tcsetwinsize with
+  | Some tcsetwinsize -> (
+      let buffer = allocate_n char ~count:winsize_bytes in
+      put_le16 buffer 0 rows;
+      put_le16 buffer 2 cols;
+      put_le16 buffer 4 0;
+      put_le16 buffer 6 0;
+      match tcsetwinsize fd (voidp buffer) with
+      | exception Unix.Unix_error _ -> false
+      | failure -> failure = 0)
+  | None when is_macos ->
+      stty_winsize fd [ "rows"; string_of_int rows; "cols"; string_of_int cols ] false
+      <> None
+  | None -> (
+      let buffer = allocate_n char ~count:winsize_bytes in
+      put_le16 buffer 0 rows;
+      put_le16 buffer 2 cols;
+      put_le16 buffer 4 0;
+      put_le16 buffer 6 0;
+      match c_ioctl fd (ULong.of_int tiocswinsz) (voidp buffer) with
+      | exception Unix.Unix_error _ -> false
+      | failure -> failure = 0)
+
 module Tty = struct
   type saved = { fd : Unix.file_descr; terminal : Unix.terminal_io }
 
@@ -392,11 +468,15 @@ module Pty = struct
     if rows < 1 || cols < 1 then
       invalid_arg "Charamel_os.Pty.create: a terminal has at least one row and one column";
     let work () =
+      (* The parent never opens the slave: a reader on the master blocks while the
+         slave has never been opened, but answers EIO once it has been opened and
+         closed — so keeping the child-facing open in the child is what lets an early
+         drain wait for the child's first bytes instead of racing it to a hang-up. *)
       try
         let master = c_posix_openpt (o_rdwr lor o_noctty lor o_cloexec) in
         let refused reason =
-          (* The master is ours the moment [posix_openpt] answers, so every later failure has
-             to give it back or the descriptor leaks. *)
+          (* The master is ours the moment [posix_openpt] answers, so every later failure
+             has to give it back or the descriptor leaks. *)
           (try ignore (c_close master) with Unix.Unix_error _ | Failure _ -> ());
           io_failure "pty" reason
         in
