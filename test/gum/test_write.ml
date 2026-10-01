@@ -1,7 +1,4 @@
-let key name =
-  match Charamel_tea.Key.of_string name with
-  | Ok key -> key
-  | Error (`Msg message) -> Alcotest.fail message
+let key = Test_gum_support.key
 
 let multiline_input () =
   let options = { Write.default_options with show_help = false; padding = "0" } in
@@ -20,6 +17,6 @@ let line_limit () =
 
 let cases =
   [
-    Alcotest.test_case "multiline input" `Quick multiline_input;
-    Alcotest.test_case "line limit" `Quick line_limit;
+    Alcotest_lwt.test_case_sync "multiline input" `Quick multiline_input;
+    Alcotest_lwt.test_case_sync "line limit" `Quick line_limit;
   ]

@@ -65,6 +65,45 @@ let of_hex_ =
       hex "#gg8537" None;
       hex "" None)
 
+let of_hex_or_ =
+  Alcotest.test_case "of_hex_or" `Quick (fun () ->
+      renders "valid hex ignores default"
+        (Charamel_ansi.Color.Rgb (255, 133, 55))
+        (Charamel_ansi.Color.of_hex_or ~default:Charamel_ansi.Color.Default "#ff8537");
+      renders "invalid hex falls back to the implicit default" Charamel_ansi.Color.Default
+        (Charamel_ansi.Color.of_hex_or "not-a-color");
+      renders "invalid hex falls back to the given default"
+        (Charamel_ansi.Color.Indexed 245)
+        (Charamel_ansi.Color.of_hex_or ~default:(Charamel_ansi.Color.Indexed 245)
+           "not-a-color"))
+
+let of_string_ =
+  Alcotest.test_case "of_string hex or decimal index" `Quick (fun () ->
+      let parses input expected =
+        Alcotest.check
+          Alcotest.(option color)
+          input expected
+          (Charamel_ansi.Color.of_string input)
+      in
+      parses "1" (Some (Charamel_ansi.Color.Basic 1));
+      parses "+1" (Some (Charamel_ansi.Color.Basic 1));
+      parses "15" (Some (Charamel_ansi.Color.Basic 15));
+      parses "21" (Some (Charamel_ansi.Color.Indexed 21));
+      parses "255" (Some (Charamel_ansi.Color.Indexed 255));
+      parses "-1" (Some (Charamel_ansi.Color.Basic 1));
+      parses "#ff0000" (Some (Charamel_ansi.Color.Rgb (255, 0, 0)));
+      parses "#f00" (Some (Charamel_ansi.Color.Rgb (255, 0, 0)));
+      parses "16711680" (Some (Charamel_ansi.Color.Rgb (255, 0, 0)));
+      parses "99999999" (Some (Charamel_ansi.Color.Rgb (245, 224, 255)));
+      parses "zz" None;
+      parses "" None;
+      parses "-" None;
+      parses "0x21" None;
+      parses "1_000" None;
+      parses " 1" None;
+      parses "#gg8537" None;
+      parses "99999999999999999999999" None)
+
 (* The expected 256-color values restate the upstream TestHexTo256 rows as
    8-bit components; the upstream fractional inputs round to these bytes. *)
 let to_ansi256_ =
@@ -452,14 +491,36 @@ let to_rgb_ =
         (Some (255, 0, 12))
         (Charamel_ansi.Color.Rgb (300, -5, 12)))
 
+let is_dark_ =
+  Alcotest.test_case "is_dark palette boundary" `Quick (fun () ->
+      let dark name expected c =
+        Alcotest.check Alcotest.bool name expected (Charamel_ansi.Color.is_dark c)
+      in
+      dark "default is dark" true Charamel_ansi.Color.Default;
+      dark "indexed 8 is dark" true (Charamel_ansi.Color.Indexed 8);
+      dark "indexed 7 is light" false (Charamel_ansi.Color.Indexed 7);
+      dark "basic 0 is dark" true (Charamel_ansi.Color.Basic 0);
+      dark "basic 15 is light" false (Charamel_ansi.Color.Basic 15);
+      dark "grey 128 is dark" true (Charamel_ansi.Color.Rgb (128, 128, 128));
+      dark "grey 129 is light" false (Charamel_ansi.Color.Rgb (129, 129, 129));
+      dark "pure red is dark" true (Charamel_ansi.Color.Rgb (255, 0, 0));
+      dark "pure green is light" false (Charamel_ansi.Color.Rgb (0, 255, 0));
+      dark "grey ramp 244 is dark" true (Charamel_ansi.Color.Indexed 244);
+      dark "grey ramp 245 is light" false (Charamel_ansi.Color.Indexed 245);
+      dark "below range clamps dark" true (Charamel_ansi.Color.Indexed (-200));
+      dark "above range clamps light" false (Charamel_ansi.Color.Indexed 300))
+
 let cases =
   [
     checked_constructors;
     of_hex_;
+    of_hex_or_;
+    of_string_;
     to_ansi256_;
     to_ansi16_table;
     to_ansi16_;
     to_rgb_;
+    is_dark_;
     pp_;
     equal_;
   ]

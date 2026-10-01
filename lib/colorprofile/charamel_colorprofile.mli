@@ -32,11 +32,12 @@ module Writer : sig
   type nonrec t
   (** The type for colour-aware output writers. *)
 
-  val create : profile:profile -> Eio.Flow.sink_ty Eio.Resource.t -> t
+  val create : profile:profile -> Lwt_io.output_channel -> t
   (** [create ~profile sink] is a writer that sends transformed output to [sink]. *)
 
-  val write : t -> string -> unit
-  (** [write writer text] sends [text] to [writer]. Incomplete escape sequences remain
-      pending until a later call completes them. [Ascii] and [No_tty] remove all SGR
-      sequences. Non-SGR sequences and UTF-8 text are preserved. *)
+  val write : t -> string -> unit Lwt.t
+  (** [write writer text] sends [text] to [writer] and flushes it, so a terminal sees the
+      frame without waiting for another write. Incomplete escape sequences remain pending
+      until a later call completes them. [Ascii] and [No_tty] remove all SGR sequences.
+      Non-SGR sequences and UTF-8 text are preserved. *)
 end

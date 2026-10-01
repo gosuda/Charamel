@@ -6,16 +6,11 @@ module Style = Charamel_lipgloss.Style
 module Textarea = Charamel_bubbles.Textarea
 module Key_binding = Charamel_bubbles.Key_binding
 
-let key name =
-  match Key.of_string name with
-  | Ok value -> value
-  | Error (`Msg message) -> invalid_arg (Fmt.str "invalid write key %s: %s" name message)
-
-let k_enter = key "enter"
-let k_escape = key "esc"
-let k_ctrl_c = key "ctrl+c"
-let k_ctrl_e = key "ctrl+e"
-let is_key actual expected = Key.matches actual expected
+let k_enter = Gum_flag.key ~cmd:"write" "enter"
+let k_escape = Gum_flag.key ~cmd:"write" "esc"
+let k_ctrl_c = Gum_flag.key ~cmd:"write" "ctrl+c"
+let k_ctrl_e = Gum_flag.key ~cmd:"write" "ctrl+e"
+let is_key = Gum_flag.is_key
 
 type cursor_mode = Blink | Hide | Static
 
@@ -88,11 +83,6 @@ let default_options =
     prompt_style = Gum_style.defaults ~foreground:"7" ();
   }
 
-let parsed_padding value =
-  match Gum_flag.parse_padding value with
-  | Ok sides -> sides
-  | Error (`Msg message) -> invalid_arg message
-
 let take count values =
   let rec loop remaining acc = function
     | [] -> List.rev acc
@@ -109,12 +99,14 @@ let normalize_lines ~max_lines text =
   else String.concat "\n" (take max_lines (String.split_on_char '\n' text))
 
 let initial_value env (options : options) =
-  if options.value <> "" then remove_carriage_returns options.value
+  if options.value <> "" then Lwt.return (remove_carriage_returns options.value)
   else
-    match Gum_io.read_stdin ~strip_ansi:options.strip_ansi env with
-    | Ok value -> remove_carriage_returns value
-    | Error `Empty -> ""
-    | Error (`Read value) -> remove_carriage_returns value
+    Lwt.map
+      (function
+        | Ok value -> remove_carriage_returns value
+        | Error `Empty -> ""
+        | Error (`Read value) -> remove_carriage_returns value)
+      (Gum_io.read_stdin ~strip_ansi:options.strip_ansi env)
 
 let textarea_styles (options : options) : Textarea.styles =
   let styles = Textarea.default_styles ~is_dark:true in
@@ -165,7 +157,7 @@ let make (options : options) =
     textarea;
     submitted = false;
     quitting = false;
-    padding = parsed_padding options.padding;
+    padding = Gum_flag.parsed_padding options.padding;
   }
 
 let value model = Textarea.value model.textarea
@@ -212,22 +204,30 @@ let handle_key model key =
     | None -> (model, Cmd.none)
     | Some component_message -> update_component model component_message
 
+let frame model body =
+  let header =
+    if model.options.header = "" then ""
+    else
+      Style.render (Gum_style.to_style model.options.header_style) model.options.header
+      ^ "\n"
+  in
+  let content =
+    if model.options.show_help then
+      body ^ "\n\nctrl+j newline • ctrl+e editor • enter submit • esc cancel"
+    else body
+  in
+  Style.render (Style.padding model.padding Style.empty) (header ^ content)
+
 let render model =
-  if model.quitting then ""
+  if model.quitting then "" else frame model (Textarea.view model.textarea)
+
+let cursor model =
+  if model.quitting then None
   else
-    let header =
-      if model.options.header = "" then ""
-      else
-        Style.render (Gum_style.to_style model.options.header_style) model.options.header
-        ^ "\n"
+    let requested =
+      if model.options.cursor_mode = Hide then None else Textarea.cursor model.textarea
     in
-    let content = header ^ Textarea.view model.textarea in
-    let content =
-      if model.options.show_help then
-        content ^ "\n\nctrl+j newline • ctrl+e editor • enter submit • esc cancel"
-      else content
-    in
-    Style.render (Style.padding model.padding Style.empty) content
+    Gum_io.place_cursor ~frame:(frame model) requested
 
 let update message model =
   match message with
@@ -261,7 +261,10 @@ let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
-    view = (fun model -> View.v (render model));
+    view =
+      (fun model ->
+        let frame = View.v (render model) in
+        { frame with cursor = cursor model });
     subscriptions =
       (fun _ ->
         Sub.batch
@@ -272,44 +275,17 @@ let app options : (model, msg) Charamel_tea.app =
   }
 
 let run env (options : options) =
-  let options =
-    {
-      options with
-      value = normalize_lines ~max_lines:options.max_lines (initial_value env options);
-    }
-  in
-  let model =
-    try
-      Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun model ->
-          if submitted model then Gum_run.Submitted else Gum_run.Quit)
-    with Gum_io.No_tty -> Charamel_cli.error "write: requires a terminal"
-  in
-  if not (submitted model) then Charamel_cli.error "not submitted";
-  Gum_io.print_raw env (value model)
-
-let validated_padding_term ~cmd =
-  let open Cmdliner in
-  let parse value =
-    match Gum_flag.parse_padding value with
-    | Ok _ -> Ok value
-    | Error (`Msg message) -> Error (`Msg message)
-  in
-  let padding_conv =
-    Arg.conv (parse, fun ppf value -> Stdlib.Format.pp_print_string ppf value)
-  in
-  Arg.(
-    value
-      (opt padding_conv "0 0"
-         (info [ "padding" ] ~doc:"Padding as one to four integers."
-            ~env:(Gum_flag.env ~cmd "padding"))))
-
-let string_arg ~cmd name ~default ~doc =
-  Cmdliner.Arg.(
-    value (opt string default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
-
-let int_arg ~cmd name ~default ~doc =
-  Cmdliner.Arg.(
-    value (opt int default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
+  Lwt.bind (initial_value env options) (fun initial ->
+      let options =
+        { options with value = normalize_lines ~max_lines:options.max_lines initial }
+      in
+      Lwt.bind
+        (Gum_run.run_tui ~name:"write" ?timeout:options.timeout env (app options)
+           ~finished:(fun model ->
+             if submitted model then Gum_run.Submitted else Gum_run.Quit))
+        (fun model ->
+          if not (submitted model) then Charamel_cli.error "not submitted";
+          Gum_io.print_raw env (value model)))
 
 let cmd env =
   let open Cmdliner in
@@ -325,22 +301,27 @@ let cmd env =
     Arg.value (Arg.opt converter Blink info)
   in
   let term =
-    let+ width = int_arg ~cmd:"write" "width" ~default:0 ~doc:"Text area width."
-    and+ height = int_arg ~cmd:"write" "height" ~default:5 ~doc:"Text area height."
-    and+ header = string_arg ~cmd:"write" "header" ~default:"" ~doc:"Header value."
+    let+ width = Gum_flag.int_arg ~cmd:"write" "width" ~default:0 ~doc:"Text area width."
+    and+ height =
+      Gum_flag.int_arg ~cmd:"write" "height" ~default:5 ~doc:"Text area height."
+    and+ header =
+      Gum_flag.string_arg ~cmd:"write" "header" ~default:"" ~doc:"Header value."
     and+ placeholder =
-      string_arg ~cmd:"write" "placeholder" ~default:"Write something..."
+      Gum_flag.string_arg ~cmd:"write" "placeholder" ~default:"Write something..."
         ~doc:"Placeholder value."
-    and+ prompt = string_arg ~cmd:"write" "prompt" ~default:"┃ " ~doc:"Prompt per line."
+    and+ prompt =
+      Gum_flag.string_arg ~cmd:"write" "prompt" ~default:"┃ " ~doc:"Prompt per line."
     and+ show_cursor_line =
       Gum_flag.flag ~cmd:"write" ~doc:"Highlight the cursor line." "show-cursor-line"
     and+ show_line_numbers =
       Gum_flag.flag ~cmd:"write" ~doc:"Show line numbers." "show-line-numbers"
-    and+ value = string_arg ~cmd:"write" "value" ~default:"" ~doc:"Initial value."
+    and+ value =
+      Gum_flag.string_arg ~cmd:"write" "value" ~default:"" ~doc:"Initial value."
     and+ char_limit =
-      int_arg ~cmd:"write" "char-limit" ~default:0 ~doc:"Maximum character count."
+      Gum_flag.int_arg ~cmd:"write" "char-limit" ~default:0
+        ~doc:"Maximum character count."
     and+ max_lines =
-      int_arg ~cmd:"write" "max-lines" ~default:0 ~doc:"Maximum logical lines."
+      Gum_flag.int_arg ~cmd:"write" "max-lines" ~default:0 ~doc:"Maximum logical lines."
     and+ show_help =
       Gum_flag.negatable ~cmd:"write" ~default:true ~doc:"Show help keybinds." "show-help"
     and+ cursor_mode = cursor_mode
@@ -349,7 +330,7 @@ let cmd env =
     and+ strip_ansi =
       Gum_flag.negatable ~cmd:"write" ~default:true ~doc:"Strip ANSI from stdin."
         "strip-ansi"
-    and+ padding = validated_padding_term ~cmd:"write"
+    and+ padding = Gum_flag.validated_padding_term ~cmd:"write" ()
     and+ base_style =
       Gum_style.term ~cmd:"write" ~prefix:"base." ~defaults:Gum_style.empty ()
     and+ cursor_line_number_style =

@@ -29,19 +29,32 @@ let error_message = function
   | `Already_exists path -> Fmt.str "%s already exists" path
   | `Io message -> message
 
-let run (env : Eio_unix.Stdenv.base) =
+let env () =
+  {
+    Charamel_cli.Env.cwd = Unix.getcwd ();
+    fs_root = ".";
+    stdin = Lwt_io.stdin;
+    stdout = Lwt_io.stdout;
+    stderr = Lwt_io.stderr;
+    clock = Charamel_os.Time.lwt;
+  }
+
+let run () =
+  let open Lwt.Syntax in
+  let* result = K.load_or_generate ~fs_root:"." ~path:"id_ed25519" K.Ed25519 in
   let host_key =
-    match K.load_or_generate ~fs:(fst env#fs) ~path:"id_ed25519" K.Ed25519 with
+    match result with
     | Ok (key, _) -> key
     | Error error -> Fmt.failwith "cannot load host key: %s" (error_message error)
   in
-  let endpoint = W.logging (W.active_term ((W.tea ~env app) (fun _session -> ()))) in
-  Eio.Switch.run (fun sw ->
-      W.serve ~sw ~net:env#net ~clock:env#clock ~host_key
-        ~addr:(`Tcp (Eio.Net.Ipaddr.V4.any, 2222))
-        ~public_key_auth:(fun ~user:_ _ -> true)
-        endpoint)
+  let endpoint =
+    W.logging (W.active_term (W.tea ~env:(env ()) app (fun _session -> Lwt.return_unit)))
+  in
+  W.serve ~host_key
+    ~addr:(`Tcp ("0.0.0.0", 2222))
+    ~public_key_auth:(fun ~user:_ _ -> true)
+    endpoint ()
 
 let () =
   Mirage_crypto_rng_unix.use_default ();
-  Eio_main.run run
+  Lwt_main.run (run ())

@@ -30,17 +30,33 @@ val default_options : options
 
 val run_child :
   ?capture:bool ->
-  Eio_unix.Stdenv.base ->
+  Charamel_cli.Env.t ->
   command:string list ->
   timeout:float option ->
-  (child_result, string) result
+  (child_result, string) result Lwt.t
 (** [run_child env ~command ~timeout] runs [command] with inherited stdin, drains stdout
     and stderr concurrently, preserving each stream byte-for-byte. [result.output] is the
     combined view in observed read-arrival order; no ordering is promised between the
     separate operating-system streams. *)
 
-val run : Eio_unix.Stdenv.base -> options -> unit
+val run_pty_pair :
+  ?rows:int ->
+  ?cols:int ->
+  ?stdin_text:string ->
+  command:string list ->
+  timeout:float option ->
+  unit ->
+  (child_result, string) result Lwt.t
+(** [run_pty_pair ?rows ?cols ?stdin_text ~command ~timeout ()] runs [command] on the
+    two-PTY capture path {!val:run_child} takes when standard output is a terminal: the
+    child's stdout and stderr are separate pseudo-terminals sized [rows] by [cols]
+    (defaulting to the real terminal, else 24x80), and [stdin_text], when given, is
+    written to the child's stdin pipe and closed, so a real [read] sees it. Exposed
+    because [dune runtest] connects a pipe, which would otherwise leave that path
+    unexercised. *)
+
+val run : Charamel_cli.Env.t -> options -> unit Lwt.t
 (** [run env options] runs the configured child and routes its output. *)
 
-val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
+val cmd : Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t
 (** [cmd env] is the [gum spin] command. *)

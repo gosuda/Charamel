@@ -1,4 +1,5 @@
 open Result.Syntax
+open Lwt_direct
 
 type path_args = { path : string option }
 type symbol_args = { symbol : string; path : string option }
@@ -73,36 +74,20 @@ let map_lsp_error = function
   | `Timeout _ -> `Timeout 10.
   | `Io (path, message) -> `Io (path, message)
 
-let canonical_or_absolute ctx path =
-  let absolute = Tool.absolute ctx path in
-  match Tool.canonical ctx absolute with Ok canonical -> canonical | Error _ -> absolute
-
 let canonical_path (ctx : Tool.ctx) = function
   | None | Some "" -> ctx.Tool.cwd
-  | Some path -> canonical_or_absolute ctx path
+  | Some path -> Tool.request_path ctx path
 
-let requested_paths (ctx : Tool.ctx) = function
-  | Some path when path <> "" -> [ canonical_or_absolute ctx path ]
-  | _ ->
-      let paths = Hashtbl.fold (fun path _ acc -> path :: acc) ctx.Tool.read_tracker [] in
-      if paths = [] then [] else List.sort String.compare paths
-
-let path_for_permission (ctx : Tool.ctx) = function
-  | Some path when path <> "" -> canonical_or_absolute ctx path
-  | _ -> ctx.Tool.cwd
+let tracked_paths (ctx : Tool.ctx) =
+  Hashtbl.fold (fun path _ acc -> path :: acc) ctx.Tool.read_tracker []
+  |> List.sort String.compare
 
 let with_lsp (ctx : Tool.ctx) f =
   match ctx.Tool.lsp with
   | None -> Error (`Unavailable "no LSP configured")
   | Some lsp -> f lsp
 
-let touch_file lsp path = if path <> "" && path <> "/" then Lsp.touch lsp ~path
-
-let truncate_output (ctx : Tool.ctx) ?diagnostics text =
-  let content, artifact =
-    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
-  in
-  Tool.ok ?artifact ?diagnostics content
+let touch_file lsp path = if path <> "" && path <> "/" then await (Lsp.touch lsp ~path)
 
 let severity = function
   | `Error -> "error"
@@ -120,25 +105,34 @@ let diagnostics_text diagnostics =
   | [] -> "no diagnostics"
   | values -> String.concat "\n" (List.map format_diagnostic values)
 
+let gather_diagnostics lsp paths =
+  let open Lwt.Infix in
+  Lwt_list.map_s
+    (fun path ->
+      (if path <> "" && path <> "/" then Lsp.touch lsp ~path else Lwt.return_unit)
+      >>= fun () -> Lsp.diagnostics lsp ~path ~wait:0.5)
+    paths
+  >|= List.concat
+
 let run_diagnostics ctx input =
   let* ({ path } : path_args) = Tool.decode path_codec input in
-  let permission_path = path_for_permission ctx path in
+  let source = canonical_path ctx path in
   let* () =
     Tool.request ctx ~read_only:true ~tool:"lsp_diagnostics" ~action:"diagnostics"
-      ~path:permission_path ~description:"Read language-server diagnostics"
+      ~path:source ~description:"Read language-server diagnostics"
   in
   with_lsp ctx (fun lsp ->
-      let paths = requested_paths ctx path in
+      let paths =
+        match path with
+        | Some value when value <> "" -> [ source ]
+        | _ -> tracked_paths ctx
+      in
       let outcome =
-        Tool.with_timeout ctx 2. (fun () ->
-            List.concat_map
-              (fun path ->
-                touch_file lsp path;
-                Lsp.diagnostics lsp ~path ~wait:0.5)
-              paths)
+        try Ok (await (Lwt_unix.with_timeout 2. (fun () -> gather_diagnostics lsp paths)))
+        with Lwt_unix.Timeout -> Error (`Timeout 2.)
       in
       let* diagnostics = outcome in
-      Ok (truncate_output ctx (diagnostics_text diagnostics)))
+      Ok (Tool.truncate ctx (diagnostics_text diagnostics)))
 
 let file_uri_path path =
   if String.starts_with ~prefix:"file://" path then
@@ -146,85 +140,86 @@ let file_uri_path path =
     String.sub path start (String.length path - start)
   else path
 
-let read_context (ctx : Tool.ctx) (location : Lsp.location) =
+let read_context (location : Lsp.location) =
   let path = file_uri_path location.Lsp.path in
   let first = max 1 (location.Lsp.line - 5) in
   let last = max first (location.Lsp.end_line + 5) in
   try
-    let lines = ref [] in
-    let line_number = ref 1 in
-    Eio.Path.with_lines
-      Eio.Path.(ctx.Tool.fs / path)
-      (fun stream ->
-        let rec consume stream =
-          if !line_number > last then ()
-          else
-            match stream () with
-            | Seq.Nil -> ()
-            | Seq.Cons (line, next) ->
-                if !line_number >= first then
-                  lines := Fmt.str "%d:%s" !line_number line :: !lines;
-                incr line_number;
-                consume next
-        in
-        consume stream);
-    List.rev !lines
-  with Eio.Io _ -> []
+    await
+      (Lwt_io.with_file ~mode:Lwt_io.Input path (fun channel ->
+           let open Lwt.Infix in
+           let stream = Lwt_io.read_lines channel in
+           let lines = ref [] in
+           let line_number = ref 1 in
+           let rec consume () =
+             if !line_number > last then Lwt.return_unit
+             else
+               Lwt_stream.get stream >>= function
+               | None -> Lwt.return_unit
+               | Some line ->
+                   if !line_number >= first then
+                     lines := Fmt.str "%d:%s" !line_number line :: !lines;
+                   incr line_number;
+                   consume ()
+           in
+           consume () >|= fun () -> List.rev !lines))
+  with Unix.Unix_error _ | Sys_error _ -> []
 
-let format_location ctx (location : Lsp.location) =
+let format_location (location : Lsp.location) =
   let path = file_uri_path location.Lsp.path in
   let header =
     Fmt.str "%s:%d:%d-%d:%d" path location.Lsp.line location.Lsp.col location.Lsp.end_line
       location.Lsp.end_col
   in
-  match read_context ctx location with
+  match read_context location with
   | [] -> header
   | context ->
       header ^ "\n" ^ String.concat "\n" (List.map (fun line -> "  " ^ line) context)
 
-let locations_text ctx locations =
+let locations_text locations =
   match locations with
   | [] -> "no locations"
-  | values -> String.concat "\n\n" (List.map (format_location ctx) values)
+  | values -> String.concat "\n\n" (List.map format_location values)
 
-let locate_symbol (ctx : Tool.ctx) lsp path name =
-  let source = canonical_path ctx path in
+let locate_symbol (ctx : Tool.ctx) lsp source name =
   if source <> ctx.Tool.cwd then touch_file lsp source;
-  match Lsp.find_symbol lsp ~path:source ~name with
+  match await (Lsp.find_symbol lsp ~path:source ~name) with
   | Ok (Some symbol) -> Ok symbol
   | Ok None -> Error (`Not_found name)
   | Error error -> Error (map_lsp_error error)
 
 let run_definition ctx input =
   let* ({ symbol; path } : symbol_args) = Tool.decode symbol_codec input in
+  let source = canonical_path ctx path in
   let* () =
     Tool.request ctx ~read_only:true ~tool:"lsp_definition" ~action:"definition"
-      ~path:(path_for_permission ctx path)
-      ~description:"Find a symbol definition"
+      ~path:source ~description:"Find a symbol definition"
   in
   with_lsp ctx (fun lsp ->
-      let* symbol = locate_symbol ctx lsp path symbol in
+      let* symbol = locate_symbol ctx lsp source symbol in
       let location = (symbol : Lsp.symbol).Lsp.range in
       match
-        Lsp.definition lsp ~path:location.Lsp.path ~line:location.Lsp.line
-          ~col:location.Lsp.col
+        await
+          (Lsp.definition lsp ~path:location.Lsp.path ~line:location.Lsp.line
+             ~col:location.Lsp.col)
       with
-      | Ok locations -> Ok (truncate_output ctx (locations_text ctx locations))
+      | Ok locations -> Ok (Tool.truncate ctx (locations_text locations))
       | Error error -> Error (map_lsp_error error))
 
 let run_references ctx input =
   let* ({ symbol; path } : symbol_args) = Tool.decode symbol_codec input in
+  let source = canonical_path ctx path in
   let* () =
     Tool.request ctx ~read_only:true ~tool:"lsp_references" ~action:"references"
-      ~path:(path_for_permission ctx path)
-      ~description:"Find symbol references"
+      ~path:source ~description:"Find symbol references"
   in
   with_lsp ctx (fun lsp ->
-      let* found = locate_symbol ctx lsp path symbol in
+      let* found = locate_symbol ctx lsp source symbol in
       let location = (found : Lsp.symbol).Lsp.range in
       match
-        Lsp.references lsp ~path:location.Lsp.path ~line:location.Lsp.line
-          ~col:location.Lsp.col
+        await
+          (Lsp.references lsp ~path:location.Lsp.path ~line:location.Lsp.line
+             ~col:location.Lsp.col)
       with
       | Ok locations ->
           let limited =
@@ -232,7 +227,7 @@ let run_references ctx input =
               List.filteri (fun index _ -> index < 200) locations
             else locations
           in
-          Ok (truncate_output ctx (locations_text ctx limited))
+          Ok (Tool.truncate ctx (locations_text limited))
       | Error error -> Error (map_lsp_error error))
 
 let rec symbol_lines indent (symbol : Lsp.symbol) =
@@ -256,11 +251,11 @@ let run_symbols ctx input =
   in
   with_lsp ctx (fun lsp ->
       touch_file lsp source;
-      match Lsp.document_symbols lsp ~path:source with
+      match await (Lsp.document_symbols lsp ~path:source) with
       | Ok symbols ->
           let lines = List.concat_map (symbol_lines 0) symbols in
           Ok
-            (truncate_output ctx
+            (Tool.truncate ctx
                (if lines = [] then "no symbols" else String.concat "\n" lines))
       | Error error -> Error (map_lsp_error error))
 
@@ -275,20 +270,21 @@ let run_rename (ctx : Tool.ctx) input =
   in
   with_lsp ctx (fun lsp ->
       touch_file lsp source;
-      let* found = locate_symbol ctx lsp path symbol in
+      let* found = locate_symbol ctx lsp source symbol in
       let location = (found : Lsp.symbol).Lsp.range in
       match
-        Lsp.rename lsp ~path:location.Lsp.path ~line:location.Lsp.line
-          ~col:location.Lsp.col ~new_name
+        await
+          (Lsp.rename lsp ~path:location.Lsp.path ~line:location.Lsp.line
+             ~col:location.Lsp.col ~new_name)
       with
       | Error error -> Error (map_lsp_error error)
       | Ok edits -> (
-          match Lsp.apply_edits ~cwd:ctx.Tool.cwd ~fs:ctx.Tool.fs edits with
+          match await (Lsp.apply_edits ~cwd:ctx.Tool.cwd edits) with
           | Error error -> Error (map_lsp_error error)
           | Ok touched ->
               let diagnostics =
                 match touched with
-                | first :: _ -> Lsp.diagnostics lsp ~path:first ~wait:0.5
+                | first :: _ -> await (Lsp.diagnostics lsp ~path:first ~wait:0.5)
                 | [] -> []
               in
               let files =
@@ -299,7 +295,7 @@ let run_rename (ctx : Tool.ctx) input =
                   (List.length touched)
                   (if files = "" then "" else "\n" ^ files)
               in
-              Ok (truncate_output ctx ~diagnostics text)))
+              Ok (Tool.truncate ~diagnostics ctx text)))
 
 let run_restart ctx input =
   let* ({ name } : restart_args) = Tool.decode restart_codec input in
@@ -308,12 +304,12 @@ let run_restart ctx input =
       ~description:"Restart language servers"
   in
   with_lsp ctx (fun lsp ->
-      match Lsp.restart lsp ~name with
+      match await (Lsp.restart lsp ~name) with
       | Error error -> Error (map_lsp_error error)
       | Ok (restarted, failed) ->
           let group values = if values = [] then "none" else String.concat ", " values in
           Ok
-            (truncate_output ctx
+            (Tool.truncate ctx
                (Fmt.str "restarted: %s; failed: %s" (group restarted) (group failed))))
 
 let lsp_diagnostics =

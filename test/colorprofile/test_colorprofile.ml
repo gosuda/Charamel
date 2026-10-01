@@ -1,15 +1,22 @@
 open Charamel_colorprofile
+open Lwt.Infix
+open Lwt.Syntax
+
+let buffer_sink output =
+  Lwt_io.make ~mode:Lwt_io.Output (fun bytes offset length ->
+      let received = Lwt_bytes.to_bytes bytes in
+      Buffer.add_subbytes output received offset length;
+      Lwt.return length)
 
 let sink_output profile chunks =
   let output = Buffer.create 128 in
-  let sink = Eio.Flow.buffer_sink output in
-  let writer = Charamel_colorprofile.Writer.create ~profile sink in
-  List.iter (Charamel_colorprofile.Writer.write writer) chunks;
+  let writer = Charamel_colorprofile.Writer.create ~profile (buffer_sink output) in
+  Lwt_list.iter_s (Charamel_colorprofile.Writer.write writer) chunks >|= fun () ->
   Buffer.contents output
 
 let writer_case name input expected_truecolor expected_ansi256 expected_ansi
     expected_ascii =
-  Alcotest.test_case name `Quick (fun () ->
+  Alcotest_lwt.test_case name `Quick (fun _switch () ->
       let expected profile =
         match profile with
         | Charamel_colorprofile.True_color -> expected_truecolor
@@ -17,26 +24,26 @@ let writer_case name input expected_truecolor expected_ansi256 expected_ansi
         | Charamel_colorprofile.Ansi -> expected_ansi
         | Charamel_colorprofile.Ascii | Charamel_colorprofile.No_tty -> expected_ascii
       in
-      List.iter
-        (fun profile ->
+      let check profile =
+        let* whole = sink_output profile [ input ] in
+        Alcotest.check Alcotest.string (name ^ " whole") (expected profile) whole;
+        let splits =
+          List.init
+            (String.length input + 1)
+            (fun split ->
+              ( String.sub input 0 split,
+                String.sub input split (String.length input - split) ))
+        in
+        let check_split split chunks =
+          let* rendered = sink_output profile [ fst chunks; snd chunks ] in
           Alcotest.check Alcotest.string
-            (name ^ " " ^ "whole")
-            (expected profile)
-            (sink_output profile [ input ]);
-          let chunks =
-            List.init
-              (String.length input + 1)
-              (fun split ->
-                ( String.sub input 0 split,
-                  String.sub input split (String.length input - split) ))
-          in
-          List.iteri
-            (fun split chunks ->
-              Alcotest.check Alcotest.string
-                (name ^ " split " ^ string_of_int split)
-                (expected profile)
-                (sink_output profile [ fst chunks; snd chunks ]))
-            chunks)
+            (name ^ " split " ^ string_of_int split)
+            (expected profile) rendered;
+          Lwt.return_unit
+        in
+        Lwt_list.iteri_s check_split splits
+      in
+      Lwt_list.iter_s check
         [ Charamel_colorprofile.True_color; Ansi256; Ansi; Ascii; No_tty ])
 
 let writers =
@@ -94,7 +101,7 @@ let writers =
 let lookup bindings name = List.assoc_opt name bindings
 
 let detect_case name ~is_tty bindings expected =
-  Alcotest.test_case name `Quick (fun () ->
+  Alcotest_lwt.test_case_sync name `Quick (fun () ->
       Alcotest.check Alcotest.string name expected
         (match Charamel_colorprofile.detect ~is_tty ~env:(lookup bindings) with
         | No_tty -> "no-tty"
@@ -151,4 +158,5 @@ let detect =
       "ansi";
   ]
 
-let () = Alcotest.run "charamel_colorprofile" [ ("writer", writers); ("detect", detect) ]
+let () =
+  Test_support.run_lwt "charamel_colorprofile" [ ("writer", writers); ("detect", detect) ]

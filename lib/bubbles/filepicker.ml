@@ -5,7 +5,6 @@ module Color = Charamel_ansi.Color
 module Position = Charamel_lipgloss.Position
 module Sides = Charamel_lipgloss.Sides
 
-let clamp n lo hi = max lo (min hi n)
 let key_binding ?help names = Key_binding.v ?help names
 
 type keymap = {
@@ -88,7 +87,7 @@ let default_styles =
 type directory_state = { selected : int; min_idx : int; max_idx : int }
 
 type t = {
-  fs : Eio.Fs.dir_ty Eio.Path.t;
+  root : string;
   path : string;
   current_directory : string;
   allowed_types : string list;
@@ -110,12 +109,12 @@ type t = {
   error : string option;
 }
 
-let v ~fs ?(current_directory = ".") ?(allowed_types = []) ?(show_permissions = true)
+let v ~root ?(current_directory = ".") ?(allowed_types = []) ?(show_permissions = true)
     ?(show_size = true) ?(show_hidden = false) ?(dir_allowed = false)
     ?(file_allowed = true) ?(auto_height = true) ?(height = 0) ?(cursor = ">")
     ?(keymap = default_keymap) ?(styles = default_styles) () =
   {
-    fs;
+    root;
     path = "";
     current_directory;
     allowed_types;
@@ -142,6 +141,47 @@ let path_join dir name =
   else if String.ends_with ~suffix:"/" dir then dir ^ name
   else dir ^ "/" ^ name
 
+exception Outside_root
+
+let separators path =
+  (* Windows accepts either separator, so a stored spelling folds to '/' before any
+     lexical check; on POSIX a '\' is an ordinary name character and stays. *)
+  if Sys.win32 then String.map (fun c -> if c = '\\' then '/' else c) path else path
+
+(* Every directory or metadata access passes through [resolve]: the candidate is made
+   absolute, folded lexically — [.] and empties dropped, [..] popped against real
+   components — and compared with the similarly normalized [root]; anything landing
+   outside it is refused, which is the confinement the sandbox directory used to
+   provide. *)
+let normalize path =
+  let flat = separators path in
+  let rec go stack = function
+    | ".." :: rest -> go (match stack with _ :: tl -> tl | [] -> []) rest
+    | ("." | "") :: rest -> go stack rest
+    | part :: rest -> go (part :: stack) rest
+    | [] -> Stdlib.List.rev stack
+  in
+  let parts = go [] (String.split_on_char '/' flat) in
+  let joined = String.concat "/" parts in
+  if String.length flat > 0 && flat.[0] = '/' then "/" ^ joined else joined
+
+let absolute path =
+  if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
+
+let within_root ~root ~path =
+  let base = normalize (absolute root) in
+  let candidate = normalize (absolute path) in
+  String.equal base candidate || String.starts_with ~prefix:(base ^ "/") candidate
+
+let under_root root path =
+  if Filename.is_relative path then Filename.concat root path else path
+
+let resolve root path =
+  if path = "" || path = "." then root
+  else
+    let effective = under_root root path in
+    if within_root ~root ~path:effective then effective else raise Outside_root
+
 let parent_directory path =
   if path = "/" then "/"
   else
@@ -152,24 +192,18 @@ let parent_directory path =
         let parent = String.sub path 0 i in
         if parent = "" then "/" else parent
 
-let io_error path = function
-  | Eio.Fs.Already_exists _ -> Fmt.str "%s: already exists" path
-  | Eio.Fs.Not_found _ -> Fmt.str "%s: not found" path
-  | Eio.Fs.Permission_denied _ -> Fmt.str "%s: permission denied" path
-  | Eio.Fs.File_too_large -> Fmt.str "%s: file too large" path
-  | Eio.Fs.Not_native message -> Fmt.str "%s: %s" path message
+let io_error path message = Fmt.str "%s: %s" path message
 
 let permission_string kind perm =
   let type_char =
     match kind with
-    | `Directory -> 'd'
-    | `Symbolic_link -> 'l'
-    | `Block_device -> 'b'
-    | `Character_special -> 'c'
-    | `Fifo -> 'p'
-    | `Socket -> 's'
-    | `Regular_file -> '-'
-    | `Unknown -> '?'
+    | Unix.S_DIR -> 'd'
+    | Unix.S_LNK -> 'l'
+    | Unix.S_BLK -> 'b'
+    | Unix.S_CHR -> 'c'
+    | Unix.S_FIFO -> 'p'
+    | Unix.S_SOCK -> 's'
+    | Unix.S_REG -> '-'
   in
   let chars = Array.make 10 '-' in
   chars.(0) <- type_char;
@@ -191,30 +225,40 @@ let permission_string kind perm =
     bits;
   Bytes.to_string (Bytes.init 10 (fun i -> chars.(i)))
 
-let entry_of_name fs current_directory (kind, name) =
-  let path = Eio.Path.(fs / path_join current_directory name) in
-  let lstat = Eio.Path.stat ~follow:false path in
-  let is_symlink = kind = `Symbolic_link || lstat.Eio.File.Stat.kind = `Symbolic_link in
-  let target = if is_symlink then Eio.Path.read_link path else "" in
-  let stat = if is_symlink then Eio.Path.stat ~follow:true path else lstat in
-  let is_dir = stat.Eio.File.Stat.kind = `Directory in
+let entry_of_name root current_directory name =
+  let path = resolve root (path_join current_directory name) in
+  let lstat = Unix.lstat path in
+  let is_symlink = lstat.Unix.st_kind = Unix.S_LNK in
+  let target = if is_symlink then Unix.readlink path else "" in
+  (* A link resolved outside [root] is listed by name only: following it for metadata or
+     navigation would make the confinement meaningless. *)
+  let inside =
+    is_symlink
+    && within_root ~root
+         ~path:
+           (if Filename.is_relative target then
+              under_root root (path_join current_directory target)
+            else target)
+  in
+  let stat = if is_symlink && inside then Unix.stat path else lstat in
+  let is_dir = stat.Unix.st_kind = Unix.S_DIR in
   {
     name;
     is_dir;
     is_symlink;
     symlink_target = target;
-    perm = permission_string lstat.Eio.File.Stat.kind lstat.Eio.File.Stat.perm;
-    size = Optint.Int63.to_int lstat.Eio.File.Stat.size;
+    perm = permission_string lstat.Unix.st_kind lstat.Unix.st_perm;
+    size = lstat.Unix.st_size;
   }
 
 let read_directory m path =
   try
-    let raw = Eio.Path.read_dir_entries Eio.Path.(m.fs / path) in
+    let raw = Array.to_list (Sys.readdir (resolve m.root path)) in
     let visible =
       if m.show_hidden then raw
-      else Stdlib.List.filter (fun (_, name) -> name = "" || name.[0] <> '.') raw
+      else Stdlib.List.filter (fun name -> name = "" || name.[0] <> '.') raw
     in
-    let entries = Stdlib.List.map (entry_of_name m.fs path) visible in
+    let entries = Stdlib.List.map (entry_of_name m.root path) visible in
     let entries =
       Stdlib.List.sort
         (fun left right ->
@@ -225,7 +269,10 @@ let read_directory m path =
         entries
     in
     Ok entries
-  with Eio.Io (Eio.Fs.E error, _) -> Error (io_error path error)
+  with
+  | Outside_root -> Error (io_error path "outside the picker root")
+  | Sys_error message -> Error (io_error path message)
+  | Unix.Unix_error (kind, _, _) -> Error (io_error path (Unix.error_message kind))
 
 let read_command m path =
   Cmd.perform (fun () ->
@@ -239,9 +286,9 @@ let normalize_indices m =
   let length = Stdlib.List.length m.entries in
   if length = 0 then { m with selected = 0; min_idx = 0; max_idx = 0 }
   else
-    let selected = clamp m.selected 0 (length - 1) in
+    let selected = Range.clamp 0 (length - 1) m.selected in
     let visible_height = max 1 m.height in
-    let min_idx = clamp m.min_idx 0 (max 0 (length - visible_height)) in
+    let min_idx = Range.clamp 0 (max 0 (length - visible_height)) m.min_idx in
     let max_idx = min (length - 1) (max (bottom_idx m min_idx) selected) in
     let min_idx = if selected < min_idx then selected else min_idx in
     let max_idx = if selected > max_idx then selected else max_idx in
@@ -285,7 +332,7 @@ let move_down m amount =
   let length = Stdlib.List.length m.entries in
   if length = 0 then m
   else
-    let selected = clamp (m.selected + amount) 0 (length - 1) in
+    let selected = Range.clamp 0 (length - 1) (m.selected + amount) in
     let min_idx, max_idx =
       if selected > m.max_idx then
         let min_idx = min selected (max 0 (length - max 1 m.height)) in
@@ -298,7 +345,7 @@ let move_up m amount =
   let length = Stdlib.List.length m.entries in
   if length = 0 then m
   else
-    let selected = clamp (m.selected - amount) 0 (length - 1) in
+    let selected = Range.clamp 0 (length - 1) (m.selected - amount) in
     let min_idx, max_idx =
       if selected < m.min_idx then (selected, min (length - 1) (bottom_idx m selected))
       else (m.min_idx, m.max_idx)
@@ -503,6 +550,16 @@ let highlighted_path m =
 let height m = m.height
 let entries m = m.entries
 let cursor m = m.selected
+
+let selection_cursor m =
+  let first = max 0 m.min_idx in
+  let last = min (Stdlib.List.length m.entries - 1) m.max_idx in
+  if first > last || m.selected < first || m.selected > last then None
+  else
+    Some
+      (Charamel_tea.Cursor.v ~blink:false (m.selected - first)
+         (Charamel_ansi.Text.width m.cursor_character))
+
 let set_allowed_types allowed_types m = { m with allowed_types }
 let set_show_hidden show_hidden m = { m with show_hidden }
 let set_styles styles m = { m with styles }

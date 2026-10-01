@@ -1,4 +1,4 @@
-open Result.Syntax
+open Lwt.Infix
 
 type model_ref = { provider : string; model : string }
 
@@ -192,6 +192,33 @@ let message_jsont =
        ~enc:(fun (value : Charamel_fantasy.Message.t) ->
          value.Charamel_fantasy.Message.parts)
   |> Object.finish
+
+let tool_output_text = function
+  | `Text text -> text
+  | `Error text -> "error: " ^ text
+  | `Media (mime, data) -> Fmt.str "media <%s> (%d bytes)" mime (String.length data)
+
+let part_text = function
+  | Charamel_fantasy.Message.Text text -> text
+  | Charamel_fantasy.Message.Reasoning { text; _ } ->
+      "<reasoning>" ^ text ^ "</reasoning>"
+  | Charamel_fantasy.Message.File { mime; data; name } ->
+      Fmt.str "<file mime=%s name=%s bytes=%d>" mime
+        (Option.value ~default:"" name)
+        (String.length data)
+  | Charamel_fantasy.Message.Tool_call { id; name; input } ->
+      Fmt.str "call %s (%s): %s" id name (Jsonx.display_string input)
+  | Charamel_fantasy.Message.Tool_result { id; name; output } ->
+      Fmt.str "result %s (%s): %s" id name (tool_output_text output)
+
+let role_text = function
+  | Charamel_fantasy.Message.System -> "system"
+  | Charamel_fantasy.Message.User -> "user"
+  | Charamel_fantasy.Message.Assistant -> "assistant"
+  | Charamel_fantasy.Message.Tool -> "tool"
+
+let message_text { Charamel_fantasy.Message.role; parts } =
+  role_text role ^ ": " ^ String.concat "" (List.map part_text parts)
 
 let model_ref_jsont =
   let open Jsont in
@@ -430,14 +457,14 @@ let index_document_jsont =
   |> Object.mem "sessions" (list index_entry_jsont) ~enc:(fun value -> value.sessions)
   |> Object.finish
 
-type store = { fs : Eio.Fs.dir_ty Eio.Path.t; root : string; index_mutex : Eio.Mutex.t }
+type store = { fs_root : string; root : string; index_mutex : Lwt_mutex.t }
 
 type t = {
   store : store;
   path : string;
   mutable header : header;
   mutable events : event array;
-  mutex : Eio.Mutex.t;
+  mutex : Lwt_mutex.t;
 }
 
 type error =
@@ -452,73 +479,86 @@ let pp_error ppf = function
   | `Not_found path -> Fmt.pf ppf "session not found: %s" path
   | `Index message -> Fmt.pf ppf "session index: %s" message
 
-let now_ms clock = int_of_float (Eio.Time.now clock *. 1000.)
-let fs_path fs name = Eio.Path.(fs / name)
+let now_ms clock = int_of_float (Charamel_os.Time.now clock *. 1000.)
+let fs_path fs_root name = Path.under ~root:fs_root name
 let sessions_dir store = Filename.concat store.root "sessions"
 let index_path store = Filename.concat store.root "sessions.json"
 let session_path store id = Filename.concat (sessions_dir store) (id ^ ".jsonl")
-let io_message exn = Fmt.str "%a" Eio.Exn.pp exn
 
-let protect_io target f =
-  try Ok (Eio.Cancel.protect f) with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found target)
-  | Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (target, io_message exn))
-  | Unix.Unix_error (error, fn, arg) ->
-      Error (`Io (target, Fmt.str "%s (%s %s)" (Unix.error_message error) fn arg))
+let write_channel path flags perm contents =
+  Lwt_unix.openfile path flags perm >>= fun fd ->
+  let channel = Lwt_io.of_fd ~mode:Lwt_io.Output fd in
+  Lwt.finalize (fun () -> Lwt_io.write channel contents) (fun () -> Lwt_io.close channel)
 
-let write_append target fs contents =
-  try
-    Eio.Cancel.protect (fun () ->
-        Eio.Path.save ~append:true ~create:(`If_missing 0o600) (fs_path fs target)
-          contents);
-    Ok ()
-  with
-  | Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (target, io_message exn))
-  | Unix.Unix_error (error, fn, arg) ->
-      Error (`Io (target, Fmt.str "%s (%s %s)" (Unix.error_message error) fn arg))
+let write_append target fs_root contents =
+  let file = fs_path fs_root target in
+  Io.trap target (fun () ->
+      write_channel file [ O_WRONLY; O_APPEND; O_CREAT ] 0o600 contents)
 
-let write_exclusive target fs contents =
-  try
-    Eio.Cancel.protect (fun () ->
-        Eio.Path.save ~create:(`Exclusive 0o600) (fs_path fs target) contents);
-    Ok ()
-  with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Already_exists _), _) -> Error `Exists
-  | Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (target, io_message exn))
-  | Unix.Unix_error (error, fn, arg) ->
-      Error (`Io (target, Fmt.str "%s (%s %s)" (Unix.error_message error) fn arg))
+let write_truncate target fs_root contents =
+  let file = fs_path fs_root target in
+  Io.trap target (fun () ->
+      write_channel file [ O_WRONLY; O_CREAT; O_TRUNC ] 0o600 contents)
+
+let write_exclusive target fs_root contents =
+  let file = fs_path fs_root target in
+  Lwt.catch
+    (fun () ->
+      write_channel file [ O_WRONLY; O_CREAT; O_EXCL ] 0o600 contents >>= fun () ->
+      Lwt.return_ok ())
+    (function
+      | Unix.Unix_error (Unix.EEXIST, _, _) -> Lwt.return_error `Exists
+      | (Unix.Unix_error _ | Charamel_os.Fs.E _ | Sys_error _) as exn ->
+          Lwt.return_error (`Io (target, Io.message exn))
+      | exn -> Lwt.fail exn)
+
+let read_file path =
+  Lwt_io.with_file ~mode:Lwt_io.Input path (fun channel -> Lwt_io.read channel)
+
+let remove_file target fs_root =
+  Charamel_os.Fs.unlink (fs_path fs_root target) >>= function
+  | Ok () | Error `Already_exists -> Lwt.return_ok ()
+  | Error `Not_found -> Lwt.return_error (`Not_found target)
+  | Error error -> Lwt.return_error (`Io (target, Io.fs_error error))
+
+let mkdir_private path =
+  Charamel_os.Fs.mkdir_p path >>= function
+  | Ok () -> Lwt_unix.chmod path 0o700
+  | Error error -> Lwt.fail (Charamel_os.Fs.E (error, path))
 
 let ensure_directories store =
-  protect_io store.root (fun () ->
-      Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 (fs_path store.fs store.root);
-      Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 (fs_path store.fs (sessions_dir store)))
+  Io.trap store.root (fun () ->
+      mkdir_private (fs_path store.fs_root store.root) >>= fun () ->
+      mkdir_private (fs_path store.fs_root (sessions_dir store)))
 
 let encode codec value = Jsonx.encode codec value
 let decode codec text = Jsonx.decode codec text
 
 let load_index store =
-  match
-    protect_io (index_path store) (fun () ->
-        Eio.Path.load (fs_path store.fs (index_path store)))
-  with
+  let target = index_path store in
+  Io.trap target (fun () -> read_file (fs_path store.fs_root target)) >>= function
+  | Error (`Not_found _) -> Lwt.return_ok []
+  | Error (`Io (path, message)) ->
+      Lwt.return_error (`Index (Fmt.str "%s: %s" path message))
   | Ok text -> (
       match decode index_document_jsont text with
-      | Ok { sessions } -> Ok sessions
-      | Error message -> Error (`Index (Fmt.str "%s: %s" (index_path store) message)))
-  | Error (`Not_found _) -> Ok []
-  | Error (`Io (path, message)) -> Error (`Index (Fmt.str "%s: %s" path message))
+      | Ok { sessions } -> Lwt.return_ok sessions
+      | Error message -> Lwt.return_error (`Index (Fmt.str "%s: %s" target message)))
 
 let index_json entries = encode index_document_jsont { sessions = entries }
 
 let replace_index store entries =
-  match State_file.replace (fs_path store.fs (index_path store)) (index_json entries) with
-  | Ok () -> Ok ()
-  | Error (`Io (path, message)) -> Error (`Index (Fmt.str "%s: %s" path message))
+  let target = index_path store in
+  State_file.replace (fs_path store.fs_root target) (index_json entries) >>= function
+  | Ok () -> Lwt.return_ok ()
+  | Error (`Io (path, message)) ->
+      Lwt.return_error (`Index (Fmt.str "%s: %s" path message))
 
 let update_index store f =
-  Eio.Mutex.use_rw ~protect:true store.index_mutex (fun () ->
-      let* entries = load_index store in
-      replace_index store (f entries))
+  Lwt_mutex.with_lock store.index_mutex (fun () ->
+      load_index store >>= function
+      | Error _ as failure -> Lwt.return failure
+      | Ok entries -> replace_index store (f entries))
 
 let replace_entry (id : string) (entry : index_entry) (entries : index_entry list) =
   let found = ref false in
@@ -562,54 +602,48 @@ let update_entry (entry : index_entry) event ~updated_ms =
 
 let valid_session_id id = Ulid.is_valid id
 
-let store ~fs ~cwd =
+let store ~fs_root ~cwd =
   let data_root = Charamel_cli.Xdg.data_dir ~app:"crush" in
   let root =
     Filename.concat (Filename.concat data_root "projects") (Config.project_key ~cwd)
   in
-  { fs; root; index_mutex = Eio.Mutex.create () }
+  { fs_root; root; index_mutex = Lwt_mutex.create () }
 
 let root store = store.root
 
+let register store (header : header) =
+  let entry = entry_of_header header in
+  update_index store (fun entries -> replace_entry header.id entry entries)
+
+let make_session store ~path header events =
+  { store; path; header; events = Array.of_list events; mutex = Lwt_mutex.create () }
+
+let rec create_id store ~clock ~random parent title ~cwd ~model remaining =
+  if remaining = 0 then
+    Lwt.return_error (`Io (sessions_dir store, "could not allocate a unique session id"))
+  else
+    let created_ms = now_ms clock in
+    let id = Ulid.v ~now_ms:created_ms ~random in
+    let header = { id; title; parent; created_ms; cwd; model } in
+    let target = session_path store id in
+    write_exclusive target store.fs_root (encode header_jsont header ^ "\n") >>= function
+    | Error `Exists ->
+        create_id store ~clock ~random parent title ~cwd ~model (remaining - 1)
+    | Error (`Io _ as failure) -> Lwt.return (Error failure)
+    | Ok () -> (
+        register store header >>= function
+        | Ok () -> Lwt.return_ok (make_session store ~path:target header [])
+        | Error error ->
+            remove_file target store.fs_root >>= fun _ -> Lwt.return_error error)
+
 let create store ~clock ~random ?parent ?title ~cwd ~model () =
-  match ensure_directories store with
-  | Error (`Not_found path) -> Error (`Io (path, "session directory does not exist"))
-  | Error (`Io (path, message)) -> Error (`Io (path, message))
+  ensure_directories store >>= function
+  | Error (`Not_found path) ->
+      Lwt.return_error (`Io (path, "session directory does not exist"))
+  | Error (`Io _ as failure) -> Lwt.return (Error failure)
   | Ok () ->
-      let created_ms = now_ms clock in
       let title = Option.value ~default:"" title in
-      let rec attempt remaining =
-        if remaining = 0 then
-          Error (`Io (sessions_dir store, "could not allocate a unique session id"))
-        else
-          let id = Ulid.v ~now_ms:created_ms ~random in
-          let header = { id; title; parent; created_ms; cwd; model } in
-          let target = session_path store id in
-          match write_exclusive target store.fs (encode header_jsont header ^ "\n") with
-          | Error `Exists -> attempt (remaining - 1)
-          | Error (`Io (path, message)) -> Error (`Io (path, message))
-          | Ok () ->
-              let entry = entry_of_header header in
-              begin match
-                update_index store (fun entries -> replace_entry id entry entries)
-              with
-              | Ok () ->
-                  Ok
-                    {
-                      store;
-                      path = target;
-                      header;
-                      events = [||];
-                      mutex = Eio.Mutex.create ();
-                    }
-              | Error error ->
-                  ignore
-                    (protect_io target (fun () ->
-                         Eio.Path.unlink ~missing_ok:true (fs_path store.fs target)));
-                  Error error
-              end
-      in
-      attempt 32
+      create_id store ~clock ~random parent title ~cwd ~model 32
 
 let split_lines text =
   let raw = String.split_on_char '\n' text in
@@ -618,115 +652,94 @@ let split_lines text =
 let joined_lines lines = String.concat "\n" lines ^ "\n"
 
 let rewrite_prefix store target lines =
-  protect_io target (fun () ->
-      Eio.Path.save ~create:(`Or_truncate 0o600) (fs_path store.fs target)
-        (joined_lines lines))
+  write_truncate target store.fs_root (joined_lines lines) >>= function
+  | Error (`Not_found path) ->
+      Lwt.return_error (`Io (path, "session disappeared while repairing"))
+  | Error (`Io _ as failure) -> Lwt.return (Error failure)
+  | Ok () -> Lwt.return_ok ()
 
 let apply_index_title store (header : header) =
-  match load_index store with
-  | Error _ -> header
+  load_index store >>= function
+  | Error _ -> Lwt.return header
   | Ok entries -> (
       match
         List.find_opt
           (fun (entry : index_entry) -> String.equal entry.id header.id)
           entries
       with
-      | None -> header
-      | Some entry -> { header with title = entry.title })
+      | None -> Lwt.return header
+      | Some entry -> Lwt.return { header with title = entry.title })
+
+let rec parse_events store target all_lines line_number raw_events = function
+  | [] -> Lwt.return_ok (List.rev raw_events, false)
+  | line :: tail -> (
+      match decode event_jsont line with
+      | Ok event ->
+          parse_events store target all_lines (line_number + 1) (event :: raw_events) tail
+      | Error _ when tail = [] -> (
+          let count = List.length raw_events + 1 in
+          let good_lines = List.filteri (fun index _ -> index < count) all_lines in
+          rewrite_prefix store target good_lines >>= function
+          | Error _ as failure -> Lwt.return failure
+          | Ok () ->
+              Log.warn (fun m ->
+                  m "discarded truncated final session line %s:%d" target line_number);
+              Lwt.return_ok (List.rev raw_events, true))
+      | Error _ -> Lwt.return_error (`Session_corrupt (target, line_number)))
+
+let open_body store target id lines had_newline first rest =
+  match decode header_jsont first with
+  | Error _ -> Lwt.return_error (`Session_corrupt (target, 1))
+  | Ok header when not (String.equal header.id id) ->
+      Lwt.return_error (`Session_corrupt (target, 1))
+  | Ok header -> (
+      let all_lines = first :: rest in
+      parse_events store target all_lines 2 [] rest >>= function
+      | Error _ as failure -> Lwt.return failure
+      | Ok (events, repaired) ->
+          let finish () =
+            apply_index_title store header >>= fun header ->
+            Lwt.return_ok (make_session store ~path:target header events)
+          in
+          if (not had_newline) && not repaired then
+            rewrite_prefix store target lines >>= function
+            | Error _ as failure -> Lwt.return failure
+            | Ok () -> finish ()
+          else finish ())
 
 let open_ store ~id =
-  if not (valid_session_id id) then Error (`Not_found id)
+  if not (valid_session_id id) then Lwt.return_error (`Not_found id)
   else
     let target = session_path store id in
-    match
-      protect_io target (fun () -> Eio.Path.kind ~follow:false (fs_path store.fs target))
-    with
-    | Error (`Not_found _) -> Error (`Not_found target)
-    | Error (`Io (path, message)) -> Error (`Io (path, message))
-    | Ok `Regular_file ->
-        begin match
-          protect_io target (fun () -> Eio.Path.load (fs_path store.fs target))
-        with
-        | Error (`Not_found _) -> Error (`Not_found target)
-        | Error (`Io (path, message)) -> Error (`Io (path, message))
+    let file = fs_path store.fs_root target in
+    Io.trap target (fun () -> Lwt_unix.lstat file) >>= function
+    | Error (`Not_found _) -> Lwt.return_error (`Not_found target)
+    | Error (`Io _ as failure) -> Lwt.return (Error failure)
+    | Ok { Unix.st_kind = Unix.S_REG; _ } -> (
+        Io.trap target (fun () -> read_file file) >>= function
+        | Error (`Not_found _) -> Lwt.return_error (`Not_found target)
+        | Error (`Io _ as failure) -> Lwt.return (Error failure)
         | Ok text -> (
-            let lines, had_newline = split_lines text in
-            match lines with
-            | [] -> Error (`Session_corrupt (target, 1))
-            | first :: rest -> (
-                match decode header_jsont first with
-                | Error _ -> Error (`Session_corrupt (target, 1))
-                | Ok header when not (String.equal header.id id) ->
-                    Error (`Session_corrupt (target, 1))
-                | Ok header ->
-                    let rec parse line_number raw_events = function
-                      | [] -> Ok (List.rev raw_events, false)
-                      | line :: tail -> (
-                          match decode event_jsont line with
-                          | Ok event -> parse (line_number + 1) (event :: raw_events) tail
-                          | Error _ when tail = [] ->
-                              let all_lines = first :: rest in
-                              let count = List.length raw_events + 1 in
-                              let rec take n values =
-                                if n = 0 then []
-                                else
-                                  match values with
-                                  | [] -> []
-                                  | value :: values -> value :: take (n - 1) values
-                              in
-                              let good_lines = take count all_lines in
-                              begin match rewrite_prefix store target good_lines with
-                              | Ok () ->
-                                  Log.warn (fun m ->
-                                      m "discarded truncated final session line %s:%d"
-                                        target line_number);
-                                  Ok (List.rev raw_events, true)
-                              | Error (`Not_found path) ->
-                                  Error
-                                    (`Io (path, "session disappeared while repairing"))
-                              | Error (`Io (path, message)) -> Error (`Io (path, message))
-                              end
-                          | Error _ -> Error (`Session_corrupt (target, line_number)))
-                    in
-                    let* events, repaired = parse 2 [] rest in
-                    if (not had_newline) && not repaired then
-                      match rewrite_prefix store target lines with
-                      | Error (`Not_found path) ->
-                          Error (`Io (path, "session disappeared while normalizing"))
-                      | Error (`Io (path, message)) -> Error (`Io (path, message))
-                      | Ok () ->
-                          Ok
-                            {
-                              store;
-                              path = target;
-                              header = apply_index_title store header;
-                              events = Array.of_list events;
-                              mutex = Eio.Mutex.create ();
-                            }
-                    else
-                      Ok
-                        {
-                          store;
-                          path = target;
-                          header = apply_index_title store header;
-                          events = Array.of_list events;
-                          mutex = Eio.Mutex.create ();
-                        }))
-        end
-    | Ok _ -> Error (`Not_found target)
+            match split_lines text with
+            | [], _ -> Lwt.return_error (`Session_corrupt (target, 1))
+            | first :: rest, had_newline ->
+                open_body store target id (first :: rest) had_newline first rest))
+    | Ok _ -> Lwt.return_error (`Not_found target)
 
 let list store =
-  let* entries = load_index store in
-  Ok
-    (List.stable_sort
-       (fun left right -> compare right.updated_ms left.updated_ms)
-       entries)
+  load_index store >>= function
+  | Error _ as failure -> Lwt.return failure
+  | Ok entries ->
+      Lwt.return_ok
+      @@ List.stable_sort
+           (fun left right -> compare right.updated_ms left.updated_ms)
+           entries
 
 let last store =
-  match list store with
-  | Error error -> Error error
-  | Ok [] -> Error (`Not_found "")
-  | Ok (entry :: _) -> open_ store ~id:entry.id
+  list store >>= function
+  | Error _ as failure -> Lwt.return failure
+  | Ok [] -> Lwt.return_error (`Not_found "")
+  | Ok ((entry : index_entry) :: _) -> open_ store ~id:entry.id
 
 let id session = session.header.id
 let header session = session.header
@@ -734,34 +747,34 @@ let title session = session.header.title
 let events session = Array.copy session.events
 let path session = session.path
 
+let index_entry_for session event updated_ms entries =
+  let current_entry =
+    List.find_opt
+      (fun (entry : index_entry) -> String.equal entry.id session.header.id)
+      entries
+  in
+  let entry =
+    Option.value ~default:(entry_of_header session.header) current_entry |> fun value ->
+    update_entry value event ~updated_ms
+  in
+  replace_entry session.header.id entry entries
+
 let append session ~clock event =
-  Eio.Mutex.use_rw ~protect:true session.mutex (fun () ->
+  Lwt_mutex.with_lock session.mutex (fun () ->
       let line = encode event_jsont event ^ "\n" in
-      match write_append session.path session.store.fs line with
-      | Error (`Io (path, message)) -> Error (`Io (path, message))
-      | Ok () ->
+      write_append session.path session.store.fs_root line >>= function
+      | Error _ as failure -> Lwt.return failure
+      | Ok () -> (
           let updated_ms = now_ms clock in
-          let result =
-            update_index session.store (fun entries ->
-                let current_entry =
-                  List.find_opt
-                    (fun (entry : index_entry) -> String.equal entry.id session.header.id)
-                    entries
-                in
-                let entry =
-                  Option.value ~default:(entry_of_header session.header) current_entry
-                  |> fun value -> update_entry value event ~updated_ms
-                in
-                replace_entry session.header.id entry entries)
-          in
-          begin
-            let* () = result in
-            session.events <- Array.append session.events [| event |];
-            Ok ()
-          end)
+          update_index session.store (index_entry_for session event updated_ms)
+          >>= function
+          | Error _ as failure -> Lwt.return failure
+          | Ok () ->
+              session.events <- Array.append session.events [| event |];
+              Lwt.return_ok ()))
 
 let set_title session ~title =
-  Eio.Mutex.use_rw ~protect:true session.mutex (fun () ->
+  Lwt_mutex.with_lock session.mutex (fun () ->
       let entry_update entries =
         List.map
           (fun (entry : index_entry) ->
@@ -769,16 +782,18 @@ let set_title session ~title =
             else entry)
           entries
       in
-      let* () = update_index session.store entry_update in
-      session.header <- { session.header with title };
-      Ok ())
+      update_index session.store entry_update >>= function
+      | Error _ as failure -> Lwt.return failure
+      | Ok () ->
+          session.header <- { session.header with title };
+          Lwt.return_ok ())
 
 let messages session =
   let events = session.events in
   let latest_summary =
     let found = ref None in
-    Array.iteri
-      (fun _index event ->
+    Array.iter
+      (fun event ->
         match event with
         | Summary { text; through; _ } -> found := Some (text, through)
         | _ -> ())
@@ -823,40 +838,57 @@ let artifacts_dir store ~id =
     invalid_arg "Session.artifacts_dir: invalid session id"
   else Filename.concat store.root (Filename.concat "artifacts" id)
 
+let rec remove_tree path =
+  Charamel_os.Fs.read_dir path >>= function
+  | Error _ -> Lwt.return_unit
+  | Ok names ->
+      Lwt_list.iter_s
+        (fun name ->
+          let child = Filename.concat path name in
+          Lwt_unix.lstat child >>= fun stats ->
+          if stats.Unix.st_kind = Unix.S_DIR then remove_tree child
+          else Charamel_os.Fs.unlink child >|= fun _ -> ())
+        names
+      >>= fun () ->
+      Lwt.catch
+        (fun () -> Lwt_unix.rmdir path)
+        (function
+          | Unix.Unix_error (Unix.ENOENT, _, _) -> Lwt.return_unit | exn -> Lwt.fail exn)
+
+let drop_index_entry store id =
+  Lwt_mutex.with_lock store.index_mutex (fun () ->
+      load_index store >>= function
+      | Error _ as failure -> Lwt.return failure
+      | Ok entries ->
+          let remaining =
+            List.filter
+              (fun (entry : index_entry) -> not (String.equal entry.id id))
+              entries
+          in
+          replace_index store remaining)
+
 let delete store ~id =
-  if not (valid_session_id id) then Error (`Not_found id)
+  if not (valid_session_id id) then Lwt.return_error (`Not_found id)
   else
     let target = session_path store id in
-    match
-      protect_io target (fun () -> Eio.Path.kind ~follow:false (fs_path store.fs target))
-    with
-    | Error (`Not_found _) -> Error (`Not_found target)
-    | Error (`Io (path, message)) -> Error (`Io (path, message))
-    | Ok `Regular_file ->
-        Eio.Mutex.use_rw ~protect:true store.index_mutex (fun () ->
-            let* entries = load_index store in
-            let remaining =
-              List.filter
-                (fun (entry : index_entry) -> not (String.equal entry.id id))
-                entries
-            in
-            begin
-              let* () = replace_index store remaining in
-              begin match
-                protect_io target (fun () ->
-                    Eio.Path.unlink ~missing_ok:false (fs_path store.fs target))
-              with
-              | Error (`Not_found _) -> Error (`Not_found target)
-              | Error (`Io (path, message)) -> Error (`Io (path, message))
-              | Ok () ->
-                  let directory = artifacts_dir store ~id in
-                  begin match
-                    protect_io directory (fun () ->
-                        Eio.Path.rmtree ~missing_ok:true (fs_path store.fs directory))
-                  with
-                  | Ok () | Error (`Not_found _) -> Ok ()
-                  | Error (`Io (path, message)) -> Error (`Io (path, message))
-                  end
-              end
-            end)
-    | Ok _ -> Error (`Not_found target)
+    let file = fs_path store.fs_root target in
+    Io.trap target (fun () -> Lwt_unix.lstat file) >>= function
+    | Error (`Not_found _) -> Lwt.return_error (`Not_found target)
+    | Error (`Io _ as failure) -> Lwt.return (Error failure)
+    | Ok { Unix.st_kind = Unix.S_REG; _ } -> (
+        drop_index_entry store id >>= function
+        | Error _ as failure -> Lwt.return failure
+        | Ok () -> (
+            remove_file target store.fs_root >>= function
+            | Error (`Not_found _) -> Lwt.return_error (`Not_found target)
+            | Error (`Io _ as failure) -> Lwt.return (Error failure)
+            | Ok () -> (
+                let artifacts = artifacts_dir store ~id in
+                Lwt.catch
+                  (fun () ->
+                    remove_tree (fs_path store.fs_root artifacts) >|= fun () -> Ok ())
+                  (fun exn -> Lwt.return_error (`Io (artifacts, Io.message exn)))
+                >>= function
+                | Ok () -> Lwt.return_ok ()
+                | Error _ as failure -> Lwt.return failure)))
+    | Ok _ -> Lwt.return_error (`Not_found target)

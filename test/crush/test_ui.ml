@@ -1,13 +1,3 @@
-let contains ~needle haystack =
-  let n = String.length needle in
-  let limit = String.length haystack - n in
-  let rec loop index =
-    if index > limit then false
-    else if String.sub haystack index n = needle then true
-    else loop (index + 1)
-  in
-  n = 0 || (limit >= 0 && loop 0)
-
 module Ui = Crush_ui
 module Agent = Crush_core.Agent
 module Permission = Crush_core.Permission
@@ -19,58 +9,47 @@ module Rules = Crush_core.Rules
 module Skills = Crush_core.Skills
 module Mcp = Crush_core.Mcp
 module Models = Crush_core.Models
+open Lwt_direct
+
+let clock = Charamel_os.Time.lwt
 
 let fifo_is_lossless () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
   let bridge = Ui.Bridge.create ~capacity:1 () in
   let first = Agent.Text_delta "one" in
   let second = Agent.Reasoning_delta "two" in
-  let done_, resolver = Eio.Promise.create () in
-  Eio.Fiber.fork ~sw (fun () ->
-      Ui.Bridge.push bridge first;
-      Ui.Bridge.push bridge second;
-      Eio.Promise.resolve resolver ())
-  |> ignore;
-  let got_first = Ui.Bridge.take_event bridge in
-  let got_second = Ui.Bridge.take_event bridge in
-  Eio.Promise.await done_;
+  let pusher =
+    Lwt.bind (Ui.Bridge.push bridge first) (fun () -> Ui.Bridge.push bridge second)
+  in
+  let got_first = await (Ui.Bridge.take_event bridge) in
+  let got_second = await (Ui.Bridge.take_event bridge) in
+  await pusher;
   Alcotest.(check bool)
     "first event preserved" true
     (match got_first with Some (Agent.Text_delta "one") -> true | _ -> false);
   Alcotest.(check bool)
     "second event preserved" true
     (match got_second with Some (Agent.Reasoning_delta "two") -> true | _ -> false);
-  Ui.Bridge.close bridge;
-  ignore env
+  Ui.Bridge.close bridge
 
 let close_wakes_question () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
   let bridge = Ui.Bridge.create () in
-  let finished, resolver = Eio.Promise.create () in
-  Eio.Fiber.fork ~sw (fun () ->
-      let request =
-        {
-          Crush_core.Tool.header = "question";
-          text = "continue?";
-          options = [];
-          multi = false;
-          free_text = true;
-        }
-      in
-      let result = Ui.Bridge.ask bridge [ request ] in
-      Eio.Promise.resolve resolver result)
-  |> ignore;
-  Eio.Time.sleep env#clock 0.;
+  let request =
+    {
+      Crush_core.Tool.header = "question";
+      text = "continue?";
+      options = [];
+      multi = false;
+      free_text = true;
+    }
+  in
+  let asker = Ui.Bridge.ask bridge [ request ] in
+  Lwt_direct.yield ();
   Ui.Bridge.close bridge;
-  match Eio.Promise.await finished with
+  match await asker with
   | Error `Aborted -> ()
   | _ -> Alcotest.fail "close did not abort question"
 
 let permission_round_trip () =
-  Eio_main.run @@ fun _env ->
-  Eio.Switch.run @@ fun sw ->
   let bridge = Ui.Bridge.create () in
   let request =
     {
@@ -82,17 +61,12 @@ let permission_round_trip () =
       read_only = false;
     }
   in
-  let finished, resolver = Eio.Promise.create () in
-  Eio.Fiber.fork ~sw (fun () ->
-      Eio.Promise.resolve resolver (Ui.Bridge.ask_permission bridge request))
-  |> ignore;
-  let pending = Ui.Bridge.take_permission bridge in
+  let asker = Ui.Bridge.ask_permission bridge request in
+  let pending = await (Ui.Bridge.take_permission bridge) in
   (match pending with
   | None -> Alcotest.fail "permission request was not delivered"
   | Some pending -> Ui.Bridge.answer_permission bridge pending Permission.Allow_once);
-  Alcotest.(check bool)
-    "allow once delivered" true
-    (Eio.Promise.await finished = Permission.Allow_once);
+  Alcotest.(check bool) "allow once delivered" true (await asker = Permission.Allow_once);
   Ui.Bridge.close bridge
 
 let make_model () =
@@ -111,166 +85,181 @@ let make_model () =
   }
 
 let with_ui_backend f =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let root =
-    Filename.concat
-      (Filename.get_temp_dir_name ())
-      ("crush-ui-" ^ string_of_int (Unix.getpid ()))
-  in
-  (try Unix.mkdir root 0o700 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-  let previous_data_home = Sys.getenv_opt "XDG_DATA_HOME" in
-  Unix.putenv "XDG_DATA_HOME" root;
-  let model = make_model () in
-  let config =
-    let provider : Config.provider =
-      {
-        kind = Config.Anthropic;
-        base_url = Some "http://127.0.0.1:1";
-        api_key = Some "fixture";
-        headers = [];
-        models = [ model ];
-      }
-    in
-    let selected : Config.selected_model =
-      {
-        provider = "anthropic";
-        model = model.Charamel_fantasy.Model.id;
-        reasoning = None;
-        max_tokens = None;
-      }
-    in
-    {
-      Config.default with
-      providers = [ ("anthropic", provider) ];
-      models = { large = Some selected; small = Some selected };
-    }
-  in
-  let auth_path = Eio.Path.(env#fs / root / "auth.json") in
-  let auth =
-    match Auth.create ~path:auth_path ~clock:env#clock () with
-    | Error error -> Alcotest.failf "auth setup: %a" Auth.pp_error error
-    | Ok resource -> (
-        match Auth.set resource ~provider:"anthropic" (Auth.Api_key "fixture") with
-        | Ok () -> resource
-        | Error error -> Alcotest.failf "auth credential setup: %a" Auth.pp_error error)
-  in
-  let store = Session.store ~fs:env#fs ~cwd:root in
-  let session =
-    match
-      Session.create store ~clock:env#clock
-        ~random:(fun n -> String.make n '\000')
-        ~title:"UI fixture" ~cwd:root
-        ~model:{ Session.provider = "anthropic"; model = model.Charamel_fantasy.Model.id }
-        ()
-    with
-    | Ok value -> value
-    | Error error -> Alcotest.failf "session setup: %a" Session.pp_error error
-  in
-  let permission =
-    Permission.create ~config:config.Config.permissions ~yolo:true ~cwd:root
-      ~plans_dir:(Filename.concat root ".crush/plans")
-      ()
-  in
-  let hooks =
-    Hooks.create ~config:[] ~proc_mgr:env#process_mgr ~clock:env#clock ~cwd:root
-  in
-  let rules = Rules.load ~fs:env#fs ~cwd:root ~config in
-  let skills = Skills.load ~fs:env#fs ~config ~home:root in
-  let mcp =
-    Mcp.create ~sw ~proc_mgr:env#process_mgr ~net:env#net ~clock:env#clock ~cwd:root
-      ~config
-  in
-  let bridge = Ui.Bridge.create () in
-  let deps : Agent.deps =
-    {
-      sw;
-      clock = env#clock;
-      fs = env#fs;
-      net = env#net;
-      proc_mgr = env#process_mgr;
-      random = (fun n -> String.make n '\000');
-      env = Sys.getenv_opt;
-      cwd = root;
-      config;
-      auth;
-      store;
-      permission;
-      hooks;
-      lsp = None;
-      mcp;
-      skills;
-      rules;
-      log_path = Filename.concat root "crush.log";
-      interactive = true;
-      ask = Some (Ui.Bridge.ask bridge);
-      events = Ui.Bridge.push bridge;
-    }
-  in
-  let resolved role =
-    match Models.resolve ~fs:env#fs config ~auth ~env:Sys.getenv_opt ~role with
-    | Ok value -> value
-    | Error error -> Alcotest.failf "model setup: %a" Models.pp_error error
-  in
-  let agent =
-    match
-      Agent.create deps ~session ~large:(resolved `Large) ~small:(resolved `Small)
-    with
-    | Ok value -> value
-    | Error error -> Alcotest.failf "agent setup: %a" Agent.pp_error error
-  in
-  let plan = ref false in
-  let backend : Ui.backend =
-    {
-      agent = ref agent;
-      events = bridge;
-      clock = env#clock;
-      env;
-      form_env = Charamel_huh.Form.Env.v ~fs:env#fs ~temp_dir:env#fs ~editor:[ "true" ];
-      project = root;
-      session_id = (fun () -> Session.id session);
-      new_session = (fun () -> Ok agent);
-      sessions = (fun () -> []);
-      resume_session = (fun _ -> Ok agent);
-      history = (fun () -> []);
-      models =
+  Test_tools_test_support.with_scratch (fun root ->
+      let previous_data_home = Sys.getenv_opt "XDG_DATA_HOME" in
+      Unix.putenv "XDG_DATA_HOME" root;
+      Fun.protect
         (fun () ->
-          [
-            {
-              Ui.id = model.Charamel_fantasy.Model.id;
-              provider = model.Charamel_fantasy.Model.provider;
-              context_window = model.Charamel_fantasy.Model.context_window;
-              max_tokens = model.Charamel_fantasy.Model.default_max_tokens;
-              can_reason = model.Charamel_fantasy.Model.can_reason;
-              supports_attachments = model.Charamel_fantasy.Model.supports_attachments;
-            };
-          ]);
-      select_model = (fun _ -> Ok ());
-      login = (fun _ _ -> Ok ());
-      logout = (fun _ -> Ok ());
-      load_attachment = (fun _ -> Error "no attachment");
-      yolo = (fun () -> false);
-      approve_session = (fun () -> Ok ());
-      set_plan_mode =
-        (fun value ->
-          plan := value;
-          Agent.set_plan_mode agent value;
-          Ok ());
-      plan_mode = (fun () -> !plan);
-      lsp_status = (fun () -> "off");
-      mcp_status = (fun () -> "off");
-      dark = (fun () -> true);
-      quit = (fun () -> ());
-    }
-  in
-  Fun.protect
-    (fun () -> f env sw backend bridge)
-    ~finally:(fun () ->
-      Ui.Bridge.close bridge;
-      (match previous_data_home with
-      | Some value -> Unix.putenv "XDG_DATA_HOME" value
-      | None -> Unix.putenv "XDG_DATA_HOME" "");
-      Eio.Path.rmtree ~missing_ok:true Eio.Path.(env#fs / root))
+          await
+          @@ Lwt_switch.with_switch (fun sw ->
+              Lwt_direct.spawn (fun () ->
+                  let model = make_model () in
+                  let config =
+                    let provider : Config.provider =
+                      {
+                        kind = Config.Anthropic;
+                        base_url = Some "http://127.0.0.1:1";
+                        api_key = Some "fixture";
+                        headers = [];
+                        models = [ model ];
+                      }
+                    in
+                    let selected : Config.selected_model =
+                      {
+                        provider = "anthropic";
+                        model = model.Charamel_fantasy.Model.id;
+                        reasoning = None;
+                        max_tokens = None;
+                      }
+                    in
+                    {
+                      Config.default with
+                      providers = [ ("anthropic", provider) ];
+                      models = { large = Some selected; small = Some selected };
+                    }
+                  in
+                  let auth_path = Filename.concat root "auth.json" in
+                  let auth =
+                    match await (Auth.create ~path:auth_path ~clock ()) with
+                    | Error error -> Alcotest.failf "auth setup: %a" Auth.pp_error error
+                    | Ok resource -> (
+                        match
+                          await
+                          @@ Auth.set resource ~provider:"anthropic"
+                               (Auth.Api_key "fixture")
+                        with
+                        | Ok () -> resource
+                        | Error error ->
+                            Alcotest.failf "auth credential setup: %a" Auth.pp_error error
+                        )
+                  in
+                  let store = Session.store ~fs_root:root ~cwd:root in
+                  let session =
+                    match
+                      await
+                      @@ Session.create store ~clock
+                           ~random:(fun n -> String.make n '\000')
+                           ~title:"UI fixture" ~cwd:root
+                           ~model:
+                             {
+                               Session.provider = "anthropic";
+                               model = model.Charamel_fantasy.Model.id;
+                             }
+                           ()
+                    with
+                    | Ok value -> value
+                    | Error error ->
+                        Alcotest.failf "session setup: %a" Session.pp_error error
+                  in
+                  let permission =
+                    Permission.create ~config:config.Config.permissions ~yolo:true
+                      ~cwd:root
+                      ~plans_dir:(Filename.concat root ".crush/plans")
+                      ()
+                  in
+                  let hooks = Hooks.create ~config:[] ~cwd:root in
+                  let rules = await (Rules.load ~fs_root:root ~cwd:root ~config) in
+                  let skills = await (Skills.load ~fs_root:root ~config ~home:root) in
+                  let mcp = await (Mcp.create ~cwd:root ~config) in
+                  let bridge = Ui.Bridge.create () in
+                  let deps : Agent.deps =
+                    {
+                      sw;
+                      clock;
+                      fs_root = root;
+                      random = (fun n -> String.make n '\000');
+                      env = Sys.getenv_opt;
+                      cwd = root;
+                      config;
+                      auth;
+                      store;
+                      permission;
+                      hooks;
+                      lsp = None;
+                      mcp;
+                      skills;
+                      rules;
+                      log_path = Filename.concat root "crush.log";
+                      interactive = true;
+                      ask = Some (fun questions -> await (Ui.Bridge.ask bridge questions));
+                      events = Ui.Bridge.push bridge;
+                    }
+                  in
+                  let resolved role =
+                    match
+                      await
+                      @@ Models.resolve ~fs_root:root config ~auth ~env:Sys.getenv_opt
+                           ~role
+                    with
+                    | Ok value -> value
+                    | Error error ->
+                        Alcotest.failf "model setup: %a" Models.pp_error error
+                  in
+                  let agent =
+                    match
+                      await
+                      @@ Agent.create deps ~session ~large:(resolved `Large)
+                           ~small:(resolved `Small)
+                    with
+                    | Ok value -> value
+                    | Error error -> Alcotest.failf "agent setup: %a" Agent.pp_error error
+                  in
+                  let plan = ref false in
+                  let backend : Ui.backend =
+                    {
+                      agent = ref agent;
+                      events = bridge;
+                      clock;
+                      form_env =
+                        Charamel_huh.Form.Env.v ~fs_root:root ~temp_dir:root
+                          ~editor:(Some [ "true" ]) ~clock;
+                      project = root;
+                      session_id = (fun () -> Session.id session);
+                      new_session = (fun () -> Ok agent);
+                      sessions = (fun () -> []);
+                      resume_session = (fun _ -> Ok agent);
+                      history = (fun () -> []);
+                      models =
+                        (fun () ->
+                          [
+                            {
+                              Ui.id = model.Charamel_fantasy.Model.id;
+                              provider = model.Charamel_fantasy.Model.provider;
+                              context_window = model.Charamel_fantasy.Model.context_window;
+                              max_tokens = model.Charamel_fantasy.Model.default_max_tokens;
+                              can_reason = model.Charamel_fantasy.Model.can_reason;
+                              supports_attachments =
+                                model.Charamel_fantasy.Model.supports_attachments;
+                            };
+                          ]);
+                      select_model = (fun _ -> Ok ());
+                      login = (fun _ _ -> Ok ());
+                      logout = (fun _ -> Ok ());
+                      load_attachment = (fun _ -> Error "no attachment");
+                      yolo = (fun () -> false);
+                      approve_session = (fun () -> Ok ());
+                      set_plan_mode =
+                        (fun value ->
+                          plan := value;
+                          (* The policy flip is synchronous inside [set_plan_mode]; only
+                             the session note is a promise. [Ui.run_with] callbacks must
+                             not suspend the step loop. *)
+                          Lwt.async (fun () -> Agent.set_plan_mode agent value);
+                          Ok ());
+                      plan_mode = (fun () -> !plan);
+                      lsp_status = (fun () -> "off");
+                      mcp_status = (fun () -> "off");
+                      dark = (fun () -> true);
+                      quit = (fun () -> ());
+                    }
+                  in
+                  Fun.protect
+                    (fun () -> f backend bridge)
+                    ~finally:(fun () -> Ui.Bridge.close bridge))))
+        ~finally:(fun () ->
+          match previous_data_home with
+          | Some value -> Unix.putenv "XDG_DATA_HOME" value
+          | None -> Unix.putenv "XDG_DATA_HOME" ""))
 
 let ui_key name =
   match Charamel_tea.Key.of_string name with
@@ -278,7 +267,7 @@ let ui_key name =
   | Error (`Msg message) -> Alcotest.fail message
 
 let serialized_dialogs () =
-  with_ui_backend (fun env sw backend bridge ->
+  with_ui_backend (fun backend bridge ->
       let question =
         {
           Crush_core.Tool.header = "question";
@@ -298,16 +287,9 @@ let serialized_dialogs () =
           read_only = false;
         }
       in
-      let question_done, question_resolver = Eio.Promise.create () in
-      let permission_done, permission_resolver = Eio.Promise.create () in
-      Eio.Fiber.fork ~sw (fun () ->
-          Eio.Promise.resolve question_resolver (Ui.Bridge.ask bridge [ question ]))
-      |> ignore;
-      Eio.Fiber.fork ~sw (fun () ->
-          Eio.Promise.resolve permission_resolver
-            (Ui.Bridge.ask_permission bridge permission))
-      |> ignore;
-      Eio.Time.sleep env#clock 0.;
+      let question_asker = Ui.Bridge.ask bridge [ question ] in
+      let permission_asker = Ui.Bridge.ask_permission bridge permission in
+      Lwt_direct.yield ();
       ignore
         (Ui.run_with backend
            ~events:
@@ -322,7 +304,7 @@ let serialized_dialogs () =
                `Key (ui_key "ctrl+c");
              ]
            ~size:(24, 80));
-      (match Eio.Promise.await question_done with
+      (match await question_asker with
       | Ok [ (answer : Crush_core.Tool.answer) ] ->
           Alcotest.(check (option string))
             "question answer" (Some "") answer.Crush_core.Tool.text
@@ -331,10 +313,10 @@ let serialized_dialogs () =
       | Error `Not_interactive -> Alcotest.fail "question dialog was not interactive");
       Alcotest.(check bool)
         "permission dialog is resolved after question" true
-        (Eio.Promise.await permission_done = Permission.Allow_once))
+        (await permission_asker = Permission.Allow_once))
 
 let scripted_runtime_event () =
-  with_ui_backend (fun _env _sw backend bridge ->
+  with_ui_backend (fun backend bridge ->
       let calls = ref 0 in
       let emitted = ref false in
       let backend =
@@ -345,7 +327,10 @@ let scripted_runtime_event () =
               incr calls;
               if !calls = 2 && not !emitted then begin
                 emitted := true;
-                Ui.Bridge.push bridge (Agent.Text_delta "runtime-produced reply")
+                (* [Ui.run_with] drives the reactor synchronously; never await inside
+                   its callbacks. The bridge has headroom, so the push completes. *)
+                Lwt.async (fun () ->
+                    Ui.Bridge.push bridge (Agent.Text_delta "runtime-produced reply"))
               end;
               []);
         }
@@ -360,19 +345,19 @@ let scripted_runtime_event () =
       in
       Alcotest.(check bool)
         "runtime event reaches chat frame" true
-        (contains ~needle:"runtime-produced reply" frame))
+        (Test_support.contains ~needle:"runtime-produced reply" ~haystack:frame))
 
 let scripted_ui_stream () =
-  with_ui_backend (fun _env _sw backend bridge ->
-      Ui.Bridge.push bridge (Agent.Text_delta "streamed reply");
-      Ui.Bridge.push bridge (Agent.Turn_done `Stop);
+  with_ui_backend (fun backend bridge ->
+      await (Ui.Bridge.push bridge (Agent.Text_delta "streamed reply"));
+      await (Ui.Bridge.push bridge (Agent.Turn_done `Stop));
       let ctrl_c = ui_key "ctrl+c" in
       let _model, frame =
         Ui.run_with backend ~events:[ `Key ctrl_c; `Key ctrl_c ] ~size:(24, 80)
       in
       Alcotest.(check bool)
         "streamed text reaches chat frame" true
-        (contains ~needle:"streamed reply" frame))
+        (Test_support.contains ~needle:"streamed reply" ~haystack:frame))
 
 let scripted_counter () =
   let model, _frame =
@@ -391,14 +376,181 @@ let scripted_counter () =
   in
   Alcotest.(check int) "scripted model update" 1 model
 
+let chat_lines count =
+  String.concat "\n" (List.init count (fun index -> Fmt.str "alpha-%02d" (index + 1)))
+
+let scripted_wheel_scroll () =
+  let wheel_up = "\027[<64;40;5M" in
+  let wheel_down = "\027[<65;40;5M" in
+  let ctrl_c = ui_key "ctrl+c" in
+  let quit = [ `Wait 0.; `Key ctrl_c; `Key ctrl_c ] in
+  let downs = List.init 20 (fun _ -> `Text wheel_down) in
+  let ups = List.init 40 (fun _ -> `Text wheel_up) in
+  with_ui_backend (fun backend bridge ->
+      await (Ui.Bridge.push bridge (Agent.Text_delta (chat_lines 60)));
+      let _model, frame = Ui.run_with backend ~events:(downs @ quit) ~size:(24, 80) in
+      Alcotest.(check bool)
+        "wheel down reveals the chat tail" true
+        (Test_support.contains ~needle:"alpha-60" ~haystack:frame);
+      Alcotest.(check bool)
+        "wheel down hides the chat head" false
+        (Test_support.contains ~needle:"alpha-01" ~haystack:frame));
+  with_ui_backend (fun backend bridge ->
+      await (Ui.Bridge.push bridge (Agent.Text_delta (chat_lines 60)));
+      let _model, frame =
+        Ui.run_with backend ~events:(downs @ ups @ quit) ~size:(24, 80)
+      in
+      Alcotest.(check bool)
+        "wheel up returns to the chat head" true
+        (Test_support.contains ~needle:"alpha-01" ~haystack:frame);
+      Alcotest.(check bool)
+        "wheel up hides the chat tail" false
+        (Test_support.contains ~needle:"alpha-60" ~haystack:frame))
+
+(* The application cursor is the last cursor-position request of a paint, so the final
+   CSI row ; col H sequence in the captured bytes is where the terminal parks. *)
+let last_cursor_position bytes =
+  let length = String.length bytes in
+  let digit value = Char.code value >= 48 && Char.code value <= 57 in
+  let rec number index value =
+    if index < length && digit bytes.[index] then
+      number (index + 1) ((value * 10) + (Char.code bytes.[index] - 48))
+    else (index, value)
+  in
+  let rec csi index result =
+    match String.index_from_opt bytes index '\027' with
+    | None -> result
+    | Some start ->
+        let next = start + 1 in
+        let found =
+          if next + 1 < length && bytes.[next] = '[' && digit bytes.[next + 1] then begin
+            let after_row, row = number (next + 1) 0 in
+            if after_row < length && bytes.[after_row] = ';' then begin
+              let after_col, col = number (after_row + 1) 0 in
+              if after_col < length && bytes.[after_col] = 'H' then Some (row, col)
+              else None
+            end
+            else None
+          end
+          else None
+        in
+        csi next (if Option.is_some found then found else result)
+  in
+  csi 0 None
+
+let editor_cursor_reaches_the_terminal () =
+  with_ui_backend (fun backend _bridge ->
+      let buffer = Buffer.create 4096 in
+      let channel =
+        Lwt_io.make ~mode:Lwt_io.output (fun source offset length ->
+            Buffer.add_subbytes buffer (Lwt_bytes.to_bytes source) offset length;
+            Lwt.return length)
+      in
+      let _model, frame =
+        Charamel_tea.Test.run (Ui.app backend) ~output:channel
+          ~events:[ `Wait 0.; `Key (ui_key "ctrl+c"); `Key (ui_key "ctrl+c") ]
+          ~size:(24, 80)
+      in
+      (match Lwt.poll (Lwt_io.flush channel) with
+      | Some () -> ()
+      | None -> Alcotest.fail "the captured output did not flush synchronously");
+      let editor_line =
+        List.length
+          (List.take_while
+             (fun line -> not (String.starts_with ~prefix:"\xe2\x80\xba " line))
+             (String.split_on_char '\n' frame))
+      in
+      Alcotest.(check (option int))
+        "the cursor sits on the editor line"
+        (Some (editor_line + 1))
+        (Option.map fst (last_cursor_position (Buffer.contents buffer))))
+
+let index_after bytes ~needle from =
+  let length = String.length needle in
+  let limit = String.length bytes - length in
+  let rec search index =
+    if index > limit then None
+    else if String.sub bytes index length = needle then Some index
+    else search (index + 1)
+  in
+  search from
+
+let paint_cursors bytes =
+  let marker = "\027[?2026l" in
+  let rec chunk start acc =
+    match index_after bytes ~needle:marker start with
+    | None -> List.rev acc
+    | Some stop ->
+        let paint = String.sub bytes start (stop - start) in
+        chunk (stop + String.length marker) (last_cursor_position paint :: acc)
+  in
+  chunk 0 []
+
+let dialog_cursor_replaces_the_editor_cursor () =
+  let question =
+    {
+      Crush_core.Tool.header = "question";
+      text = "continue?";
+      options = [];
+      multi = false;
+      free_text = true;
+    }
+  in
+  let quit = [ `Key (ui_key "ctrl+c"); `Wait 0.1; `Key (ui_key "ctrl+c") ] in
+  let capture dialog events paints =
+    with_ui_backend (fun backend bridge ->
+        let buffer = Buffer.create 8192 in
+        let channel =
+          Lwt_io.make ~mode:Lwt_io.output (fun source offset length ->
+              Buffer.add_subbytes buffer (Lwt_bytes.to_bytes source) offset length;
+              Lwt.return length)
+        in
+        if dialog then ignore (Ui.Bridge.ask bridge [ question ]);
+        Lwt_direct.yield ();
+        ignore
+          (Charamel_tea.Test.run (Ui.app backend) ~output:channel ~events ~size:(24, 80));
+        await (Lwt_io.flush channel);
+        paints := List.filter_map Fun.id (paint_cursors (Buffer.contents buffer)))
+  in
+  let editor_line = 19 and editor_caret = 7 and field_prompt = 2 in
+  let plain = ref [] in
+  capture false (`Wait 0. :: `Wait 0.1 :: quit) plain;
+  Alcotest.(check bool)
+    "every paint parks the caret on the editor line" true
+    (List.for_all
+       (fun (row, column) -> row = editor_line && column = editor_caret)
+       !plain);
+  let dialog = ref [] in
+  capture true
+    (`Wait 0. :: `Wait 0.1 :: `Text "qx" :: `Wait 0.1 :: `Key (ui_key "escape") :: quit)
+    dialog;
+  Alcotest.(check bool)
+    "the dialog field takes the caret below the editor line" true
+    (List.exists
+       (fun (row, column) ->
+         row > editor_line && column = field_prompt + String.length "qx" + 1)
+       !dialog);
+  Alcotest.(check bool)
+    "the editor caret returns when the dialog closes" true
+    (List.exists
+       (fun (row, column) -> row = editor_line && column = editor_caret)
+       !dialog)
+
 let cases =
   [
-    Alcotest.test_case "bounded bridge preserves order" `Quick fifo_is_lossless;
-    Alcotest.test_case "bridge close wakes question" `Quick close_wakes_question;
-    Alcotest.test_case "permission dialog bridge round trip" `Quick permission_round_trip;
-    Alcotest.test_case "serialized question and permission dialogs" `Quick
+    Test_tools_test_support.case "bounded bridge preserves order" `Quick fifo_is_lossless;
+    Test_tools_test_support.case "bridge close wakes question" `Quick close_wakes_question;
+    Test_tools_test_support.case "permission dialog bridge round trip" `Quick
+      permission_round_trip;
+    Test_tools_test_support.case "serialized question and permission dialogs" `Quick
       serialized_dialogs;
-    Alcotest.test_case "scripted UI stream" `Quick scripted_ui_stream;
-    Alcotest.test_case "scripted runtime event" `Quick scripted_runtime_event;
-    Alcotest.test_case "scripted Tea model update" `Quick scripted_counter;
+    Test_tools_test_support.case "scripted UI stream" `Quick scripted_ui_stream;
+    Test_tools_test_support.case "dialog cursor replaces the editor cursor" `Quick
+      dialog_cursor_replaces_the_editor_cursor;
+    Test_tools_test_support.case "scripted runtime event" `Quick scripted_runtime_event;
+    Test_tools_test_support.case "scripted wheel scroll reaches the viewport" `Quick
+      scripted_wheel_scroll;
+    Test_tools_test_support.case "editor cursor reaches the terminal" `Quick
+      editor_cursor_reaches_the_terminal;
+    Test_tools_test_support.case "scripted Tea model update" `Quick scripted_counter;
   ]

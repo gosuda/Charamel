@@ -1,3 +1,5 @@
+module Env = Charamel_cli.Env
+
 type options = {
   command : string list;
   show_output : bool;
@@ -21,8 +23,6 @@ type child_result = {
   timed_out : bool;
 }
 
-let style ?foreground () = Gum_style.defaults ?foreground ()
-
 let default_options =
   {
     command = [];
@@ -35,8 +35,8 @@ let default_options =
     align = "left";
     timeout = None;
     padding = "0 0";
-    spinner_style = style ~foreground:"212" ();
-    title_style = style ();
+    spinner_style = Gum_style.defaults ~foreground:"212" ();
+    title_style = Gum_style.defaults ();
   }
 
 let child_abort : (unit -> unit) ref = ref (fun () -> ())
@@ -44,60 +44,64 @@ let child_abort : (unit -> unit) ref = ref (fun () -> ())
 type capture_file = { path : string; fd : Unix.file_descr }
 type captures = { stdout : capture_file; stderr : capture_file; output : capture_file }
 
-let run_system ~label f = Eio_unix.run_in_systhread ~label f
-
 let create_capture suffix =
-  let path =
-    run_system ~label:"gum spin capture create" (fun () ->
-        Filename.temp_file "gum-spin-" suffix)
-  in
-  try
-    let fd =
-      run_system ~label:"gum spin capture open" (fun () ->
-          Unix.openfile path [ Unix.O_WRONLY; Unix.O_TRUNC; Unix.O_CLOEXEC ] 0o600)
-    in
-    { path; fd }
-  with exn ->
-    Eio.Cancel.protect (fun () ->
-        try run_system ~label:"gum spin capture cleanup" (fun () -> Unix.unlink path)
-        with Unix.Unix_error _ -> ());
-    raise exn
+  Lwt.bind
+    (Lwt_preemptive.detach (fun () -> Filename.temp_file "gum-spin-" suffix) ())
+    (fun path ->
+      Lwt.catch
+        (fun () ->
+          Lwt.map
+            (fun fd -> { path; fd })
+            (Lwt_preemptive.detach
+               (fun () ->
+                 Unix.openfile path [ Unix.O_WRONLY; Unix.O_TRUNC; Unix.O_CLOEXEC ] 0o600)
+               ()))
+        (fun exn ->
+          Lwt.bind
+            (Lwt.catch
+               (fun () -> Lwt_preemptive.detach (fun () -> Unix.unlink path) ())
+               (function Unix.Unix_error _ -> Lwt.return_unit | exn -> Lwt.fail exn))
+            (fun () -> Lwt.fail exn)))
 
 let close_capture capture =
-  try run_system ~label:"gum spin capture close" (fun () -> Unix.close capture.fd)
-  with Unix.Unix_error _ -> ()
+  Lwt.catch
+    (fun () -> Lwt_preemptive.detach (fun () -> Unix.close capture.fd) ())
+    (function Unix.Unix_error _ -> Lwt.return_unit | exn -> Lwt.fail exn)
 
 let remove_capture capture =
-  close_capture capture;
-  try run_system ~label:"gum spin capture cleanup" (fun () -> Unix.unlink capture.path)
-  with Unix.Unix_error _ -> ()
+  Lwt.bind (close_capture capture) (fun () ->
+      Lwt.catch
+        (fun () -> Lwt_preemptive.detach (fun () -> Unix.unlink capture.path) ())
+        (function Unix.Unix_error _ -> Lwt.return_unit | exn -> Lwt.fail exn))
 
 let create_captures () =
   let created = ref [] in
   let make suffix =
-    let capture = create_capture suffix in
-    created := capture :: !created;
-    capture
+    Lwt.map
+      (fun capture ->
+        created := capture :: !created;
+        capture)
+      (create_capture suffix)
   in
-  try
-    let stdout = make ".stdout" in
-    let stderr = make ".stderr" in
-    let output = make ".output" in
-    { stdout; stderr; output }
-  with exn ->
-    Eio.Cancel.protect (fun () -> List.iter remove_capture !created);
-    raise exn
+  Lwt.catch
+    (fun () ->
+      Lwt.bind (make ".stdout") (fun stdout ->
+          Lwt.bind (make ".stderr") (fun stderr ->
+              Lwt.map (fun output -> { stdout; stderr; output }) (make ".output"))))
+    (fun exn ->
+      Lwt.bind (Lwt_list.iter_s remove_capture !created) (fun () -> Lwt.fail exn))
 
 let close_captures captures =
-  List.iter close_capture [ captures.stdout; captures.stderr; captures.output ]
+  Lwt_list.iter_s close_capture [ captures.stdout; captures.stderr; captures.output ]
 
 let remove_captures captures =
-  Eio.Cancel.protect (fun () ->
-      List.iter remove_capture [ captures.stdout; captures.stderr; captures.output ])
+  Lwt_list.iter_s remove_capture [ captures.stdout; captures.stderr; captures.output ]
 
 let write_capture capture text =
-  if text <> "" then
-    run_system ~label:"gum spin capture write" (fun () ->
+  if text = "" then Lwt.return_unit
+  else
+    Lwt_preemptive.detach
+      (fun () ->
         let length = String.length text in
         let rec loop offset =
           if offset < length then
@@ -109,9 +113,11 @@ let write_capture capture text =
             with Unix.Unix_error (Unix.EINTR, _, _) -> loop offset
         in
         loop 0)
+      ()
 
 let read_capture capture =
-  run_system ~label:"gum spin capture read" (fun () ->
+  Lwt_preemptive.detach
+    (fun () ->
       let fd = Unix.openfile capture.path [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0 in
       Fun.protect
         ~finally:(fun () -> try Unix.close fd with Unix.Unix_error _ -> ())
@@ -126,249 +132,245 @@ let read_capture capture =
                 loop ()
           in
           loop ()))
-
-let status_code = function `Exited code -> max 0 code | `Signaled _ -> 1
-
-let process_error_message = function
-  | Eio.Process.Executable_not_found path -> Fmt.str "executable not found: %s" path
-  | Eio.Process.Child_error status ->
-      Fmt.str "child error: %a" Eio.Process.pp_status status
-  | Eio.Process.Argument_list_too_long -> "argument list too long"
-  | Eio.Process.Permission_denied path -> Fmt.str "permission denied: %s" path
-  | Eio.Process.Executable_format_error path -> Fmt.str "executable format error: %s" path
-
-let wait_with_timeout env ~timeout process =
-  match timeout with
-  | None -> `Status (Eio.Process.await process)
-  | Some seconds ->
-      Eio.Fiber.first
-        (fun () -> `Status (Eio.Process.await process))
-        (fun () ->
-          Eio.Time.sleep (Eio.Stdenv.clock env) seconds;
-          `Timed_out)
+    ()
 
 let finish_captured captures ~status ~timed_out =
-  close_captures captures;
-  let stdout = read_capture captures.stdout in
-  let stderr = read_capture captures.stderr in
-  let output = read_capture captures.output in
-  Ok
-    {
-      status = (if timed_out then 124 else status_code status);
-      stdout;
-      stderr;
-      output;
-      timed_out;
-    }
+  Lwt.bind (close_captures captures) (fun () ->
+      Lwt.bind (read_capture captures.stdout) (fun stdout ->
+          Lwt.bind (read_capture captures.stderr) (fun stderr ->
+              Lwt.map
+                (fun output ->
+                  Ok
+                    {
+                      status = (if timed_out then 124 else status);
+                      stdout;
+                      stderr;
+                      output;
+                      timed_out;
+                    })
+                (read_capture captures.output))))
 
-(* A Unix PTY master reports EIO after its slave closes. Every successful read
-   is committed to both capture files before this terminal EOF is accepted. *)
-let drain source ~destination ~combined ~mutex ~pty =
-  let chunk = Cstruct.create 65536 in
+let drain_channel channel ~destination ~combined ~mutex =
   let rec loop () =
-    let count = Eio.Flow.single_read source chunk in
-    let text = Cstruct.to_string (Cstruct.sub chunk 0 count) in
-    Eio.Mutex.use_rw ~protect:true mutex (fun () ->
-        write_capture destination text;
-        write_capture combined text);
-    loop ()
+    Lwt.bind (Lwt_io.read ~count:65536 channel) (function
+      | "" -> Lwt.return_unit
+      | text ->
+          Lwt.bind
+            (Lwt_mutex.with_lock mutex (fun () ->
+                 Lwt.bind (write_capture destination text) (fun () ->
+                     write_capture combined text)))
+            loop)
   in
-  try loop () with
-  | End_of_file -> ()
-  | Eio.Io (Eio.Exn.X (Eio_unix.Unix_error (Unix.EIO, _, _)), _) when pty -> ()
+  loop ()
 
-let run_direct_child env ~command ~timeout =
-  let previous_abort = !child_abort in
-  Fun.protect
-    ~finally:(fun () -> child_abort := previous_abort)
-    (fun () ->
-      try
-        Eio.Switch.run @@ fun sw ->
-        let process =
-          Eio.Process.spawn ~sw (Eio.Stdenv.process_mgr env) ~stdin:env#stdin
-            ~stdout:env#stdout ~stderr:env#stderr command
-        in
-        (child_abort := fun () -> Eio.Process.signal process Sys.sigint);
-        let timed_out = ref false in
-        let status =
-          match wait_with_timeout env ~timeout process with
-          | `Status status -> status
-          | `Timed_out ->
-              timed_out := true;
-              Eio.Process.signal process Sys.sigterm;
-              Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
-              Eio.Process.signal process Sys.sigkill;
-              Eio.Process.await process
-        in
-        Ok
-          {
-            status = (if !timed_out then 124 else status_code status);
-            stdout = "";
-            stderr = "";
-            output = "";
-            timed_out = !timed_out;
-          }
-      with
-      | Eio.Io (Eio.Process.E error, _) ->
-          Error (Fmt.str "unable to run action: %s" (process_error_message error))
-      | Eio.Io _ -> Error "unable to run action: process I/O"
-      | Unix.Unix_error (error, _, _) ->
-          Error (Fmt.str "unable to run action: %s" (Unix.error_message error)))
+(* Charamel_os.Pty.read folds the master's end-of-input signal — an EIO on POSIX once the
+   child's slave closes — into an empty read. Every successful chunk is committed to both
+   capture files before that terminal signal is accepted. *)
+let drain_pty pty ~destination ~combined ~mutex =
+  let rec loop () =
+    Lwt.bind (Charamel_os.Pty.read pty 65536) (function
+      | Ok "" | Error _ -> Lwt.return_unit
+      | Ok text ->
+          Lwt.bind
+            (Lwt_mutex.with_lock mutex (fun () ->
+                 Lwt.bind (write_capture destination text) (fun () ->
+                     write_capture combined text)))
+            loop)
+  in
+  loop ()
 
-let run_pty_child env ~command ~timeout =
+let wait_status ~timeout process =
+  let finished =
+    Lwt.map (fun status -> (status, false)) (Charamel_os.Process.await process)
+  in
+  match timeout with
+  | None -> finished
+  | Some seconds ->
+      let arrived = Lwt.map (fun result -> Some result) finished in
+      let elapsed = Lwt.map (fun () -> None) (Lwt_unix.sleep seconds) in
+      Lwt.bind
+        (Lwt.choose [ arrived; elapsed ])
+        (function
+          | Some result -> Lwt.return result
+          | None ->
+              Charamel_os.Process.terminate process;
+              Lwt.bind (Lwt_unix.sleep 0.1) (fun () ->
+                  Charamel_os.Process.kill_tree process;
+                  Lwt.map
+                    (fun status -> (status, true))
+                    (Charamel_os.Process.await process)))
+
+let run_protected thunk =
+  Lwt.catch thunk (function
+    | Unix.Unix_error (error, _, _) ->
+        Lwt.return (Error (Fmt.str "unable to run action: %s" (Unix.error_message error)))
+    | Invalid_argument message ->
+        Lwt.return (Error (Fmt.str "unable to run action: %s" message))
+    | exn -> Lwt.fail exn)
+
+let with_child_abort action =
   let previous_abort = !child_abort in
-  Fun.protect
-    ~finally:(fun () -> child_abort := previous_abort)
-    (fun () ->
-      try
-        let captures = create_captures () in
-        Fun.protect
-          ~finally:(fun () -> remove_captures captures)
+  Lwt.finalize action (fun () ->
+      child_abort := previous_abort;
+      Lwt.return_unit)
+
+let with_child_guard action = with_child_abort (fun () -> run_protected action)
+
+let with_pty ~rows ~cols f =
+  Lwt.bind (Charamel_os.Pty.create ~rows ~cols ()) (function
+    | Error (`Error message) ->
+        Lwt.return (Error (Fmt.str "unable to run action: %s" message))
+    | Error `Unsupported ->
+        Lwt.return (Error "unable to run action: PTY is unsupported on this platform")
+    | Ok pty ->
+        Lwt.finalize
+          (fun () -> f pty)
           (fun () ->
-            Eio.Switch.run @@ fun sw ->
-            let stdout_pty = Eio_unix.Pty.open_pty ~sw () in
-            let stderr_pty = Eio_unix.Pty.open_pty ~sw () in
-            let window_size =
-              try Eio_unix.Pty.get_window_size (Eio_unix.Resource.fd env#stdout)
-              with Unix.Unix_error _ ->
-                { Eio_unix.Pty.rows = 24; cols = 80; xpixel = 0; ypixel = 0 }
-            in
-            Eio_unix.Pty.set_window_size (Eio_unix.Pty.pty stdout_pty) window_size;
-            Eio_unix.Pty.set_window_size (Eio_unix.Pty.pty stderr_pty) window_size;
-            let stdin_fd = Eio_unix.Resource.fd env#stdin in
-            let command =
-              [ "/bin/sh"; "-c"; "exec 2>&3 3>&- 0<&4 4<&-; exec \"$@\""; "gum-spin" ]
-              @ command
-            in
-            let process =
-              Eio_unix.Process.spawn_unix ~sw (Eio.Stdenv.process_mgr env)
-                ~login_tty:(Eio_unix.Pty.tty stdout_pty)
-                ~fds:
-                  [
-                    (3, Eio_unix.Pty.tty stderr_pty, `Blocking);
-                    (4, stdin_fd, `Preserve_blocking);
-                  ]
-                command
-            in
-            Eio_unix.Fd.close (Eio_unix.Pty.tty stdout_pty);
-            Eio_unix.Fd.close (Eio_unix.Pty.tty stderr_pty);
-            (child_abort := fun () -> Eio.Process.signal process Sys.sigint);
-            let mutex = Eio.Mutex.create () in
-            let status = ref None in
-            let timed_out = ref false in
-            Eio.Fiber.all
-              [
-                (fun () ->
-                  drain
-                    (Eio_unix.Pty.source stdout_pty)
-                    ~destination:captures.stdout ~combined:captures.output ~mutex
-                    ~pty:true);
-                (fun () ->
-                  drain
-                    (Eio_unix.Pty.source stderr_pty)
-                    ~destination:captures.stderr ~combined:captures.output ~mutex
-                    ~pty:true);
-                (fun () ->
-                  match wait_with_timeout env ~timeout process with
-                  | `Status value -> status := Some value
-                  | `Timed_out ->
-                      timed_out := true;
-                      Eio.Process.signal process Sys.sigterm;
-                      Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
-                      Eio.Process.signal process Sys.sigkill;
-                      status := Some (Eio.Process.await process));
-              ];
-            let status = Option.value !status ~default:(`Exited 1) in
-            finish_captured captures ~status ~timed_out:!timed_out)
-      with
-      | Eio.Io (Eio.Process.E error, _) ->
-          Error (Fmt.str "unable to run action: %s" (process_error_message error))
-      | Eio.Io _ -> Error "unable to run action: process I/O"
-      | Unix.Unix_error (error, _, _) ->
-          Error (Fmt.str "unable to run action: %s" (Unix.error_message error)))
+            Charamel_os.Pty.close pty;
+            Lwt.return_unit))
 
-let run_pipe_child env ~command ~timeout =
-  let previous_abort = !child_abort in
-  Fun.protect
-    ~finally:(fun () -> child_abort := previous_abort)
+let run_direct_child ~command ~timeout =
+  with_child_guard (fun () ->
+      let process = Charamel_os.Process.spawn ~stdin:`Inherit command in
+      (child_abort := fun () -> Charamel_os.Process.terminate process);
+      Lwt.map
+        (fun (status, timed_out) ->
+          Ok
+            {
+              status = (if timed_out then 124 else status);
+              stdout = "";
+              stderr = "";
+              output = "";
+              timed_out;
+            })
+        (wait_status ~timeout process))
+
+let run_with_channels captures ~timeout process =
+  let mutex = Lwt_mutex.create () in
+  let status = ref None in
+  Lwt.bind
+    (Lwt.join
+       [
+         drain_channel
+           (Charamel_os.Process.stdout_r process)
+           ~destination:captures.stdout ~combined:captures.output ~mutex;
+         drain_channel
+           (Charamel_os.Process.stderr_r process)
+           ~destination:captures.stderr ~combined:captures.output ~mutex;
+         Lwt.map (fun result -> status := Some result) (wait_status ~timeout process);
+       ])
     (fun () ->
-      try
-        let captures = create_captures () in
-        Fun.protect
-          ~finally:(fun () -> remove_captures captures)
-          (fun () ->
-            Eio.Switch.run @@ fun sw ->
-            let process_mgr = Eio.Stdenv.process_mgr env in
-            let stdout_source, stdout_sink = Eio.Process.pipe ~sw process_mgr in
-            let stderr_source, stderr_sink = Eio.Process.pipe ~sw process_mgr in
-            let process =
-              Eio.Process.spawn ~sw process_mgr ~stdin:env#stdin ~stdout:stdout_sink
-                ~stderr:stderr_sink command
-            in
-            Eio.Flow.close stdout_sink;
-            Eio.Flow.close stderr_sink;
-            (child_abort := fun () -> Eio.Process.signal process Sys.sigint);
-            let mutex = Eio.Mutex.create () in
-            let status = ref None in
-            let timed_out = ref false in
-            Eio.Fiber.all
-              [
-                (fun () ->
-                  drain stdout_source ~destination:captures.stdout
-                    ~combined:captures.output ~mutex ~pty:false);
-                (fun () ->
-                  drain stderr_source ~destination:captures.stderr
-                    ~combined:captures.output ~mutex ~pty:false);
-                (fun () ->
-                  match wait_with_timeout env ~timeout process with
-                  | `Status value -> status := Some value
-                  | `Timed_out ->
-                      timed_out := true;
-                      Eio.Process.signal process Sys.sigterm;
-                      Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
-                      Eio.Process.signal process Sys.sigkill;
-                      status := Some (Eio.Process.await process));
-              ];
-            let status = Option.value !status ~default:(`Exited 1) in
-            finish_captured captures ~status ~timed_out:!timed_out)
-      with
-      | Eio.Io (Eio.Process.E error, _) ->
-          Error (Fmt.str "unable to run action: %s" (process_error_message error))
-      | Eio.Io _ -> Error "unable to run action: process I/O"
-      | Unix.Unix_error (error, _, _) ->
-          Error (Fmt.str "unable to run action: %s" (Unix.error_message error)))
+      let status, timed_out = Option.value !status ~default:(1, false) in
+      finish_captured captures ~status ~timed_out)
+
+let with_captured_child action =
+  with_child_abort (fun () ->
+      Lwt.bind (create_captures ()) (fun captures ->
+          Lwt.finalize
+            (fun () -> run_protected (fun () -> action captures))
+            (fun () -> remove_captures captures)))
+
+let run_pipe_child ~command ~timeout =
+  with_captured_child (fun captures ->
+      let process =
+        Charamel_os.Process.spawn ~stdin:`Inherit ~stdout:`Pipe ~stderr:`Pipe command
+      in
+      (child_abort := fun () -> Charamel_os.Process.terminate process);
+      run_with_channels captures ~timeout process)
+
+let run_with_ptys ?stdin_text captures ~command ~timeout stdout_pty stderr_pty =
+  let wrapped_command =
+    [
+      "/bin/sh";
+      "-c";
+      "exec 1>\"$1\" 2>\"$2\"; shift 2; exec \"$@\"";
+      "gum-spin";
+      Charamel_os.Pty.slave_path stdout_pty;
+      Charamel_os.Pty.slave_path stderr_pty;
+    ]
+    @ command
+  in
+  (* A caller that supplies text feeds a real stdin pipe, exactly as an interactive run
+     inherits the terminal: the child's [read] sees the bytes and then end-of-file. *)
+  let process =
+    Charamel_os.Process.spawn
+      ~stdin:(match stdin_text with Some _ -> `Pipe | None -> `Inherit)
+      wrapped_command
+  in
+  (child_abort := fun () -> Charamel_os.Process.terminate process);
+  let feed_stdin =
+    match stdin_text with
+    | None -> Lwt.return_unit
+    | Some text ->
+        let input = Charamel_os.Process.stdin_w process in
+        Lwt.bind (Lwt_io.write input text) (fun () ->
+            Lwt.bind (Lwt_io.flush input) (fun () -> Lwt_io.close input))
+  in
+  let mutex = Lwt_mutex.create () in
+  let status = ref None in
+  Lwt.bind
+    (Lwt.join
+       [
+         feed_stdin;
+         drain_pty stdout_pty ~destination:captures.stdout ~combined:captures.output
+           ~mutex;
+         drain_pty stderr_pty ~destination:captures.stderr ~combined:captures.output
+           ~mutex;
+         Lwt.map (fun result -> status := Some result) (wait_status ~timeout process);
+       ])
+    (fun () ->
+      let status, timed_out = Option.value !status ~default:(1, false) in
+      finish_captured captures ~status ~timed_out)
+
+let spawn_pty_pair ?rows ?cols ?stdin_text captures ~command ~timeout =
+  let default_rows, default_cols =
+    match Charamel_os.Tty.size_stdout () with Some size -> size | None -> (24, 80)
+  in
+  let rows = Option.value rows ~default:default_rows in
+  let cols = Option.value cols ~default:default_cols in
+  with_pty ~rows ~cols (fun stdout_pty ->
+      with_pty ~rows ~cols (fun stderr_pty ->
+          run_with_ptys ?stdin_text captures ~command ~timeout stdout_pty stderr_pty))
+
+let run_pty_child ~command ~timeout =
+  with_captured_child (fun captures -> spawn_pty_pair captures ~command ~timeout)
+
+(* [run_child] takes the two-PTY path only when the real standard output is a terminal,
+   which a piped [dune runtest] never is. This entry point drives that path directly,
+   with the geometry and the stdin text a caller controls. *)
+let run_pty_pair ?rows ?cols ?stdin_text ~command ~timeout () =
+  with_captured_child (fun captures ->
+      spawn_pty_pair ?rows ?cols ?stdin_text captures ~command ~timeout)
 
 let run_child ?(capture = true) env ~command ~timeout =
   match command with
-  | [] -> Error "empty command"
-  | _ when not capture -> run_direct_child env ~command ~timeout
-  | _ when Gum_io.stdout_is_tty env -> run_pty_child env ~command ~timeout
-  | _ -> run_pipe_child env ~command ~timeout
+  | [] -> Lwt.return (Error "empty command")
+  | _ when not capture -> run_direct_child ~command ~timeout
+  | _ when Gum_io.stdout_is_tty env -> run_pty_child ~command ~timeout
+  | _ -> run_pipe_child ~command ~timeout
 
-let write flow text = if text <> "" then Eio.Flow.copy_string text flow
+let write channel text = if text = "" then Lwt.return_unit else Lwt_io.write channel text
 
-let route_output (env : Eio_unix.Stdenv.base) (options : options) (result : child_result)
-    =
+let route_output (env : Charamel_cli.Env.t) (options : options) (result : child_result) =
   let stdout_tty = Gum_io.stdout_is_tty env in
   let explicit =
     options.show_output || options.show_error || options.show_stdout
     || options.show_stderr
   in
   if result.status = 0 then
-    begin if options.show_output || (options.show_stdout && options.show_stderr) then
-      write env#stdout result.output
-    else if options.show_stdout then write env#stdout result.stdout
-    else if options.show_stderr then write env#stdout result.stderr
-    else if (not explicit) && not stdout_tty then begin
-      write env#stdout result.stdout;
-      write env#stderr result.stderr
-    end
-    end
-  else if options.show_error then write env#stdout result.output
-  else if (not explicit) && not stdout_tty then begin
-    write env#stdout result.stdout;
-    write env#stderr result.stderr
-  end
+    if options.show_output || (options.show_stdout && options.show_stderr) then
+      write env.Env.stdout result.output
+    else if options.show_stdout then write env.Env.stdout result.stdout
+    else if options.show_stderr then write env.Env.stdout result.stderr
+    else if (not explicit) && not stdout_tty then
+      Lwt.bind (write env.Env.stdout result.stdout) (fun () ->
+          write env.Env.stderr result.stderr)
+    else Lwt.return_unit
+  else if options.show_error then write env.Env.stdout result.output
+  else if (not explicit) && not stdout_tty then
+    Lwt.bind (write env.Env.stdout result.stdout) (fun () ->
+        write env.Env.stderr result.stderr)
+  else Lwt.return_unit
 
 type msg =
   | Tick of Charamel_bubbles.Spinner.msg
@@ -382,14 +384,12 @@ type model = {
   align : string;
 }
 
-let key_name key = Charamel_tea.Key.to_string key
-
 let spinner_kind value =
   Option.value
     (Charamel_bubbles.Spinner.kind_of_string value)
     ~default:Charamel_bubbles.Spinner.Dot
 
-let make_app (env : Eio_unix.Stdenv.base) (options : options) padding ~capture =
+let make_app (env : Charamel_cli.Env.t) (options : options) padding ~capture =
   let spinner =
     Charamel_bubbles.Spinner.v
       ~kind:(spinner_kind options.spinner)
@@ -402,14 +402,15 @@ let make_app (env : Eio_unix.Stdenv.base) (options : options) padding ~capture =
   in
   let initial = { spinner; result = None; title; align = options.align } in
   let start =
-    Charamel_tea.Cmd.perform (fun () ->
-        Finished
-          (run_child ~capture env ~command:options.command ~timeout:options.timeout))
+    Charamel_tea.Cmd.await
+      (Lwt.map
+         (fun result -> Finished result)
+         (run_child ~capture env ~command:options.command ~timeout:options.timeout))
   in
   let update message model =
     match message with
     | Finished result -> ({ model with result = Some result }, Charamel_tea.Cmd.quit)
-    | Key key when String.equal (key_name key) "ctrl+c" ->
+    | Key key when Gum_flag.is_abort key ->
         !child_abort ();
         (model, Charamel_tea.Cmd.interrupt)
     | Key _ -> (model, Charamel_tea.Cmd.none)
@@ -456,26 +457,26 @@ let run env (options : options) =
     run_child ~capture env ~command:options.command ~timeout:options.timeout
   in
   let result =
-    if Gum_io.stderr_is_tty env then begin
+    if Gum_io.stderr_is_tty env then
       let app = make_app env options padding ~capture in
-      try
-        let model =
-          Gum_run.run env app ~finished:(fun model ->
-              match model.result with Some _ -> Gum_run.Submitted | None -> Gum_run.Quit)
-        in
-        Option.value model.result ~default:(Error "unable to run action")
-      with Gum_io.No_tty -> run_direct ()
-    end
-    else begin
-      write env#stderr (options.title ^ "\n");
-      run_direct ()
-    end
+      Lwt.catch
+        (fun () ->
+          Lwt.map
+            (fun model ->
+              Option.value model.result ~default:(Error "unable to run action"))
+            (Gum_run.run env app ~finished:(fun model ->
+                 match model.result with
+                 | Some _ -> Gum_run.Submitted
+                 | None -> Gum_run.Quit)))
+        (function Gum_io.No_tty -> run_direct () | exn -> Lwt.fail exn)
+    else Lwt.bind (write env.Env.stderr (options.title ^ "\n")) (fun () -> run_direct ())
   in
-  match result with
-  | Error message -> Charamel_cli.error message
-  | Ok result ->
-      route_output env options result;
-      if result.timed_out then Charamel_cli.exit 124 else Charamel_cli.exit result.status
+  Lwt.bind result (function
+    | Error message -> Charamel_cli.error message
+    | Ok result ->
+        Lwt.bind (route_output env options result) (fun () ->
+            if result.timed_out then Charamel_cli.exit 124
+            else Charamel_cli.exit result.status))
 
 let options command show_output show_error show_stdout show_stderr spinner title align
     timeout padding spinner_style title_style =
@@ -558,18 +559,9 @@ let cmd env =
     Gum_flag.seconds ~cmd:"spin" ~doc:"Terminate after this duration." "timeout"
   in
   let padding =
-    let parse value =
-      match Gum_flag.parse_padding value with
-      | Ok _ -> Ok value
-      | Error (`Msg message) -> Error (`Msg message)
-    in
-    let padding_conv =
-      Arg.conv (parse, fun formatter _ -> Stdlib.Format.pp_print_string formatter "")
-    in
-    Arg.(
-      value
-        (opt padding_conv "0 0"
-           (info [ "padding" ] ~env:(Gum_flag.env ~cmd:"spin" "padding") ~doc:"Padding.")))
+    Gum_flag.validated_padding_term ~doc:"Padding."
+      ~pp:(fun formatter _ -> Stdlib.Format.pp_print_string formatter "")
+      ~cmd:"spin" ()
   in
   let spinner_style =
     Gum_style.term ~cmd:"spin" ~prefix:"spinner" ~defaults:default_options.spinner_style

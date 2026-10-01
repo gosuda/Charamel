@@ -1,3 +1,4 @@
+open Lwt_direct
 module Artifact = Crush_core.Artifact
 module Config = Crush_core.Config
 module Hooks = Crush_core.Hooks
@@ -33,35 +34,35 @@ let job_value id =
 
 let job_kill_value id = Jsont.Json.object' [ json_field "job_id" (Jsont.Json.string id) ]
 
-let contains text part =
-  let text_length = String.length text and part_length = String.length part in
-  let rec at index =
-    if index + part_length > text_length then false
-    else if String.sub text index part_length = part then true
-    else at (index + 1)
-  in
-  part_length = 0 || at 0
+(* Same shell-compatibility layer as the jobs tests. *)
+let emit text = if Sys.win32 then "(<nul set /p x=" ^ text ^ ")" else "printf " ^ text
 
-let make_ctx env sw =
-  let cwd = "/tmp" in
+let both_streams =
+  if Sys.win32 then "(<nul set /p x=out)&(<nul set /p x=err 1>&2)"
+  else "printf out; printf err >&2"
+
+let long_sleep seconds =
+  if Sys.win32 then "ping -n " ^ string_of_int (seconds + 1) ^ " 127.0.0.1 >nul"
+  else "sleep " ^ string_of_int seconds
+
+let make_ctx sw =
+  let open Lwt.Syntax in
+  let clock = Charamel_os.Time.lwt in
+  let cwd = Filename.get_temp_dir_name () in
   let config = Config.default in
   let permission =
     Permission.create ~config:config.Config.permissions ~yolo:true ~cwd
-      ~plans_dir:"/tmp/.crush/plans" ()
+      ~plans_dir:(Filename.concat cwd ".crush/plans")
+      ()
   in
-  let hooks = Hooks.create ~config:[] ~proc_mgr:env#process_mgr ~clock:env#clock ~cwd in
-  let mcp =
-    Mcp.create ~sw ~proc_mgr:env#process_mgr ~net:env#net ~clock:env#clock ~cwd ~config
-  in
-  let artifacts = Artifact.create ~fs:env#fs ~dir:"/tmp/crush-shell-test-artifacts" in
-  let jobs = Jobs.create ~sw ~proc_mgr:env#process_mgr ~clock:env#clock ~artifacts in
-  let skills = Skills.load ~fs:env#fs ~config ~home:"/tmp" in
+  let hooks = Hooks.create ~config:[] ~cwd in
+  let* mcp = Mcp.create ~cwd ~config in
+  let artifacts = Artifact.create ~fs_root:"/" ~dir:"tmp/crush-shell-test-artifacts" in
+  let jobs = Jobs.create ~sw ~artifacts in
+  let+ skills = Skills.load ~fs_root:"/" ~config ~home:cwd in
   {
-    Tool.sw;
-    clock = env#clock;
-    fs = env#fs;
-    net = env#net;
-    proc_mgr = env#process_mgr;
+    Tool.clock;
+    fs_root = "/";
     random = (fun length -> String.make length '\000');
     env = Sys.getenv_opt;
     cwd;
@@ -76,7 +77,7 @@ let make_ctx env sw =
     jobs;
     todos = Todos.create ();
     skills;
-    log_path = "/tmp/crush-shell-test.log";
+    log_path = Filename.concat cwd "crush-shell-test.log";
     interactive = false;
     is_subagent = false;
     ask = None;
@@ -85,8 +86,10 @@ let make_ctx env sw =
   }
 
 let with_ctx f =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw -> f env (make_ctx env sw)
+  let open Lwt.Syntax in
+  Lwt_switch.with_switch (fun sw ->
+      let* ctx = make_ctx sw in
+      Lwt_direct.spawn (fun () -> f ctx))
 
 let output_or_fail = function
   | Ok output -> output
@@ -110,30 +113,36 @@ let test_classifier () =
     (Tools_shell.is_read_only "FLAG=value ls")
 
 let test_foreground_capture () =
-  with_ctx @@ fun _env ctx ->
-  let input =
-    bash_value ~command:"printf out; printf err >&2" ~description:"capture both streams"
-      ()
-  in
+  await @@ with_ctx
+  @@ fun ctx ->
+  let input = bash_value ~command:both_streams ~description:"capture both streams" () in
   let output = output_or_fail (Tools_shell.bash.Tool.run ctx input) in
-  Alcotest.(check bool) "stdout is captured" true (contains output.Tool.content "out");
-  Alcotest.(check bool) "stderr is captured" true (contains output.Tool.content "err");
+  Alcotest.(check bool)
+    "stdout is captured" true
+    (Test_support.contains ~needle:"out" ~haystack:output.Tool.content);
+  Alcotest.(check bool)
+    "stderr is captured" true
+    (Test_support.contains ~needle:"err" ~haystack:output.Tool.content);
   Alcotest.(check bool) "successful process is not an error" false output.Tool.is_error
 
 let test_timeout () =
-  with_ctx @@ fun _env ctx ->
-  let input = bash_value ~timeout_s:1 ~command:"sleep 5" ~description:"deadline" () in
+  await @@ with_ctx
+  @@ fun ctx ->
+  let input =
+    bash_value ~timeout_s:1 ~command:(long_sleep 5) ~description:"deadline" ()
+  in
   match Tools_shell.bash.Tool.run ctx input with
   | Error (`Timeout seconds) -> Alcotest.(check (float 1e-9)) "deadline" 1. seconds
   | Error error -> Alcotest.failf "unexpected timeout result: %a" Tool.pp_error error
   | Ok _ -> Alcotest.fail "sleep exceeded its deadline"
 
 let test_background_lifecycle () =
-  with_ctx @@ fun _env ctx ->
+  await @@ with_ctx
+  @@ fun ctx ->
   let started =
     output_or_fail
       (Tools_shell.bash.Tool.run ctx
-         (bash_value ~timeout_s:5 ~run_in_background:true ~command:"printf background"
+         (bash_value ~timeout_s:5 ~run_in_background:true ~command:(emit "background")
             ~description:"background output" ()))
   in
   let prefix = "started " in
@@ -147,11 +156,11 @@ let test_background_lifecycle () =
   let output = output_or_fail (Tools_shell.job_output.Tool.run ctx (job_value id)) in
   Alcotest.(check bool)
     "background stdout is retained" true
-    (contains output.Tool.content "background");
+    (Test_support.contains ~needle:"background" ~haystack:output.Tool.content);
   let killed_started =
     output_or_fail
       (Tools_shell.bash.Tool.run ctx
-         (bash_value ~timeout_s:5 ~run_in_background:true ~command:"sleep 30"
+         (bash_value ~timeout_s:5 ~run_in_background:true ~command:(long_sleep 30)
             ~description:"background kill" ()))
   in
   let killed_id =
@@ -164,12 +173,12 @@ let test_background_lifecycle () =
   in
   Alcotest.(check bool)
     "job kill reports killed" true
-    (contains killed_output.Tool.content "killed")
+    (Test_support.contains ~needle:"killed" ~haystack:killed_output.Tool.content)
 
 let cases =
   [
-    Alcotest.test_case "conservative shell classifier" `Quick test_classifier;
-    Alcotest.test_case "foreground capture" `Quick test_foreground_capture;
-    Alcotest.test_case "foreground deadline" `Quick test_timeout;
-    Alcotest.test_case "background lifecycle" `Quick test_background_lifecycle;
+    Test_tools_test_support.case "conservative shell classifier" `Quick test_classifier;
+    Test_tools_test_support.case "foreground capture" `Quick test_foreground_capture;
+    Test_tools_test_support.case "foreground deadline" `Quick test_timeout;
+    Test_tools_test_support.case "background lifecycle" `Quick test_background_lifecycle;
   ]

@@ -10,6 +10,6 @@ type error = [ `Io of string * string ]
 val pp_error : error Fmt.t
 (** [pp_error] formats a state-file error. *)
 
-val replace : Eio.Fs.dir_ty Eio.Path.t -> string -> (unit, error) result
+val replace : string -> string -> (unit, error) result Lwt.t
 (** [replace path contents] atomically replaces [path] with [contents]. The destination
     itself is never followed as a symlink. *)

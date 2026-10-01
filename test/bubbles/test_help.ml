@@ -48,7 +48,7 @@ let full_columns () =
 
 let cases =
   [
-    Alcotest.test_case "short help" `Quick short_and_disabled;
-    Alcotest.test_case "short width" `Quick short_width;
-    Alcotest.test_case "full columns" `Quick full_columns;
+    Alcotest_lwt.test_case_sync "short help" `Quick short_and_disabled;
+    Alcotest_lwt.test_case_sync "short width" `Quick short_width;
+    Alcotest_lwt.test_case_sync "full columns" `Quick full_columns;
   ]

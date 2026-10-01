@@ -33,6 +33,6 @@ let modes () =
 
 let cases =
   [
-    Alcotest.test_case "blink and focus" `Quick blink_and_focus;
-    Alcotest.test_case "modes" `Quick modes;
+    Alcotest_lwt.test_case_sync "blink and focus" `Quick blink_and_focus;
+    Alcotest_lwt.test_case_sync "modes" `Quick modes;
   ]

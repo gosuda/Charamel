@@ -48,13 +48,25 @@ val render : t -> View.t -> string
     declarative mode (mouse reporting, bracketed paste, focus reporting, window title,
     default foreground and background, the OS progress indicator, the Kitty keyboard
     flags), the minimal cell diff for [view.content], and the application cursor's
-    visibility, shape and position. The whole frame is wrapped in synchronized-output mode
-    (2026) unless nothing changed at all, in which case [render] returns [""].
+    visibility, shape, color and position. The whole frame is wrapped in
+    synchronized-output mode (2026) unless nothing changed at all, in which case [render]
+    returns [""].
 
     [view.content] is parsed for printable text, SGR (`m`) and OSC 8 hyperlinks only;
     every other escape sequence it contains is dropped. A [Basic] or [Indexed]
-    {!Charamel_ansi.Color.t} in [view.background] or [view.foreground] has no portable OSC
-    10/11 spelling and is silently not applied; only [Rgb] is sent. *)
+    {!Charamel_ansi.Color.t} in [view.background], [view.foreground] or [view.cursor]'s
+    [color] has no portable OSC 10/11/12 spelling and is silently not applied; only [Rgb]
+    is sent. A cursor position that lands on the continuation cell of a wide glyph snaps
+    back onto the glyph itself. *)
+
+val move_to_anchor : t -> [ `Column_start | `Fresh_line ] -> string
+(** [move_to_anchor t anchor] is the escape sequence that attaches the inline view.
+    [`Column_start] keeps the view's rows and moves to column 1 of the cursor's row; the
+    diff state stays valid. [`Fresh_line] attaches the view at column 1 of the next row;
+    the diff state resets, so the next {!render} repaints the frame there over rows the
+    old grid no longer describes. [t]'s cursor model follows the move in both cases. A
+    caller that moves the terminal by other means desynchronizes the model, and the paint
+    then lands at the wrong cells. *)
 
 val clear : t -> string
 (** [clear t] is the escape sequence that erases the inline region [t] currently owns and

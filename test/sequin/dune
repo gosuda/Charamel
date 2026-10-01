@@ -2,15 +2,7 @@
  (name test_sequin)
  (package sequin)
  (modules test_sequin test_explain)
- (libraries sequin_core alcotest eio eio.unix eio_main unix)
+ (libraries sequin_core alcotest alcotest-lwt lwt lwt.unix test_support unix)
  (deps %{exe:../../bin/sequin/main.exe})
  (flags
-  (:standard
-   -open
-   Sequin_core
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  (:standard -open Sequin_core)))

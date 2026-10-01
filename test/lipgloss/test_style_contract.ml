@@ -1,15 +1,5 @@
 open Charamel_lipgloss
 
-let check_string name expected actual = Alcotest.(check string) name expected actual
-let check_int name expected actual = Alcotest.(check int) name expected actual
-let check_bool name expected actual = Alcotest.(check bool) name expected actual
-
-let check_int_opt name expected actual =
-  Alcotest.(check (option int)) name expected actual
-
-let check_bool_opt name expected actual =
-  Alcotest.(check (option bool)) name expected actual
-
 let color_eq = Alcotest.testable Color.pp Color.equal
 
 let check_color_opt name expected actual =
@@ -31,8 +21,8 @@ let dark_bg = Option.get (Color.rgb 0x11 0x11 0x11)
 let test_bool_props_set_unset () =
   let check_flag name set unset get =
     let s = set true Style.empty in
-    check_bool_opt (name ^ " set true") (Some true) (get s);
-    check_bool_opt (name ^ " unset") None (get (unset s))
+    Alcotest.(check (option bool)) (name ^ " set true") (Some true) (get s);
+    Alcotest.(check (option bool)) (name ^ " unset") None (get (unset s))
   in
   check_flag "bold" Style.bold Style.unset_bold Style.get_bold;
   check_flag "italic" Style.italic Style.unset_italic Style.get_italic;
@@ -51,7 +41,8 @@ let test_bool_props_set_unset () =
      from unset (None): the option-based getter design (documented at
      style.mli:121) can tell "present but false" from "absent", which
      upstream's bool-with-implicit-default getters cannot. *)
-  check_bool_opt "explicit false is Some false, not None" (Some false)
+  Alcotest.(check (option bool))
+    "explicit false is Some false, not None" (Some false)
     (Style.get_bold (Style.bold false Style.empty))
 
 let test_hyperlink_render_and_inherit () =
@@ -60,16 +51,20 @@ let test_hyperlink_render_and_inherit () =
     Style.hyperlink link
       (Style.padding (Sides.all 1) (Style.border Border.normal Style.empty))
   in
-  check_bool "hyperlink getter returns the typed link" true
+  Alcotest.(check bool)
+    "hyperlink getter returns the typed link" true
     (Style.get_hyperlink (Style.hyperlink link Style.empty) = Some link);
-  check_string "OSC8 wraps core text but not padding or border"
+  Alcotest.(check string)
+    "OSC8 wraps core text but not padding or border"
     "┌───┐\n│   │\n│ \x1b]8;;https://example.test\x07x\x1b]8;;\x07 │\n│   │\n└───┘"
     (Style.render styled "x");
-  check_string "hyperlinks are not inherited" "x"
+  Alcotest.(check string)
+    "hyperlinks are not inherited" "x"
     (Style.render
        (Style.inherit_ ~parent:(Style.hyperlink link Style.empty) Style.empty)
        "x");
-  check_string "unset_hyperlink removes OSC8" "x"
+  Alcotest.(check string)
+    "unset_hyperlink removes OSC8" "x"
     (Style.render (Style.unset_hyperlink (Style.hyperlink link Style.empty)) "x")
 
 let test_color_props_set_unset () =
@@ -93,44 +88,52 @@ let test_color_props_set_unset () =
 let test_margin_padding_whole_record_set_unset () =
   let sides = Sides.v ~top:1 ~right:2 ~bottom:3 ~left:4 () in
   let s = Style.margin sides Style.empty in
-  check_bool "margin set" true (Style.get_margin s = Some sides);
-  check_bool "margin unset clears the whole record" true
+  Alcotest.(check bool) "margin set" true (Style.get_margin s = Some sides);
+  Alcotest.(check bool)
+    "margin unset clears the whole record" true
     (Style.get_margin (Style.unset_margin s) = None);
   let s = Style.padding sides Style.empty in
-  check_bool "padding set" true (Style.get_padding s = Some sides);
-  check_bool "padding unset clears the whole record" true
+  Alcotest.(check bool) "padding set" true (Style.get_padding s = Some sides);
+  Alcotest.(check bool)
+    "padding unset clears the whole record" true
     (Style.get_padding (Style.unset_padding s) = None)
 
 let test_border_sides_set_unset () =
   let s = Style.border Border.normal Style.empty in
-  check_bool_opt "border sets all four sides true" (Some true) (Style.get_border_top s);
-  check_bool_opt "border_right true" (Some true) (Style.get_border_right s);
-  check_bool_opt "border_bottom true" (Some true) (Style.get_border_bottom s);
-  check_bool_opt "border_left true" (Some true) (Style.get_border_left s);
+  Alcotest.(check (option bool))
+    "border sets all four sides true" (Some true) (Style.get_border_top s);
+  Alcotest.(check (option bool))
+    "border_right true" (Some true) (Style.get_border_right s);
+  Alcotest.(check (option bool))
+    "border_bottom true" (Some true) (Style.get_border_bottom s);
+  Alcotest.(check (option bool)) "border_left true" (Some true) (Style.get_border_left s);
   let s = Style.unset_border_top s in
-  check_bool_opt "unset_border_top only" None (Style.get_border_top s);
-  check_bool_opt "border_right survives unset_border_top" (Some true)
-    (Style.get_border_right s);
+  Alcotest.(check (option bool)) "unset_border_top only" None (Style.get_border_top s);
+  Alcotest.(check (option bool))
+    "border_right survives unset_border_top" (Some true) (Style.get_border_right s);
   let s = Style.unset_border_right s in
-  check_bool_opt "unset_border_right" None (Style.get_border_right s);
+  Alcotest.(check (option bool)) "unset_border_right" None (Style.get_border_right s);
   let s = Style.unset_border_bottom s in
-  check_bool_opt "unset_border_bottom" None (Style.get_border_bottom s);
+  Alcotest.(check (option bool)) "unset_border_bottom" None (Style.get_border_bottom s);
   let s = Style.unset_border_left s in
-  check_bool_opt "unset_border_left" None (Style.get_border_left s);
+  Alcotest.(check (option bool)) "unset_border_left" None (Style.get_border_left s);
   (* unset_border clears the border value itself and every side flag. *)
   let s = Style.border Border.normal Style.empty in
   let s = Style.unset_border s in
-  check_bool "unset_border clears border" true (Style.get_border s = None);
-  check_bool_opt "unset_border clears border_top too" None (Style.get_border_top s);
+  Alcotest.(check bool) "unset_border clears border" true (Style.get_border s = None);
+  Alcotest.(check (option bool))
+    "unset_border clears border_top too" None (Style.get_border_top s);
   let foregrounds = Sides_color.v ~top:red () in
   let s = Style.border_foreground foregrounds (Style.border Border.normal Style.empty) in
-  check_bool "unset_border preserves independent border colors" true
+  Alcotest.(check bool)
+    "unset_border preserves independent border colors" true
     (Style.get_border_foreground (Style.unset_border s) = Some foregrounds)
 
 let test_tab_width_set_unset () =
   let s = Style.tab_width 2 Style.empty in
-  check_int_opt "tab_width set" (Some 2) (Style.get_tab_width s);
-  check_int_opt "tab_width clamps values below -1" (Some (-1))
+  Alcotest.(check (option int)) "tab_width set" (Some 2) (Style.get_tab_width s);
+  Alcotest.(check (option int))
+    "tab_width clamps values below -1" (Some (-1))
     (Style.get_tab_width (Style.tab_width (-2) Style.empty));
   (* Ported behavior, not upstream's literal assertion: upstream's own
      TestStyleUnset checks `GetTabWidth() != 4` after unset, which only
@@ -138,7 +141,8 @@ let test_tab_width_set_unset () =
      getAsInt(tabWidthKey) call (no default arg) never applies -- an
      upstream doc/implementation mismatch. Our option-based getter sidesteps
      the whole ambiguity: unset is unambiguously None. *)
-  check_int_opt "tab_width unset is None, not a default" None
+  Alcotest.(check (option int))
+    "tab_width unset is None, not a default" None
     (Style.get_tab_width (Style.unset_tab_width s))
 
 (* Inheritance: ports TestStyleInherit (style_test.go:156-192) plus the
@@ -152,27 +156,33 @@ let test_inherit_copies_attributes () =
     |> Style.padding (Sides.all 1)
   in
   let i = Style.inherit_ ~parent Style.empty in
-  check_bool "bold inherited" true (Style.get_bold i = Style.get_bold parent);
-  check_bool "italic inherited" true (Style.get_italic i = Style.get_italic parent);
-  check_bool "underline inherited" true
+  Alcotest.(check bool) "bold inherited" true (Style.get_bold i = Style.get_bold parent);
+  Alcotest.(check bool)
+    "italic inherited" true
+    (Style.get_italic i = Style.get_italic parent);
+  Alcotest.(check bool)
+    "underline inherited" true
     (Style.get_underline i = Style.get_underline parent);
-  check_bool "strikethrough inherited" true
+  Alcotest.(check bool)
+    "strikethrough inherited" true
     (Style.get_strikethrough i = Style.get_strikethrough parent);
-  check_bool "blink inherited" true (Style.get_blink i = Style.get_blink parent);
-  check_bool "faint inherited" true (Style.get_faint i = Style.get_faint parent);
-  check_bool "foreground inherited" true
+  Alcotest.(check bool) "blink inherited" true (Style.get_blink i = Style.get_blink parent);
+  Alcotest.(check bool) "faint inherited" true (Style.get_faint i = Style.get_faint parent);
+  Alcotest.(check bool)
+    "foreground inherited" true
     (Style.get_foreground i = Style.get_foreground parent);
-  check_bool "background inherited" true
+  Alcotest.(check bool)
+    "background inherited" true
     (Style.get_background i = Style.get_background parent);
-  check_bool "padding is never inherited" true (Style.get_padding i = None);
-  check_bool "margin is never inherited" true (Style.get_margin i = None)
+  Alcotest.(check bool) "padding is never inherited" true (Style.get_padding i = None);
+  Alcotest.(check bool) "margin is never inherited" true (Style.get_margin i = None)
 
 let test_inherit_child_overrides_parent () =
   let parent = Style.bold true Style.empty in
   let child = Style.bold false Style.empty in
   let merged = Style.inherit_ ~parent child in
-  check_bool_opt "child's own explicit value wins over parent" (Some false)
-    (Style.get_bold merged)
+  Alcotest.(check (option bool))
+    "child's own explicit value wins over parent" (Some false) (Style.get_bold merged)
 
 let test_inherit_margin_background_fallback () =
   (* Case A: parent sets only background -> child's margin_background
@@ -224,7 +234,8 @@ let test_underline_family () =
   (* Case: UnderlineSpaces(true) alone (no bare underline flag) -- no
      upstream quirk applies here since the raw `underline` bool is never
      set; byte-identical to upstream's expected "ab\x1b[4m \x1b[mc". *)
-  check_string "underline_spaces alone styles only the space" "ab\x1b[4m \x1b[mc"
+  Alcotest.(check string)
+    "underline_spaces alone styles only the space" "ab\x1b[4m \x1b[mc"
     (Style.render (Style.underline_spaces true Style.empty) "ab c");
   (* Case: Underline(true) alone == Underline(true) + UnderlineSpaces(true):
      default underline_spaces already tracks underline when unset. *)
@@ -232,13 +243,16 @@ let test_underline_family () =
   let explicit_spaces =
     Style.render (Style.underline_spaces true (Style.underline true Style.empty)) "ab c"
   in
-  check_string "explicit underline_spaces(true) matches the implicit default"
-    plain_underline explicit_spaces;
-  check_string "underline(true) alone (derived; upstream doubles the SGR '4')"
+  Alcotest.(check string)
+    "explicit underline_spaces(true) matches the implicit default" plain_underline
+    explicit_spaces;
+  Alcotest.(check string)
+    "underline(true) alone (derived; upstream doubles the SGR '4')"
     "\x1b[4ma\x1b[m\x1b[4mb\x1b[m\x1b[4m \x1b[m\x1b[4mc\x1b[m" plain_underline;
   (* Case: Underline(true) + UnderlineSpaces(false) -- the space is left
      completely bare (te_space collapses to Charamel_ansi.Style.default). *)
-  check_string "underline(true).underline_spaces(false) leaves the space bare"
+  Alcotest.(check string)
+    "underline(true).underline_spaces(false) leaves the space bare"
     "\x1b[4ma\x1b[m\x1b[4mb\x1b[m \x1b[4mc\x1b[m"
     (Style.render
        (Style.underline_spaces false (Style.underline true Style.empty))
@@ -252,21 +266,23 @@ let test_underline_family () =
      (see report). *)
 
 let test_strikethrough_family () =
-  check_string "strikethrough(true) alone"
-    "\x1b[9ma\x1b[m\x1b[9mb\x1b[m\x1b[9m \x1b[m\x1b[9mc\x1b[m"
+  Alcotest.(check string)
+    "strikethrough(true) alone" "\x1b[9ma\x1b[m\x1b[9mb\x1b[m\x1b[9m \x1b[m\x1b[9mc\x1b[m"
     (Style.render (Style.strikethrough true Style.empty) "ab c");
-  check_string "strikethrough(true).strikethrough_spaces(true) same as default"
+  Alcotest.(check string)
+    "strikethrough(true).strikethrough_spaces(true) same as default"
     "\x1b[9ma\x1b[m\x1b[9mb\x1b[m\x1b[9m \x1b[m\x1b[9mc\x1b[m"
     (Style.render
        (Style.strikethrough_spaces true (Style.strikethrough true Style.empty))
        "ab c");
-  check_string "strikethrough(true).strikethrough_spaces(false) leaves the space bare"
+  Alcotest.(check string)
+    "strikethrough(true).strikethrough_spaces(false) leaves the space bare"
     "\x1b[9ma\x1b[m\x1b[9mb\x1b[m \x1b[9mc\x1b[m"
     (Style.render
        (Style.strikethrough_spaces false (Style.strikethrough true Style.empty))
        "ab c");
-  check_string "strikethrough_spaces(true) alone styles only the space"
-    "ab\x1b[9m \x1b[mc"
+  Alcotest.(check string)
+    "strikethrough_spaces(true) alone styles only the space" "ab\x1b[9m \x1b[mc"
     (Style.render (Style.strikethrough_spaces true Style.empty) "ab c")
 
 (* Plain flag rendering: ports TestStyleRender (style_test.go:100-142). The
@@ -274,20 +290,26 @@ let test_strikethrough_family () =
    reused byte for byte. The underline sub-case is re-derived per the
    comment above test_underline_family. *)
 let test_style_render_flags () =
-  check_string "foreground" "\x1b[38;2;90;86;224mhello\x1b[m"
+  Alcotest.(check string)
+    "foreground" "\x1b[38;2;90;86;224mhello\x1b[m"
     (Style.render
        (Style.foreground (Option.get (Color.rgb 90 86 224)) Style.empty)
        "hello");
-  check_string "bold" "\x1b[1mhello\x1b[m"
+  Alcotest.(check string)
+    "bold" "\x1b[1mhello\x1b[m"
     (Style.render (Style.bold true Style.empty) "hello");
-  check_string "italic" "\x1b[3mhello\x1b[m"
+  Alcotest.(check string)
+    "italic" "\x1b[3mhello\x1b[m"
     (Style.render (Style.italic true Style.empty) "hello");
-  check_string "underline (derived; no spaces present, upstream still doubles the '4')"
+  Alcotest.(check string)
+    "underline (derived; no spaces present, upstream still doubles the '4')"
     "\x1b[4mh\x1b[m\x1b[4me\x1b[m\x1b[4ml\x1b[m\x1b[4ml\x1b[m\x1b[4mo\x1b[m"
     (Style.render (Style.underline true Style.empty) "hello");
-  check_string "blink" "\x1b[5mhello\x1b[m"
+  Alcotest.(check string)
+    "blink" "\x1b[5mhello\x1b[m"
     (Style.render (Style.blink true Style.empty) "hello");
-  check_string "faint" "\x1b[2mhello\x1b[m"
+  Alcotest.(check string)
+    "faint" "\x1b[2mhello\x1b[m"
     (Style.render (Style.faint true Style.empty) "hello")
 
 (* Transform, tabs, CRLF, and inline newline stripping: ports
@@ -298,9 +320,11 @@ let test_style_render_flags () =
 let test_string_transform () =
   let wrap s = "\x1b[1m" ^ s ^ "\x1b[m" in
   let style = Style.bold true Style.empty in
-  check_string "no-op transform" (wrap "hello")
+  Alcotest.(check string)
+    "no-op transform" (wrap "hello")
     (Style.render (Style.transform (fun s -> s) style) "hello");
-  check_string "uppercase transform" (wrap "RAOW")
+  Alcotest.(check string)
+    "uppercase transform" (wrap "RAOW")
     (Style.render (Style.transform String.uppercase_ascii style) "raow");
   let reverse_utf8 s =
     let b = Buffer.create (String.length s) in
@@ -312,15 +336,22 @@ let test_string_transform () =
      UTF-8 sequence appears in this input, unlike upstream's Chinese
      example, which needs full Unicode-aware reversal we don't replicate
      byte-for-byte here). *)
-  check_string "reverse transform" (wrap "olleh")
+  Alcotest.(check string)
+    "reverse transform" (wrap "olleh")
     (Style.render (Style.transform reverse_utf8 style) "hello")
 
 let test_tab_conversion () =
-  check_string "default tab_width is 4" "[    ]" (Style.render Style.empty "[\t]");
-  check_string "tab_width 2" "[  ]" (Style.render (Style.tab_width 2 Style.empty) "[\t]");
-  check_string "tab_width 0 removes tabs" "[]"
+  Alcotest.(check string)
+    "default tab_width is 4" "[    ]"
+    (Style.render Style.empty "[\t]");
+  Alcotest.(check string)
+    "tab_width 2" "[  ]"
+    (Style.render (Style.tab_width 2 Style.empty) "[\t]");
+  Alcotest.(check string)
+    "tab_width 0 removes tabs" "[]"
     (Style.render (Style.tab_width 0 Style.empty) "[\t]");
-  check_string "tab_width -1 keeps the literal tab" "[\t]"
+  Alcotest.(check string)
+    "tab_width -1 keeps the literal tab" "[\t]"
     (Style.render (Style.tab_width (-1) Style.empty) "[\t]")
 
 let test_carriage_return_normalized () =
@@ -329,7 +360,7 @@ let test_carriage_return_normalized () =
     Style.render style "Super duper california oranges\r\nHello world\r\n"
   in
   let with_lf = Style.render style "Super duper california oranges\nHello world\n" in
-  check_string "\\r\\n normalizes to the same render as \\n" with_lf with_crlf
+  Alcotest.(check string) "\\r\\n normalizes to the same render as \\n" with_lf with_crlf
 
 let test_inline_suppresses_border_padding_margin () =
   let style =
@@ -337,8 +368,9 @@ let test_inline_suppresses_border_padding_margin () =
     |> Style.padding (Sides.all 2)
     |> Style.margin (Sides.all 2)
   in
-  check_string "inline mode flattens newlines and skips border/padding/margin entirely"
-    "xy" (Style.render style "x\ny")
+  Alcotest.(check string)
+    "inline mode flattens newlines and skips border/padding/margin entirely" "xy"
+    (Style.render style "x\ny")
 
 (* Exact width vs minimum height: ports TestWidth/TestHeight
    (style_test.go:533-581) using Layout.width/height and hand-computed
@@ -357,7 +389,7 @@ let test_width_exact_across_border_variants () =
   let check name style horizontal_frame_size =
     let content_width = 80 - horizontal_frame_size in
     let rendered = Style.render (Style.width content_width style) long_content in
-    check_int name content_width (Layout.width rendered)
+    Alcotest.(check int) name content_width (Layout.width rendered)
   in
   check "width with borders"
     (Style.padding (Sides.v ~right:2 ~left:2 ()) (Style.border Border.normal Style.empty))
@@ -383,7 +415,7 @@ let test_height_minimum_across_border_variants () =
     let rendered =
       Style.render (Style.height content_height (Style.width 80 style)) long_content
     in
-    check_int name content_height (Layout.height rendered)
+    Alcotest.(check int) name content_height (Layout.height rendered)
   in
   check "height with borders"
     (Style.padding (Sides.v ~right:2 ~left:2 ()) (Style.border Border.normal Style.empty))
@@ -405,9 +437,11 @@ let test_height_minimum_across_border_variants () =
 
 let test_height_never_truncates_but_pads_up () =
   let five_lines = "a\nb\nc\nd\ne" in
-  check_int "height smaller than content leaves every line" 5
+  Alcotest.(check int)
+    "height smaller than content leaves every line" 5
     (Layout.height (Style.render (Style.height 2 Style.empty) five_lines));
-  check_int "height larger than content pads up to the minimum" 4
+  Alcotest.(check int)
+    "height larger than content pads up to the minimum" 4
     (Layout.height (Style.render (Style.height 4 Style.empty) "a\nb"))
 
 (* Max clipping: no applicable upstream style_test.go cases exist for
@@ -415,11 +449,13 @@ let test_height_never_truncates_but_pads_up () =
    are derived directly from the render order documented in style.mli and
    the plan: max_width/max_height apply AFTER border and margins. *)
 let test_max_width_truncates_plain_text () =
-  check_string "max_width truncates a single line" "hello"
+  Alcotest.(check string)
+    "max_width truncates a single line" "hello"
     (Style.render (Style.max_width 5 Style.empty) "hello world")
 
 let test_max_height_keeps_first_lines () =
-  check_string "max_height keeps only the first N lines" "a\nb"
+  Alcotest.(check string)
+    "max_height keeps only the first N lines" "a\nb"
     (Style.render (Style.max_height 2 Style.empty) "a\nb\nc\nd\ne")
 
 let test_max_width_truncates_after_border () =
@@ -427,7 +463,8 @@ let test_max_width_truncates_after_border () =
      glyphs themselves -- proving the documented "border then margins ...
      then max_width" render order (border_h=2 here, content "hello" is
      never wrapped since Style.width is unset). *)
-  check_string "max_width=2 truncates into the border glyphs"
+  Alcotest.(check string)
+    "max_width=2 truncates into the border glyphs"
     "\xe2\x94\x8c\xe2\x94\x80\n\xe2\x94\x82h\n\xe2\x94\x94\xe2\x94\x80"
     (Style.render (Style.max_width 2 (Style.border Border.normal Style.empty)) "hello")
 
@@ -445,7 +482,8 @@ let test_render_order_padding_border_margin () =
     |> Style.margin (Sides.all 1)
   in
   let rendered = Style.render style "x" in
-  check_string "padding sits inside the border, border sits inside the margin"
+  Alcotest.(check string)
+    "padding sits inside the border, border sits inside the margin"
     "       \n\
     \ \xe2\x95\xad\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x95\xae \n\
     \ \xe2\x94\x82   \xe2\x94\x82 \n\
@@ -454,9 +492,11 @@ let test_render_order_padding_border_margin () =
     \ \xe2\x95\xb0\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x95\xaf \n\
     \       "
     rendered;
-  check_int "outermost width is content(1) + padding(2) + border(2) + margin(2)" 7
+  Alcotest.(check int)
+    "outermost width is content(1) + padding(2) + border(2) + margin(2)" 7
     (Layout.width rendered);
-  check_int "outermost height is content(1) + padding(2) + border(2) + margin(2)" 7
+  Alcotest.(check int)
+    "outermost height is content(1) + padding(2) + border(2) + margin(2)" 7
     (Layout.height rendered)
 
 (* Per-edge border colors and multicolumn (wide-glyph) borders: no
@@ -470,24 +510,29 @@ let test_border_per_edge_colors () =
     |> Style.border_foreground (Sides_color.v ~top:red ())
   in
   let rendered = Style.render style "x" in
-  check_string "only the top edge is colored; left/right/bottom stay plain"
+  Alcotest.(check string)
+    "only the top edge is colored; left/right/bottom stay plain"
     "\x1b[38;2;255;0;0m\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x90\x1b[m\n\
      \xe2\x94\x82x\xe2\x94\x82\n\
      \xe2\x94\x94\xe2\x94\x80\xe2\x94\x98"
     rendered;
   let foregrounds = Sides_color.v ~top:red () in
   let backgrounds = Sides_color.v ~bottom:blue () in
-  check_bool "border_foreground getter preserves per-edge values" true
+  Alcotest.(check bool)
+    "border_foreground getter preserves per-edge values" true
     (Style.get_border_foreground (Style.border_foreground foregrounds Style.empty)
     = Some foregrounds);
-  check_bool "border_background getter preserves per-edge values" true
+  Alcotest.(check bool)
+    "border_background getter preserves per-edge values" true
     (Style.get_border_background (Style.border_background backgrounds Style.empty)
     = Some backgrounds);
-  check_bool "unset border_foreground clears the whole record" true
+  Alcotest.(check bool)
+    "unset border_foreground clears the whole record" true
     (Style.get_border_foreground
        (Style.unset_border_foreground (Style.border_foreground foregrounds Style.empty))
     = None);
-  check_bool "unset border_background clears the whole record" true
+  Alcotest.(check bool)
+    "unset border_background clears the whole record" true
     (Style.get_border_background
        (Style.unset_border_background (Style.border_background backgrounds Style.empty))
     = None)
@@ -499,9 +544,10 @@ let test_border_wide_corner_consistency () =
   let rendered = Style.render (Style.border wide_left_border Style.empty) "x" in
   match String.split_on_char '\n' rendered with
   | [ top; body; bottom ] ->
-      check_int "top row width matches the body row width" (Layout.width body)
-        (Layout.width top);
-      check_int "bottom row width matches the body row width" (Layout.width body)
+      Alcotest.(check int)
+        "top row width matches the body row width" (Layout.width body) (Layout.width top);
+      Alcotest.(check int)
+        "bottom row width matches the body row width" (Layout.width body)
         (Layout.width bottom)
   | _ -> Alcotest.fail "expected exactly three rendered lines (top, body, bottom)"
 
@@ -516,20 +562,23 @@ let test_color_whitespace () =
      color_whitespace gates only whether the PADDING cells around it also
      get that background -- so even the default-true case wraps "x" in its
      own separate SGR run rather than sharing one run with the padding. *)
-  check_string "color_whitespace defaults to true: padding gets the background too"
+  Alcotest.(check string)
+    "color_whitespace defaults to true: padding gets the background too"
     "\x1b[48;2;255;0;0m   \x1b[m\n\
      \x1b[48;2;255;0;0m \x1b[m\x1b[48;2;255;0;0mx\x1b[m\x1b[48;2;255;0;0m \x1b[m\n\
      \x1b[48;2;255;0;0m   \x1b[m"
     colored;
   let uncolored = Style.render (Style.color_whitespace false style) "x" in
-  check_string "color_whitespace(false) leaves the padding bare but \"x\" stays colored"
+  Alcotest.(check string)
+    "color_whitespace(false) leaves the padding bare but \"x\" stays colored"
     "   \n \x1b[48;2;255;0;0mx\x1b[m \n   " uncolored;
   (* Reverse's foreground-on-whitespace rule (styleWhitespace = reverse in
      upstream) is independent of color_whitespace: it still applies to the
      padding even when color_whitespace is explicitly disabled. *)
   let reverse_style = Style.color_whitespace false (Style.reverse true style) in
   let reverse_rendered = Style.render reverse_style "x" in
-  check_bool "reverse's fg-on-padding rule ignores color_whitespace" true
+  Alcotest.(check bool)
+    "reverse's fg-on-padding rule ignores color_whitespace" true
     (reverse_rendered <> uncolored)
 
 (* Margin-only rendering with no other property set: ports the four
@@ -538,13 +587,17 @@ let test_color_whitespace () =
    text of its own by design (render takes the text as a plain argument),
    so "set string" / "new style with string" have no OCaml counterpart. *)
 let test_margin_only_render () =
-  check_string "margin right on non-empty text" "foo "
+  Alcotest.(check string)
+    "margin right on non-empty text" "foo "
     (Style.render (Style.margin (Sides.v ~right:1 ()) Style.empty) "foo");
-  check_string "margin left on non-empty text" " foo"
+  Alcotest.(check string)
+    "margin left on non-empty text" " foo"
     (Style.render (Style.margin (Sides.v ~left:1 ()) Style.empty) "foo");
-  check_string "margin right on empty text" " "
+  Alcotest.(check string)
+    "margin right on empty text" " "
     (Style.render (Style.margin (Sides.v ~right:1 ()) Style.empty) "");
-  check_string "margin left on empty text" " "
+  Alcotest.(check string)
+    "margin left on empty text" " "
     (Style.render (Style.margin (Sides.v ~left:1 ()) Style.empty) "")
 
 let test_escape_payload_terminators () =
@@ -554,7 +607,7 @@ let test_escape_payload_terminators () =
   Stdlib.List.iteri
     (fun index terminator ->
       let payload = "\x1b]8;;hidden payload " ^ terminator in
-      check_string
+      Alcotest.(check string)
         ("escape payload terminator " ^ string_of_int index)
         (styled "a" ^ payload ^ styled "b")
         (Style.render style ("a" ^ payload ^ "b")))
@@ -580,7 +633,50 @@ let test_zero_width_border_glyphs () =
     }
   in
   let rendered = Style.render (Style.border border Style.empty) "x" in
-  check_int "zero-width border glyphs do not create fake cells" 1 (Layout.width rendered)
+  Alcotest.(check int)
+    "zero-width border glyphs do not create fake cells" 1 (Layout.width rendered)
+
+let test_fractional_align_horizontal () =
+  let style = Style.(align_horizontal (Position.v 0.25) (width 5 Style.empty)) in
+  Alcotest.(check string)
+    "quarter position pads three left, one right" "   x " (Style.render style "x")
+
+let test_layout_fractional_orientation_preserved () =
+  Alcotest.(check string)
+    "join horizontal keeps block one row down" "a \nbc"
+    (Layout.join_horizontal ~pos:(Position.v 0.75) [ "a\nb"; "c" ]);
+  Alcotest.(check string)
+    "join vertical pads one left" "aa\n b"
+    (Layout.join_vertical ~pos:(Position.v 0.75) [ "aa"; "b" ]);
+  Alcotest.(check string)
+    "place vertical splits two up one down" " \n \na\n "
+    (Layout.place_vertical ~height:4 ~pos:(Position.v 0.25) "a");
+  Alcotest.(check string)
+    "style height splits two above one below" " \n \na\n "
+    (Style.render Style.(align_vertical (Position.v 0.25) (height 4 Style.empty)) "a")
+
+let test_cjk_border_edge_stays_bounded () =
+  let rand = Random.State.make [| 20260926 |] in
+  let check i =
+    let glyph = QCheck2.Gen.generate1 ~rand Test_support.cjk_gen in
+    let target = 1 + (i mod 9) in
+    let border = { Border.normal with top = glyph } in
+    let style =
+      Style.border_top true
+        (Style.border_right false
+           (Style.border_bottom false
+              (Style.border_left false
+                 (Style.border border (Style.width target Style.empty)))))
+    in
+    let rendered = Style.render style "x" in
+    let top = Stdlib.List.nth (String.split_on_char '\n' rendered) 0 in
+    Alcotest.(check bool)
+      (Printf.sprintf "top border edge of width %d from %S fits: rendered=%S" target glyph
+         rendered)
+      true
+      (Charamel_ansi.Text.width (Charamel_ansi.Text.strip top) <= target)
+  in
+  Stdlib.List.iter check (Stdlib.List.init 200 Fun.id)
 
 let cases =
   [
@@ -628,4 +724,9 @@ let cases =
     ("escape payload terminators", `Quick, test_escape_payload_terminators);
     ("color_whitespace", `Quick, test_color_whitespace);
     ("margin-only render", `Quick, test_margin_only_render);
+    ("fractional horizontal align is weighted", `Quick, test_fractional_align_horizontal);
+    ( "layout fractional orientation preserved",
+      `Quick,
+      test_layout_fractional_orientation_preserved );
+    ("cjk border edge width stays bounded", `Quick, test_cjk_border_edge_stays_bounded);
   ]

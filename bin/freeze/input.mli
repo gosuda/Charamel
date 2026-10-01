@@ -9,12 +9,10 @@ type loaded = { text : string; path : string option }
 (** Input bytes together with an optional source path. *)
 
 val read :
-  fs:Eio.Fs.dir_ty Eio.Path.t ->
-  stdin:_ Eio.Flow.source ->
-  source ->
-  (loaded, string) result
-(** [read ~fs ~stdin source] reads a file or stdin. [Execute] is rejected here because PTY
-    capture belongs to {!Pty}. *)
+  fs_root:string -> stdin:Lwt_io.input_channel -> source -> (loaded, string) result Lwt.t
+(** [read ~fs_root ~stdin source] reads a file or stdin, resolving a relative [File] path
+    against [fs_root]. [Execute] is rejected here because PTY capture belongs to {!Pty}.
+*)
 
 val cut_lines : lines:int list -> string -> string
 (** [cut_lines ~lines text] selects the inclusive zero-based range. An empty range keeps

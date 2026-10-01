@@ -45,26 +45,28 @@ type error =
 val pp_error : error Fmt.t
 (** [pp_error] formats [error] for diagnostics. *)
 
-val set : root:_ Eio.Path.t -> db:string -> string -> string -> (unit, error) result
+val set : root:string -> db:string -> string -> string -> (unit, error) result Lwt.t
 (** [set ~root ~db key data] stores [data] at [key] in [db], creating [db] and every
     missing ancestor directory of [root] if absent. An existing value at [key] is
     replaced; every other key already in [db] is preserved. [data] is stored as [Text]
     when it is valid UTF-8 and as [Binary] otherwise. *)
 
-val get : root:_ Eio.Path.t -> db:string -> string -> (value, error) result
+val get : root:string -> db:string -> string -> (value, error) result Lwt.t
 (** [get ~root ~db key] is the value stored at [key] in [db]. *)
 
-val delete : root:_ Eio.Path.t -> db:string -> string -> (unit, error) result
+val delete : root:string -> db:string -> string -> (unit, error) result Lwt.t
 (** [delete ~root ~db key] removes [key] from [db]. Every other key already in [db] is
     preserved. *)
 
-val list : root:_ Eio.Path.t -> db:string -> ((string * value) list, error) result
+val list : root:string -> db:string -> ((string * value) list, error) result Lwt.t
 (** [list ~root ~db] is every [(key, value)] pair in [db], sorted by key with
     [String.compare]. [db] having no file is [Ok []], not an error. *)
 
-val delete_db : root:_ Eio.Path.t -> db:string -> (unit, error) result
+val delete_db : root:string -> db:string -> (unit, error) result Lwt.t
 (** [delete_db ~root ~db] removes [db]'s file entirely. *)
 
-val dbs : root:_ Eio.Path.t -> (string list, error) result
+val dbs : root:string -> (string list, error) result Lwt.t
 (** [dbs ~root] is the name of every database file directly under [root], sorted with
-    [String.compare]. [root] not existing yet is [Ok []], not an error. *)
+    [String.compare]. Each name is the one that was stored, so it is accepted again by
+    [get], [list] and [delete_db]. A file whose name this module could not have written is
+    skipped. [root] not existing yet is [Ok []], not an error. *)

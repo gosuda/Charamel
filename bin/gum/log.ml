@@ -1,3 +1,5 @@
+module Env = Charamel_cli.Env
+
 type formatter = Text | Logfmt | Json
 type level = None_ | Debug | Info | Warn | Error | Fatal
 
@@ -260,7 +262,8 @@ let make_styles ~level_style ~time_style ~prefix_style ~message_style ~key_style
   }
 
 let emit ?file ?(formatter = Text) ?(level = None_) ?(min_level = "") ?(prefix = "")
-    ?(time = "") ?(format = false) ?(structured = false) ?styles env texts =
+    ?(time = "") ?(format = false) ?(structured = false) ?styles
+    (env : Charamel_cli.Env.t) texts =
   if format && structured then
     Charamel_cli.error ~code:2 "--format and --structured are mutually exclusive";
   let minimum =
@@ -268,7 +271,7 @@ let emit ?file ?(formatter = Text) ?(level = None_) ?(min_level = "") ?(prefix =
     | Ok rank -> rank
     | Error (`Msg message) -> Charamel_cli.error message
   in
-  if level_rank level < minimum then ()
+  if level_rank level < minimum then Lwt.return_unit
   else
     let emitted = logs_level level in
     let message, tags =
@@ -296,7 +299,7 @@ let emit ?file ?(formatter = Text) ?(level = None_) ?(min_level = "") ?(prefix =
       let reporter =
         Charamel_log.reporter ~format:output_format ~styles ~report_timestamp:(time <> "")
           ?time_format:(if time = "" then None else Some (time_formatter time))
-          ~clock:env#clock ~profile ppf
+          ~clock:env.Env.clock ~profile ppf
       in
       let source = Logs.Src.create prefix in
       Logs.Src.set_level source (Some Logs.Debug);
@@ -311,32 +314,31 @@ let emit ?file ?(formatter = Text) ?(level = None_) ?(min_level = "") ?(prefix =
       match file with
       | Some path when path <> "" -> (
           try
-            Eio.Path.with_open_out ~append:true ~create:(`If_missing 0o644)
-              Eio.Path.(env#fs / path)
-              (fun flow ->
-                let ppf =
-                  Stdlib.Format.make_formatter
-                    (fun buffer position length ->
-                      Eio.Flow.copy_string (String.sub buffer position length) flow)
-                    (fun () -> ())
-                in
-                report ppf);
+            let resolved =
+              if Filename.is_relative path then Filename.concat env.Env.cwd path else path
+            in
+            let fd =
+              Unix.openfile resolved [ Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CREAT ] 0o644
+            in
+            let oc = Unix.out_channel_of_descr fd in
+            Fun.protect
+              ~finally:(fun () -> close_out_noerr oc)
+              (fun () ->
+                let ppf = Stdlib.Format.formatter_of_out_channel oc in
+                report ppf;
+                Stdlib.Format.pp_print_flush ppf ());
             Ok ()
-          with
-          | Eio.Io (Eio.Fs.E _, _) as exn ->
-              Result.Error
-                (`Msg (Fmt.str "error opening file: %s" (Fmt.str "%a" Eio.Exn.pp exn)))
-          | Unix.Unix_error (error, function_name, argument) ->
-              Result.Error
-                (`Msg
-                   (Fmt.str "error opening file: %s (%s %s)" (Unix.error_message error)
-                      function_name argument)))
+          with Unix.Unix_error (error, function_name, argument) ->
+            Result.Error
+              (`Msg
+                 (Fmt.str "error opening file: %s (%s %s)" (Unix.error_message error)
+                    function_name argument)))
       | _ ->
           report Stdlib.Format.err_formatter;
           Ok ()
     in
     (match result with Error (`Msg message) -> Charamel_cli.error message | Ok () -> ());
-    if level = Fatal then Charamel_cli.exit 1
+    if level = Fatal then Charamel_cli.exit 1 else Lwt.return_unit
 
 let string_opt ?short ~cmd name ~default ~doc =
   let names =
@@ -416,8 +418,6 @@ let style_terms () =
   in
   (level, time, prefix, message, key, value, separator)
 
-let command_info name doc = Cmdliner.Cmd.info name ~doc
-
 let cmd env =
   let open Cmdliner in
   let file =
@@ -474,4 +474,4 @@ let cmd env =
     emit ~file ~formatter ~level ~min_level ~prefix ~time ~format:printf ~structured
       ~styles env texts
   in
-  Cmd.v (command_info "log" "Write a structured or styled log message.") term
+  Cmd.v (Cmd.info "log" ~doc:"Write a structured or styled log message.") term

@@ -148,10 +148,11 @@ let spec =
     ~strings:[ ("'", "'", false); ("\"", "\"", false) ]
     ~number:float_number
     ~ident:
-      (seq
+      (Re.seq
          [
-           set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
-           rep (set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$");
+           Re.set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+           Re.rep
+             (Re.set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$");
          ])
     ~operators:
       [

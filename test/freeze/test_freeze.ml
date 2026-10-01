@@ -1,20 +1,7 @@
 open Freeze_core
-
-let rec source_root dir =
-  if Sys.file_exists (Filename.concat dir "dune-project") then dir
-  else
-    let parent = Filename.dirname dir in
-    if String.equal parent dir then
-      failwith "test_freeze: dune-project not found above the working directory"
-    else source_root parent
+open Lwt.Syntax
 
 let path_env = "/usr/bin:/bin"
-
-let fixture_parent env =
-  let root =
-    Filename.concat (Filename.concat (source_root (Sys.getcwd ())) ".outline") "worktree"
-  in
-  Eio.Path.(env#fs / root)
 
 let minimal_environment ~root =
   let path name = Filename.concat root name in
@@ -30,23 +17,6 @@ let minimal_environment ~root =
     "TMPDIR=" ^ path "tmp";
   |]
 
-let with_fixture env f =
-  let parent = fixture_parent env in
-  Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 parent;
-  let path =
-    Filename.temp_file ~temp_dir:(Eio.Path.native_exn parent) "charamel-freeze-cli-"
-      ".dir"
-  in
-  Sys.remove path;
-  let root = Eio.Path.(env#fs / path) in
-  Eio.Path.mkdir ~perm:0o700 root;
-  List.iter
-    (fun name -> Eio.Path.mkdir ~perm:0o700 Eio.Path.(root / name))
-    [ "home"; "xdg-config"; "xdg-data"; "xdg-state"; "xdg-cache"; "tmp" ];
-  Fun.protect
-    ~finally:(fun () -> Eio.Path.rmtree ~missing_ok:true root)
-    (fun () -> f path)
-
 let expect_ok = function Ok value -> value | Error message -> Alcotest.fail message
 
 let test_side_expansion () =
@@ -54,11 +24,11 @@ let test_side_expansion () =
   Alcotest.(check (array (float 1e-10)))
     "vertical/horizontal sides" [| 2.; 4.; 2.; 4. |] actual
 
-let test_svg_escapes_and_styles env =
+let test_svg_escapes_and_styles () =
   let language = Option.get (Charamel_highlight.find "ocaml") in
   let config = { Config.default with output = "capture.svg" } in
   let rendered =
-    Svg.render ~fs:env#fs ~config ~language:(Some language) ~text:"let x = <&>"
+    Svg.render ~fs_root:"." ~config ~language:(Some language) ~text:"let x = <&>"
       ~is_ansi:false
     |> expect_ok
   in
@@ -70,10 +40,10 @@ let test_svg_escapes_and_styles env =
     (String.contains rendered.Svg.svg '&' && String.contains rendered.Svg.svg ';');
   Alcotest.(check bool) "syntax colour" true (String.contains rendered.Svg.svg '#')
 
-let test_ansi_background env =
+let test_ansi_background () =
   let config = { Config.default with output = "capture.svg" } in
   let rendered =
-    Svg.render ~fs:env#fs ~config ~language:None ~text:"\027[48;2;255;0;0mred\027[0m"
+    Svg.render ~fs_root:"." ~config ~language:None ~text:"\027[48;2;255;0;0mred\027[0m"
       ~is_ansi:true
     |> expect_ok
   in
@@ -81,28 +51,75 @@ let test_ansi_background env =
     "background rectangle" true
     (String.contains rendered.Svg.svg 'r' && String.contains rendered.Svg.svg '#')
 
-let test_pty_capture env =
-  with_fixture env (fun root ->
-      Eio.Switch.run @@ fun sw ->
-      match
-        Pty.execute ~sw ~clock:env#clock ~process_mgr:env#process_mgr
-          ~env:(minimal_environment ~root) ~timeout:2. "printf '\\033[31mred\\033[0m'"
-      with
-      | Ok output -> Alcotest.(check string) "PTY output" "\027[31mred\027[0m" output
-      | Error (`Exit (code, output)) -> Alcotest.failf "exit %d: %s" code output
-      | Error (`Signaled (signal, output)) -> Alcotest.failf "signal %d: %s" signal output
-      | Error (`Timeout output) -> Alcotest.failf "timeout: %s" output
-      | Error (`Spawn message) -> Alcotest.fail message
-      | Error (`Invalid_command message) -> Alcotest.fail message)
+let render_ansi text =
+  let config = { Config.default with output = "capture.svg" } in
+  let rendered =
+    Svg.render ~fs_root:"." ~config ~language:None ~text ~is_ansi:true |> expect_ok
+  in
+  rendered.Svg.svg
+
+let test_ansi_underline_color () =
+  let svg = render_ansi "\027[4;58;2;0;128;255mblue\027[58;2;255;0;0mred\027[0m" in
+  Alcotest.(check bool)
+    "underline colour attribute" true
+    (Test_support.contains ~needle:"undercolor=\"#0080FF\"" ~haystack:svg);
+  Alcotest.(check bool)
+    "underline colour splits runs" true
+    (Test_support.contains ~needle:"undercolor=\"#FF0000\"" ~haystack:svg);
+  let cleared = render_ansi "\027[4;58;2;0;128;255m\027[59mgrey\027[0m" in
+  Alcotest.(check bool)
+    "underlined run survives the colour reset" true
+    (Test_support.contains ~needle:"text-decoration=\"underline\"" ~haystack:cleared);
+  Alcotest.(check bool)
+    "SGR 59 clears the underline colour" false
+    (Test_support.contains ~needle:"undercolor" ~haystack:cleared)
+
+let count_occurrences ~needle ~haystack =
+  let n = String.length needle in
+  let rec loop at acc =
+    if at + n > String.length haystack then acc
+    else if String.sub haystack at n = needle then loop (at + n) (acc + 1)
+    else loop (at + 1) acc
+  in
+  loop 0 0
+
+let test_reset_closes_link () =
+  let svg =
+    render_ansi "\027]8;;http://example.com\027\\\027[4munderlined\027[0m plain"
+  in
+  Alcotest.(check int)
+    "SGR 0 closes the hyperlink" 1
+    (count_occurrences ~needle:"href=\"http://example.com\"" ~haystack:svg)
+
+let test_pty_capture () =
+  if Sys.win32 then Alcotest.skip ()
+  else
+    Test_support.with_temp_dir (fun root ->
+        List.iter
+          (fun name -> Unix.mkdir (Filename.concat root name) 0o700)
+          [ "home"; "xdg-config"; "xdg-data"; "xdg-state"; "xdg-cache"; "tmp" ];
+        let* result =
+          Pty.execute ~env:(minimal_environment ~root) ~timeout:2.
+            "printf '\\033[31mred\\033[0m'"
+        in
+        (match result with
+        | Ok output -> Alcotest.(check string) "PTY output" "\027[31mred\027[0m" output
+        | Error (`Exit (code, output)) -> Alcotest.failf "exit %d: %s" code output
+        | Error (`Signaled (signal, output)) ->
+            Alcotest.failf "signal %d: %s" signal output
+        | Error (`Timeout output) -> Alcotest.failf "timeout: %s" output
+        | Error (`Spawn message) -> Alcotest.fail message
+        | Error (`Invalid_command message) -> Alcotest.fail message);
+        Lwt.return_unit)
 
 let suites =
   [
-    Alcotest.test_case "side expansion" `Quick test_side_expansion;
-    Alcotest.test_case "SVG escapes" `Quick (fun () ->
-        Eio_main.run test_svg_escapes_and_styles);
-    Alcotest.test_case "ANSI background" `Quick (fun () ->
-        Eio_main.run test_ansi_background);
-    Alcotest.test_case "PTY capture" `Quick (fun () -> Eio_main.run test_pty_capture);
+    Alcotest_lwt.test_case_sync "side expansion" `Quick test_side_expansion;
+    Alcotest_lwt.test_case_sync "SVG escapes" `Quick test_svg_escapes_and_styles;
+    Alcotest_lwt.test_case_sync "ANSI background" `Quick test_ansi_background;
+    Alcotest_lwt.test_case "PTY capture" `Quick (fun _switch () -> test_pty_capture ());
+    Alcotest_lwt.test_case_sync "ANSI underline colour" `Quick test_ansi_underline_color;
+    Alcotest_lwt.test_case_sync "SGR 0 closes the hyperlink" `Quick test_reset_closes_link;
   ]
 
-let () = Alcotest.run "freeze" [ ("freeze", suites) ]
+let () = Test_support.run_lwt "freeze" [ ("freeze", suites) ]

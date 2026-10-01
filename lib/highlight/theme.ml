@@ -1,4 +1,4 @@
-type t = Spec.kind -> Charamel_lipgloss.Style.t
+type t = Spec.kind -> Charamel_ansi.Style.t
 
 type palette = {
   keyword : string option;
@@ -16,9 +16,9 @@ type palette = {
 }
 
 let style color =
-  match Option.bind color Charamel_lipgloss.Color.of_hex with
-  | None -> Charamel_lipgloss.Style.empty
-  | Some color -> Charamel_lipgloss.Style.foreground color Charamel_lipgloss.Style.empty
+  match Option.bind color Charamel_ansi.Color.of_hex with
+  | None -> Charamel_ansi.Style.default
+  | Some fg -> { Charamel_ansi.Style.default with fg }
 
 let apply palette = function
   | Spec.Keyword -> style palette.keyword

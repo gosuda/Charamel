@@ -20,11 +20,8 @@ type answer = { header : string; selected : string list; text : string option }
 (** The type for one answer returned by the interactive question boundary. *)
 
 type ctx = {
-  sw : Eio.Switch.t;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
-  fs : Eio.Fs.dir_ty Eio.Path.t;
-  net : Eio_unix.Net.t;
-  proc_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
+  clock : Charamel_os.Time.clock;
+  fs_root : string;
   random : int -> string;
   env : string -> string option;
   cwd : string;
@@ -99,20 +96,8 @@ val decode : 'a Jsont.t -> Jsont.json -> ('a, error) result
 
 val absolute : ctx -> string -> string
 (** [absolute ctx path] resolves [path] against [ctx.cwd]. A leading [~/] uses the home
-    directory from [ctx.env]. Dot and dot-dot components are normalized lexically. *)
-
-val within_cwd : ctx -> string -> bool
-(** [within_cwd ctx path] is [true] when [path] is lexically contained in the normalized
-    project directory [ctx.cwd]. Component boundaries are respected. *)
-
-val normalize_path : string -> string
-(** [normalize_path path] resolves dot and dot-dot components lexically. Dot-dot above the
-    root is dropped and relative dot-dot components are preserved. The empty path becomes
-    ["."]. *)
-
-val component_prefix : string -> string -> bool
-(** [component_prefix root path] is [true] when [path] equals [root] or lies beneath it at
-    a component boundary. The root ["/"] prefixes every absolute path. *)
+    directory from [ctx.env]. Dot and dot-dot components are normalized lexically and a
+    [..] never climbs past the filesystem root. *)
 
 val canonical : ctx -> string -> (string, error) result
 (** [canonical ctx path] resolves [path] to an existing canonical filesystem path.
@@ -121,6 +106,25 @@ val canonical : ctx -> string -> (string, error) result
 val canonical_parent : ctx -> string -> (string, error) result
 (** [canonical_parent ctx path] resolves the existing parent of [path] and appends its
     final component. It is the path check for a new file. *)
+
+val canonical_or_abs : ctx -> string -> (string, error) result
+(** [canonical_or_abs ctx path] is {!val:canonical} [ctx path], except that a missing path
+    answers [Ok] with its absolute form: a read of a path that does not exist must still
+    reach the filesystem to report what is wrong, and only a real I/O failure is an error
+    here. *)
+
+val request_path : ctx -> string -> string
+(** [request_path ctx path] is the path a permission request should name for [path]: its
+    canonical form when the filesystem knows it, its absolute form otherwise. The name is
+    for display and grant matching, so it never fails. It resolves the path once; a caller
+    that also runs the operation must not pair it with {!val:canonical_or_abs}, because
+    the second resolution could name a different file after a symlink moved. Take
+    [Result.value target ~default:absolute] from the one result instead. *)
+
+val truncate : ?diagnostics:diagnostic list -> ctx -> string -> output
+(** [truncate ?diagnostics ctx text] is {!val:ok} for [text] after it passes through the
+    artifact store: short text returns unchanged, long text returns a head, a tail, and
+    the id of the artifact holding the whole. [diagnostics] defaults to the empty list. *)
 
 val request :
   ctx ->
@@ -133,10 +137,6 @@ val request :
 (** [request ctx ~read_only ~tool ~action ~path ~description] authorizes one decoded
     operation through [ctx.permission]. [read_only] is supplied by trusted tool code
     rather than model JSON. *)
-
-val with_timeout : ctx -> float -> (unit -> 'a) -> ('a, error) result
-(** [with_timeout ctx seconds f] runs [f] for at most [seconds] seconds using [ctx.clock].
-    A deadline expiry is returned as [`Timeout seconds]. *)
 
 val schema_object : ?required:string list -> (string * Jsont.json) list -> Jsont.json
 (** [schema_object ?required fields] is a JSON object schema with [fields] as properties.

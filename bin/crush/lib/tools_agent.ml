@@ -1,4 +1,5 @@
 open Result.Syntax
+open Lwt_direct
 
 type task = { prompt : string }
 type request = { prompt : string option; tasks : task list option; max_active : int }
@@ -37,12 +38,6 @@ let schema =
         Tool.s_int ~default:8 ~desc:"Maximum active children, from one to eight" () );
     ]
 
-let truncate_output (ctx : Tool.ctx) text =
-  let content, artifact =
-    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
-  in
-  Tool.ok ?artifact content
-
 let validate_request ({ prompt; tasks; max_active } : request) =
   if max_active < 1 || max_active > 8 then
     Error (`Invalid_input "max_active must be between 1 and 8")
@@ -66,14 +61,12 @@ let run_children (ctx : Tool.ctx) ~max_active prompts =
       let inputs = Array.of_list prompts in
       let results : (string, string) result option array = Array.make count None in
       let next = ref 0 in
-      let mutex = Eio.Mutex.create () in
       let claim () =
-        Eio.Mutex.use_rw ~protect:true mutex (fun () ->
-            if !next >= count then None
-            else
-              let index = !next in
-              incr next;
-              Some index)
+        if !next >= count then None
+        else
+          let index = !next in
+          incr next;
+          Some index
       in
       let worker () =
         let rec loop () =
@@ -86,10 +79,8 @@ let run_children (ctx : Tool.ctx) ~max_active prompts =
         loop ()
       in
       let workers = min max_active count in
-      let promises =
-        Array.init workers (fun _ -> Eio.Fiber.fork_promise ~sw:ctx.Tool.sw worker)
-      in
-      Array.iter (fun promise -> ignore (Eio.Promise.await promise)) promises;
+      let promises = Array.init workers (fun _ -> spawn worker) in
+      await (Lwt.join (Array.to_list promises));
       let missing = Error "child worker returned no result" in
       Ok (Array.to_list (Array.map (Option.value ~default:missing) results))
 
@@ -108,7 +99,7 @@ let render_tasks results =
   (String.concat "\n" lines, !failures)
 
 let run_single ctx = function
-  | [ Ok text ] -> Ok (truncate_output ctx text)
+  | [ Ok text ] -> Ok (Tool.truncate ctx text)
   | [ Error message ] -> Ok (Tool.fail message)
   | _ -> Error (`Unavailable "agent returned no result")
 
@@ -124,7 +115,7 @@ let run_agent ctx input =
   | Some _, None -> run_single ctx results
   | None, Some _ ->
       let text, failed = render_tasks results in
-      let output = truncate_output ctx text in
+      let output = Tool.truncate ctx text in
       Ok (if failed then { output with is_error = true } else output)
   | _ -> Error (`Invalid_input "one of prompt or tasks is required")
 

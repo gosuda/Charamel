@@ -9,7 +9,8 @@ let form =
     [
       Group.v ~title:"Burger" ~description:"Build your burger"
         [
-          Field.input ~title:(Dyn.const "Your name") ~placeholder:"Ada" name_key;
+          Field.input ~title:(Dyn.const "Your name") ~placeholder:(Dyn.const "Ada")
+            name_key;
           Field.select ~title:(Dyn.const "Bun")
             ~options:
               (Dyn.const (Field.options_of_strings [ "brioche"; "sesame"; "pretzel" ]))
@@ -32,8 +33,8 @@ let print_results results =
     toppings confirmed
 
 let () =
-  Eio_main.run (fun env ->
-      match Charamel_huh.run ~clock:env#clock form env with
-      | Ok results -> print_results results
-      | Error `Aborted -> Fmt.epr "Order cancelled.@."
-      | Error `Timeout -> Fmt.epr "Order timed out.@.")
+  match Lwt_main.run (Charamel_huh.run ~clock:Charamel_os.Time.lwt form) with
+  | Ok results -> print_results results
+  | Error `Aborted -> Fmt.epr "Order cancelled.@."
+  | Error `Timeout -> Fmt.epr "Order timed out.@."
+  | Error `Timeout_unsupported -> Fmt.epr "Timeout unsupported.@."

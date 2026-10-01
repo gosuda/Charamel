@@ -1,45 +1,16 @@
-; One independent native target per example. The Tea examples depend on
-; nothing but charamel.tea and the Eio stack, so building them never pulls in
+; One independent native target per program. The bubbletea_examples dispatcher
+; depends only on the bubbletea example library, so building it never pulls in
 ; Huh or the SSH tier.
 
 (executable
- (name tea_counter)
- (modules tea_counter)
- (libraries charamel.tea eio eio.unix eio_main fmt)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
-
-(executable
- (name tea_inline)
- (modules tea_inline)
- (libraries charamel.tea eio eio.unix eio_main fmt mtime)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+ (name bubbletea_examples)
+ (modules bubbletea_examples)
+ (libraries bubbletea lwt lwt.unix unix))
 
 (executable
  (name huh_burger)
  (modules huh_burger)
- (libraries charamel.huh charamel.tea eio eio.unix eio_main fmt)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+ (libraries charamel.huh charamel.tea charamel.os lwt lwt.unix fmt))
 
 (executable
  (name wish_counter)
@@ -48,19 +19,13 @@
   charamel-ssh.wish
   charamel-ssh.keygen
   charamel.tea
-  eio
-  eio.unix
-  eio_main
+  charamel.cli
+  charamel.os
+  lwt
+  lwt.unix
+  unix
   fmt
-  mirage-crypto-rng.unix)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  mirage-crypto-rng.unix))
 
 (executable
  (name confetti)
@@ -69,17 +34,11 @@
   charamel-ssh.wish
   charamel-ssh.keygen
   charamel.tea
-  eio
-  eio.unix
-  eio_main
+  charamel.cli
+  charamel.os
+  lwt
+  lwt.unix
+  unix
   fmt
   mtime
-  mirage-crypto-rng.unix)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  mirage-crypto-rng.unix))

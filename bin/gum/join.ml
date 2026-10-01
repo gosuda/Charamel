@@ -1,21 +1,15 @@
 let errorf fmt = Fmt.str fmt
 
-let join ?(align = "left") ?(horizontal = false) ?(vertical = false) texts =
+let join ?(align = "left") ?horizontal:(_ = false) ?(vertical = false) texts =
   match texts with
   | [] -> Error (`Msg "no text provided")
   | _ -> (
       match Gum_flag.align align with
       | None -> Error (`Msg (errorf "invalid alignment: %s" align))
       | Some position ->
-          let rendered =
-            if vertical then Charamel_lipgloss.Layout.join_vertical ~pos:position texts
-            else if horizontal then
-              Charamel_lipgloss.Layout.join_horizontal ~pos:position texts
-            else Charamel_lipgloss.Layout.join_horizontal ~pos:position texts
-          in
-          Ok rendered)
-
-let command_info name doc = Cmdliner.Cmd.info name ~doc
+          Ok
+            (if vertical then Charamel_lipgloss.Layout.join_vertical ~pos:position texts
+             else Charamel_lipgloss.Layout.join_horizontal ~pos:position texts))
 
 let cmd env =
   let open Cmdliner in
@@ -54,4 +48,4 @@ let cmd env =
     | Ok output -> Gum_io.println env output
     | Error (`Msg message) -> Charamel_cli.error message
   in
-  Cmd.v (command_info "join" "Join multi-line text blocks.") term
+  Cmd.v (Cmd.info "join" ~doc:"Join multi-line text blocks.") term

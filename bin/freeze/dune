@@ -6,35 +6,28 @@
   charamel.cli
   charamel.highlight
   charamel.lipgloss
-  eio
-  eio.unix
+  charamel.os
   cmdliner
   jsont
   jsont.bytesrw
   cstruct
   base64
   fmt
-  unix)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  lwt
+  lwt.unix
+  unix))
 
 (executable
  (name main)
  (public_name freeze)
  (package freeze)
  (modules main)
- (libraries freeze_core charamel.cli eio eio.unix eio_main cmdliner fmt unix)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+ (libraries
+  freeze_core
+  charamel.cli
+  charamel.os
+  cmdliner
+  fmt
+  lwt
+  lwt.unix
+  unix))

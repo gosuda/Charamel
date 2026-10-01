@@ -4,6 +4,9 @@
 open Charamel_lipgloss
 
 let check_render name expected actual = Alcotest.(check string) name expected actual
+let check_string name expected actual = Alcotest.(check string) name expected actual
+let check_bool name expected actual = Alcotest.(check bool) name expected actual
+let check_int name expected actual = Alcotest.(check int) name expected actual
 
 let table_case name expected table =
   Alcotest.test_case name `Quick (fun () ->
@@ -35,12 +38,13 @@ let test_table_smart_shrink () =
     "┌────┬──┬──────┐\n\
      │Name│A…│Locat…│\n\
      ├────┼──┼──────┤\n\
-     │Kini│40│New Y…│\n\
+     │Kini│40│New   │\n\
+     │    │  │York  │\n\
      │Eli │30│London│\n\
      │Iris│20│Paris │\n\
      └────┴──┴──────┘"
   in
-  check_render "median shrink" expected (Table.render table)
+  check_render "median shrink wraps the widest cell" expected (Table.render table)
 
 let test_table_even_median () =
   let table =
@@ -48,8 +52,10 @@ let test_table_even_median () =
       ~rows:[ [ "abcdefghij"; "123456789" ]; [ ""; "" ] ]
       ~border:Border.normal ()
   in
-  let expected = "┌──────┬─────┐\n│abcde…│1234…│\n│      │     │\n└──────┴─────┘" in
-  check_render "even median uses both middle widths" expected (Table.render table)
+  let expected =
+    "┌──────┬─────┐\n│abcdef│12345│\n│ghij  │6789 │\n│      │     │\n└──────┴─────┘"
+  in
+  check_render "even median wraps both middle widths" expected (Table.render table)
 
 let test_table_unicode_width () =
   let decomposed = "\x65\xcc\x81" in
@@ -61,8 +67,17 @@ let test_table_minimum_width_floor () =
   let table =
     Table.v ~width:9 ~rows:[ [ "x"; "longword"; "z" ] ] ~border:Border.normal ()
   in
-  let expected = "┌─┬───┬─┐\n│x│lo…│z│\n└─┴───┴─┘" in
+  let expected = "┌─┬───┬─┐\n│x│lon│z│\n│ │gwo│ │\n│ │rd │ │\n└─┴───┴─┘" in
   check_render "minimum column floor" expected (Table.render table)
+
+let test_table_no_wrap_truncates () =
+  let table =
+    Table.v ~width:9 ~wrap:false
+      ~rows:[ [ "x"; "longword"; "z" ] ]
+      ~border:Border.normal ()
+  in
+  check_render "explicit no-wrap truncates" "┌─┬───┬─┐\n│x│lo…│z│\n└─┴───┴─┘"
+    (Table.render table)
 
 let test_table_offset_overflow_height () =
   let table =
@@ -100,7 +115,7 @@ let test_table_crlf_no_wrap () =
       [ "a2"; "b2"; "c2"; "d2" ];
     ]
   in
-  let table = Table.v ~rows ~border:Border.normal () in
+  let table = Table.v ~rows ~wrap:false ~border:Border.normal () in
   let expected =
     "┌──┬────┬──┬──┐\n\
      │a0│b0  │c0│d0│\n\
@@ -212,9 +227,13 @@ let test_table_borders () =
 let test_tree_default_shape () =
   let tree =
     Tree.node ~value:"root"
-      [
-        Tree.leaf "one"; Tree.node ~value:"branch" [ Tree.leaf "deep" ]; Tree.leaf "last";
-      ]
+      ~children:
+        [
+          Tree.leaf "one";
+          Tree.node ~value:"branch" ~children:[ Tree.leaf "deep" ] ();
+          Tree.leaf "last";
+        ]
+      ()
   in
   let expected = "root\n├── one\n├── branch\n│   └── deep\n└── last" in
   check_render "nested branches" expected (Tree.render tree)
@@ -225,33 +244,44 @@ let test_tree_custom_enumerator_and_indenter () =
     ^ (if last then "L" else "M")
     ^ "> "
   in
-  let indenter ~depth ~last =
+  let indenter ~depth ~index:_ ~last =
     "[" ^ string_of_int depth ^ ":" ^ (if last then "L" else "M") ^ "] "
   in
   let tree =
-    Tree.node ~value:"R" [ Tree.leaf "A"; Tree.node ~value:"N" [ Tree.leaf "C" ] ]
+    Tree.node ~value:"R"
+      ~children:[ Tree.leaf "A"; Tree.node ~value:"N" ~children:[ Tree.leaf "C" ] () ]
+      ()
   in
   let expected = "R\n<1:0:M> A\n<1:1:L> N\n[1:L] <2:0:L> C" in
   check_render "custom branch functions" expected (Tree.render ~enumerator ~indenter tree)
 
+let plain_role = fun ~depth:_ ~index:_ ~value:_ -> Style.empty
+
 let test_tree_styles_by_depth () =
-  let style ~depth _ =
-    if depth = 0 then Style.bold true Style.empty else Style.italic true Style.empty
+  let styles =
+    {
+      Tree.root = Style.bold true Style.empty;
+      item = (fun ~depth:_ ~index:_ ~value:_ -> Style.italic true Style.empty);
+      enumerator = plain_role;
+      indenter = plain_role;
+    }
   in
-  let tree = Tree.node ~value:"root" [ Tree.leaf "leaf" ] in
+  let tree = Tree.node ~value:"root" ~children:[ Tree.leaf "leaf" ] () in
   let expected = "\027[1mroot\027[m\n└── \027[3mleaf\027[m" in
-  check_render "root and child styles" expected (Tree.render ~style tree)
+  check_render "root and child styles" expected (Tree.render (Tree.style tree styles))
 
 let test_tree_multiline_values () =
   let tree =
-    Tree.node ~value:"Root\nLine" [ Tree.node ~value:"Child\nTail" [ Tree.leaf "Grand" ] ]
+    Tree.node ~value:"Root\nLine"
+      ~children:[ Tree.node ~value:"Child\nTail" ~children:[ Tree.leaf "Grand" ] () ]
+      ()
   in
   let expected = "Root\nLine\n└── Child\n    Tail\n    └── Grand" in
   check_render "multiline nodes" expected (Tree.render tree)
 
 let test_tree_custom_marker_width () =
   let enumerator ~depth:_ ~index:_ ~last:_ = "-> " in
-  let tree = Tree.node ~value:"root" [ Tree.leaf "first\nsecond" ] in
+  let tree = Tree.node ~value:"root" ~children:[ Tree.leaf "first\nsecond" ] () in
   let expected = "root\n-> first\n   second" in
   check_render "multiline child follows marker width" expected
     (Tree.render ~enumerator tree)
@@ -262,72 +292,122 @@ let test_tree_marker_alignment () =
   in
   let tree =
     Tree.node ~value:"root"
-      [ Tree.leaf "one"; Tree.leaf "two"; Tree.leaf "three"; Tree.leaf "four" ]
+      ~children:[ Tree.leaf "one"; Tree.leaf "two"; Tree.leaf "three"; Tree.leaf "four" ]
+      ()
   in
   let expected = "root\n  I one\n II two\nIII three\n IV four" in
   check_render "sibling marker alignment" expected (Tree.render ~enumerator tree)
 
 let test_tree_empty_root () =
-  let tree = Tree.node [ Tree.leaf "child" ] in
+  let tree = Tree.node ~children:[ Tree.leaf "child" ] () in
   check_render "empty root is omitted" "└── child" (Tree.render tree)
 
-let list_case name enumerator expected =
+let test_tree_hidden_and_offset () =
+  let hidden_first =
+    Tree.node ~children:[ Tree.leaf ~hidden:true "a"; Tree.leaf "b" ] ()
+  in
+  check_render "hidden node leaves no marker" "└── b" (Tree.render hidden_first);
+  check_bool "hidden flag" true (Tree.hidden (Tree.leaf ~hidden:true "x"));
+  check_bool "visible flag" false (Tree.hidden (Tree.leaf "x"));
+  check_render "hidden root renders nothing" ""
+    (Tree.render (Tree.hide true (Tree.node ~value:"r" ~children:[] ())));
+  let windowed =
+    Tree.node ~value:"r" ~offset:(1, 2)
+      ~children:[ Tree.leaf "a"; Tree.leaf "b"; Tree.leaf "c" ]
+      ()
+  in
+  check_render "offset windows children" "r\n└── b" (Tree.render windowed);
+  let inverted =
+    Tree.node ~value:"r" ~offset:(2, 1)
+      ~children:[ Tree.leaf "a"; Tree.leaf "b"; Tree.leaf "c" ]
+      ()
+  in
+  check_render "inverted offset swaps" "r\n└── b" (Tree.render inverted);
+  check_int "children kept" 3 (Stdlib.List.length (Tree.children windowed));
+  check_string "value kept" "r" (Tree.value windowed)
+
+let test_tree_root_width_and_rounded () =
+  let tree = Tree.root "R" (Tree.node ~children:[ Tree.leaf "x" ] ()) in
+  check_render "root renames in place" "R\n└── x" (Tree.render tree);
+  let wide = Tree.width 6 (Tree.node ~value:"root" ~children:[ Tree.leaf "a" ] ()) in
+  let lines = String.split_on_char '\n' (Tree.render wide) in
+  check_bool "every line is six cells" true
+    (Stdlib.List.for_all (fun line -> Layout.width line = 6) lines);
+  check_render "rounded enumerator" "╰── x"
+    (Tree.render (Tree.enumerate `Rounded (Tree.node ~children:[ Tree.leaf "x" ] ())))
+
+let text items = Stdlib.List.map (fun item -> List.Text item) items
+
+let list_case name marker expected =
   Alcotest.test_case name `Quick (fun () ->
       check_render name expected
-        (List.render (List.v ~enumerator [ "Foo"; "Bar"; "Baz" ])))
+        (List.render (List.v ~marker (text [ "Foo"; "Bar"; "Baz" ]))))
 
 let test_list_multiline_item () =
   let items = [ "first\nsecond\nthird"; "last" ] in
   let expected = "• first\n  second\n  third\n• last" in
-  check_render "multiline list item" expected (List.render (List.v items))
+  check_render "multiline list item" expected (List.render (List.v (text items)))
 
 let test_list_alphabet_boundaries () =
   let items = Stdlib.List.init 703 (fun _ -> "") in
   let lines =
-    String.split_on_char '\n' (List.render (List.v ~enumerator:`Alphabet items))
+    String.split_on_char '\n' (List.render (List.v ~marker:`Alphabet (text items)))
   in
   let line index = Stdlib.List.nth lines index in
-  Alcotest.(check string) "Z" "Z. " (line 25);
-  Alcotest.(check string) "AA" "AA. " (line 26);
-  Alcotest.(check string) "AZ" "AZ. " (line 51);
-  Alcotest.(check string) "BA" "BA. " (line 52);
-  Alcotest.(check string) "ZZ" "ZZ. " (line 701);
+  Alcotest.(check string) "Z" "  Z. " (line 25);
+  Alcotest.(check string) "AA" " AA. " (line 26);
+  Alcotest.(check string) "AZ" " AZ. " (line 51);
+  Alcotest.(check string) "BA" " BA. " (line 52);
+  Alcotest.(check string) "ZZ" " ZZ. " (line 701);
   Alcotest.(check string) "AAA" "AAA. " (line 702)
 
 let test_list_alphabet_rollover () =
   let items = Stdlib.List.init 28 (fun _ -> "item") in
   let expected =
-    "A. item\n\
-     B. item\n\
-     C. item\n\
-     D. item\n\
-     E. item\n\
-     F. item\n\
-     G. item\n\
-     H. item\n\
-     I. item\n\
-     J. item\n\
-     K. item\n\
-     L. item\n\
-     M. item\n\
-     N. item\n\
-     O. item\n\
-     P. item\n\
-     Q. item\n\
-     R. item\n\
-     S. item\n\
-     T. item\n\
-     U. item\n\
-     V. item\n\
-     W. item\n\
-     X. item\n\
-     Y. item\n\
-     Z. item\n\
-     AA. item\n\
-     AB. item"
+    let marker letter = " " ^ String.make 1 letter ^ ". item" in
+    let single = Stdlib.List.init 26 (fun i -> marker (Char.chr (65 + i))) in
+    String.concat "\n" (single @ [ "AA. item"; "AB. item" ])
   in
   check_render "alphabet rollover" expected
-    (List.render (List.v ~enumerator:`Alphabet items))
+    (List.render (List.v ~marker:`Alphabet (text items)))
+
+let test_list_nested_and_custom () =
+  let sub = List.v ~marker:`Roman (text [ "Hi"; "Hello"; "Halo" ]) in
+  let list =
+    List.v [ List.Text "Foo"; List.Text "Bar"; List.Nested sub; List.Text "Qux" ]
+  in
+  check_render "nested list indents one level"
+    "• Foo\n• Bar\n    I. Hi\n   II. Hello\n  III. Halo\n• Qux" (List.render list);
+  check_render "custom marker" "1) Foo\n2) Bar"
+    (List.render
+       (List.v
+          ~marker:(`Custom (fun ~index -> string_of_int (index + 1) ^ ")"))
+          (text [ "Foo"; "Bar" ])));
+  check_render "appended item" "• Foo\n• Baz"
+    (List.render (List.item (List.Text "Baz") (List.v (text [ "Foo" ]))));
+  check_render "offset window" "• b\n• c"
+    (List.render (List.offset 1 3 (List.v (text [ "a"; "b"; "c"; "d" ]))));
+  check_render "hidden nested list" "• Foo\n• Qux"
+    (List.render
+       (List.v
+          [
+            List.Text "Foo";
+            List.Nested (List.hide true (List.v (text [ "gone" ])));
+            List.Text "Qux";
+          ]));
+  check_bool "marker name" true (List.marker_of_string "roman" = Some `Roman);
+  check_bool "unknown marker name" true (List.marker_of_string "greek" = None);
+  let red = Option.get (Color.rgb 255 0 0) in
+  let styled =
+    List.render
+      (List.v
+         ~marker_style:(fun ~index:_ -> Style.foreground red Style.empty)
+         (text [ "Foo" ]))
+  in
+  check_bool "marker styled" true
+    (Stdlib.String.length styled > Stdlib.String.length "• Foo");
+  check_bool "item text untouched" true
+    (String.sub styled (String.length styled - 3) 3 = "Foo")
 
 let cases : unit Alcotest.test_case list =
   [
@@ -346,6 +426,7 @@ let cases : unit Alcotest.test_case list =
     Alcotest.test_case "table distinct border fields" `Quick
       test_table_distinct_border_fields;
     Alcotest.test_case "table minimum width floor" `Quick test_table_minimum_width_floor;
+    Alcotest.test_case "table no wrap truncates" `Quick test_table_no_wrap_truncates;
     Alcotest.test_case "table offset overflow and height" `Quick
       test_table_offset_overflow_height;
     Alcotest.test_case "table multiline wrap" `Quick test_table_multiline_wrap;
@@ -364,6 +445,9 @@ let cases : unit Alcotest.test_case list =
     Alcotest.test_case "tree custom marker width" `Quick test_tree_custom_marker_width;
     Alcotest.test_case "tree sibling marker alignment" `Quick test_tree_marker_alignment;
     Alcotest.test_case "tree empty root" `Quick test_tree_empty_root;
+    Alcotest.test_case "tree hidden and offset" `Quick test_tree_hidden_and_offset;
+    Alcotest.test_case "tree root width and rounded" `Quick
+      test_tree_root_width_and_rounded;
     list_case "list bullets" `Bullet "• Foo\n• Bar\n• Baz";
     list_case "list dashes" `Dash "- Foo\n- Bar\n- Baz";
     list_case "list asterisks" `Asterisk "* Foo\n* Bar\n* Baz";
@@ -373,4 +457,5 @@ let cases : unit Alcotest.test_case list =
     Alcotest.test_case "list alphabet rollover" `Quick test_list_alphabet_rollover;
     Alcotest.test_case "list multiline item" `Quick test_list_multiline_item;
     Alcotest.test_case "list alphabet boundaries" `Quick test_list_alphabet_boundaries;
+    Alcotest.test_case "list nested and custom" `Quick test_list_nested_and_custom;
   ]

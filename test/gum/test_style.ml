@@ -58,8 +58,8 @@ let neutral_style_is_identity () =
 
 let cases =
   [
-    Alcotest.test_case "trim lines" `Quick trims_each_line;
-    Alcotest.test_case "line structure" `Quick keeps_line_structure;
-    Alcotest.test_case "complete style" `Quick renders_complete_style;
-    Alcotest.test_case "neutral style" `Quick neutral_style_is_identity;
+    Alcotest_lwt.test_case_sync "trim lines" `Quick trims_each_line;
+    Alcotest_lwt.test_case_sync "line structure" `Quick keeps_line_structure;
+    Alcotest_lwt.test_case_sync "complete style" `Quick renders_complete_style;
+    Alcotest_lwt.test_case_sync "neutral style" `Quick neutral_style_is_identity;
   ]

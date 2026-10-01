@@ -2,7 +2,9 @@
 
     Cursor coordinates start at one. Text payloads must be valid UTF-8 and cannot contain
     ESC, BEL, or C1 control scalars. Invalid payloads raise [Invalid_argument]. Clipboard
-    data is opaque and is base64-encoded. *)
+    data is opaque and is base64-encoded. A constructor marked [ported API] has no emitter
+    in this repository. Its bytes are pinned by the test suite, and the
+    terminal-capability work of [charamel.tea] emits it. *)
 
 (** {1 Cursor movement} *)
 
@@ -28,10 +30,10 @@ val cub : int -> string
     default movement of one cell. *)
 
 val save_cursor : string
-(** [save_cursor] is the DEC sequence that saves the cursor position. *)
+(** [save_cursor] is the DEC sequence that saves the cursor position. Ported API. *)
 
 val restore_cursor : string
-(** [restore_cursor] is the DEC sequence that restores the saved cursor. *)
+(** [restore_cursor] is the DEC sequence that restores the saved cursor. Ported API. *)
 
 (** {1 Erase} *)
 
@@ -86,10 +88,11 @@ val grapheme_clustering : int
 
 val mouse_on : mode:[ `Click | `Motion | `All ] -> string
 (** [mouse_on ~mode] is the sequence that enables the requested reporting mode with SGR
-    mouse encoding. *)
+    mouse encoding. The renderer builds its own enable sequence today. Ported API. *)
 
 val mouse_off : string
-(** [mouse_off] is the sequence that disables mouse reporting and encoding. *)
+(** [mouse_off] is the sequence that disables mouse reporting and encoding. The renderer
+    builds its own teardown today. Ported API. *)
 
 (** {1 Window title and notifications} *)
 
@@ -101,7 +104,7 @@ val clipboard_osc52 : string -> string
     Empty data clears the clipboard. *)
 
 val notify_osc9 : string -> string
-(** [notify_osc9 text] is the OSC 9 desktop notification for [text]. *)
+(** [notify_osc9 text] is the OSC 9 desktop notification for [text]. Ported API. *)
 
 (** {1 Queries} *)
 
@@ -115,7 +118,7 @@ val cursor_color_query : string
 (** [cursor_color_query] is the cursor-color query. *)
 
 val da1 : string
-(** [da1] is the primary device-attributes query. *)
+(** [da1] is the primary device-attributes query. Ported API. *)
 
 val xtversion : string
 (** [xtversion] is the terminal name and version query. *)

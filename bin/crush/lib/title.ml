@@ -1,3 +1,5 @@
+open Lwt.Infix
+
 let utf8_prefix s limit =
   if limit <= 0 then ""
   else
@@ -16,30 +18,32 @@ let strip_think text =
   let tags = Re.Perl.compile_pat "</?think>" in
   text |> Re.replace_string block ~by:"" |> Re.replace_string tags ~by:""
 
-let generate ~sw ~clock ~net ~(small : Models.resolved) ~first_prompt =
+let generate ~sw ~clock ~(small : Models.resolved) ~first_prompt =
   let prompt = utf8_prefix first_prompt 2_000 in
   let messages = [ Charamel_fantasy.Message.text Charamel_fantasy.Message.User prompt ] in
   let stream =
-    Charamel_fantasy.Provider.stream small.Models.provider ~sw ~clock ~net
+    Charamel_fantasy.Provider.stream small.Models.provider ~stop:sw ~clock
       ~model:small.Models.model ~system:[ Prompt_title.text ] ~max_tokens:40 messages
   in
   let output = Buffer.create 128 in
+  let cleaned_title () =
+    let cleaned = String.trim (strip_think (Buffer.contents output)) in
+    if cleaned = "" then utf8_prefix prompt 60 else utf8_prefix cleaned 80
+  in
   let rec consume () =
-    match Eio.Stream.take stream with
-    | Charamel_fantasy.Stream_part.Text_delta text ->
+    Lwt_stream.get stream >>= fun (item : Charamel_fantasy.Stream_part.t option) ->
+    match item with
+    | None -> Lwt.return (Error (`Provider "title stream ended before completion"))
+    | Some (Text_delta text) ->
         Buffer.add_string output text;
         consume ()
-    | Reasoning_delta _ -> consume ()
-    | Tool_call_start _ -> consume ()
-    | Tool_input_delta _ -> consume ()
-    | Tool_call_end _ -> consume ()
-    | Usage _ -> consume ()
-    | Finish (`Error message) -> Error (`Provider message)
-    | Finish (`Stop | `Length | `Content_filter | `Tool_calls) ->
-        let cleaned = String.trim (strip_think (Buffer.contents output)) in
-        let title =
-          if cleaned = "" then utf8_prefix prompt 60 else utf8_prefix cleaned 80
-        in
-        Ok title
+    | Some (Reasoning_delta _) -> consume ()
+    | Some (Tool_call_start _) -> consume ()
+    | Some (Tool_input_delta _) -> consume ()
+    | Some (Tool_call_end _) -> consume ()
+    | Some (Usage _) -> consume ()
+    | Some (Finish (`Error message)) -> Lwt.return (Error (`Provider message))
+    | Some (Finish (`Stop | `Length | `Content_filter | `Tool_calls)) ->
+        Lwt.return (Ok (cleaned_title ()))
   in
   consume ()

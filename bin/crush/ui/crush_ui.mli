@@ -29,25 +29,25 @@ module Bridge : sig
   (** [create ?capacity ()] creates a bounded, lossless bridge. The default capacity is
       256. *)
 
-  val push : t -> Crush_core.Agent.event -> unit
+  val push : t -> Crush_core.Agent.event -> unit Lwt.t
   (** [push bridge event] blocks while the bounded event queue is full. Once [close] has
       run it returns without dropping a producer's cancellation. *)
 
   val ask :
     t ->
     Crush_core.Tool.question list ->
-    (Crush_core.Tool.answer list, [ `Aborted | `Not_interactive ]) result
+    (Crush_core.Tool.answer list, [ `Aborted | `Not_interactive ]) result Lwt.t
   (** [ask bridge questions] serializes an agent question through the UI. *)
 
   val ask_permission :
-    t -> Crush_core.Permission.request -> Crush_core.Permission.decision
+    t -> Crush_core.Permission.request -> Crush_core.Permission.decision Lwt.t
   (** [ask_permission bridge request] serializes one decoded write request through the
       permission dialog and blocks until the policy decision. *)
 
-  val take_event : t -> Crush_core.Agent.event option
-  val take_question : t -> ask_request option
+  val take_event : t -> Crush_core.Agent.event option Lwt.t
+  val take_question : t -> ask_request option Lwt.t
 
-  val take_permission : t -> permission_request option
+  val take_permission : t -> permission_request option Lwt.t
   (** [take_permission t] takes the next permission request for [t], blocking until one
       arrives. It returns [None] only after [close] and once the queue is empty. *)
 
@@ -71,8 +71,7 @@ end
 type backend = {
   agent : Crush_core.Agent.t ref;
   events : Bridge.t;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
-  env : Eio_unix.Stdenv.base;
+  clock : Charamel_os.Time.clock;
   form_env : Charamel_huh.Form.Env.t;
   project : string;
   session_id : unit -> string;
@@ -110,8 +109,8 @@ type ui_msg
 val app : backend -> (ui_model, ui_msg) Charamel_tea.app
 (** [app backend] is the Tea application used by both production and scripted tests. *)
 
-val run : backend -> (ui_model, Charamel_tea.error) result
-(** [run backend] starts the chat application on [backend.env], restoring the terminal and
+val run : backend -> (ui_model, Charamel_tea.error) result Lwt.t
+(** [run backend] starts the chat application on the local terminal, restoring it and
     closing the bridge on every exit path. *)
 
 val run_with :

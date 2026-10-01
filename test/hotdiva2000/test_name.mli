@@ -3,9 +3,9 @@
     transcription fidelity ({!Words}) is verified once elsewhere and is not duplicated
     here.
 
-    Exposed rather than run directly. {!suites} is meant to be spliced into a single
-    [Alcotest.run] call owned by whatever [test/hotdiva2000/dune] wires up as the runnable
-    test executable for this app, alongside any sibling suites (e.g. a future CLI-level
-    test module). *)
+    Exposed rather than run directly. {!suites} is meant to be spliced into the single
+    [Test_support.run_lwt] call owned by whatever [test/hotdiva2000/dune] wires up as the
+    runnable test executable for this app, alongside any sibling suites (e.g. a future
+    CLI-level test module). *)
 
-val suites : (string * unit Alcotest.test_case list) list
+val suites : (string * unit Alcotest_lwt.test_case list) list

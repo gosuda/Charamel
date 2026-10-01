@@ -33,9 +33,9 @@ let test_writer () =
 
 let cases =
   [
-    Alcotest.test_case "quotes" `Quick test_quotes;
-    Alcotest.test_case "BOM and CRLF" `Quick test_crlf_and_bom;
-    Alcotest.test_case "malformed" `Quick test_malformed;
-    Alcotest.test_case "lazy quotes" `Quick test_lazy_quotes;
-    Alcotest.test_case "writer" `Quick test_writer;
+    Alcotest_lwt.test_case_sync "quotes" `Quick test_quotes;
+    Alcotest_lwt.test_case_sync "BOM and CRLF" `Quick test_crlf_and_bom;
+    Alcotest_lwt.test_case_sync "malformed" `Quick test_malformed;
+    Alcotest_lwt.test_case_sync "lazy quotes" `Quick test_lazy_quotes;
+    Alcotest_lwt.test_case_sync "writer" `Quick test_writer;
   ]

@@ -8,18 +8,17 @@
   charamel.bubbles
   charamel.lipgloss
   charamel.ansi
-  eio
-  eio.unix
+  charamel.os
+  lwt
+  lwt.unix
   unix
-  eio_main
-  eio.mock
   alcotest
-  fmt)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  alcotest-lwt
+  fmt
+  test_support))
+
+(test
+ (name test_merge_battery)
+ (package charamel)
+ (modules test_merge_battery)
+ (libraries charamel.huh charamel.tea charamel.ansi charamel.os alcotest fmt))

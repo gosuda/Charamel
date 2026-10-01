@@ -19,8 +19,6 @@ let display ~current constraint_ =
   | None -> Ok current
   | Some constraint_text -> Result.map (fun () -> "") (check ~current constraint_text)
 
-let command_info name doc = Cmdliner.Cmd.info name ~doc
-
 let cmd env =
   let open Cmdliner in
   let constraint_ =
@@ -33,7 +31,7 @@ let cmd env =
     let+ constraint_ = constraint_ in
     match display ~current:Charamel_cli.Version.current constraint_ with
     | Ok output when output <> "" -> Gum_io.println env output
-    | Ok _ -> ()
+    | Ok _ -> Lwt.return_unit
     | Error (`Msg message) -> Charamel_cli.error message
   in
-  Cmd.v (command_info "version" "Print or check the gum version.") term
+  Cmd.v (Cmd.info "version" ~doc:"Print or check the gum version.") term

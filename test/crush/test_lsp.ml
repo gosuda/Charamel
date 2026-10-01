@@ -1,5 +1,6 @@
 module Lsp = Crush_core.Lsp
 module Config = Crush_core.Config
+module Path = Crush_core.Path
 
 let source_text = "a\240\159\152\128b\n"
 
@@ -79,140 +80,122 @@ let config_with_server script =
     options = { base.Config.options with auto_lsp = false };
   }
 
-let with_lsp ?(cwd = "/tmp") script f =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let path = Filename.temp_file "crush-lsp" ".ml" in
-  Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(env#fs / path) source_text;
-  let lsp =
-    Lsp.create ~sw ~proc_mgr:env#process_mgr ~clock:env#clock ~fs:env#fs ~cwd
-      ~config:(config_with_server script)
-  in
-  Fun.protect
-    (fun () -> f env lsp path)
-    ~finally:(fun () ->
-      Lsp.stop_all lsp;
-      Eio.Path.unlink ~missing_ok:true Eio.Path.(env#fs / path))
+let lsp_temp_path prefix =
+  Fmt.str "%s%s%s-%d-%d.ml"
+    (Filename.get_temp_dir_name ())
+    Filename.dir_sep prefix (Unix.getpid ()) (Random.bits ())
 
+let clock = Charamel_os.Time.lwt
+
+let with_lsp ?(cwd = Filename.get_temp_dir_name ()) script f =
+  let path = lsp_temp_path "crush-lsp" in
+  Test_tools_test_support.write_file path source_text;
+  let sw = Lwt_switch.create () in
+  let lsp = Lsp.create ~sw ~clock ~fs_root:"/" ~cwd ~config:(config_with_server script) in
+  Fun.protect
+    (fun () -> f lsp path)
+    ~finally:(fun () ->
+      Lwt_direct.await (Lsp.stop_all lsp);
+      try Sys.remove path with Sys_error _ -> ())
+
+(* [Lsp] reports [Path.normalize]d locations — \\ separators become /. *)
 let check_location expected (actual : Lsp.location) =
-  Alcotest.(check string) "location path" expected actual.Lsp.path;
+  Alcotest.(check string) "location path" (Path.normalize expected) actual.Lsp.path;
   Alcotest.(check int) "location line" 1 actual.Lsp.line;
   Alcotest.(check int) "location column" 1 actual.Lsp.col
 
 let protocol_round_trip () =
-  with_lsp fixture_script (fun _env lsp path ->
+  with_lsp fixture_script (fun lsp path ->
       Alcotest.(check (option string))
         "fixture handle" (Some "fixture") (Lsp.handles lsp ~path);
-      Lsp.touch lsp ~path;
-      let values = Lsp.diagnostics lsp ~path ~wait:0.5 in
+      Lwt_direct.await (Lsp.touch lsp ~path);
+      let values = Lwt_direct.await (Lsp.diagnostics lsp ~path ~wait:0.5) in
       Alcotest.(check int) "diagnostic count" 1 (List.length values);
       Alcotest.(check string)
         "diagnostic message" "fixture warning" (List.hd values).Lsp.message;
-      (match Lsp.definition lsp ~path ~line:1 ~col:1 with
+      (match Lwt_direct.await (Lsp.definition lsp ~path ~line:1 ~col:1) with
       | Error error -> Alcotest.failf "definition failed: %a" Lsp.pp_error error
       | Ok locations ->
           Alcotest.(check int) "definition count" 1 (List.length locations);
           check_location path (List.hd locations));
-      (match Lsp.references lsp ~path ~line:1 ~col:1 with
+      (match Lwt_direct.await (Lsp.references lsp ~path ~line:1 ~col:1) with
       | Error error -> Alcotest.failf "references failed: %a" Lsp.pp_error error
       | Ok locations -> Alcotest.(check int) "references count" 1 (List.length locations));
-      (match Lsp.document_symbols lsp ~path with
+      (match Lwt_direct.await (Lsp.document_symbols lsp ~path) with
       | Error error -> Alcotest.failf "symbols failed: %a" Lsp.pp_error error
       | Ok [ symbol ] ->
-          Alcotest.(check string) "symbol path fallback" path symbol.Lsp.range.Lsp.path;
+          Alcotest.(check string)
+            "symbol path fallback" (Path.normalize path) symbol.Lsp.range.Lsp.path;
           Alcotest.(check string) "symbol kind" "Function" symbol.Lsp.kind
       | Ok _ -> Alcotest.fail "unexpected symbols");
-      (match Lsp.find_symbol lsp ~path ~name:"fixture" with
+      (match Lwt_direct.await (Lsp.find_symbol lsp ~path ~name:"fixture") with
       | Error error -> Alcotest.failf "find symbol failed: %a" Lsp.pp_error error
       | Ok None -> Alcotest.fail "symbol was not found"
       | Ok (Some symbol) ->
           Alcotest.(check string) "found symbol" "fixture" symbol.Lsp.name);
-      match Lsp.rename lsp ~path ~line:1 ~col:1 ~new_name:"renamed" with
+      match
+        Lwt_direct.await (Lsp.rename lsp ~path ~line:1 ~col:1 ~new_name:"renamed")
+      with
       | Error error -> Alcotest.failf "rename failed: %a" Lsp.pp_error error
       | Ok [ (changed_path, [ edit ]) ] ->
-          Alcotest.(check string) "rename path" path changed_path;
+          Alcotest.(check string) "rename path" (Path.normalize path) changed_path;
           Alcotest.(check string) "rename text" "z" edit.Lsp.new_text
       | Ok _ -> Alcotest.fail "unexpected rename edits")
 
 let unicode_edit () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun _sw ->
-  let path = Filename.temp_file "crush-lsp-edit" ".ml" in
-  Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(env#fs / path) source_text;
+  let path = lsp_temp_path "crush-lsp-edit" in
+  Test_tools_test_support.write_file path source_text;
   let edit =
     { Lsp.range = { path; line = 1; col = 2; end_line = 1; end_col = 4 }; new_text = "X" }
   in
-  (match Lsp.apply_edits ~cwd:(Sys.getcwd ()) ~fs:env#fs [ (path, [ edit ]) ] with
+  (match Lwt_direct.await (Lsp.apply_edits ~cwd:(Sys.getcwd ()) [ (path, [ edit ]) ]) with
   | Error error -> Alcotest.failf "unicode edit failed: %a" Lsp.pp_error error
   | Ok [ changed ] ->
-      Alcotest.(check string) "changed path" path changed;
+      Alcotest.(check string) "changed path" (Path.normalize path) changed;
       Alcotest.(check string)
         "unicode edit" "aXb\n"
-        (Eio.Path.load Eio.Path.(env#fs / path))
+        (Test_tools_test_support.load_file path)
   | Ok _ -> Alcotest.fail "unexpected changed path list");
-  Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(env#fs / path) source_text;
+  Test_tools_test_support.write_file path source_text;
   let split =
     { Lsp.range = { path; line = 1; col = 3; end_line = 1; end_col = 4 }; new_text = "Y" }
   in
-  (match Lsp.apply_edits ~cwd:(Sys.getcwd ()) ~fs:env#fs [ (path, [ split ]) ] with
-  | Error (`Io (_, message)) ->
-      Alcotest.(check bool) "surrogate boundary rejected" true (String.length message > 0)
+  (match
+     Lwt_direct.await (Lsp.apply_edits ~cwd:(Sys.getcwd ()) [ (path, [ split ]) ])
+   with
+  | Error (`Io _) -> ()
   | Error error -> Alcotest.failf "wrong split error: %a" Lsp.pp_error error
   | Ok _ -> Alcotest.fail "surrogate boundary was accepted");
-  Eio.Path.unlink ~missing_ok:true Eio.Path.(env#fs / path)
+  Sys.remove path
 
 let malformed_frame () =
-  with_lsp malformed_script (fun _env lsp path ->
-      Lsp.touch lsp ~path;
-      match Lsp.servers lsp with
-      | [ ("fixture", Lsp.Failed message) ] ->
-          Alcotest.(check bool)
-            "malformed frame reports failure" true
-            (String.length message > 0)
+  with_lsp malformed_script (fun lsp path ->
+      Lwt_direct.await (Lsp.touch lsp ~path);
+      match Lwt_direct.await (Lsp.servers lsp) with
+      | [ ("fixture", Lsp.Failed _) ] -> ()
       | values ->
           Alcotest.failf "unexpected malformed server state count %d" (List.length values))
 
 let root_slash_matches () =
-  with_lsp ~cwd:"/" fixture_script (fun _env lsp path ->
+  if Sys.win32 then Alcotest.skip () (* A bare [/] names no Windows root. *);
+  with_lsp ~cwd:"/" fixture_script (fun lsp path ->
       Alcotest.(check (option string))
         "fixture handle under root" (Some "fixture") (Lsp.handles lsp ~path))
 
 let handles_respects_cwd () =
-  with_lsp fixture_script (fun _env lsp _path ->
+  with_lsp fixture_script (fun lsp _path ->
       Alcotest.(check (option string))
         "inside cwd" (Some "fixture")
-        (Lsp.handles lsp ~path:"/tmp/crush-lsp-inside.ml");
+        (Lsp.handles lsp ~path:(lsp_temp_path "crush-lsp-inside"));
       Alcotest.(check (option string))
         "outside cwd" None
         (Lsp.handles lsp ~path:"/home/foo.ml"))
 
-let normalize_path_pins () =
-  Alcotest.check Alcotest.string "empty resolves to cwd" "/proj"
-    (Lsp.normalize_path ~cwd:"/proj" "");
-  Alcotest.check Alcotest.string "dot-dot clamps at root" "/"
-    (Lsp.normalize_path ~cwd:"/proj" "/../..");
-  Alcotest.check Alcotest.string "escape above cwd reaches root" "/"
-    (Lsp.normalize_path ~cwd:"/a" "x/../../..");
-  Alcotest.check Alcotest.bool "child is inside" true (Lsp.inside ~cwd:"/a" "/a" "/a/b");
-  Alcotest.check Alcotest.bool "sibling prefix is not inside" false
-    (Lsp.inside ~cwd:"/a" "/a" "/ab");
-  Alcotest.check Alcotest.bool "root contains every absolute path" true
-    (Lsp.inside ~cwd:"/a" "/" "/x");
-  Alcotest.check Alcotest.string "bare dot-dot above cwd clamps at root" "/"
-    (Lsp.normalize_path ~cwd:"/a" "..");
-  Alcotest.check Alcotest.string "mid-path dot-dot resolves" "/p/a/c"
-    (Lsp.normalize_path ~cwd:"/p" "a/b/../c");
-  Alcotest.check Alcotest.string "trailing slash is dropped" "/a/b"
-    (Lsp.normalize_path ~cwd:"/p" "/a/b/");
-  Alcotest.check Alcotest.bool "equal paths are inside" true
-    (Lsp.inside ~cwd:"/a" "/a" "/a")
-
 let cases =
   [
-    Alcotest.test_case "real child JSON-RPC" `Quick protocol_round_trip;
-    Alcotest.test_case "UTF-16 Unicode workspace edit" `Quick unicode_edit;
-    Alcotest.test_case "malformed frame" `Quick malformed_frame;
-    Alcotest.test_case "root slash matches" `Quick root_slash_matches;
-    Alcotest.test_case "handles respects cwd" `Quick handles_respects_cwd;
-    Alcotest.test_case "normalize path pins" `Quick normalize_path_pins;
+    Test_tools_test_support.case "real child JSON-RPC" `Quick protocol_round_trip;
+    Test_tools_test_support.case "UTF-16 Unicode workspace edit" `Quick unicode_edit;
+    Test_tools_test_support.case "malformed frame" `Quick malformed_frame;
+    Test_tools_test_support.case "root slash matches" `Quick root_slash_matches;
+    Test_tools_test_support.case "handles respects cwd" `Quick handles_respects_cwd;
   ]

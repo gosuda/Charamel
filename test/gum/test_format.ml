@@ -2,15 +2,6 @@ let expect_ok name = function
   | Ok value -> value
   | Error (`Msg message) -> Alcotest.failf "%s: %s" name message
 
-let contains_sub text needle =
-  let text_length = String.length text in
-  let needle_length = String.length needle in
-  let rec loop index =
-    index + needle_length <= text_length
-    && (String.sub text index needle_length = needle || loop (index + 1))
-  in
-  needle = "" || loop 0
-
 let template_styles_text () =
   let rendered =
     expect_ok "template" (Format.render Format.Template "{{ Bold \"hello\" }}")
@@ -60,9 +51,15 @@ let all_renderers () =
     expect_ok "emoji" (Format.render ~theme:"ascii" Format.Emoji "hello :heart:")
   in
   let plain value = Charamel_ansi.Text.strip value in
-  Alcotest.(check bool) "markdown output" true (contains_sub (plain markdown) "# Title");
-  Alcotest.(check bool) "code output" true (contains_sub (plain code) "let x = 1");
-  Alcotest.(check bool) "emoji output" true (contains_sub (plain emoji) "hello ❤️")
+  Alcotest.(check bool)
+    "markdown output" true
+    (Test_support.contains ~needle:"# Title" ~haystack:(plain markdown));
+  Alcotest.(check bool)
+    "code output" true
+    (Test_support.contains ~needle:"let x = 1" ~haystack:(plain code));
+  Alcotest.(check bool)
+    "emoji output" true
+    (Test_support.contains ~needle:"hello ❤️" ~haystack:(plain emoji))
 
 let invalid_template () =
   match Format.render Format.Template "{{ Missing \"x\" }}" with
@@ -80,10 +77,10 @@ let strip_input () =
 
 let cases =
   [
-    Alcotest.test_case "template styles" `Quick template_styles_text;
-    Alcotest.test_case "nested trim" `Quick nested_and_trim;
-    Alcotest.test_case "template functions" `Quick template_functions;
-    Alcotest.test_case "all renderers" `Quick all_renderers;
-    Alcotest.test_case "invalid template" `Quick invalid_template;
-    Alcotest.test_case "strip" `Quick strip_input;
+    Alcotest_lwt.test_case_sync "template styles" `Quick template_styles_text;
+    Alcotest_lwt.test_case_sync "nested trim" `Quick nested_and_trim;
+    Alcotest_lwt.test_case_sync "template functions" `Quick template_functions;
+    Alcotest_lwt.test_case_sync "all renderers" `Quick all_renderers;
+    Alcotest_lwt.test_case_sync "invalid template" `Quick invalid_template;
+    Alcotest_lwt.test_case_sync "strip" `Quick strip_input;
   ]

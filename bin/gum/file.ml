@@ -1,3 +1,5 @@
+module Env = Charamel_cli.Env
+
 type options = {
   path : string;
   cursor : string;
@@ -21,9 +23,6 @@ type options = {
   header_style : Gum_style.t;
 }
 
-let style ?foreground ?bold ?width ?align () =
-  Gum_style.defaults ?foreground ?bold ?width ?align ()
-
 let default_options =
   {
     path = ".";
@@ -38,19 +37,15 @@ let default_options =
     header = "";
     height = 10;
     padding = "0 0";
-    cursor_style = style ~foreground:"212" ();
-    symlink_style = style ~foreground:"36" ();
-    directory_style = style ~foreground:"99" ();
-    file_style = style ();
-    permissions_style = style ~foreground:"244" ();
-    selected_style = style ~foreground:"212" ~bold:true ();
-    file_size_style = style ~foreground:"240" ~width:8 ~align:"right" ();
-    header_style = style ~foreground:"99" ();
+    cursor_style = Gum_style.defaults ~foreground:"212" ();
+    symlink_style = Gum_style.defaults ~foreground:"36" ();
+    directory_style = Gum_style.defaults ~foreground:"99" ();
+    file_style = Gum_style.defaults ();
+    permissions_style = Gum_style.defaults ~foreground:"244" ();
+    selected_style = Gum_style.defaults ~foreground:"212" ~bold:true ();
+    file_size_style = Gum_style.defaults ~foreground:"240" ~width:8 ~align:"right" ();
+    header_style = Gum_style.defaults ~foreground:"99" ();
   }
-
-let key_name key = Charamel_tea.Key.to_string key
-let is_quit key = match key_name key with "q" | "esc" -> true | _ -> false
-let is_abort key = String.equal (key_name key) "ctrl+c"
 
 type status = Running | Selected of string | Quit | Aborted
 type model = { picker : Charamel_bubbles.Filepicker.t; status : status }
@@ -78,9 +73,9 @@ let apply_styles (options : options) picker =
   in
   Charamel_bubbles.Filepicker.set_styles styles picker
 
-let app ~env (options : options) ~padding ~directory =
+let app ~(env : Charamel_cli.Env.t) (options : options) ~padding ~directory =
   let picker =
-    Charamel_bubbles.Filepicker.v ~fs:env#fs ~current_directory:directory
+    Charamel_bubbles.Filepicker.v ~root:env.Env.fs_root ~current_directory:directory
       ~height:options.height ~auto_height:(options.height = 0) ~cursor:options.cursor
       ~dir_allowed:options.directory ~file_allowed:options.file
       ~show_permissions:options.permissions ~show_size:options.size
@@ -92,9 +87,10 @@ let app ~env (options : options) ~padding ~directory =
   let init_cmd = Charamel_tea.Cmd.map (fun message -> Picker message) init_cmd in
   let update message model =
     match message with
-    | Key key when is_abort key ->
+    | Key key when Gum_flag.is_abort key ->
         ({ model with status = Aborted }, Charamel_tea.Cmd.interrupt)
-    | Key key when is_quit key -> ({ model with status = Quit }, Charamel_tea.Cmd.quit)
+    | Key key when Gum_flag.is_quit key ->
+        ({ model with status = Quit }, Charamel_tea.Cmd.quit)
     | Key key -> (
         match Charamel_bubbles.Filepicker.key model.picker key with
         | None -> (model, Charamel_tea.Cmd.none)
@@ -124,8 +120,7 @@ let app ~env (options : options) ~padding ~directory =
             ( { model with picker },
               Charamel_tea.Cmd.map (fun message -> Picker message) command ))
   in
-  let view model =
-    let picker_view = Charamel_bubbles.Filepicker.view model.picker in
+  let frame body =
     let parts =
       (if options.header = "" then []
        else
@@ -133,14 +128,23 @@ let app ~env (options : options) ~padding ~directory =
            ( Gum_style.to_style options.header_style |> fun style ->
              Charamel_lipgloss.Style.render style options.header );
          ])
-      @ [ picker_view ]
+      @ [ body ]
     in
     let parts = if options.show_help then parts @ [ help_line ] else parts in
     let content = String.concat "\n" parts in
-    Charamel_tea.View.v ~alt_screen:false
-      (Charamel_lipgloss.Style.render
-         (Charamel_lipgloss.Style.padding padding Charamel_lipgloss.Style.empty)
-         content)
+    Charamel_lipgloss.Style.render
+      (Charamel_lipgloss.Style.padding padding Charamel_lipgloss.Style.empty)
+      content
+  in
+  let cursor model =
+    Gum_io.place_cursor ~frame (Charamel_bubbles.Filepicker.selection_cursor model.picker)
+  in
+  let view model =
+    let view =
+      Charamel_tea.View.v ~alt_screen:false
+        (frame (Charamel_bubbles.Filepicker.view model.picker))
+    in
+    { view with cursor = cursor model }
   in
   let subscriptions _ =
     Charamel_tea.Sub.batch
@@ -156,40 +160,50 @@ let absolute_directory path =
   let path =
     if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
   in
-  Eio_unix.run_in_systhread ~label:"realpath" (fun () -> Unix.realpath path)
+  Lwt_preemptive.detach (fun () -> Unix.realpath path) ()
+
+let is_directory path =
+  Lwt.map
+    (function Ok { Unix.st_kind = Unix.S_DIR; _ } -> true | Ok _ | Error _ -> false)
+    (Charamel_os.Fs.stat path)
 
 let run env (options : options) =
   if (not options.file) && not options.directory then
     Charamel_cli.error "at least one between --file and --directory must be set";
-  let directory =
-    try absolute_directory (if options.path = "" then "." else options.path)
-    with Unix.Unix_error (error, _, _) ->
-      Charamel_cli.error (Fmt.str "file not found: %s" (Unix.error_message error))
-  in
-  let is_directory =
-    try Eio.Path.is_directory Eio.Path.(env#fs / directory) with Eio.Io _ -> false
-  in
-  if not is_directory then Charamel_cli.error (Fmt.str "file not found: %s" directory);
-  let padding =
-    match Gum_flag.parse_padding options.padding with
-    | Ok value -> value
-    | Error (`Msg message) -> Charamel_cli.error message
-  in
-  let app, () = app ~env options ~padding ~directory in
-  let model =
-    try
-      Gum_run.run ?timeout:options.timeout env app ~finished:(fun model ->
-          match model.status with
-          | Selected _ -> Gum_run.Submitted
-          | Quit -> Gum_run.Quit
-          | Aborted -> Gum_run.Aborted
-          | Running -> Gum_run.Quit)
-    with Gum_io.No_tty -> Charamel_cli.error "file: requires a terminal"
-  in
-  match model.status with
-  | Selected path -> Gum_io.print_raw env path
-  | Quit | Running -> Charamel_cli.error "no file selected"
-  | Aborted -> Charamel_cli.exit 130
+  Lwt.bind
+    (Lwt.catch
+       (fun () ->
+         Lwt.map
+           (fun path -> Ok path)
+           (absolute_directory (if options.path = "" then "." else options.path)))
+       (function
+         | Unix.Unix_error (error, _, _) -> Lwt.return (Error error) | exn -> Lwt.fail exn))
+    (function
+      | Error error ->
+          Charamel_cli.error (Fmt.str "file not found: %s" (Unix.error_message error))
+      | Ok directory ->
+          Lwt.bind (is_directory directory) (fun directory_ok ->
+              if not directory_ok then
+                Charamel_cli.error (Fmt.str "file not found: %s" directory);
+              let padding =
+                match Gum_flag.parse_padding options.padding with
+                | Ok value -> value
+                | Error (`Msg message) -> Charamel_cli.error message
+              in
+              let app, () = app ~env options ~padding ~directory in
+              Lwt.bind
+                (Gum_run.run_tui ~name:"file" ?timeout:options.timeout env app
+                   ~finished:(fun model ->
+                     match model.status with
+                     | Selected _ -> Gum_run.Submitted
+                     | Quit -> Gum_run.Quit
+                     | Aborted -> Gum_run.Aborted
+                     | Running -> Gum_run.Quit))
+                (fun model ->
+                  match model.status with
+                  | Selected path -> Gum_io.print_raw env path
+                  | Quit | Running -> Charamel_cli.error "no file selected"
+                  | Aborted -> Charamel_cli.exit 130)))
 
 let options path cursor all permissions size file directory show_help timeout header
     height padding cursor_style symlink_style directory_style file_style permissions_style
@@ -251,18 +265,9 @@ let cmd env =
       ~doc:"Show file sizes." "size"
   in
   let typed_padding =
-    let parse value =
-      match Gum_flag.parse_padding value with
-      | Ok _ -> Ok value
-      | Error (`Msg message) -> Error (`Msg message)
-    in
-    let padding_conv =
-      Arg.conv (parse, fun formatter _ -> Stdlib.Format.pp_print_string formatter "")
-    in
-    Arg.(
-      value
-        (opt padding_conv "0 0"
-           (info [ "padding" ] ~env:(Gum_flag.env ~cmd:"file" "padding") ~doc:"Padding.")))
+    Gum_flag.validated_padding_term ~doc:"Padding."
+      ~pp:(fun formatter _ -> Stdlib.Format.pp_print_string formatter "")
+      ~cmd:"file" ()
   in
   let file = bool "file" "file" ~default:true ~doc:"Allow file selection." in
   let directory =

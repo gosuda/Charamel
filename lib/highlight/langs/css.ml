@@ -70,10 +70,10 @@ let spec =
       ]
     ~attribute:
       (Some
-         (alt
+         (Re.alt
             [
-              seq [ str "."; identifier_dash ];
-              seq [ str "::"; identifier ];
-              seq [ str ":"; identifier ];
+              Re.seq [ Re.str "."; identifier_dash ];
+              Re.seq [ Re.str "::"; identifier ];
+              Re.seq [ Re.str ":"; identifier ];
             ]))
     ~case_sensitive:false ()

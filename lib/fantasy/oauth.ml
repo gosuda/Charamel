@@ -1,3 +1,4 @@
+open Lwt.Infix
 open Result.Syntax
 
 module Credential = struct
@@ -16,8 +17,6 @@ module Credential = struct
 end
 
 type error = Error.t
-
-let pp_error = Error.pp
 
 module Anthropic = struct
   let client_id = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -184,63 +183,36 @@ module Anthropic = struct
       retryable = Retry.retryable_status status;
     }
 
-  let post_token ~sw ~clock ~net ~headers ~body =
-    let request config =
-      let https uri flow =
-        let host =
-          match Uri.host uri with
-          | Some host -> Domain_name.host_exn (Domain_name.of_string_exn host)
-          | None -> invalid_arg "OAuth endpoint has no host"
-        in
-        Tls_eio.client_of_flow config ~host flow
-      in
-      let client = Cohttp_eio.Client.make ~https:(Some https) net in
-      let headers =
-        Cohttp.Header.of_list
-          (("content-type", "application/json")
-          :: ("accept", "application/json")
-          :: headers)
-      in
-      let response, response_body =
-        Cohttp_eio.Client.call client ~sw ~headers
-          ~body:(Cohttp_eio.Body.of_string body)
-          `POST (Uri.of_string token_url)
-      in
-      let response_body =
-        Eio.Buf_read.take_all
-          (Eio.Buf_read.of_flow ~max_size:((10 * 1024 * 1024) + 1) response_body)
-      in
-      let status = Cohttp.Code.code_of_status (Cohttp.Response.status response) in
-      if status >= 200 && status < 300 then Ok response_body
-      else if status = 400 && token_error response_body = Some "invalid_grant" then
-        Error (`Oauth_invalid_grant "invalid_grant")
-      else Error (`Http (http_error status response_body))
+  let invalid_grant body = token_error body = Some "invalid_grant"
+
+  (* [Charamel_net] reads a non-2xx body under {!val:Charamel_net.max_error_body} and
+     sanitizes it, so the [error] and [error_description] members a token endpoint reports
+     are read back out of that excerpt. *)
+  let net_error (error : Charamel_net.error) =
+    match error with
+    | `Oauth message -> `Oauth message
+    | `Oauth_invalid_grant message -> `Oauth_invalid_grant message
+    | `Transport message -> `Transport message
+    | `Http { Charamel_net.status = 400; message; _ } when invalid_grant message ->
+        `Oauth_invalid_grant "invalid_grant"
+    | `Http http -> `Http (http_error http.Charamel_net.status http.message)
+
+  let token_timeout = 60.
+
+  let post_token ~headers ~body =
+    let request_headers =
+      ("content-type", "application/json") :: ("accept", "application/json") :: headers
     in
-    try
-      Eio.Time.with_timeout_exn clock 60. (fun () ->
-          match Eio_unix.run_in_systhread (fun () -> Ca_certs.authenticator ()) with
-          | Error (`Msg message) ->
-              Error (`Transport (Fmt.str "cannot load TLS trust roots: %s" message))
-          | Ok authenticator -> (
-              match Tls.Config.client ~authenticator () with
-              | Error (`Msg message) ->
-                  Error (`Transport (Fmt.str "cannot configure TLS client: %s" message))
-              | Ok config -> request config))
-    with
-    | Eio.Time.Timeout -> Error (`Transport "token request timed out")
-    | Eio.Buf_read.Buffer_limit_exceeded ->
-        Error (`Transport "token response exceeds 10 MiB")
-    | End_of_file -> Error (`Transport "token connection closed prematurely")
-    | Eio.Io (Eio.Net.E (Eio.Net.Connection_failure _), _)
-    | Eio.Io (Eio.Net.E (Eio.Net.Connection_reset _), _)
-    | Eio.Io (Eio.Net.E (Eio.Net.Address_lookup_failed _), _)
-    | Eio.Io (Eio.Net.E Eio.Net.Invalid_option, _) ->
-        Error (`Transport "token connection failed")
-    | Tls_eio.Tls_alert _ | Tls_eio.Tls_failure _ ->
-        Error (`Transport "token TLS connection failed")
+    Charamel_net.call ~timeout:token_timeout ~headers:request_headers ~meth:`POST
+      ~body:(Some body) (Uri.of_string token_url)
+    >>= function
+    | Error error -> Lwt.return (Error (net_error error))
+    | Ok (_response, stream) ->
+        Charamel_net.read_body ~timeout:token_timeout stream
+        >|= Result.map_error net_error
 
   let now_ms_of clock =
-    let seconds = Eio.Time.now clock in
+    let seconds = Charamel_os.Time.now clock in
     if
       (not (Float.is_finite seconds))
       || seconds < 0.
@@ -269,45 +241,51 @@ module Anthropic = struct
           account = response.account_uuid;
         }
 
-  let exchange ?now_ms ~sw ~clock ~net ~redirect_uri ~login ~code () =
-    let open Result.Syntax in
-    if single_param (Uri.of_string login.uri) "redirect_uri" <> Some redirect_uri then
-      Error (`Oauth "redirect URI differs from pending login")
-    else
-      let* code = extract_code ~url_or_code:code ~state:login.state in
-      let body =
-        token_body ~grant:"authorization_code"
-          ~extra:
-            [
-              ("code", code);
-              ("redirect_uri", redirect_uri);
-              ("code_verifier", login.pkce.Pkce.verifier);
-              ("state", login.state);
-            ]
-      in
-      let* body = post_token ~sw ~clock ~net ~headers:[] ~body in
-      let* response = parse_token_response body in
-      credential_of_response (resolve_now now_ms clock) response
+  let credential_of_body ~now_ms ~clock body =
+    Result.bind (parse_token_response body) (fun response ->
+        credential_of_response (resolve_now now_ms clock) response)
 
-  let refresh ?now_ms ~sw ~clock ~net credential =
-    let open Result.Syntax in
+  let exchange ?now_ms ~clock ~redirect_uri ~login ~code () =
+    if single_param (Uri.of_string login.uri) "redirect_uri" <> Some redirect_uri then
+      Lwt.return (Error (`Oauth "redirect URI differs from pending login"))
+    else
+      match extract_code ~url_or_code:code ~state:login.state with
+      | Error _ as failure -> Lwt.return failure
+      | Ok authorization_code ->
+          let body =
+            token_body ~grant:"authorization_code"
+              ~extra:
+                [
+                  ("code", authorization_code);
+                  ("redirect_uri", redirect_uri);
+                  ("code_verifier", login.pkce.Pkce.verifier);
+                  ("state", login.state);
+                ]
+          in
+          post_token ~headers:[] ~body >>= fun response ->
+          Lwt.return (Result.bind response (credential_of_body ~now_ms ~clock))
+
+  let refresh ?now_ms ~clock credential =
     if String.trim credential.Credential.refresh = "" then
-      Error (`Oauth "missing refresh token")
+      Lwt.return (Error (`Oauth "missing refresh token"))
     else
       let body =
         token_body ~grant:"refresh_token"
           ~extra:[ ("refresh_token", credential.Credential.refresh) ]
       in
-      let* body = post_token ~sw ~clock ~net ~headers:refresh_headers ~body in
-      let* response = parse_token_response body in
-      let+ fresh = credential_of_response (resolve_now now_ms clock) response in
-      { fresh with Credential.account = credential.Credential.account }
+      let keep_account fresh =
+        { fresh with Credential.account = credential.Credential.account }
+      in
+      post_token ~headers:refresh_headers ~body >>= fun response ->
+      Lwt.return
+        (Result.map keep_account
+           (Result.bind response (credential_of_body ~now_ms ~clock)))
 
-  let ensure_fresh ~sw ~clock ~net credential =
+  let ensure_fresh ~clock credential =
     let now = now_ms_of clock in
     if
       Int64.add (Int64.of_int now) 60_000L
       >= Int64.of_int credential.Credential.expires_at_ms
-    then refresh ~now_ms:now ~sw ~clock ~net credential
-    else Ok credential
+    then refresh ~now_ms:now ~clock credential
+    else Lwt.return (Ok credential)
 end

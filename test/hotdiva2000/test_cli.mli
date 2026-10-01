@@ -1,4 +1,4 @@
-val suites : (string * unit Alcotest.test_case list) list
+val suites : (string * unit Alcotest_lwt.test_case list) list
 (** Command-line checks for [hotdiva2000].
 
     The cases execute the built binary through pipes, covering defaults, generation

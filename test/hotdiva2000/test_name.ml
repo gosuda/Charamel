@@ -37,7 +37,7 @@ let unreachable_random n =
 (* Runs [f] purely for its exception: passes iff [f ()] raises
    [Invalid_argument], fails on a normal return or any other exception. *)
 let expect_invalid_argument name (f : unit -> unit) =
-  Alcotest.test_case name `Quick (fun () ->
+  Alcotest_lwt.test_case_sync name `Quick (fun () ->
       match f () with
       | () -> Alcotest.fail (name ^ ": expected Invalid_argument, got no exception")
       | exception Invalid_argument _ -> ()
@@ -55,13 +55,13 @@ let accept_modifier1 = be16 1 (* Words.modifiers.(1) = "180 BPM" *)
 let exact_output_suite =
   ( "Name.generate exact output (controlled entropy)",
     [
-      Alcotest.test_case "rejects a draw, then accepts, for a single noun token" `Quick
-        (fun () ->
+      Alcotest_lwt.test_case_sync "rejects a draw, then accepts, for a single noun token"
+        `Quick (fun () ->
           let random = queued [ reject_noun; accept_noun0 ] in
           Alcotest.(check string)
             "output" "2-factor-auth-token"
             (Name.generate ~random ~separator:"-" ~tokens:1 ()));
-      Alcotest.test_case
+      Alcotest_lwt.test_case_sync
         "rejects then accepts both the modifier and noun slots (multi-char separator, \
          digit/uppercase/multiword entries)"
         `Quick (fun () ->
@@ -71,8 +71,8 @@ let exact_output_suite =
           Alcotest.(check string)
             "output" "180 :: bpm :: 3d :: renderer"
             (Name.generate ~random ~separator:" :: " ~tokens:2 ()));
-      Alcotest.test_case "generate_many draws each name independently, in order" `Quick
-        (fun () ->
+      Alcotest_lwt.test_case_sync "generate_many draws each name independently, in order"
+        `Quick (fun () ->
           let random = queued [ accept_noun0; accept_noun1 ] in
           Alcotest.(check (list string))
             "outputs"
@@ -83,8 +83,8 @@ let exact_output_suite =
 let boundaries_suite =
   ( "Name boundaries",
     [
-      Alcotest.test_case "generate_many ~count:0 is [] and never calls random" `Quick
-        (fun () ->
+      Alcotest_lwt.test_case_sync "generate_many ~count:0 is [] and never calls random"
+        `Quick (fun () ->
           Alcotest.(check (list string))
             "empty" []
             (Name.generate_many ~random:unreachable_random ~count:0 ~separator:"-"

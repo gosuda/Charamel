@@ -8,6 +8,26 @@ let env_name ~cmd name =
 let env ~cmd name = Cmdliner.Cmd.Env.info (env_name ~cmd name)
 let env_info = env
 
+module Key = Charamel_tea.Key
+
+let key ~cmd name =
+  match Key.of_string name with
+  | Ok value -> value
+  | Error (`Msg message) -> invalid_arg (Fmt.str "invalid %s key %s: %s" cmd name message)
+
+let is_key actual expected = Key.matches actual expected
+let any_key actual expected = List.exists (is_key actual) expected
+let key_name key = Key.to_string key
+let is_quit key = match key_name key with "q" | "esc" -> true | _ -> false
+let is_abort key = String.equal (key_name key) "ctrl+c"
+let is_submit key = match key_name key with "enter" | "ctrl+q" -> true | _ -> false
+
+let string_arg ~cmd name ~default ~doc =
+  Cmdliner.Arg.(value (opt string default (info [ name ] ~doc ~env:(env ~cmd name))))
+
+let int_arg ~cmd name ~default ~doc =
+  Cmdliner.Arg.(value (opt int default (info [ name ] ~doc ~env:(env ~cmd name))))
+
 let env_bool value =
   match String.lowercase_ascii (String.trim value) with
   | "1" | "true" | "yes" | "on" -> Ok true
@@ -222,20 +242,23 @@ let parse_padding text =
   | Ok [] -> Error (`Msg "padding requires one to four integer values")
   | Ok _ -> Error (`Msg "padding requires one to four integer values")
 
-let padding ~cmd =
-  let conv =
-    Cmdliner.Arg.Conv.make ~docv:"PADDING"
-      ~parser:(fun raw ->
-        match parse_padding raw with
-        | Ok _ -> Ok raw
-        | Error (`Msg message) -> Error message)
-      ~pp:(fun ppf value -> Fmt.string ppf value)
-      ()
+let parsed_padding value =
+  match parse_padding value with
+  | Ok sides -> sides
+  | Error (`Msg message) -> invalid_arg message
+
+let validated_padding_term ?(doc = "Padding as one to four integers.") ?pp ~cmd () =
+  let pp =
+    Option.value pp ~default:(fun ppf value -> Stdlib.Format.pp_print_string ppf value)
   in
-  Cmdliner.Arg.value
-    (Cmdliner.Arg.opt conv "0 0"
-       (Cmdliner.Arg.info [ "padding" ] ~doc:"Padding as one to four integers."
-          ?env:(Some (env ~cmd "padding"))))
+  let parse value =
+    match parse_padding value with
+    | Ok _ -> Ok value
+    | Error (`Msg message) -> Error (`Msg message)
+  in
+  let padding_conv = Cmdliner.Arg.conv (parse, pp) in
+  Cmdliner.Arg.(
+    value (opt padding_conv "0 0" (info [ "padding" ] ~doc ~env:(env ~cmd "padding"))))
 
 let align text =
   match String.lowercase_ascii (String.trim text) with

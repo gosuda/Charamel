@@ -8,16 +8,16 @@ let spec =
     ~number:decimal_signed ~ident:identifier_dash ~operators:[ "-" ]
     ~attribute:
       (Some
-         (alt
+         (Re.alt
             [
-              seq [ set "&*"; identifier_dash ];
-              seq [ str "!!"; identifier ];
-              seq [ str "!"; identifier ];
-              seq
+              Re.seq [ Re.set "&*"; identifier_dash ];
+              Re.seq [ Re.str "!!"; identifier ];
+              Re.seq [ Re.str "!"; identifier ];
+              Re.seq
                 [
-                  str "%";
-                  rep1
-                    (set
+                  Re.str "%";
+                  Re.rep1
+                    (Re.set
                        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-");
                 ];
             ]))

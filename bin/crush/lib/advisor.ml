@@ -1,3 +1,5 @@
+open Lwt.Infix
+
 type verdict = { severity : [ `Nit | `Concern | `Blocker ]; guidance : string }
 
 let severity_jsont =
@@ -28,35 +30,8 @@ let create (config : Config.advisor) =
     quarantined = false;
   }
 
-let output_string = function
-  | `Text text -> text
-  | `Error text -> "error: " ^ text
-  | `Media (mime, data) -> Fmt.str "media <%s> (%d bytes)" mime (String.length data)
-
-let part_text = function
-  | Charamel_fantasy.Message.Text text -> text
-  | Charamel_fantasy.Message.Reasoning { text; _ } ->
-      "<reasoning>" ^ text ^ "</reasoning>"
-  | Charamel_fantasy.Message.File { mime; data; name } ->
-      Fmt.str "<file mime=%s name=%s bytes=%d>" mime
-        (Option.value ~default:"" name)
-        (String.length data)
-  | Charamel_fantasy.Message.Tool_call { id; name; input } ->
-      Fmt.str "call %s (%s): %s" id name (Jsonx.display_string input)
-  | Charamel_fantasy.Message.Tool_result { id; name; output } ->
-      Fmt.str "result %s (%s): %s" id name (output_string output)
-
-let message_text { Charamel_fantasy.Message.role; parts } =
-  let role =
-    match role with
-    | Charamel_fantasy.Message.System -> "system"
-    | Charamel_fantasy.Message.User -> "user"
-    | Charamel_fantasy.Message.Assistant -> "assistant"
-    | Charamel_fantasy.Message.Tool -> "tool"
-  in
-  role ^ ": " ^ String.concat "" (List.map part_text parts)
-
-let render_last_turn messages = String.concat "\n" (List.map message_text messages)
+let render_last_turn messages =
+  String.concat "\n" (List.map Session.message_text messages)
 
 let first_json_object text =
   Option.bind (String.index_opt text '{') (fun start ->
@@ -97,44 +72,49 @@ let fingerprint verdict =
   in
   Digestif.SHA256.(digest_string (severity ^ "\000" ^ verdict.guidance) |> to_hex)
 
-let review t ~sw ~clock ~net (model : Models.resolved) ~context ~last_turn =
-  if (not t.enabled) || t.quarantined then Ok None
+let review t ~sw ~clock (model : Models.resolved) ~context ~last_turn =
+  if (not t.enabled) || t.quarantined then Lwt.return (Ok None)
   else
     let user = render_last_turn last_turn in
     let stream =
-      Charamel_fantasy.Provider.stream model.Models.provider ~sw ~clock ~net
+      Charamel_fantasy.Provider.stream model.Models.provider ~stop:sw ~clock
         ~model:model.Models.model
         ~system:[ Prompt_advisor.text; context ]
         ~max_tokens:512
         [ Charamel_fantasy.Message.text Charamel_fantasy.Message.User user ]
     in
     let text = Buffer.create 512 in
+    let settle () =
+      match decoded_verdict (Buffer.contents text) with
+      | None -> Ok None
+      | Some verdict ->
+          let current = fingerprint verdict in
+          (match t.previous with
+          | Some previous when String.equal previous current ->
+              t.consecutive <- t.consecutive + 1
+          | _ ->
+              t.previous <- Some current;
+              t.consecutive <- 1);
+          if t.consecutive >= 2 then (
+            t.quarantined <- true;
+            Ok None)
+          else Ok (Some verdict)
+    in
     let rec consume () =
-      match Eio.Stream.take stream with
-      | Charamel_fantasy.Stream_part.Text_delta delta ->
+      Lwt_stream.get stream >>= fun (item : Charamel_fantasy.Stream_part.t option) ->
+      match item with
+      | None -> Lwt.return (Error (`Provider "advisor stream ended before completion"))
+      | Some (Text_delta delta) ->
           Buffer.add_string text delta;
           consume ()
-      | Reasoning_delta _ -> consume ()
-      | Tool_call_start _ -> consume ()
-      | Tool_input_delta _ -> consume ()
-      | Tool_call_end _ -> consume ()
-      | Usage _ -> consume ()
-      | Finish (`Error message) -> Error (`Provider message)
-      | Finish (`Stop | `Length | `Content_filter | `Tool_calls) -> (
-          match decoded_verdict (Buffer.contents text) with
-          | None -> Ok None
-          | Some verdict ->
-              let current = fingerprint verdict in
-              (match t.previous with
-              | Some previous when String.equal previous current ->
-                  t.consecutive <- t.consecutive + 1
-              | _ ->
-                  t.previous <- Some current;
-                  t.consecutive <- 1);
-              if t.consecutive >= 2 then (
-                t.quarantined <- true;
-                Ok None)
-              else Ok (Some verdict))
+      | Some (Reasoning_delta _) -> consume ()
+      | Some (Tool_call_start _) -> consume ()
+      | Some (Tool_input_delta _) -> consume ()
+      | Some (Tool_call_end _) -> consume ()
+      | Some (Usage _) -> consume ()
+      | Some (Finish (`Error message)) -> Lwt.return (Error (`Provider message))
+      | Some (Finish (`Stop | `Length | `Content_filter | `Tool_calls)) ->
+          Lwt.return (settle ())
     in
     consume ()
 

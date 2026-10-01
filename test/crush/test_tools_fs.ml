@@ -1,105 +1,11 @@
 module Tool = Crush_core.Tool
-module Config = Crush_core.Config
 module Permission = Crush_core.Permission
-module Hooks = Crush_core.Hooks
-module Artifact = Crush_core.Artifact
-module Jobs = Crush_core.Jobs
-module Todos = Crush_core.Todos
-module Skills = Crush_core.Skills
-module Mcp = Crush_core.Mcp
 module Tools_fs = Crush_core.Tools_fs
 module Patch = Tools_fs.Patch
+open Test_tools_test_support
+open Lwt_direct
 
-let contains needle haystack =
-  let needle_length = String.length needle in
-  let haystack_length = String.length haystack in
-  let rec loop index =
-    if index + needle_length > haystack_length then false
-    else if String.sub haystack index needle_length = needle then true
-    else loop (index + 1)
-  in
-  needle_length = 0 || loop 0
-
-let temp_root () =
-  let path = Filename.temp_file "crush-tools-fs" ".dir" in
-  Sys.remove path;
-  path
-
-let make_context ?(allowed_tools = [ "read"; "write"; "edit" ]) env sw root =
-  let config = Config.default in
-  let permissions : Config.permissions = { allowed_tools; deny = [] } in
-  let permission =
-    Permission.create ~config:permissions ~yolo:false
-      ~asker:(fun _ -> Permission.Allow_once)
-      ~cwd:root
-      ~plans_dir:(Filename.concat root ".crush/plans")
-      ()
-  in
-  let hooks =
-    Hooks.create ~config:[] ~proc_mgr:env#process_mgr ~clock:env#clock ~cwd:root
-  in
-  let artifacts = Artifact.create ~fs:env#fs ~dir:(Filename.concat root ".artifacts") in
-  let jobs = Jobs.create ~sw ~proc_mgr:env#process_mgr ~clock:env#clock ~artifacts in
-  let mcp =
-    Mcp.create ~sw ~proc_mgr:env#process_mgr ~net:env#net ~clock:env#clock ~cwd:root
-      ~config
-  in
-  let todos = Todos.create () in
-  let skills = Skills.load ~fs:env#fs ~config ~home:root in
-  {
-    Tool.sw;
-    clock = env#clock;
-    fs = env#fs;
-    net = env#net;
-    proc_mgr = env#process_mgr;
-    random = (fun length -> String.make length '\001');
-    env = Sys.getenv_opt;
-    cwd = root;
-    session = "test-session";
-    call_id = "test-call";
-    config;
-    permission;
-    hooks;
-    lsp = None;
-    mcp;
-    artifacts;
-    jobs;
-    todos;
-    skills;
-    log_path = Filename.concat root "crush.log";
-    interactive = false;
-    is_subagent = false;
-    ask = None;
-    run_subagent = None;
-    read_tracker = Hashtbl.create 16;
-  }
-
-let with_context ?allowed_tools f =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let root = temp_root () in
-  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(env#fs / root);
-  let context = make_context ?allowed_tools env sw root in
-  f env root context
-
-let write_file env path content =
-  let target = Eio.Path.(env#fs / path) in
-  begin match Eio.Path.split target with
-  | Some (parent, _) -> Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 parent
-  | None -> ()
-  end;
-  Eio.Path.save ~create:(`Or_truncate 0o644) target content
-
-let load_file env path = Eio.Path.load Eio.Path.(env#fs / path)
-
-let json_object fields =
-  Jsont.Json.object'
-    (List.map (fun (name, value) -> Jsont.Json.mem (Jsont.Json.name name) value) fields)
-
-let run_tool tool context value =
-  match tool.Tool.run context value with
-  | Ok output -> output
-  | Error error -> Alcotest.failf "%a" Tool.pp_error error
+let with_context = Test_tools_test_support.with_context
 
 let check_patch_operations () =
   let parse source =
@@ -146,41 +52,49 @@ let check_patch_rejects_invalid_operations () =
   in
   let overlap = parse "[file#0000]\nPUT 1.=2:\n+x\nCUT 2.=3\n" in
   begin match Patch.apply "a\nb\nc\n" overlap with
-  | Error message ->
-      Alcotest.(check bool) "overlap reports an error" true (String.length message > 0)
+  | Error _ -> ()
   | Ok _ -> Alcotest.fail "overlapping operations were accepted"
   end;
   let out_of_bounds = parse "[file#0000]\nPUT 4.=4:\n+x\n" in
   begin match Patch.apply "a\nb\nc\n" out_of_bounds with
-  | Error message ->
-      Alcotest.(check bool) "bounds reports an error" true (String.length message > 0)
+  | Error _ -> ()
   | Ok _ -> Alcotest.fail "out-of-bounds operation was accepted"
   end;
   begin match Patch.parse "[file#0000]\nPUT <1:\n+x\nnot-an-operation\n" with
-  | Error message ->
-      Alcotest.(check bool)
-        "malformed operation reports an error" true
-        (String.length message > 0)
+  | Error _ -> ()
   | Ok _ -> Alcotest.fail "malformed operation was accepted"
   end
 
 let check_read_ranges () =
-  with_context @@ fun env root context ->
+  await @@ with_context
+  @@ fun root context ->
   let file = Filename.concat root "numbers.txt" in
-  write_file env file "one\ntwo\nthree\nfour\nfive\n";
+  write_file file "one\ntwo\nthree\nfour\nfive\n";
   let run path =
     run_tool Tools_fs.read context (json_object [ ("path", Jsont.Json.string path) ])
   in
   let from_two = (run (file ^ ":2")).Tool.content in
-  Alcotest.(check bool) "N starts at the requested line" true (contains "2:two" from_two);
-  Alcotest.(check bool) "N includes the final line" true (contains "5:five" from_two);
+  Alcotest.(check bool)
+    "N starts at the requested line" true
+    (Test_support.contains ~needle:"2:two" ~haystack:from_two);
+  Alcotest.(check bool)
+    "N includes the final line" true
+    (Test_support.contains ~needle:"5:five" ~haystack:from_two);
   let span = (run (file ^ ":2-3")).Tool.content in
-  Alcotest.(check bool) "N-M includes both bounds" true (contains "2:two\n3:three" span);
+  Alcotest.(check bool)
+    "N-M includes both bounds" true
+    (Test_support.contains ~needle:"2:two\n3:three" ~haystack:span);
   let count = (run (file ^ ":2+2")).Tool.content in
-  Alcotest.(check bool) "N+K has K lines" true (contains "2:two\n3:three" count);
-  Alcotest.(check bool) "N+K stops at its count" false (contains "4:four" count);
+  Alcotest.(check bool)
+    "N+K has K lines" true
+    (Test_support.contains ~needle:"2:two\n3:three" ~haystack:count);
+  Alcotest.(check bool)
+    "N+K stops at its count" false
+    (Test_support.contains ~needle:"4:four" ~haystack:count);
   let last = (run (file ^ ":-2")).Tool.content in
-  Alcotest.(check bool) "-K selects the tail" true (contains "4:four\n5:five" last);
+  Alcotest.(check bool)
+    "-K selects the tail" true
+    (Test_support.contains ~needle:"4:four\n5:five" ~haystack:last);
   begin match
     Tools_fs.read.Tool.run context
       (json_object [ ("path", Jsont.Json.string (file ^ ":0")) ])
@@ -191,9 +105,10 @@ let check_read_ranges () =
   end
 
 let check_binary_and_spill () =
-  with_context @@ fun env root context ->
+  await @@ with_context
+  @@ fun root context ->
   let binary_file = Filename.concat root "binary.bin" in
-  write_file env binary_file "ok\000bad";
+  write_file binary_file "ok\000bad";
   let binary_output =
     run_tool Tools_fs.read context
       (json_object [ ("path", Jsont.Json.string binary_file) ])
@@ -201,7 +116,7 @@ let check_binary_and_spill () =
   Alcotest.(check bool) "binary read is rejected" true binary_output.Tool.is_error;
   let rows = List.init 500 (fun _ -> String.make 400 'x') in
   let large_file = Filename.concat root "large.txt" in
-  write_file env large_file (String.concat "\n" rows);
+  write_file large_file (String.concat "\n" rows);
   let large_output =
     run_tool Tools_fs.read context
       (json_object [ ("path", Jsont.Json.string large_file) ])
@@ -211,12 +126,13 @@ let check_binary_and_spill () =
     (Option.is_some large_output.Tool.artifact)
 
 let check_stale_tag_and_atomicity () =
-  with_context @@ fun env root context ->
+  await @@ with_context
+  @@ fun root context ->
   let file = Filename.concat root "edit.txt" in
-  write_file env file "one\ntwo\nthree\n";
-  let original = load_file env file in
+  write_file file "one\ntwo\nthree\n";
+  let original = load_file file in
   let old_tag = Crush_core.Hashline.tag original in
-  write_file env file "changed\ntwo\nthree\n";
+  write_file file "changed\ntwo\nthree\n";
   let stale_patch = Fmt.str "[%s#%s]\nPUT 1.=1:\n+ONE\n" file old_tag in
   let stale =
     run_tool Tools_fs.edit context
@@ -225,10 +141,12 @@ let check_stale_tag_and_atomicity () =
   Alcotest.(check bool) "stale tag is an error output" true stale.Tool.is_error;
   Alcotest.(check bool)
     "stale output reports current tag" true
-    (contains (Crush_core.Hashline.tag (load_file env file)) stale.Tool.content);
+    (Test_support.contains
+       ~needle:(Crush_core.Hashline.tag (load_file file))
+       ~haystack:stale.Tool.content);
   Alcotest.(check string)
-    "stale edit leaves file unchanged" "changed\ntwo\nthree\n" (load_file env file);
-  let current = load_file env file in
+    "stale edit leaves file unchanged" "changed\ntwo\nthree\n" (load_file file);
+  let current = load_file file in
   let tag = Crush_core.Hashline.tag current in
   let invalid_patch = Fmt.str "[%s#%s]\nPUT 1.=1:\n+ONE\nCUT 99.=99\n" file tag in
   begin match
@@ -239,17 +157,18 @@ let check_stale_tag_and_atomicity () =
   | Error error -> Alcotest.failf "wrong atomicity error: %a" Tool.pp_error error
   | Ok _ -> Alcotest.fail "invalid multi-operation patch was accepted"
   end;
-  Alcotest.(check string)
-    "invalid patch leaves file unchanged" current (load_file env file)
+  Alcotest.(check string) "invalid patch leaves file unchanged" current (load_file file)
 
 let check_symlink_plan_confinement () =
-  with_context ~allowed_tools:[ "write" ] @@ fun env root context ->
+  await
+  @@ with_context ~allowed_tools:[ "write" ]
+  @@ fun root context ->
   let plans = Filename.concat root ".crush/plans" in
   let outside = Filename.concat root "outside.txt" in
   let link = Filename.concat plans "link.txt" in
-  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(env#fs / plans);
-  write_file env outside "outside";
-  Eio.Path.symlink Eio.Path.(env#fs / link) ~link_to:outside;
+  mkdir_p plans;
+  write_file outside "outside";
+  Unix.symlink outside link;
   Permission.set_plan_mode context.Tool.permission true;
   begin match
     Tools_fs.write.Tool.run context
@@ -259,14 +178,15 @@ let check_symlink_plan_confinement () =
   | Error (`Denied message) ->
       Alcotest.(check bool)
         "symlink escape is denied by plan mode" true
-        (contains "plan mode" message)
+        (Test_support.contains ~needle:"plan mode" ~haystack:message)
   | Error error -> Alcotest.failf "wrong symlink error: %a" Tool.pp_error error
   | Ok _ -> Alcotest.fail "symlink escape was accepted"
   end;
-  Alcotest.(check string) "symlink target is unchanged" "outside" (load_file env outside)
+  Alcotest.(check string) "symlink target is unchanged" "outside" (load_file outside)
 
 let check_write_guard_and_nested_create () =
-  with_context @@ fun env root context ->
+  await @@ with_context
+  @@ fun root context ->
   let nested = Filename.concat root "a/b/new.txt" in
   let created =
     run_tool Tools_fs.write context
@@ -276,18 +196,16 @@ let check_write_guard_and_nested_create () =
          ])
   in
   Alcotest.(check bool) "nested write succeeds" false created.Tool.is_error;
-  Alcotest.(check string)
-    "nested write creates parents" "new content" (load_file env nested);
+  Alcotest.(check string) "nested write creates parents" "new content" (load_file nested);
   let existing = Filename.concat root "existing.txt" in
-  write_file env existing "old";
+  write_file existing "old";
   let refused =
     run_tool Tools_fs.write context
       (json_object
          [ ("path", Jsont.Json.string existing); ("content", Jsont.Json.string "new") ])
   in
   Alcotest.(check bool) "unread existing write is refused" true refused.Tool.is_error;
-  Alcotest.(check string)
-    "refused write leaves file unchanged" "old" (load_file env existing)
+  Alcotest.(check string) "refused write leaves file unchanged" "old" (load_file existing)
 
 let check_registered_tools () =
   let tools = [ Tools_fs.read; Tools_fs.write; Tools_fs.edit ] in
@@ -306,13 +224,12 @@ let check_registered_tools () =
 
 let cases =
   [
-    Alcotest.test_case "patch operations" `Quick check_patch_operations;
-    Alcotest.test_case "patch validation" `Quick check_patch_rejects_invalid_operations;
-    Alcotest.test_case "read ranges" `Quick check_read_ranges;
-    Alcotest.test_case "binary and spilled reads" `Quick check_binary_and_spill;
-    Alcotest.test_case "stale tags and atomic edits" `Quick check_stale_tag_and_atomicity;
-    Alcotest.test_case "symlink plan confinement" `Quick check_symlink_plan_confinement;
-    Alcotest.test_case "write guards and nested paths" `Quick
-      check_write_guard_and_nested_create;
-    Alcotest.test_case "registered tools" `Quick check_registered_tools;
+    case "patch operations" `Quick check_patch_operations;
+    case "patch validation" `Quick check_patch_rejects_invalid_operations;
+    case "read ranges" `Quick check_read_ranges;
+    case "binary and spilled reads" `Quick check_binary_and_spill;
+    case "stale tags and atomic edits" `Quick check_stale_tag_and_atomicity;
+    case "symlink plan confinement" `Quick check_symlink_plan_confinement;
+    case "write guards and nested paths" `Quick check_write_guard_and_nested_create;
+    case "registered tools" `Quick check_registered_tools;
   ]

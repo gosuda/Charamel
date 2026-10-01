@@ -1,10 +1,14 @@
 let env bindings name = List.assoc_opt name bindings
 let read files path = List.assoc_opt path files
 
+(* [cwd] must qualify as absolute on the platform: [/work] is POSIX-only. *)
+let work = if Sys.win32 then "C:\\work" else "/work"
+let work_file name = Filename.concat work name
+
 let precedence () =
   let files =
     [
-      ( "/work/glow.json",
+      ( work_file "glow.json",
         Ok "{\"style\":\"light\",\"width\":41,\"pager\":false,\"all\":false}" );
     ]
   in
@@ -12,11 +16,11 @@ let precedence () =
     [ ("GLOW_STYLE", "dracula"); ("GLOW_WIDTH", "52"); ("GLOW_PAGER", "true") ]
   in
   match
-    Config.load ~explicit:None ~cwd:"/work" ~env:(env environment) ~read:(read files)
+    Config.load ~explicit:None ~cwd:work ~env:(env environment) ~read:(read files)
   with
   | Error _ -> Alcotest.fail "configuration should decode"
   | Ok (config, Some path) ->
-      Alcotest.(check string) "path" "/work/glow.json" path;
+      Alcotest.(check string) "path" (work_file "glow.json") path;
       Alcotest.(check string) "style" "dracula" config.Config.style;
       Alcotest.(check int) "width" 52 config.Config.width;
       Alcotest.(check bool) "pager" true config.Config.pager
@@ -62,7 +66,7 @@ let booleans () =
 let suite =
   ( "config",
     [
-      Alcotest.test_case "precedence" `Quick precedence;
-      Alcotest.test_case "flags win" `Quick flags_win;
-      Alcotest.test_case "booleans" `Quick booleans;
+      Alcotest_lwt.test_case_sync "precedence" `Quick precedence;
+      Alcotest_lwt.test_case_sync "flags win" `Quick flags_win;
+      Alcotest_lwt.test_case_sync "booleans" `Quick booleans;
     ] )

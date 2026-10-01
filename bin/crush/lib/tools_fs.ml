@@ -1,4 +1,5 @@
 open Result.Syntax
+open Lwt_direct
 
 let max_file_bytes = 10 * 1024 * 1024
 let max_line_bytes = 2000
@@ -256,15 +257,13 @@ module Patch = struct
             removed )
 end
 
-let protect_io path f =
-  try Ok (f ()) with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found path)
-  | Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (path, Fmt.str "%a" Eio.Exn.pp exn))
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (`Io (path, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
-
-let path ctx path = Eio.Path.(ctx.Tool.fs / path)
+let lstat_kind_opt path =
+  let open Lwt.Infix in
+  Lwt.catch
+    (fun () -> Lwt_unix.lstat path >|= fun stat -> Some stat.Unix.st_kind)
+    (function
+      | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Lwt.return None
+      | exn -> Lwt.fail exn)
 
 type write_target = Existing of string | New of string
 
@@ -272,41 +271,30 @@ let append_components path components = List.fold_left Filename.concat path comp
 
 let rec canonical_new_target ctx current components =
   match Tool.canonical ctx current with
-  | Ok parent -> Ok (New (append_components parent components))
   | Error (`Not_found _) ->
       let parent = Filename.dirname current in
       if parent = current then Error (`Not_found current)
       else canonical_new_target ctx parent (Filename.basename current :: components)
-  | Error error -> Error error
+  | resolved ->
+      let* parent = resolved in
+      Ok (New (append_components parent components))
 
 let resolve_write_target ctx absolute =
-  let target_path = path ctx absolute in
-  let* kind = protect_io absolute (fun () -> Eio.Path.kind ~follow:false target_path) in
+  let* kind = Io.trap_await absolute (fun () -> lstat_kind_opt absolute) in
   match kind with
-  | `Not_found -> canonical_new_target ctx absolute []
-  | _ ->
+  | None -> canonical_new_target ctx absolute []
+  | Some _ ->
       let* target = Tool.canonical ctx absolute in
       Ok (Existing target)
-
-let canonical_for_read ctx absolute =
-  match Tool.canonical ctx absolute with
-  | Ok target -> Ok target
-  | Error (`Not_found _) -> Ok absolute
-  | Error error -> Error error
-
-let output ctx ?(diagnostics = []) text =
-  let content, artifact =
-    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
-  in
-  Tool.ok ?artifact ~diagnostics content
 
 let diagnostics ctx target =
   match ctx.Tool.lsp with
   | None -> []
   | Some lsp ->
       begin match
-        protect_io target (fun () ->
-            Lsp.touch lsp ~path:target;
+        Io.trap_await target (fun () ->
+            let open Lwt.Infix in
+            Lsp.touch lsp ~path:target >>= fun () ->
             Lsp.diagnostics lsp ~path:target ~wait:0.5)
       with
       | Ok values -> values
@@ -319,7 +307,7 @@ let touch_lsp ctx target =
   | Some lsp ->
       begin match Lsp.handles lsp ~path:target with
       | None -> ()
-      | Some _ -> ignore (protect_io target (fun () -> Lsp.touch lsp ~path:target))
+      | Some _ -> ignore (Io.trap_await target (fun () -> Lsp.touch lsp ~path:target))
       end
 
 let truncate_line line =
@@ -455,6 +443,8 @@ let edit_schema =
   Tool.schema_object ~required:[ "patch" ]
     [ ("patch", Tool.s_string ~desc:"Hashline patch text." ()) ]
 
+let load_file path = Lwt_io.with_file ~mode:Lwt_io.Input path Lwt_io.read
+
 let run_read ctx json =
   let* raw_path = Tool.decode read_params_jsont json in
   let base, selector = parse_selector raw_path in
@@ -467,7 +457,7 @@ let run_read ctx json =
           Tool.request ctx ~read_only:true ~tool:"read" ~action:"read" ~path:base
             ~description:base
         in
-        begin match Artifact.load ctx.Tool.artifacts ~id with
+        begin match await (Artifact.load ctx.Tool.artifacts ~id) with
         | Error (`Not_found missing) -> Error (`Not_found missing)
         | Error (`Io (path, message)) -> Error (`Io (path, message))
         | Ok content ->
@@ -475,7 +465,7 @@ let run_read ctx json =
               Ok (Tool.fail "not valid UTF-8")
             else
               Ok
-                (output ctx
+                (Tool.truncate ctx
                    (format_read_content base (Hashline.tag content) content selector))
         end
       end
@@ -484,23 +474,23 @@ let run_read ctx json =
           Tool.request ctx ~read_only:true ~tool:"read" ~action:"read" ~path:base
             ~description:base
         in
-        begin match Skills.resolve_uri ctx.Tool.skills ~fs:ctx.Tool.fs base with
+        begin match
+          await (Skills.resolve_uri ctx.Tool.skills ~fs_root:ctx.Tool.fs_root base)
+        with
         | Error (`Not_found missing) -> Error (`Not_found missing)
         | Ok content ->
             if (not (String.is_valid_utf_8 content)) || binary_content content then
               Ok (Tool.fail "not valid UTF-8")
             else
               Ok
-                (output ctx
+                (Tool.truncate ctx
                    (format_read_content base (Hashline.tag content) content selector))
         end
       end
       else
         let absolute = Tool.absolute ctx base in
-        let target_result = canonical_for_read ctx absolute in
-        let request_path =
-          match target_result with Ok target -> target | Error _ -> absolute
-        in
+        let target_result = Tool.canonical_or_abs ctx absolute in
+        let request_path = Result.value target_result ~default:absolute in
         begin
           let* () =
             Tool.request ctx ~read_only:true ~tool:"read" ~action:"read"
@@ -508,61 +498,40 @@ let run_read ctx json =
           in
           begin
             let* target = target_result in
-            let target_path = path ctx target in
-            begin match
-              protect_io target (fun () -> Eio.Path.kind ~follow:true target_path)
-            with
-            | Error error -> Error error
-            | Ok `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory; use ls" target))
-            | Ok `Regular_file ->
-                begin match
-                  protect_io target (fun () -> Eio.Path.stat ~follow:true target_path)
-                with
-                | Error error -> Error error
-                | Ok stat
-                  when Optint.Int63.to_int stat.Eio.File.Stat.size > max_file_bytes ->
-                    Ok (Tool.fail (Fmt.str "%s is too large (maximum is 10 MiB)" target))
-                | Ok _ -> begin
-                    let* content =
-                      protect_io target (fun () -> Eio.Path.load target_path)
+            let* stat = Io.trap_await target (fun () -> Lwt_unix.stat target) in
+            match stat.Unix.st_kind with
+            | Unix.S_DIR -> Ok (Tool.fail (Fmt.str "%s is a directory; use ls" target))
+            | Unix.S_REG ->
+                if stat.Unix.st_size > max_file_bytes then
+                  Ok (Tool.fail (Fmt.str "%s is too large (maximum is 10 MiB)" target))
+                else
+                  let* content = Io.trap_await target (fun () -> load_file target) in
+                  if (not (String.is_valid_utf_8 content)) || binary_content content then
+                    Ok (Tool.fail "not valid UTF-8")
+                  else begin
+                    touch_lsp ctx target;
+                    let now =
+                      int_of_float (Charamel_os.Time.now ctx.Tool.clock *. 1000.)
                     in
-                    if (not (String.is_valid_utf_8 content)) || binary_content content
-                    then Ok (Tool.fail "not valid UTF-8")
-                    else begin
-                      touch_lsp ctx target;
-                      let now = int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.) in
-                      Hashtbl.replace ctx.Tool.read_tracker target now;
-                      Ok
-                        (output ctx
-                           (format_read_content target (Hashline.tag content) content
-                              selector))
-                    end
+                    Hashtbl.replace ctx.Tool.read_tracker target now;
+                    Ok
+                      (Tool.truncate ctx
+                         (format_read_content target (Hashline.tag content) content
+                            selector))
                   end
-                end
-            | Ok _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
-            end
+            | _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
           end
         end
   end
 
-let save_file ctx target content =
-  let target_path = path ctx target in
-  let parent = Option.map fst (Eio.Path.split target_path) in
-  try
-    Eio.Cancel.protect (fun () ->
-        begin match parent with
-        | Some parent -> Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 parent
-        | None -> ()
-        end;
-        Eio.Path.save ~create:(`Or_truncate 0o644) target_path content);
-    Ok ()
-  with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found target)
-  | Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (target, Fmt.str "%a" Eio.Exn.pp exn))
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (`Io
-           (target, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
+let save_file target content =
+  match await (Charamel_os.Fs.mkdir_p (Filename.dirname target)) with
+  | Error `Not_found -> Error (`Not_found target)
+  | Error error -> Error (`Io (target, Io.fs_error error))
+  | Ok () ->
+      Io.trap_await target (fun () ->
+          Charamel_os.Fs.with_open_out ~perm:0o644 target (fun channel ->
+              Lwt_io.write channel content))
 
 let run_write ctx json =
   let* target_name, content = Tool.decode write_params_jsont json in
@@ -578,25 +547,22 @@ let run_write ctx json =
       Tool.request ctx ~read_only:false ~tool:"write" ~action:"write" ~path:request_path
         ~description:target_name
     in
-    begin match target_result with
-    | Error error -> Error error
-    | Ok (New target) -> begin
-        let* () = save_file ctx target content in
+    let* resolved = target_result in
+    match resolved with
+    | New target -> begin
+        let* () = save_file target content in
         Hashtbl.replace ctx.Tool.read_tracker target
-          (int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.));
+          (int_of_float (Charamel_os.Time.now ctx.Tool.clock *. 1000.));
         let tag = Hashline.tag content in
         Ok
-          (output ctx ~diagnostics:(diagnostics ctx target)
+          (Tool.truncate ~diagnostics:(diagnostics ctx target) ctx
              (Fmt.str "wrote %s (%d bytes) [%s#%s]" target (String.length content) target
                 tag))
       end
-    | Ok (Existing target) ->
-        let target_path = path ctx target in
-        begin match
-          protect_io target (fun () -> Eio.Path.kind ~follow:true target_path)
-        with
-        | Error error -> Error error
-        | Ok `Regular_file ->
+    | Existing target ->
+        let* stat = Io.trap_await target (fun () -> Lwt_unix.stat target) in
+        begin match stat.Unix.st_kind with
+        | Unix.S_REG ->
             if
               not
                 (Hashtbl.mem ctx.Tool.read_tracker target
@@ -608,19 +574,18 @@ let run_write ctx json =
                       "%s exists and was not read this session; read it first or use edit"
                       target))
             else begin
-              let* () = save_file ctx target content in
+              let* () = save_file target content in
               Hashtbl.replace ctx.Tool.read_tracker target
-                (int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.));
+                (int_of_float (Charamel_os.Time.now ctx.Tool.clock *. 1000.));
               let tag = Hashline.tag content in
               Ok
-                (output ctx ~diagnostics:(diagnostics ctx target)
+                (Tool.truncate ~diagnostics:(diagnostics ctx target) ctx
                    (Fmt.str "wrote %s (%d bytes) [%s#%s]" target (String.length content)
                       target tag))
             end
-        | Ok `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
-        | Ok _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
+        | Unix.S_DIR -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
+        | _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
         end
-    end
   end
 
 let first_patch_line = function
@@ -673,9 +638,7 @@ let run_edit ctx json =
   | Ok patch ->
       let absolute = Tool.absolute ctx patch.Patch.path in
       let target_result = Tool.canonical ctx absolute in
-      let request_path =
-        match target_result with Ok target -> target | Error _ -> absolute
-      in
+      let request_path = Result.value target_result ~default:absolute in
       begin
         let* () =
           Tool.request ctx ~read_only:false ~tool:"edit" ~action:"edit" ~path:request_path
@@ -685,41 +648,36 @@ let run_edit ctx json =
         in
         begin
           let* target = target_result in
-          let target_path = path ctx target in
-          begin match
-            protect_io target (fun () -> Eio.Path.kind ~follow:true target_path)
-          with
-          | Error error -> Error error
-          | Ok `Regular_file ->
-              begin match protect_io target (fun () -> Eio.Path.load target_path) with
-              | Error error -> Error error
-              | Ok content when Hashline.tag content <> patch.Patch.tag ->
-                  let anchor =
-                    match patch.Patch.ops with [] -> 1 | op :: _ -> first_patch_line op
-                  in
-                  let message =
-                    Fmt.str "stale tag: %s is now #%s; re-read before editing\n%s" target
-                      (Hashline.tag content)
-                      (format_context target content anchor)
-                  in
-                  Ok (Tool.fail message)
-              | Ok content ->
-                  begin match Patch.apply content patch with
-                  | Error message -> Error (`Invalid_input message)
-                  | Ok (updated, added, removed) -> begin
-                      let* () = save_file ctx target updated in
-                      Hashtbl.replace ctx.Tool.read_tracker target
-                        (int_of_float (Eio.Time.now ctx.Tool.clock *. 1000.));
-                      let tag = Hashline.tag updated in
-                      Ok
-                        (output ctx ~diagnostics:(diagnostics ctx target)
-                           (edit_output patch target added removed tag))
-                    end
-                  end
+          let* stat = Io.trap_await target (fun () -> Lwt_unix.stat target) in
+          match stat.Unix.st_kind with
+          | Unix.S_REG ->
+              let* content = Io.trap_await target (fun () -> load_file target) in
+              if Hashline.tag content <> patch.Patch.tag then begin
+                let anchor =
+                  match patch.Patch.ops with [] -> 1 | op :: _ -> first_patch_line op
+                in
+                let message =
+                  Fmt.str "stale tag: %s is now #%s; re-read before editing\n%s" target
+                    (Hashline.tag content)
+                    (format_context target content anchor)
+                in
+                Ok (Tool.fail message)
               end
-          | Ok `Directory -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
-          | Ok _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
-          end
+              else
+                begin match Patch.apply content patch with
+                | Error message -> Error (`Invalid_input message)
+                | Ok (updated, added, removed) -> begin
+                    let* () = save_file target updated in
+                    Hashtbl.replace ctx.Tool.read_tracker target
+                      (int_of_float (Charamel_os.Time.now ctx.Tool.clock *. 1000.));
+                    let tag = Hashline.tag updated in
+                    Ok
+                      (Tool.truncate ~diagnostics:(diagnostics ctx target) ctx
+                         (edit_output patch target added removed tag))
+                  end
+                end
+          | Unix.S_DIR -> Ok (Tool.fail (Fmt.str "%s is a directory" target))
+          | _ -> Ok (Tool.fail (Fmt.str "%s is not a regular file" target))
         end
       end
   end

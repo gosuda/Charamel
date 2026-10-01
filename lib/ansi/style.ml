@@ -162,3 +162,85 @@ let transition ~from to_ =
        | No_underline | Single -> ());
     "\x1b[" ^ Buffer.contents buf ^ "m"
   end
+
+let color_value = function Some n -> n | None -> 0
+
+let underline_of = function
+  | [] | [ None ] | [ Some 1 ] -> Single
+  | [ Some 0 ] -> No_underline
+  | [ Some 2 ] -> Double
+  | [ Some 3 ] -> Curly
+  | [ Some 4 ] -> Dotted
+  | [ Some 5 ] -> Dashed
+  | _ -> Single
+
+let extended_color subs rest =
+  let values, rest =
+    if subs <> [] then (subs, rest)
+    else
+      match rest with
+      | [ Some 5 ] :: index :: more -> ([ Some 5 ] @ index, more)
+      | [ Some 2 ] :: r :: g :: b :: more -> ([ Some 2 ] @ r @ g @ b, more)
+      | _ -> ([], rest)
+  in
+  let color =
+    match values with
+    | Some 5 :: index :: _ -> (
+        match Color.indexed (color_value index) with
+        | Some color -> color
+        | None -> Color.Default)
+    | Some 2 :: _colorspace :: r :: g :: b :: _ -> (
+        match Color.rgb (color_value r) (color_value g) (color_value b) with
+        | Some color -> color
+        | None -> Color.Default)
+    | Some 2 :: r :: g :: b :: _ -> (
+        match Color.rgb (color_value r) (color_value g) (color_value b) with
+        | Some color -> color
+        | None -> Color.Default)
+    | _ -> Color.Default
+  in
+  (color, rest)
+
+let rec of_sgr ~params t =
+  match params with
+  | [] -> t
+  | parameter :: rest -> (
+      match parameter with
+      | [] | [ None ] | [ Some 0 ] -> of_sgr ~params:rest default
+      | [ Some 1 ] -> of_sgr ~params:rest { t with bold = true }
+      | [ Some 2 ] -> of_sgr ~params:rest { t with faint = true }
+      | [ Some 3 ] -> of_sgr ~params:rest { t with italic = true }
+      | Some 4 :: subparameters ->
+          of_sgr ~params:rest { t with underline = underline_of subparameters }
+      | [ Some 5 ] | [ Some 6 ] -> of_sgr ~params:rest { t with blink = true }
+      | [ Some 7 ] -> of_sgr ~params:rest { t with reverse = true }
+      | [ Some 8 ] -> of_sgr ~params:rest { t with conceal = true }
+      | [ Some 9 ] -> of_sgr ~params:rest { t with strike = true }
+      | [ Some 22 ] -> of_sgr ~params:rest { t with bold = false; faint = false }
+      | [ Some 23 ] -> of_sgr ~params:rest { t with italic = false }
+      | [ Some 24 ] -> of_sgr ~params:rest { t with underline = No_underline }
+      | [ Some 25 ] -> of_sgr ~params:rest { t with blink = false }
+      | [ Some 27 ] -> of_sgr ~params:rest { t with reverse = false }
+      | [ Some 28 ] -> of_sgr ~params:rest { t with conceal = false }
+      | [ Some 29 ] -> of_sgr ~params:rest { t with strike = false }
+      | Some 38 :: subparameters ->
+          let color, rest = extended_color subparameters rest in
+          of_sgr ~params:rest { t with fg = color }
+      | [ Some 39 ] -> of_sgr ~params:rest { t with fg = Color.Default }
+      | Some 48 :: subparameters ->
+          let color, rest = extended_color subparameters rest in
+          of_sgr ~params:rest { t with bg = color }
+      | [ Some 49 ] -> of_sgr ~params:rest { t with bg = Color.Default }
+      | Some 58 :: subparameters ->
+          let color, rest = extended_color subparameters rest in
+          of_sgr ~params:rest { t with underline_color = color }
+      | [ Some 59 ] -> of_sgr ~params:rest { t with underline_color = Color.Default }
+      | [ Some n ] when n >= 30 && n <= 37 ->
+          of_sgr ~params:rest { t with fg = Color.Basic (n - 30) }
+      | [ Some n ] when n >= 40 && n <= 47 ->
+          of_sgr ~params:rest { t with bg = Color.Basic (n - 40) }
+      | [ Some n ] when n >= 90 && n <= 97 ->
+          of_sgr ~params:rest { t with fg = Color.Basic (n - 90 + 8) }
+      | [ Some n ] when n >= 100 && n <= 107 ->
+          of_sgr ~params:rest { t with bg = Color.Basic (n - 100 + 8) }
+      | _ -> of_sgr ~params:rest t)

@@ -4,7 +4,8 @@ module Event = Charamel_tea.Event
 
 let decode input =
   let decoder = Input.create () in
-  Input.feed decoder input @ Input.flush decoder
+  let events = Input.feed decoder input in
+  List.append events (Input.flush decoder)
 
 let only_key = function
   | [ Event.Key key ] -> key
@@ -272,6 +273,129 @@ let test_consecutive_pastes_and_marker_chunks () =
       Alcotest.(check string) "second paste" "b" second
   | events -> Alcotest.failf "consecutive pastes produced %d events" (List.length events)
 
+let test_capability_and_clipboard_replies () =
+  (match decode "\027P1+r524742=38\027\\" with
+  | [ Event.Capability (Some value) ] ->
+      Alcotest.(check string) "XTGETTCAP value" "8" value
+  | events -> Alcotest.failf "XTGETTCAP reply produced %d events" (List.length events));
+  (match decode "\027P0+r524742\027\\" with
+  | [ Event.Capability None ] -> ()
+  | events -> Alcotest.failf "rejected XTGETTCAP produced %d events" (List.length events));
+  (match decode "\027]52;c;aGVsbG8=\007" with
+  | [ Event.Clipboard { selection = `System; content } ] ->
+      Alcotest.(check string) "clipboard reply" "hello" content
+  | events -> Alcotest.failf "OSC 52 reply produced %d events" (List.length events));
+  (match decode "\027]52;p;YQ==\027\\" with
+  | [ Event.Clipboard { selection = `Primary; content } ] ->
+      Alcotest.(check string) "primary reply" "a" content
+  | events ->
+      Alcotest.failf "primary OSC 52 reply produced %d events" (List.length events));
+  match decode "\027]52;c;not base64!\007" with
+  | [ Event.Unknown raw ] ->
+      Alcotest.(check string)
+        "undecodable clipboard stays raw" "\027]52;c;not base64!\007" raw
+  | events -> Alcotest.failf "malformed OSC 52 produced %d events" (List.length events)
+
+let test_split_four_byte_scalar () =
+  let decoder = Input.create () in
+  Alcotest.(check int)
+    "three bytes of a four-byte scalar wait" 0
+    (List.length (Input.feed decoder "\xf0\x9f\x98"));
+  Alcotest.(check bool)
+    "a partial scalar is not a pending escape" false
+    (Input.pending_escape decoder);
+  match Input.feed decoder "\x80" with
+  | [ Event.Key key ] ->
+      Alcotest.(check string) "one emoji key" "\xf0\x9f\x98\x80" (Key.to_string key);
+      Alcotest.(check bool)
+        "the code is U+1F600" true
+        (key.Key.code = Key.Char (Uchar.of_int 0x1f600));
+      Alcotest.(check string)
+        "the text is the whole scalar" "\xf0\x9f\x98\x80" key.Key.text
+  | events -> Alcotest.failf "split scalar produced %d events" (List.length events)
+
+let jamo = "\u{1112}\u{1161}\u{11AB}"
+
+let test_decomposed_jamo_is_one_cluster () =
+  match decode jamo with
+  | [ Event.Key key ] ->
+      Alcotest.(check string) "the text is the whole syllable block" jamo key.Key.text;
+      Alcotest.(check bool)
+        "the code is the leading jamo" true
+        (key.Key.code = Key.Char (Uchar.of_int 0x1112));
+      Alcotest.(check int)
+        "the cluster measures two cells" 2
+        (Charamel_ansi.Width.grapheme_width key.Key.text)
+  | events -> Alcotest.failf "decomposed jamo produced %d events" (List.length events)
+
+let test_jamo_bytes_are_one_cluster () =
+  let keys =
+    List.filter_map
+      (function Event.Key key -> Some key | _ -> None)
+      (feed_one_byte jamo)
+  in
+  Alcotest.(check int) "one byte-split cluster yields one key" 1 (List.length keys);
+  Alcotest.(check bool)
+    "no key carries empty text" true
+    (List.for_all (fun key -> key.Key.text <> "") keys);
+  Alcotest.(check string)
+    "the cluster reassembles in byte order" jamo
+    (String.concat "" (List.map (fun key -> key.Key.text) keys));
+  match keys with
+  | [ key ] ->
+      Alcotest.(check bool)
+        "the code is the leading jamo" true
+        (key.Key.code = Key.Char (Uchar.of_int 0x1112));
+      Alcotest.(check int)
+        "the cluster measures two cells" 2
+        (Charamel_ansi.Width.grapheme_width key.Key.text)
+  | _ -> ()
+
+let test_partial_cluster_flushes_its_scalars () =
+  let decoder = Input.create () in
+  Alcotest.(check int)
+    "the leading jamo waits for its continuation" 0
+    (List.length (Input.feed decoder "\u{1112}"));
+  Alcotest.(check bool)
+    "the wait is reported as a pending cluster" true
+    (Input.pending_cluster decoder);
+  Alcotest.(check bool)
+    "a pending cluster is not a pending escape" false
+    (Input.pending_escape decoder);
+  let key = only_key (Input.flush decoder) in
+  Alcotest.(check string) "the held scalar is delivered whole" "\u{1112}" key.Key.text;
+  Alcotest.(check bool)
+    "nothing stays held after the flush" false
+    (Input.pending_cluster decoder)
+
+let corpus_case index (text, cells, clusters) =
+  let test () =
+    let keys =
+      List.filter_map (function Event.Key key -> Some key | _ -> None) (decode text)
+    in
+    let texts = List.map (fun key -> key.Key.text) keys in
+    Alcotest.(check int) "one key per cluster" clusters (List.length keys);
+    Alcotest.(check string) "cluster texts rebuild the row" text (String.concat "" texts);
+    Alcotest.(check int)
+      "each key carries exactly one cluster" clusters
+      (List.length (List.concat_map Charamel_ansi.Width.graphemes texts));
+    Alcotest.(check int)
+      "the cell width survives decoding" cells
+      (List.fold_left
+         (fun total text -> total + Charamel_ansi.Width.grapheme_width text)
+         0 texts);
+    List.iter
+      (fun key ->
+        Alcotest.(check bool)
+          "the code is the cluster's first scalar" true
+          (match String.get_utf_8_uchar key.Key.text 0 with
+          | decoded when Uchar.utf_decode_is_valid decoded ->
+              key.Key.code = Key.Char (Uchar.utf_decode_uchar decoded)
+          | _ -> false))
+      keys
+  in
+  Alcotest.test_case (Fmt.str "corpus_%02d_%d_clusters" index clusters) `Quick test
+
 let cases =
   [
     Alcotest.test_case "plain_and_controls" `Quick test_plain_and_controls;
@@ -292,4 +416,13 @@ let cases =
       test_eof_abort_and_unknown_boundaries;
     Alcotest.test_case "consecutive_pastes" `Quick
       test_consecutive_pastes_and_marker_chunks;
+    Alcotest.test_case "capability_and_clipboard" `Quick
+      test_capability_and_clipboard_replies;
+    Alcotest.test_case "split_four_byte_scalar" `Quick test_split_four_byte_scalar;
+    Alcotest.test_case "decomposed_jamo_cluster" `Quick
+      test_decomposed_jamo_is_one_cluster;
+    Alcotest.test_case "jamo_bytes_one_cluster" `Quick test_jamo_bytes_are_one_cluster;
+    Alcotest.test_case "partial_cluster_flush" `Quick
+      test_partial_cluster_flushes_its_scalars;
   ]
+  @ List.mapi corpus_case Test_support.corpus

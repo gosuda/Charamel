@@ -1,29 +1,16 @@
+open Lwt.Infix
+
 type rule = { path : string; globs : string list; always : bool; body : string }
 type indexed_rule = { value : rule; patterns : Re.re list }
 type t = { cwd : string; rules : indexed_rule list }
 
 let max_file_bytes = 65_536
-let path_of fs path = Eio.Path.(fs / path)
-
-let read_file_opt path =
-  try
-    Eio.Path.with_open_in path (fun flow ->
-        match
-          Eio.Buf_read.parse ~max_size:(max_file_bytes + 1) Eio.Buf_read.take_all flow
-        with
-        | Ok content -> Some content
-        | Error (`Msg _) -> None)
-  with Eio.Io _ | Unix.Unix_error _ -> None
+let path_of fs_root path = Path.under ~root:fs_root path
 
 let kind path =
-  try Some (Eio.Path.kind ~follow:true path) with Eio.Io _ | Unix.Unix_error _ -> None
-
-let trim_cr line =
-  let length = String.length line in
-  if length > 0 && Char.equal line.[length - 1] '\r' then String.sub line 0 (length - 1)
-  else line
-
-let lines text = List.map trim_cr (String.split_on_char '\n' text)
+  Lwt.catch
+    (fun () -> Lwt_unix.stat path >|= fun stats -> Some stats.Unix.st_kind)
+    (function Unix.Unix_error _ | Sys_error _ -> Lwt.return_none | exn -> Lwt.fail exn)
 
 let invalid path detail =
   invalid_arg (Fmt.str "invalid rule frontmatter in %s: %s" path detail)
@@ -98,7 +85,7 @@ let parse_frontmatter path header_lines =
   loop [] None header_lines
 
 let parse_document path content =
-  match lines content with
+  match Io.lines content with
   | first :: rest when String.equal first "---" ->
       let rec close_header count = function
         | [] -> invalid path "unterminated frontmatter"
@@ -126,87 +113,66 @@ let make_rule path content =
       { value = { path; globs; always; body }; patterns = compile_globs path globs })
     (parse_document path content)
 
-let regular_file path = match kind path with Some `Regular_file -> true | _ -> false
-let directory path = match kind path with Some `Directory -> true | _ -> false
+let regular_file path = kind path >|= function Some Unix.S_REG -> true | _ -> false
+let is_directory path = kind path >|= function Some Unix.S_DIR -> true | _ -> false
 
-let discover_file fs path =
-  if not (regular_file (path_of fs path)) then None
-  else Option.bind (read_file_opt (path_of fs path)) (make_rule path)
-
-let discover_directory fs path =
-  if not (directory (path_of fs path)) then []
+let discover_file fs_root path =
+  let file = path_of fs_root path in
+  regular_file file >>= fun is_file ->
+  if not is_file then Lwt.return_none
   else
-    let entries =
-      try Eio.Path.read_dir (path_of fs path) with Eio.Io _ | Unix.Unix_error _ -> []
-    in
-    List.filter_map
-      (fun entry ->
-        if Filename.check_suffix entry ".md" then
-          discover_file fs (Filename.concat path entry)
-        else None)
-      entries
+    Io.read_bounded file ~max:max_file_bytes >>= function
+    | None -> Lwt.return_none
+    | Some content -> Lwt.return (make_rule path content)
 
-let discover_context_file fs path =
-  if not (regular_file (path_of fs path)) then None
+let rec discover_entries fs_root directory = function
+  | [] -> Lwt.return_nil
+  | entry :: rest -> (
+      discover_file fs_root (Filename.concat directory entry) >>= fun found ->
+      discover_entries fs_root directory rest >|= fun others ->
+      match found with None -> others | Some rule -> rule :: others)
+
+let discover_directory fs_root directory =
+  let root = path_of fs_root directory in
+  is_directory root >>= fun is_dir ->
+  if not is_dir then Lwt.return_nil
   else
-    Option.map
-      (fun body -> { value = { path; globs = []; always = true; body }; patterns = [] })
-      (read_file_opt (path_of fs path))
+    Charamel_os.Fs.read_dir root >>= function
+    | Error _ -> Lwt.return_nil
+    | Ok entries ->
+        discover_entries fs_root directory
+          (List.filter (fun entry -> Filename.check_suffix entry ".md") entries)
 
-let canonical_path path =
-  let absolute = String.length path > 0 && Char.equal path.[0] '/' in
-  let rec push components = function
-    | [] -> components
-    | component :: rest ->
-        if String.equal component "" || String.equal component "." then
-          push components rest
-        else if String.equal component ".." then
-          match components with
-          | _ :: tail -> push tail rest
-          | [] -> if absolute then push [] rest else push [ ".." ] rest
-        else push (component :: components) rest
-  in
-  let components = push [] (String.split_on_char '/' path) |> List.rev in
-  let body = String.concat "/" components in
-  match (absolute, String.equal body "") with
-  | true, true -> "/"
-  | true, false -> "/" ^ body
-  | false, _ -> body
+let discover_context_file fs_root path =
+  let file = path_of fs_root path in
+  regular_file file >>= fun is_file ->
+  if not is_file then Lwt.return_none
+  else
+    Io.read_bounded file ~max:max_file_bytes >|= function
+    | None -> None
+    | Some body ->
+        Some { value = { path; globs = []; always = true; body }; patterns = [] }
 
-let absolute_path ~cwd path =
-  canonical_path (if Filename.is_relative path then Filename.concat cwd path else path)
+let rec discover_context_paths fs_root cwd = function
+  | [] -> Lwt.return_nil
+  | relative :: rest -> (
+      let path = Path.normalize ~cwd relative in
+      kind (path_of fs_root path) >>= function
+      | Some Unix.S_DIR ->
+          discover_directory fs_root path >>= fun found ->
+          discover_context_paths fs_root cwd rest >|= fun others -> found @ others
+      | Some Unix.S_REG -> (
+          discover_context_file fs_root path >>= fun found ->
+          discover_context_paths fs_root cwd rest >|= fun others ->
+          match found with None -> others | Some rule -> rule :: others)
+      | Some _ | None -> discover_context_paths fs_root cwd rest)
 
-let load ~fs ~cwd ~(config : Config.t) =
-  let cwd = canonical_path cwd in
-  let rules =
-    List.concat_map
-      (fun relative ->
-        let path = absolute_path ~cwd relative in
-        match kind (path_of fs path) with
-        | Some `Directory -> discover_directory fs path
-        | Some `Regular_file -> Option.to_list (discover_context_file fs path)
-        | _ -> [])
-      config.Config.context_paths
-  in
+let load ~fs_root ~cwd ~(config : Config.t) =
+  let cwd = Path.normalize cwd in
+  discover_context_paths fs_root cwd config.Config.context_paths >|= fun rules ->
   { cwd; rules }
 
-let path_is_under ~root path =
-  String.equal root "/" || String.equal path root
-  || String.length path > String.length root
-     && String.sub path 0 (String.length root) = root
-     && Char.equal path.[String.length root] '/'
-
-let relative_path t path =
-  let path =
-    canonical_path
-      (if Filename.is_relative path then Filename.concat t.cwd path else path)
-  in
-  if not (path_is_under ~root:t.cwd path) then None
-  else
-    let offset = String.length t.cwd + if String.equal path t.cwd then 0 else 1 in
-    Some
-      (if offset >= String.length path then ""
-       else String.sub path offset (String.length path - offset))
+let relative_path t path = Path.relative ~root:t.cwd (Path.normalize ~cwd:t.cwd path)
 
 let matches indexed path =
   List.exists (fun pattern -> Re.execp pattern path) indexed.patterns

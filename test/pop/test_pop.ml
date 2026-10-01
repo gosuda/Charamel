@@ -1,13 +1,5 @@
 open Pop_core
-
-let contains text needle =
-  let text_length = String.length text and needle_length = String.length needle in
-  let rec search index =
-    if index + needle_length > text_length then false
-    else if String.sub text index needle_length = needle then true
-    else search (index + 1)
-  in
-  needle_length = 0 || search 0
+open Lwt.Infix
 
 let fixed_date () =
   match Ptime.of_date_time ((2026, 9, 16), ((12, 34, 56), 0)) with
@@ -37,13 +29,18 @@ let test_message () =
   | Ok value -> value
   | Error error -> Alcotest.failf "could not build test message: %a" Mime.pp_error error
 
-let test_mime_and_preview () =
+let test_wire_and_envelope () =
   let message = test_message () in
-  let wire = Preview.render message in
-  Alcotest.(check bool) "Bcc header omitted" false (contains wire "Bcc:");
-  Alcotest.(check bool) "body present" true (contains wire "Hello");
-  Alcotest.(check bool) "attachment present" true (contains wire "YXR0YWNobWVudA==");
-  Alcotest.(check string) "preview is serialised message" (Mime.serialise message) wire;
+  let wire = Mime.serialise message in
+  Alcotest.(check bool)
+    "Bcc header omitted" false
+    (Test_support.contains ~needle:"Bcc:" ~haystack:wire);
+  Alcotest.(check bool)
+    "body present" true
+    (Test_support.contains ~needle:"Hello" ~haystack:wire);
+  Alcotest.(check bool)
+    "attachment present" true
+    (Test_support.contains ~needle:"YXR0YWNobWVudA==" ~haystack:wire);
   match Mime.envelope message with
   | Error error -> Alcotest.failf "envelope failed: %a" Mime.pp_error error
   | Ok (from, recipients) ->
@@ -53,38 +50,41 @@ let test_mime_and_preview () =
         [ "to@example.com"; "copy@example.com"; "blind@example.com" ]
         recipients
 
-let prepare_with_body env ~unsafe_html body =
-  Eio.Switch.run (fun sw ->
-      match
-        Pop_lib.prepare ~sw ~clock:env#clock ~cwd:env#cwd
-          ~stdin:(Eio.Flow.string_source "") ~date:(fixed_date ())
-          {
-            Pop_lib.empty_options with
-            to_ = [ "to@example.com" ];
-            from = Some "from@example.com";
-            subject = Some "Subject";
-            body = Some body;
-            unsafe_html;
-          }
-      with
-      | Ok value -> value
-      | Error error -> Alcotest.failf "prepare failed: %a" Pop_lib.pp_error error)
+let prepare_with_body ~unsafe_html body =
+  let stdin = Lwt_io.of_bytes ~mode:Lwt_io.Input (Lwt_bytes.of_string "") in
+  Pop_lib.prepare ~cwd:(Sys.getcwd ()) ~stdin ~date:(fixed_date ())
+    {
+      Pop_lib.to_ = [ "to@example.com" ];
+      cc = [];
+      bcc = [];
+      from = Some "from@example.com";
+      subject = Some "Subject";
+      body = Some body;
+      body_file = None;
+      attachments = [];
+      signature = None;
+      unsafe_html;
+    }
+  >>= function
+  | Ok value -> Lwt.return value
+  | Error error -> Alcotest.failf "prepare failed: %a" Pop_lib.pp_error error
 
-let test_markdown_safety env =
+let test_markdown_safety () =
   let body = "# Hello\n\n<script>alert(1)</script>" in
-  let safe = prepare_with_body env ~unsafe_html:false body in
-  let unsafe = prepare_with_body env ~unsafe_html:true body in
-  let safe_html = Option.get safe.Pop_lib.message.Mime.body_html in
-  let unsafe_html = Option.get unsafe.Pop_lib.message.Mime.body_html in
+  prepare_with_body ~unsafe_html:false body >>= fun safe ->
+  prepare_with_body ~unsafe_html:true body >>= fun unsafe ->
+  let safe_html = Option.get safe.Mime.body_html in
+  let unsafe_html = Option.get unsafe.Mime.body_html in
   Alcotest.(check bool)
     "safe HTML removes raw script" false
-    (contains safe_html "<script>");
+    (Test_support.contains ~needle:"<script>" ~haystack:safe_html);
   Alcotest.(check bool)
     "unsafe HTML preserves raw script" true
-    (contains unsafe_html "<script>");
+    (Test_support.contains ~needle:"<script>" ~haystack:unsafe_html);
   Alcotest.(check bool)
     "plain rendering has heading" true
-    (contains safe.Pop_lib.message.Mime.body_text "Hello")
+    (Test_support.contains ~needle:"Hello" ~haystack:safe.Mime.body_text);
+  Lwt.return_unit
 
 let test_config_env () =
   let bindings =
@@ -107,30 +107,38 @@ let test_config_env () =
         (match config.Send.security with Smtp.Tls -> true | _ -> false)
 
 let test_config_rejects_bad_port () =
-  let env name =
-    if name = "POP_SMTP_HOST" then Some "smtp"
-    else if name = "POP_SMTP_PORT" then Some "bad"
-    else None
-  in
-  match Pop_lib.config_of_env ~env with
-  | Error (`Input message) ->
-      Alcotest.(check bool) "mentions port" true (contains message "POP_SMTP_PORT")
-  | Error error -> Alcotest.failf "wrong configuration error: %a" Pop_lib.pp_error error
-  | Ok _ -> Alcotest.fail "bad port was accepted"
+  List.iter
+    (fun value ->
+      let env name =
+        if name = "POP_SMTP_HOST" then Some "smtp"
+        else if name = "POP_SMTP_PORT" then Some value
+        else None
+      in
+      match Pop_lib.config_of_env ~env with
+      | Error (`Input message) ->
+          Alcotest.(check bool)
+            (Printf.sprintf "%s rejected" value)
+            true
+            (Test_support.contains ~needle:"POP_SMTP_PORT" ~haystack:message)
+      | Error error ->
+          Alcotest.failf "wrong configuration error: %a" Pop_lib.pp_error error
+      | Ok _ -> Alcotest.failf "%s accepted as a port" value)
+    [ "bad"; "0x1d1"; "1_000"; "+465"; "-1" ]
 
 let test_resend_payload () =
   let payload = Send.resend_payload (test_message ()) in
-  Alcotest.(check bool) "payload has from field" true (contains payload "\"from\"");
+  Alcotest.(check bool)
+    "payload has from field" true
+    (Test_support.contains ~needle:"\"from\"" ~haystack:payload);
   Alcotest.(check bool)
     "payload has Bcc recipients" true
-    (contains payload "blind@example.com");
+    (Test_support.contains ~needle:"blind@example.com" ~haystack:payload);
   Alcotest.(check bool)
     "payload has base64 attachment" true
-    (contains payload "YXR0YWNobWVudA==")
+    (Test_support.contains ~needle:"YXR0YWNobWVudA==" ~haystack:payload)
 
-let test_smtp_delivery env =
-  Eio.Switch.run (fun sw ->
-      let fixture = Fixture_smtp.start ~sw ~net:env#net () in
+let test_smtp_delivery () =
+  Fixture_smtp.with_server (fun fixture ->
       let config =
         {
           Send.host = "127.0.0.1";
@@ -140,14 +148,20 @@ let test_smtp_delivery env =
           security = Smtp.Plain;
         }
       in
-      match Send.smtp ~sw ~clock:env#clock ~net:env#net ~config (test_message ()) with
+      Send.smtp ~config (test_message ()) >>= fun delivered ->
+      match delivered with
       | Error error -> Alcotest.failf "SMTP delivery failed: %a" Send.pp_error error
       | Ok () -> (
           match Fixture_smtp.body fixture with
           | None -> Alcotest.fail "SMTP fixture received no DATA payload"
           | Some body ->
-              Alcotest.(check bool) "DATA has From" true (contains body "From:");
-              Alcotest.(check bool) "DATA omits Bcc" false (contains body "Bcc:")))
+              Alcotest.(check bool)
+                "DATA has From" true
+                (Test_support.contains ~needle:"From:" ~haystack:body);
+              Alcotest.(check bool)
+                "DATA omits Bcc" false
+                (Test_support.contains ~needle:"Bcc:" ~haystack:body);
+              Lwt.return_unit))
 
 let suite =
   [
@@ -156,23 +170,24 @@ let suite =
     ("CLI", Test_cli.cases);
     ( "composition",
       [
-        Alcotest.test_case "MIME and preview" `Quick test_mime_and_preview;
-        Alcotest.test_case "Resend payload" `Quick test_resend_payload;
-        Alcotest.test_case "configuration" `Quick test_config_env;
-        Alcotest.test_case "configuration validation" `Quick test_config_rejects_bad_port;
+        Alcotest_lwt.test_case_sync "MIME wire and envelope" `Quick test_wire_and_envelope;
+        Alcotest_lwt.test_case_sync "Resend payload" `Quick test_resend_payload;
+        Alcotest_lwt.test_case_sync "configuration" `Quick test_config_env;
+        Alcotest_lwt.test_case_sync "configuration validation" `Quick
+          test_config_rejects_bad_port;
       ] );
     ( "markdown",
       [
-        Alcotest.test_case "safe and unsafe HTML" `Quick (fun () ->
-            Eio_main.run test_markdown_safety);
+        Alcotest_lwt.test_case "safe and unsafe HTML" `Quick (fun _switch () ->
+            test_markdown_safety ());
       ] );
     ( "smtp",
       [
-        Alcotest.test_case "plain delivery" `Quick (fun () ->
-            Eio_main.run test_smtp_delivery);
+        Alcotest_lwt.test_case "plain delivery" `Quick (fun _switch () ->
+            test_smtp_delivery ());
       ] );
   ]
 
 let () =
   Mirage_crypto_rng_unix.use_default ();
-  Alcotest.run "pop" suite
+  Test_support.run_lwt "pop" suite

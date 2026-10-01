@@ -53,4 +53,6 @@ module Theme : module type of Theme
 
 val render : ?theme:Theme.t -> spec -> string -> string
 (** [render ?theme spec source] applies token styles to [source]. The default is the dark
-    Charm palette; an empty or unknown style leaves token bytes unchanged. *)
+    Charm palette; an empty or unknown style leaves token bytes unchanged. Tabs become
+    four spaces and CRLF endings become LF, so every emitted run holds cells that a
+    terminal or a grid layout can measure. No other source byte is rewritten. *)

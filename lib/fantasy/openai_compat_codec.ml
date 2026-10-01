@@ -1,21 +1,4 @@
-(* OpenAI-compatible Chat Completions codec.
-
-   Wire sources, all under [.references/fantasy]:
-   - [providers/openai/language_model.go], [Stream] (lines 453-771) for the
-     chunk loop and the terminal evaluation, [prepareParams] (259-363) for
-     the request, [DefaultMapFinishReasonFunc]
-     ([language_model_hooks.go:190-208]) for finish reason mapping and
-     [DefaultStreamUsageFunc] ([language_model_hooks.go:244-286]) for the
-     usage mapping.
-   - [providers/openaicompat/language_model_hooks.go] [ToPromptFunc]
-     (189-566) for message conversion, [StreamExtraFunc] (106-184) for the
-     reasoning_content rules, and the openai provider's
-     [ToolResultMediaMessages] (620-635) for media tool results.
-   - [providers/openaicompat/replay_test.go] for the DeepSeek/Kimi chunk
-     shapes this decoder must survive: interleaved parallel tool calls,
-     batched boundary chunks, reasoning replay and cut-stream suppression.
-
-   The [data] of a [File] part already holds the provider wire form
+(* The [data] of a [File] part already holds the provider wire form
    ([lib/fantasy/message.mli]), so it is copied into the request verbatim;
    re-encoding would corrupt it. *)
 
@@ -25,8 +8,6 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
 open Json
 
 let jtrue = Jsont.Json.bool true
-
-(* Request encoding *)
 
 (* One content part per text or file part; tool calls and reasoning belong
    to their own members of the assistant message, and tool results become
@@ -203,38 +184,21 @@ let tools_json (tools : Tool.t list) =
                tools) );
       ]
 
-(* Reasoning effort; reasoning models reject the sampling knobs, so
-   [temperature] is dropped alongside [reasoning_effort]
-   (language_model.go:285-328). *)
-let reasoning_effort = function
-  | Request.Off -> None
-  | Request.Low -> Some "low"
-  | Request.Medium -> Some "medium"
-  | Request.High -> Some "high"
-
 (* System blocks join into one [role: "system"] message ahead of the
    conversation, alongside the text of any System-role message; blank
    blocks are dropped, and a request with no system content posts no
    system message (ToPromptFunc:215-239). *)
 let system_parts (r : Request.t) =
-  let from_messages =
-    List.concat_map
-      (fun (m : Message.t) ->
-        match m.Message.role with
-        | Message.System ->
-            List.filter_map
-              (fun p -> match p with Message.Text s -> Some s | _ -> None)
-              m.Message.parts
-        | Message.User | Message.Assistant | Message.Tool -> [])
-      r.Request.messages
-  in
-  match List.filter (fun s -> String.trim s <> "") (r.Request.system @ from_messages) with
+  match List.filter (fun s -> String.trim s <> "") (Request.system_blocks r) with
   | [] -> []
   | blocks ->
       [ obj [ (n "role", str "system"); (n "content", str (String.concat "\n" blocks)) ] ]
 
+(* Reasoning effort; reasoning models reject the sampling knobs, so
+   [temperature] is dropped alongside [reasoning_effort]
+   (language_model.go:285-328). *)
 let encode (r : Request.t) =
-  let reasoning = reasoning_effort r.Request.reasoning in
+  let reasoning = Openai_wire.effort r.Request.reasoning in
   let ms = ref [ (n "model", str r.Request.model.Model.id); (n "stream", jtrue) ] in
   (match reasoning with
   | Some effort -> ms := !ms @ [ (n "reasoning_effort", str effort) ]
@@ -245,8 +209,9 @@ let encode (r : Request.t) =
   (* Reasoning models take the cap as [max_completion_tokens]; the
      [max_tokens] member is rejected there (language_model.go:321-327). *)
   (match reasoning with
-  | None -> ms := !ms @ [ (n "max_tokens", int r.Request.max_tokens) ]
-  | Some _ -> ms := !ms @ [ (n "max_completion_tokens", int r.Request.max_tokens) ]);
+  | None -> ms := !ms @ [ (n "max_tokens", int (Request.effective_max_tokens r)) ]
+  | Some _ ->
+      ms := !ms @ [ (n "max_completion_tokens", int (Request.effective_max_tokens r)) ]);
   (* The usage chunk is only sent when the request asks for it. *)
   ms := !ms @ [ (n "stream_options", obj [ (n "include_usage", jtrue) ]) ];
   let messages = system_parts r @ List.concat_map message_of r.Request.messages in
@@ -256,28 +221,18 @@ let encode (r : Request.t) =
   ms := !ms @ tools_json r.Request.tools;
   obj !ms
 
-(* Stream decoding *)
-
 type tool_state = { id : string; mutable arguments : string }
 
 type state = {
   tools : (int, tool_state) Hashtbl.t;
   closed : (string, unit) Hashtbl.t;
-  mutable pending_finish : Stream_part.t option;
-  mutable usage : Usage.t option;
-  mutable finished : bool;
+  term : Codec_state.t;
 }
 
 type t = state
 
 let create () =
-  {
-    tools = Hashtbl.create 8;
-    closed = Hashtbl.create 8;
-    pending_finish = None;
-    usage = None;
-    finished = false;
-  }
+  { tools = Hashtbl.create 8; closed = Hashtbl.create 8; term = Codec_state.create () }
 
 (* DefaultStreamUsageFunc (language_model_hooks.go:244-286). OpenAI reports
    prompt_tokens including cached tokens; the cached amount is moved to
@@ -314,16 +269,6 @@ let finish_of_string = function
       `Error "provider ended with finish reason insufficient_system_resource"
   | other -> `Error (Fmt.str "unknown finish reason %s" other)
 
-let usage_events (st : state) =
-  match st.usage with Some u -> [ Stream_part.Usage u ] | None -> []
-
-let terminal (st : state) msg =
-  st.finished <- true;
-  st.pending_finish <- None;
-  let usage = usage_events st in
-  st.usage <- None;
-  usage @ [ Stream_part.Finish (`Error msg) ]
-
 let calls_in_index_order (st : state) : tool_state list =
   let items = Hashtbl.fold (fun k v acc -> (k, v) :: acc) st.tools [] in
   let items = List.sort (fun (a, _) (b, _) -> compare a b) items in
@@ -349,15 +294,10 @@ let close_open_calls (st : state) =
 (* A stream cut without arguments, or with arguments that never parsed, must
    not present fabricated "{}" input: the calls are suppressed and the turn
    errors (CHARM-2020). *)
-let valid_arguments args =
-  args <> ""
-  &&
-  match Jsont_bytesrw.decode_string Jsont.json args with
-  | Ok _ -> true
-  | Error _ -> false
+let valid_arguments args = args <> "" && Json.valid_json args
 
 let release (st : state) =
-  match st.pending_finish with
+  match st.term.pending_finish with
   | None -> []
   | Some f ->
       let suppress =
@@ -368,31 +308,34 @@ let release (st : state) =
       let calls = calls_in_index_order st in
       let truncated = List.exists (fun c -> not (valid_arguments c.arguments)) calls in
       if truncated && not suppress then
-        terminal st "stream ended before tool call arguments completed"
+        Codec_state.terminal st.term "stream ended before tool call arguments completed"
       else
         let ends = if suppress then [] else close_open_calls st in
-        st.finished <- true;
-        st.pending_finish <- None;
-        let usage = usage_events st in
-        st.usage <- None;
+        st.term.finished <- true;
+        st.term.pending_finish <- None;
+        let usage = Codec_state.usage_events st.term in
+        st.term.usage <- None;
         ends @ usage @ [ f ]
 
 let complete (st : state) : Stream_part.t list =
-  if st.finished then []
+  if st.term.finished then []
   else
-    match st.pending_finish with
+    match st.term.pending_finish with
     | Some _ -> release st
     | None -> (
         let calls = calls_in_index_order st in
         let truncated = List.exists (fun c -> not (valid_arguments c.arguments)) calls in
-        if truncated then terminal st "stream ended before tool call arguments completed"
+        if truncated then
+          Codec_state.terminal st.term "stream ended before tool call arguments completed"
         else
           match calls with
-          | [] -> terminal st "stream ended before the provider reported a finish reason"
+          | [] ->
+              Codec_state.terminal st.term
+                "stream ended before the provider reported a finish reason"
           | _ :: _ ->
               (* No finish reason at all with complete arguments infers a
                  tool-call turn. *)
-              st.pending_finish <- Some (Stream_part.Finish `Tool_calls);
+              st.term.pending_finish <- Some (Stream_part.Finish `Tool_calls);
               release st)
 
 let error_message j =
@@ -403,8 +346,8 @@ let error_message j =
   | None -> "provider reported an error"
 
 let record_finish (st : state) (reason : string) =
-  if not st.finished then
-    st.pending_finish <- Some (Stream_part.Finish (finish_of_string reason))
+  if not st.term.finished then
+    st.term.pending_finish <- Some (Stream_part.Finish (finish_of_string reason))
 
 (* Reasoning: StreamExtraFunc (openaicompat/language_model_hooks.go:106-184)
    reduced to the observable part. A null or empty reasoning_content never
@@ -447,7 +390,8 @@ let open_tool (st : state) (index : int) (tc : Jsont.json) : Stream_part.t list 
   else
     match string_mem tc "type" with
     | Some t when t <> "function" ->
-        (terminal st (Fmt.str "tool call type %s is not function" t), false)
+        ( Codec_state.terminal st.term (Fmt.str "tool call type %s is not function" t),
+          false )
     | Some _ | None ->
         let name = match name with Some s -> s | None -> "" in
         let id =
@@ -466,7 +410,7 @@ let open_tool (st : state) (index : int) (tc : Jsont.json) : Stream_part.t list 
 
 let tool_entry (st : state) (tc : Jsont.json) : Stream_part.t list * bool =
   match int_option_mem tc "index" with
-  | None -> (terminal st "tool call is missing its index", false)
+  | None -> (Codec_state.terminal st.term "tool call is missing its index", false)
   | Some index -> (
       match Hashtbl.find_opt st.tools index with
       | Some call -> (tool_delta call tc, true)
@@ -482,7 +426,7 @@ let tool_parts (st : state) (tcs : Jsont.json) : Stream_part.t list =
       let stop = ref false in
       List.iter
         (fun tc ->
-          if (not !stop) && not st.finished then
+          if (not !stop) && not st.term.finished then
             match tc with
             | Jsont.Object _ ->
                 let parts, continue_ = tool_entry st tc in
@@ -515,7 +459,7 @@ let decode_choices (st : state) (cs : Jsont.json list) : Stream_part.t list =
     (fun c ->
       if not !stop then begin
         out := List.rev_append (decode_choice st c) !out;
-        if st.finished then stop := true
+        if st.term.finished then stop := true
       end)
     cs;
   List.rev !out
@@ -524,8 +468,8 @@ let decode_choices (st : state) (cs : Jsont.json list) : Stream_part.t list =
    normal and never an error. A zero-usage object is ignored, as upstream's
    accumulator does. *)
 let decode_event (st : state) (j : Jsont.json) : Stream_part.t list =
-  if not (is_object j) then terminal st "event is not a JSON object"
-  else if has_error j then terminal st (error_message j)
+  if not (is_object j) then Codec_state.terminal st.term "event is not a JSON object"
+  else if has_error j then Codec_state.terminal st.term (error_message j)
   else begin
     (match oopt j "usage" with
     | Some u
@@ -540,13 +484,13 @@ let decode_event (st : state) (j : Jsont.json) : Stream_part.t list =
               match oopt u "completion_tokens_details" with
               | Some details -> int_mem details "reasoning_tokens" <> 0
               | None -> false) ->
-        st.usage <- Some (usage_of u)
+        st.term.usage <- Some (usage_of u)
     | Some _ | None -> ());
     match oopt j "choices" with
     | None -> []
     | Some cs -> (
         match array_of cs with
-        | None -> terminal st "choices is not an array"
+        | None -> Codec_state.terminal st.term "choices is not an array"
         | Some cs -> decode_choices st cs)
   end
 
@@ -558,13 +502,13 @@ let event_kind ~event j =
   else event
 
 let feed (st : t) ~event ~(data : string) =
-  if st.finished then []
+  if st.term.finished then []
   else if data = "[DONE]" then complete st
   else
     match Jsont_bytesrw.decode_string Jsont.json data with
     | Error e ->
         Log.err (fun m -> m "malformed openai event: %s" e);
-        terminal st (Fmt.str "malformed event: %s" e)
+        Codec_state.terminal st.term (Fmt.str "malformed event: %s" e)
     | Ok j ->
         let kind = event_kind ~event j in
         if

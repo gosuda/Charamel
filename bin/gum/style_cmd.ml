@@ -5,16 +5,16 @@ let render style ~trim text =
   let text = if trim then trim_lines text else text in
   Charamel_lipgloss.Style.render (Gum_style.to_style style) text
 
-let command_info name doc = Cmdliner.Cmd.info name ~doc
-
 let read_input env ~strip_ansi texts =
   match texts with
-  | _ :: _ -> Ok (String.concat "\n" texts)
-  | [] -> (
-      match Gum_io.read_stdin ~strip_ansi env with
-      | Ok text -> Ok text
-      | Error `Empty -> Error (`Msg "no input provided, see `gum style --help`")
-      | Error (`Read message) -> Error (`Msg message))
+  | _ :: _ -> Lwt.return (Ok (String.concat "\n" texts))
+  | [] ->
+      Lwt.map
+        (function
+          | Ok text -> Ok text
+          | Error `Empty -> Error (`Msg "no input provided, see `gum style --help`")
+          | Error (`Read message) -> Error (`Msg message))
+        (Gum_io.read_stdin ~strip_ansi env)
 
 let cmd env =
   let open Cmdliner in
@@ -32,10 +32,10 @@ let cmd env =
   let term =
     let open Term.Syntax in
     let+ trim = trim and+ strip_ansi = strip_ansi and+ style = style and+ texts = texts in
-    match read_input env ~strip_ansi texts with
-    | Error (`Msg message) -> Charamel_cli.error message
-    | Ok text when text = "" ->
-        Charamel_cli.error "no input provided, see `gum style --help`"
-    | Ok text -> Gum_io.println env (render style ~trim text)
+    Lwt.bind (read_input env ~strip_ansi texts) (function
+      | Error (`Msg message) -> Charamel_cli.error message
+      | Ok text when text = "" ->
+          Charamel_cli.error "no input provided, see `gum style --help`"
+      | Ok text -> Gum_io.println env (render style ~trim text))
   in
-  Cmd.v (command_info "style" "Apply terminal styles to text.") term
+  Cmd.v (Cmd.info "style" ~doc:"Apply terminal styles to text.") term

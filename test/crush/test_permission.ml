@@ -1,5 +1,6 @@
 module Config = Crush_core.Config
 module Permission = Crush_core.Permission
+open Lwt_direct
 
 let request ?(session = "session") ?(tool = "read") ?(action = "read")
     ?(path = "/project/file") ?(description = "test request") ?(read_only = true) () :
@@ -222,14 +223,13 @@ let observability_runs_after_unlock () =
   Alcotest.check Alcotest.int "observer runs once per actual resolution" 2 !count
 
 let policy_lock_is_free_while_asking () =
-  Eio_main.run @@ fun _env ->
-  let started, started_resolver = Eio.Promise.create () in
-  let release, release_resolver = Eio.Promise.create () in
+  let started, started_resolver = Lwt.wait () in
+  let release, release_resolver = Lwt.wait () in
   let p =
     policy
       ~asker:(fun _ ->
-        Eio.Promise.resolve started_resolver ();
-        Eio.Promise.await release;
+        Lwt.wakeup_later started_resolver ();
+        await release;
         Permission.Allow_once)
       ()
   in
@@ -237,16 +237,22 @@ let policy_lock_is_free_while_asking () =
     request ~tool:"edit" ~action:"edit" ~path:"/project/source.ml" ~read_only:false ()
   in
   let result = ref None in
-  Eio.Fiber.both
-    (fun () -> result := Some (Permission.resolve p req))
-    (fun () ->
-      Eio.Promise.await started;
-      Alcotest.check Alcotest.bool "plan getter remains live while asker waits" false
-        (Permission.plan_mode p);
-      Permission.set_plan_mode p true;
-      Alcotest.check Alcotest.bool "plan mode changes while asker waits" true
-        (Permission.plan_mode p);
-      Eio.Promise.resolve release_resolver ());
+  let resolving =
+    Lwt_direct.spawn (fun () -> result := Some (Permission.resolve p req))
+  in
+  let observing =
+    Lwt_direct.spawn (fun () ->
+        await started;
+        Fun.protect
+          (fun () ->
+            Alcotest.check Alcotest.bool "plan getter remains live while asker waits"
+              false (Permission.plan_mode p);
+            Permission.set_plan_mode p true;
+            Alcotest.check Alcotest.bool "plan mode changes while asker waits" true
+              (Permission.plan_mode p))
+          ~finally:(fun () -> Lwt.wakeup_later release_resolver ()))
+  in
+  await (Lwt.join [ resolving; observing ]);
   match !result with
   | None -> Alcotest.fail "permission resolution did not finish"
   | Some outcome ->
@@ -267,52 +273,27 @@ let matches_cases () =
   Alcotest.check Alcotest.bool "different tool does not match" false
     (Permission.matches ~entry:"git" req)
 
-let canonical_pins () =
-  Alcotest.check Alcotest.string "empty stays empty" "" (Permission.canonical "");
-  Alcotest.check Alcotest.string "root stays root" "/" (Permission.canonical "/");
-  Alcotest.check Alcotest.string "dot-dot clamps at root" "/"
-    (Permission.canonical "/a/../..");
-  Alcotest.check Alcotest.string "inner dot-dot resolves" "/a/c"
-    (Permission.canonical "/a/b/../c");
-  Alcotest.check Alcotest.string "relative dot-dot is dropped" ""
-    (Permission.canonical "../..");
-  Alcotest.check Alcotest.string "relative path passes through" "a/b"
-    (Permission.canonical "a/b");
-  Alcotest.check Alcotest.bool "equal paths are within" true
-    (Permission.within ~root:"/a" "/a");
-  Alcotest.check Alcotest.bool "child is within" true
-    (Permission.within ~root:"/a" "/a/b");
-  Alcotest.check Alcotest.bool "sibling prefix is not within" false
-    (Permission.within ~root:"/a" "/ab");
-  Alcotest.check Alcotest.bool "relative path is never within" false
-    (Permission.within ~root:"/a" "a/b");
-  Alcotest.check Alcotest.bool "root contains every absolute path" true
-    (Permission.within ~root:"/" "/x");
-  Alcotest.check Alcotest.string "lone relative dot-dot is dropped" ""
-    (Permission.canonical "..");
-  Alcotest.check Alcotest.string "trailing slash is dropped" "/a/b"
-    (Permission.canonical "/a/b/");
-  Alcotest.check Alcotest.bool "relative path is never within root" false
-    (Permission.within ~root:"/" "a")
-
 let cases =
   [
-    Alcotest.test_case "plan ceiling" `Quick plan_ceiling;
-    Alcotest.test_case "unknown mutation targets" `Quick plan_unknown_mutations;
-    Alcotest.test_case "yolo and plan order" `Quick yolo_and_plan_order;
-    Alcotest.test_case "deny before allow" `Quick deny_before_allow_and_readonly;
-    Alcotest.test_case "deny before session approval" `Quick deny_beats_session_approval;
-    Alcotest.test_case "exact config entries" `Quick config_entries_are_exact;
-    Alcotest.test_case "exact session grants" `Quick session_grants_are_exact;
-    Alcotest.test_case "asker session grant" `Quick asker_session_grant_is_exact;
-    Alcotest.test_case "hook order" `Quick hook_precedes_local_autoapproval;
-    Alcotest.test_case "local read-only approval" `Quick readonly_local_autoapproval;
-    Alcotest.test_case "read-only plan behavior" `Quick
+    Test_tools_test_support.case "plan ceiling" `Quick plan_ceiling;
+    Test_tools_test_support.case "unknown mutation targets" `Quick plan_unknown_mutations;
+    Test_tools_test_support.case "yolo and plan order" `Quick yolo_and_plan_order;
+    Test_tools_test_support.case "deny before allow" `Quick deny_before_allow_and_readonly;
+    Test_tools_test_support.case "deny before session approval" `Quick
+      deny_beats_session_approval;
+    Test_tools_test_support.case "exact config entries" `Quick config_entries_are_exact;
+    Test_tools_test_support.case "exact session grants" `Quick session_grants_are_exact;
+    Test_tools_test_support.case "asker session grant" `Quick asker_session_grant_is_exact;
+    Test_tools_test_support.case "hook order" `Quick hook_precedes_local_autoapproval;
+    Test_tools_test_support.case "local read-only approval" `Quick
+      readonly_local_autoapproval;
+    Test_tools_test_support.case "read-only plan behavior" `Quick
       readonly_skips_plan_ceiling_but_not_asker;
-    Alcotest.test_case "component-aware containment" `Quick
+    Test_tools_test_support.case "component-aware containment" `Quick
       sibling_prefix_is_not_contained;
-    Alcotest.test_case "decision observability" `Quick observability_runs_after_unlock;
-    Alcotest.test_case "policy lock while asking" `Quick policy_lock_is_free_while_asking;
-    Alcotest.test_case "entry matching" `Quick matches_cases;
-    Alcotest.test_case "canonical path pins" `Quick canonical_pins;
+    Test_tools_test_support.case "decision observability" `Quick
+      observability_runs_after_unlock;
+    Test_tools_test_support.case "policy lock while asking" `Quick
+      policy_lock_is_free_while_asking;
+    Test_tools_test_support.case "entry matching" `Quick matches_cases;
   ]

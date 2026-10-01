@@ -35,7 +35,7 @@ type msg
 type model
 (** The input application state. *)
 
-val initial_value : Eio_unix.Stdenv.base -> options -> string
+val initial_value : Charamel_cli.Env.t -> options -> string Lwt.t
 (** [initial_value env options] uses [options.value], or a non-empty trimmed
     standard-input value when the option is empty. *)
 
@@ -51,8 +51,8 @@ val value : model -> string
 val submitted : model -> bool
 (** [submitted model] is [true] after Enter submitted the value. *)
 
-val run : Eio_unix.Stdenv.base -> options -> unit
+val run : Charamel_cli.Env.t -> options -> unit Lwt.t
 (** [run env options] runs the input UI and writes the submitted value. *)
 
-val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
+val cmd : Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t
 (** [cmd env] is the [gum input] command. *)

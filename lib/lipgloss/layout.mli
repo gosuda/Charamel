@@ -52,11 +52,29 @@ val place :
     vertical placement. [h] defaults to {!Position.left}; [v] defaults to {!Position.top}.
 *)
 
-val style_runes : Style.t -> Style.t -> string -> indices:int list -> string
-(** [style_runes matched unmatched text ~indices] styles grapheme-cluster indices in the
-    escape-stripped text with [matched] and all other clusters with [unmatched]. Indices
-    outside the text are ignored. Escape sequences remain in the result and no grapheme
-    cluster is split. *)
+type rune_index = [ `Grapheme | `Scalar ]
+(** The unit an index list counts: an extended grapheme cluster or a Unicode scalar. *)
+
+val style_runes :
+  ?basis:rune_index -> Style.t -> Style.t -> string -> indices:int list -> string
+(** [style_runes ?basis matched unmatched text ~indices] styles the clusters at [indices]
+    in the escape-stripped text with [matched] and every other cluster with [unmatched].
+    Indices outside the text are ignored. Escape sequences remain in the result and no
+    grapheme cluster is split.
+
+    [basis] says what [indices] count. [{!rune-index:`Grapheme}] (the default) counts
+    clusters, which is what {!Charamel_bubbles.Fuzzy} produces. [{!rune-index:`Scalar}]
+    counts Unicode scalars, matching upstream's rune indexing: a scalar inside a
+    multi-scalar cluster styles the whole cluster. *)
+
+val wrap : ?breakpoints:string -> width:int -> string -> string
+(** [wrap ?breakpoints ~width text] word-wraps [text] at [width] cells like
+    {!Charamel_ansi.Text.wrap} and then rewrites every inserted line break so the line
+    that follows it starts in the same state the line before it ended in: the active SGR
+    attributes are reset and any open OSC 8 link is closed before the newline, then the
+    link and the attributes are re-opened after it. A trailing reset closes a state left
+    open at the end of [text]. Widths of at most [1] wrap nothing. [breakpoints] is passed
+    to {!Charamel_ansi.Text.wrap} and defaults to empty. *)
 
 val style_ranges : (int * int * Style.t) list -> string -> string
 (** [style_ranges ranges text] applies each style to its half-open terminal-cell range.

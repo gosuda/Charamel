@@ -13,4 +13,7 @@ type t =
   | Kitty_flags of int
   | Mode_report of { mode : int; value : int }
   | Profile of Charamel_colorprofile.t
+  | Resume
+  | Clipboard of { selection : [ `System | `Primary ]; content : string }
+  | Capability of string option
   | Unknown of string

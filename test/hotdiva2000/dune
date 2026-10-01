@@ -2,13 +2,13 @@
  (name test_hotdiva2000)
  (package hotdiva2000)
  (modules test_hotdiva2000 test_name test_cli)
- (libraries hotdiva_core alcotest fmt unix eio eio_main)
- (deps %{exe:../../bin/hotdiva2000/main.exe})
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+ (libraries
+  hotdiva_core
+  alcotest
+  alcotest-lwt
+  lwt
+  lwt.unix
+  fmt
+  unix
+  test_support)
+ (deps %{exe:../../bin/hotdiva2000/main.exe}))

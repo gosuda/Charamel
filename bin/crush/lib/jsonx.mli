@@ -22,6 +22,21 @@ val encode : ?minify:bool -> 'a Jsont.t -> 'a -> string
 (** [encode ?minify codec value] encodes [value] with [codec]. Encoding errors are
     reported as [Invalid_argument]. *)
 
+val array_members : Jsont.json -> Jsont.json list option
+(** [array_members json] is the values of [json] when it is an array, [None] otherwise. *)
+
+val object_members : Jsont.json -> Jsont.object' option
+(** [object_members json] is the members of [json] when it is an object, [None] otherwise.
+    A member is [(name, meta), value]: the name carries its metadata. *)
+
+val array_member : string -> Jsont.json -> Jsont.json list option
+(** [array_member name json] is the values of an array member [name], [None] when the
+    member is absent or is not an array. *)
+
+val object_member : string -> Jsont.json -> Jsont.json option
+(** [object_member name json] is the member [name] when it is an object, [None] when it is
+    absent or has another type. *)
+
 val member : string -> Jsont.json -> Jsont.json option
 (** [member name json] returns the named member when [json] is an object. *)
 

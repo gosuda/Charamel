@@ -11,6 +11,7 @@
   test_state_file
   test_todos
   test_tool_runtime
+  test_path
   test_permission
   test_rules
   test_skills
@@ -26,6 +27,7 @@
   test_tools_meta
   test_tools_net
   test_tools_search
+  test_tools_test_support
   test_tools_shell
   test_tools_agent
   test_tools_protocol
@@ -37,21 +39,15 @@
   charamel.fantasy
   charamel.huh
   charamel.tea
+  charamel.os
   alcotest
-  eio
-  eio_main
+  alcotest-lwt
+  lwt
+  lwt.unix
+  lwt_direct
   fmt
   jsont
   jsont.bytesrw
-  cohttp-eio
-  http
+  test_support
   unix)
- (deps %{exe:../../bin/crush/main.exe})
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+ (deps %{exe:../../bin/crush/main.exe}))

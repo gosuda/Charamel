@@ -5,42 +5,36 @@ module View = Charamel_tea.View
 module Style = Charamel_lipgloss.Style
 module Text = Charamel_ansi.Text
 
-let key name =
-  match Key.of_string name with
-  | Ok value -> value
-  | Error (`Msg message) -> invalid_arg (Fmt.str "invalid choose key %s: %s" name message)
-
-let k_down = key "down"
-let k_j = key "j"
-let k_ctrl_j = key "ctrl+j"
-let k_ctrl_n = key "ctrl+n"
-let k_up = key "up"
-let k_k = key "k"
-let k_ctrl_k = key "ctrl+k"
-let k_ctrl_p = key "ctrl+p"
-let k_right = key "right"
-let k_l = key "l"
-let k_ctrl_f = key "ctrl+f"
-let k_left = key "left"
-let k_h = key "h"
-let k_ctrl_b = key "ctrl+b"
-let k_home = key "home"
-let k_g = key "g"
-let k_end = key "end"
-let k_shift_g = key "G"
-let k_space = key " "
-let k_tab = key "tab"
-let k_x = key "x"
-let k_ctrl_at = key "ctrl+@"
-let k_a = key "a"
-let k_shift_a = key "A"
-let k_ctrl_a = key "ctrl+a"
-let k_enter = key "enter"
-let k_ctrl_q = key "ctrl+q"
-let k_escape = key "esc"
-let k_ctrl_c = key "ctrl+c"
-let is_key actual expected = Key.matches actual expected
-let any_key actual expected = List.exists (is_key actual) expected
+let k_down = Gum_flag.key ~cmd:"choose" "down"
+let k_j = Gum_flag.key ~cmd:"choose" "j"
+let k_ctrl_j = Gum_flag.key ~cmd:"choose" "ctrl+j"
+let k_ctrl_n = Gum_flag.key ~cmd:"choose" "ctrl+n"
+let k_up = Gum_flag.key ~cmd:"choose" "up"
+let k_k = Gum_flag.key ~cmd:"choose" "k"
+let k_ctrl_k = Gum_flag.key ~cmd:"choose" "ctrl+k"
+let k_ctrl_p = Gum_flag.key ~cmd:"choose" "ctrl+p"
+let k_right = Gum_flag.key ~cmd:"choose" "right"
+let k_l = Gum_flag.key ~cmd:"choose" "l"
+let k_ctrl_f = Gum_flag.key ~cmd:"choose" "ctrl+f"
+let k_left = Gum_flag.key ~cmd:"choose" "left"
+let k_h = Gum_flag.key ~cmd:"choose" "h"
+let k_ctrl_b = Gum_flag.key ~cmd:"choose" "ctrl+b"
+let k_home = Gum_flag.key ~cmd:"choose" "home"
+let k_g = Gum_flag.key ~cmd:"choose" "g"
+let k_end = Gum_flag.key ~cmd:"choose" "end"
+let k_shift_g = Gum_flag.key ~cmd:"choose" "G"
+let k_space = Gum_flag.key ~cmd:"choose" " "
+let k_tab = Gum_flag.key ~cmd:"choose" "tab"
+let k_x = Gum_flag.key ~cmd:"choose" "x"
+let k_ctrl_at = Gum_flag.key ~cmd:"choose" "ctrl+@"
+let k_a = Gum_flag.key ~cmd:"choose" "a"
+let k_shift_a = Gum_flag.key ~cmd:"choose" "A"
+let k_ctrl_a = Gum_flag.key ~cmd:"choose" "ctrl+a"
+let k_enter = Gum_flag.key ~cmd:"choose" "enter"
+let k_ctrl_q = Gum_flag.key ~cmd:"choose" "ctrl+q"
+let k_escape = Gum_flag.key ~cmd:"choose" "esc"
+let k_ctrl_c = Gum_flag.key ~cmd:"choose" "ctrl+c"
+let any_key = Gum_flag.any_key
 
 let find_substring ~needle text =
   let needle_length = String.length needle in
@@ -152,11 +146,6 @@ let single_option (options : options) =
 let effective_limit (options : options) count =
   if options.no_limit then count + 1 else max 1 options.limit
 
-let parsed_padding value =
-  match Gum_flag.parse_padding value with
-  | Ok sides -> sides
-  | Error (`Msg message) -> invalid_arg message
-
 let make (options : options) =
   let raw_items =
     match parse_options ~delimiter:options.label_delimiter options.options with
@@ -211,7 +200,7 @@ let make (options : options) =
     paginator;
     submitted = false;
     quitting = false;
-    padding = parsed_padding options.padding;
+    padding = Gum_flag.parsed_padding options.padding;
   }
 
 let selected model =
@@ -323,56 +312,71 @@ let handle_key model key =
   else if any_key key [ k_a; k_shift_a; k_ctrl_a ] then (toggle_all model, Cmd.none)
   else (model, Cmd.none)
 
-let render model =
-  if model.quitting then ""
+let page_start model =
+  Charamel_bubbles.Paginator.page model.paginator * max 1 model.options.height
+
+let frame model body =
+  let header_style = Gum_style.to_style model.options.header_style in
+  let body =
+    if model.paginator |> Charamel_bubbles.Paginator.total_pages > 1 then
+      body ^ "\n  " ^ Charamel_bubbles.Paginator.view model.paginator
+    else body
+  in
+  let body =
+    if model.options.header = "" then body
+    else Style.render header_style model.options.header ^ "\n" ^ body
+  in
+  let body =
+    if model.options.show_help then
+      body ^ "\n\nenter submit • esc quit • ↑↓ navigate • space toggle"
+    else body
+  in
+  Style.render (Style.padding model.padding Style.empty) body
+
+let items_view model =
+  let start =
+    Charamel_bubbles.Paginator.page model.paginator * max 1 model.options.height
+  in
+  let visible =
+    model.items
+    |> List.mapi (fun index item -> (index, item))
+    |> List.filter (fun (index, _) ->
+        index >= start && index < start + max 1 model.options.height)
+  in
+  let cursor_style = Gum_style.to_style model.options.cursor_style in
+  let item_style = Gum_style.to_style model.options.item_style in
+  let selected_style = Gum_style.to_style model.options.selected_style in
+  let lines =
+    List.map
+      (fun (index, (item : item)) ->
+        let cursor =
+          if index = model.index then model.options.cursor
+          else String.make (Text.width model.options.cursor) ' '
+        in
+        let cursor =
+          if index = model.index then Style.render cursor_style cursor else cursor
+        in
+        let marker, body_style =
+          if item.selected then (model.options.selected_prefix, selected_style)
+          else if index = model.index then (model.options.cursor_prefix, cursor_style)
+          else (model.options.unselected_prefix, item_style)
+        in
+        cursor ^ Style.render body_style (marker ^ item.label))
+      visible
+  in
+  String.concat "\n" lines
+
+let render model = if model.quitting then "" else frame model (items_view model)
+
+let cursor model =
+  if model.quitting then None
   else
-    let start =
-      Charamel_bubbles.Paginator.page model.paginator * max 1 model.options.height
+    let row = model.index - page_start model in
+    let requested =
+      if row < 0 || row >= max 1 model.options.height then None
+      else Some (Charamel_tea.Cursor.v ~blink:false row (Text.width model.options.cursor))
     in
-    let visible =
-      model.items
-      |> List.mapi (fun index item -> (index, item))
-      |> List.filter (fun (index, _) ->
-          index >= start && index < start + max 1 model.options.height)
-    in
-    let cursor_style = Gum_style.to_style model.options.cursor_style in
-    let header_style = Gum_style.to_style model.options.header_style in
-    let item_style = Gum_style.to_style model.options.item_style in
-    let selected_style = Gum_style.to_style model.options.selected_style in
-    let lines =
-      List.map
-        (fun (index, (item : item)) ->
-          let cursor =
-            if index = model.index then model.options.cursor
-            else String.make (Text.width model.options.cursor) ' '
-          in
-          let cursor =
-            if index = model.index then Style.render cursor_style cursor else cursor
-          in
-          let marker, body_style =
-            if item.selected then (model.options.selected_prefix, selected_style)
-            else if index = model.index then (model.options.cursor_prefix, cursor_style)
-            else (model.options.unselected_prefix, item_style)
-          in
-          cursor ^ Style.render body_style (marker ^ item.label))
-        visible
-    in
-    let lines = String.concat "\n" lines in
-    let lines =
-      if model.paginator |> Charamel_bubbles.Paginator.total_pages > 1 then
-        lines ^ "\n  " ^ Charamel_bubbles.Paginator.view model.paginator
-      else lines
-    in
-    let lines =
-      if model.options.header = "" then lines
-      else Style.render header_style model.options.header ^ "\n" ^ lines
-    in
-    let lines =
-      if model.options.show_help then
-        lines ^ "\n\nenter submit • esc quit • ↑↓ navigate • space toggle"
-      else lines
-    in
-    Style.render (Style.padding model.padding Style.empty) lines
+    Gum_io.place_cursor ~frame:(frame model) requested
 
 let update message model =
   match message with
@@ -399,7 +403,10 @@ let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
-    view = (fun model -> View.v (render model));
+    view =
+      (fun model ->
+        let frame = View.v (render model) in
+        { frame with cursor = cursor model });
     subscriptions =
       (fun _ ->
         Sub.batch
@@ -410,68 +417,45 @@ let app options : (model, msg) Charamel_tea.app =
   }
 
 let read_text env (options : options) =
-  match Gum_io.read_stdin ~strip_ansi:options.strip_ansi env with
-  | Ok value -> value
-  | Error `Empty -> ""
-  | Error (`Read value) -> value
+  Lwt.map
+    (function Ok value -> value | Error `Empty -> "" | Error (`Read value) -> value)
+    (Gum_io.read_stdin ~strip_ansi:options.strip_ansi env)
 
 let normalized_options env (options : options) =
-  let input = read_text env options in
-  let positional = options.options in
-  let options, selected =
-    if positional = [] then
-      let values =
-        if input = "" then [] else Gum_io.split ~delimiter:options.input_delimiter input
+  Lwt.map
+    (fun input ->
+      let positional = options.options in
+      let options, selected =
+        if positional = [] then
+          let values =
+            if input = "" then []
+            else Gum_io.split ~delimiter:options.input_delimiter input
+          in
+          ({ options with options = values }, options.selected)
+        else if options.selected = [] && input <> "" then
+          (options, Gum_io.split ~delimiter:options.input_delimiter input)
+        else (options, options.selected)
       in
-      ({ options with options = values }, options.selected)
-    else if options.selected = [] && input <> "" then
-      (options, Gum_io.split ~delimiter:options.input_delimiter input)
-    else (options, options.selected)
-  in
-  { options with selected }
+      { options with selected })
+    (read_text env options)
 
 let run env (options : options) =
-  let options = normalized_options env options in
-  if options.options = [] then
-    Charamel_cli.error "no options provided, see `gum choose --help`";
-  match single_option options with
-  | Error message -> Charamel_cli.error message
-  | Ok (Some value) -> Gum_io.print_raw env value
-  | Ok None ->
-      let model =
-        try
-          Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun model ->
-              if submitted model then Gum_run.Submitted else Gum_run.Quit)
-        with Gum_io.No_tty -> Charamel_cli.error "choose: requires a terminal"
-      in
-      if not (submitted model) then Charamel_cli.error "nothing selected";
-      let values = selected model in
-      if values = [] then Charamel_cli.error "nothing selected"
-      else Gum_io.println env (String.concat options.output_delimiter values)
-
-let validated_padding_term ~cmd =
-  let open Cmdliner in
-  let parse value =
-    match Gum_flag.parse_padding value with
-    | Ok _ -> Ok value
-    | Error (`Msg message) -> Error (`Msg message)
-  in
-  let padding_conv =
-    Arg.conv (parse, fun ppf value -> Stdlib.Format.pp_print_string ppf value)
-  in
-  Arg.(
-    value
-      (opt padding_conv "0 0"
-         (info [ "padding" ] ~doc:"Padding as one to four integers."
-            ~env:(Gum_flag.env ~cmd "padding"))))
-
-let string_arg ~cmd name ~default ~doc =
-  Cmdliner.Arg.(
-    value (opt string default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
-
-let int_arg ~cmd name ~default ~doc =
-  Cmdliner.Arg.(
-    value (opt int default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
+  Lwt.bind (normalized_options env options) (fun (options : options) ->
+      if options.options = [] then
+        Charamel_cli.error "no options provided, see `gum choose --help`";
+      match single_option options with
+      | Error message -> Charamel_cli.error message
+      | Ok (Some value) -> Gum_io.print_raw env value
+      | Ok None ->
+          Lwt.bind
+            (Gum_run.run_tui ~name:"choose" ?timeout:options.timeout env (app options)
+               ~finished:(fun model ->
+                 if submitted model then Gum_run.Submitted else Gum_run.Quit))
+            (fun model ->
+              if not (submitted model) then Charamel_cli.error "nothing selected";
+              let values = selected model in
+              if values = [] then Charamel_cli.error "nothing selected"
+              else Gum_io.println env (String.concat options.output_delimiter values)))
 
 let cmd env =
   let open Cmdliner in
@@ -507,26 +491,30 @@ let cmd env =
   let term =
     let+ options = options_arg
     and+ limit =
-      int_arg ~cmd:"choose" "limit" ~default:1 ~doc:"Maximum number of options to pick."
+      Gum_flag.int_arg ~cmd:"choose" "limit" ~default:1
+        ~doc:"Maximum number of options to pick."
     and+ no_limit = Gum_flag.flag ~cmd:"choose" ~doc:"Pick unlimited options." "no-limit"
     and+ ordered = Gum_flag.flag ~cmd:"choose" ~doc:"Maintain selection order." "ordered"
     and+ height =
-      int_arg ~cmd:"choose" "height" ~default:10 ~doc:"Number of options per page."
-    and+ cursor = string_arg ~cmd:"choose" "cursor" ~default:"> " ~doc:"Cursor prefix."
+      Gum_flag.int_arg ~cmd:"choose" "height" ~default:10
+        ~doc:"Number of options per page."
+    and+ cursor =
+      Gum_flag.string_arg ~cmd:"choose" "cursor" ~default:"> " ~doc:"Cursor prefix."
     and+ show_help =
       Gum_flag.negatable ~cmd:"choose" ~default:true ~doc:"Show help keybinds."
         "show-help"
     and+ timeout =
       Gum_flag.seconds ~cmd:"choose" ~doc:"Timeout until selection." "timeout"
     and+ header =
-      string_arg ~cmd:"choose" "header" ~default:"Choose:" ~doc:"Header value."
+      Gum_flag.string_arg ~cmd:"choose" "header" ~default:"Choose:" ~doc:"Header value."
     and+ cursor_prefix =
-      string_arg ~cmd:"choose" "cursor-prefix" ~default:"• " ~doc:"Cursor item prefix."
+      Gum_flag.string_arg ~cmd:"choose" "cursor-prefix" ~default:"• "
+        ~doc:"Cursor item prefix."
     and+ selected_prefix =
-      string_arg ~cmd:"choose" "selected-prefix" ~default:"✓ "
+      Gum_flag.string_arg ~cmd:"choose" "selected-prefix" ~default:"✓ "
         ~doc:"Selected item prefix."
     and+ unselected_prefix =
-      string_arg ~cmd:"choose" "unselected-prefix" ~default:"• "
+      Gum_flag.string_arg ~cmd:"choose" "unselected-prefix" ~default:"• "
         ~doc:"Unselected item prefix."
     and+ selected = selected_arg
     and+ select_if_one =
@@ -539,11 +527,12 @@ let cmd env =
       Gum_flag.delimiter ~cmd:"choose" ~default:"\n" ~doc:"Output option delimiter."
         "output-delimiter"
     and+ label_delimiter =
-      string_arg ~cmd:"choose" "label-delimiter" ~default:"" ~doc:"Label/value delimiter."
+      Gum_flag.string_arg ~cmd:"choose" "label-delimiter" ~default:""
+        ~doc:"Label/value delimiter."
     and+ strip_ansi =
       Gum_flag.negatable ~cmd:"choose" ~default:true ~doc:"Strip ANSI from stdin."
         "strip-ansi"
-    and+ padding = validated_padding_term ~cmd:"choose"
+    and+ padding = Gum_flag.validated_padding_term ~cmd:"choose" ()
     and+ cursor_style = cursor_style
     and+ header_style = header_style
     and+ item_style = item_style

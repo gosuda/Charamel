@@ -7,16 +7,16 @@ let spec =
     ~number:integer_number ~ident:identifier_dash
     ~attribute:
       (Some
-         (alt
+         (Re.alt
             [
-              seq [ str "</"; identifier_dash ];
-              seq [ str "<"; identifier_dash ];
-              seq
+              Re.seq [ Re.str "</"; identifier_dash ];
+              Re.seq [ Re.str "<"; identifier_dash ];
+              Re.seq
                 [
-                  str "&";
-                  rep1 (set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
-                  str ";";
+                  Re.str "&";
+                  Re.rep1 (Re.set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+                  Re.str ";";
                 ];
-              seq [ str "&#"; rep1 (set "0123456789"); str ";" ];
+              Re.seq [ Re.str "&#"; Re.rep1 (Re.set "0123456789"); Re.str ";" ];
             ]))
     ()

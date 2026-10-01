@@ -1,20 +1,6 @@
 type t = { max : int; base : float; factor : float; max_delay : float; jitter : float }
 
-let policy ~max ~base ~factor ~max_delay ~jitter =
-  if
-    max < 0
-    || (not (Float.is_finite base))
-    || base < 0.
-    || (not (Float.is_finite factor))
-    || factor < 1.
-    || (not (Float.is_finite max_delay))
-    || max_delay < 0.
-    || (not (Float.is_finite jitter))
-    || jitter < 0. || jitter > 1.
-  then invalid_arg "Retry.policy: invalid retry bounds";
-  { max; base; factor; max_delay; jitter }
-
-let default = policy ~max:8 ~base:0.5 ~factor:2. ~max_delay:60. ~jitter:0.25
+let default : t = { max = 8; base = 0.5; factor = 2.; max_delay = 60.; jitter = 0.25 }
 
 let retryable_status = function
   | 408 | 409 | 429 -> true

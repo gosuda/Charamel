@@ -198,6 +198,37 @@ let test_matches_ignores_payload () =
   Alcotest.(check bool)
     "payload fields do not affect matching" true (Key.matches first second)
 
+let printable_scalar =
+  let open QCheck2.Gen in
+  let scalar low high = map Uchar.of_int (int_range low high) in
+  oneof
+    [
+      scalar 0x20 0x7e;
+      scalar 0xa0 0x2ff;
+      scalar 0x370 0x4ff;
+      scalar 0x590 0x5ff;
+      scalar 0x3040 0x30ff;
+      scalar 0x4e00 0x9fff;
+      scalar 0xac00 0xd7a3;
+      scalar 0xfe00 0xfe0f;
+      scalar 0xff00 0xff60;
+      scalar 0x1f300 0x1f9ff;
+      scalar 0x10000 0x10ffff;
+    ]
+
+let printable_key =
+  let open QCheck2.Gen in
+  map2
+    (fun scalar bits -> Key.v ~mods:(mods_of_bits bits) (Key.Char scalar))
+    printable_scalar (int_range 0 255)
+
+let key_roundtrip =
+  QCheck2.Test.make ~name:"key_roundtrip" ~count:1_000 ~print:Key.to_string printable_key
+    (fun key ->
+      match Key.of_string (Key.to_string key) with
+      | Ok parsed -> parsed = key
+      | Error (`Msg _) -> false)
+
 let cases =
   [
     Alcotest.test_case "named_roundtrips" `Quick test_named_roundtrips;
@@ -206,4 +237,5 @@ let cases =
     Alcotest.test_case "plus_aliases" `Quick test_plus_and_aliases;
     Alcotest.test_case "aliases_and_errors" `Quick test_aliases_and_errors;
     Alcotest.test_case "matches_payload" `Quick test_matches_ignores_payload;
+    QCheck_alcotest.to_alcotest ~speed_level:`Quick key_roundtrip;
   ]

@@ -5,27 +5,57 @@ let max_glob_results = 100
 let max_grep_results = 500
 let max_file_bytes = 10 * 1024 * 1024
 
-let protect_io path f =
-  try Ok (f ()) with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found path)
-  | Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (path, Fmt.str "%a" Eio.Exn.pp exn))
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (`Io (path, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
+let file_kind (stat : Unix.stats) =
+  match stat.Unix.st_kind with
+  | Unix.S_DIR -> `Directory
+  | Unix.S_REG -> `Regular_file
+  | Unix.S_LNK -> `Symbolic_link
+  | Unix.S_FIFO -> `Fifo
+  | Unix.S_BLK -> `Block_device
+  | Unix.S_CHR -> `Char_device
+  | Unix.S_SOCK -> `Socket
 
-let path ctx absolute = Eio.Path.(ctx.Tool.fs / absolute)
+let path_kind ~follow path =
+  let open Lwt.Infix in
+  Lwt.catch
+    (fun () ->
+      (if follow then Lwt_unix.stat path else Lwt_unix.lstat path) >|= fun stat ->
+      (file_kind stat
+        :> [ `Directory
+           | `Regular_file
+           | `Symbolic_link
+           | `Fifo
+           | `Block_device
+           | `Char_device
+           | `Socket
+           | `Not_found ]))
+    (function
+      | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Lwt.return `Not_found
+      | exn -> Lwt.fail exn)
 
-let canonical_or_abs ctx absolute =
-  match Tool.canonical ctx absolute with
-  | Ok target -> Ok target
-  | Error (`Not_found _) -> Ok absolute
-  | Error error -> Error error
+let read_directory_entries dir =
+  let open Lwt.Infix in
+  Lwt_unix.opendir dir >>= fun handle ->
+  Lwt.finalize
+    (fun () ->
+      let rec loop acc =
+        Lwt.catch
+          (fun () -> Lwt_unix.readdir handle >|= fun name -> Some name)
+          (function End_of_file -> Lwt.return None | exn -> Lwt.fail exn)
+        >>= function
+        | None -> Lwt.return (List.rev acc)
+        | Some ("." | "..") -> loop acc
+        | Some name -> loop (name :: acc)
+      in
+      loop [])
+    (fun () -> Lwt_unix.closedir handle)
+  >>= fun names ->
+  Lwt_list.map_s
+    (fun name ->
+      Lwt_unix.lstat (Filename.concat dir name) >|= fun stat -> (file_kind stat, name))
+    names
 
-let output ctx text =
-  let content, artifact =
-    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
-  in
-  Tool.ok ?artifact content
+let load_file path = Lwt_io.with_file ~mode:Lwt_io.Input path Lwt_io.read
 
 let trim_slashes path =
   let length = String.length path in
@@ -132,8 +162,11 @@ let compile_ignores ignores =
           end)
     (Ok []) ignores
 
-let ls_entries ctx root ~ignore ~depth =
+let deadline_exceeded ctx deadline = Charamel_os.Time.now ctx.Tool.clock > deadline
+
+let ls_entries ctx ~timeout root ~ignore ~depth =
   let* ignore_patterns = compile_ignores ignore in
+  let deadline = Charamel_os.Time.now ctx.Tool.clock +. timeout in
   let count = ref 0 in
   let truncated = ref false in
   let result = ref [] in
@@ -150,14 +183,13 @@ let ls_entries ctx root ~ignore ~depth =
   let include_hidden = hidden_name (basename root) in
   let include_generated = generated_name (basename root) in
   let rec walk current relative current_depth =
-    if !count >= max_ls_entries then begin
+    if deadline_exceeded ctx deadline then Error (`Timeout timeout)
+    else if !count >= max_ls_entries then begin
       truncated := true;
       Ok ()
     end
     else
-      match
-        protect_io current (fun () -> Eio.Path.read_dir_entries (path ctx current))
-      with
+      match Io.trap_await current (fun () -> read_directory_entries current) with
       | Error _ as error -> error
       | Ok entries ->
           let entries =
@@ -187,8 +219,8 @@ let ls_entries ctx root ~ignore ~depth =
           in
           visit entries
   in
-  let root_path = path ctx root in
-  match protect_io root (fun () -> Eio.Path.kind ~follow:true root_path) with
+  let root_path = root in
+  match Io.trap_await root (fun () -> path_kind ~follow:true root_path) with
   | Error error -> Error error
   | Ok `Directory ->
       let root_name = basename root in
@@ -209,22 +241,14 @@ let ls_entries ctx root ~ignore ~depth =
       end
   | Ok _ -> Ok (basename root)
 
-let run_with_timeout ctx seconds f =
-  let* value = Tool.with_timeout ctx seconds f in
-  value
-
 let run_ls ctx json =
   let* path_opt, ignore, depth = Tool.decode ls_params_jsont json in
   if depth < 0 then Error (`Invalid_input "depth must not be negative")
   else
     let depth = min 10 depth in
-    let absolute =
-      Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) |> trim_slashes
-    in
-    let target_result = canonical_or_abs ctx absolute in
-    let request_path =
-      match target_result with Ok target -> target | Error _ -> absolute
-    in
+    let absolute = Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) in
+    let target_result = Tool.canonical_or_abs ctx absolute in
+    let request_path = Result.value target_result ~default:absolute in
     begin
       let* () =
         Tool.request ctx ~read_only:true ~tool:"ls" ~action:"ls" ~path:request_path
@@ -232,55 +256,57 @@ let run_ls ctx json =
       in
       begin
         let* target = target_result in
-        run_with_timeout ctx 30. (fun () ->
-            match ls_entries ctx target ~ignore ~depth with
-            | Ok text -> Ok (output ctx text)
-            | Error error -> Error error)
+        match ls_entries ctx ~timeout:30. target ~ignore ~depth with
+        | Ok text -> Ok (Tool.truncate ctx text)
+        | Error error -> Error error
       end
     end
 
-let collect_files ctx ?(include_hidden = false) ?(include_generated = false) root callback
-    =
+let collect_files ctx ~timeout ?(include_hidden = false) ?(include_generated = false) root
+    callback =
+  let deadline = Charamel_os.Time.now ctx.Tool.clock +. timeout in
   let include_hidden = include_hidden || hidden_name (basename root) in
   let include_generated = include_generated || generated_name (basename root) in
   let rec walk current relative =
-    match
-      protect_io current (fun () -> Eio.Path.kind ~follow:false (path ctx current))
-    with
-    | Error error -> Error error
-    | Ok `Symbolic_link -> Ok ()
-    | Ok `Regular_file ->
-        callback current (if relative = "." then basename current else relative)
-    | Ok `Directory -> begin
-        let* entries =
-          protect_io current (fun () -> Eio.Path.read_dir_entries (path ctx current))
-        in
-        let entries =
-          List.sort (fun (_, left) (_, right) -> String.compare left right) entries
-        in
-        let rec visit = function
-          | [] -> Ok ()
-          | (kind, name) :: rest ->
-              let hidden = hidden_name name && not include_hidden in
-              let generated = generated_name name && not include_generated in
-              if hidden || generated then visit rest
-              else
-                let child = if current = "/" then "/" ^ name else current ^ "/" ^ name in
-                let child_relative =
-                  if relative = "." then name else relative ^ "/" ^ name
-                in
-                begin match kind with
-                | `Symbolic_link -> visit rest
-                | _ ->
-                    begin match walk child child_relative with
-                    | Ok () -> visit rest
-                    | Error _ as error -> error
-                    end
-                end
-        in
-        visit entries
-      end
-    | Ok _ -> Ok ()
+    if deadline_exceeded ctx deadline then Error (`Timeout timeout)
+    else
+      match Io.trap_await current (fun () -> path_kind ~follow:false current) with
+      | Error error -> Error error
+      | Ok `Symbolic_link -> Ok ()
+      | Ok `Regular_file ->
+          callback current (if relative = "." then basename current else relative)
+      | Ok `Directory -> begin
+          let* entries =
+            Io.trap_await current (fun () -> read_directory_entries current)
+          in
+          let entries =
+            List.sort (fun (_, left) (_, right) -> String.compare left right) entries
+          in
+          let rec visit = function
+            | [] -> Ok ()
+            | (kind, name) :: rest ->
+                let hidden = hidden_name name && not include_hidden in
+                let generated = generated_name name && not include_generated in
+                if hidden || generated then visit rest
+                else
+                  let child =
+                    if current = "/" then "/" ^ name else current ^ "/" ^ name
+                  in
+                  let child_relative =
+                    if relative = "." then name else relative ^ "/" ^ name
+                  in
+                  begin match kind with
+                  | `Symbolic_link -> visit rest
+                  | _ ->
+                      begin match walk child child_relative with
+                      | Ok () -> visit rest
+                      | Error _ as error -> error
+                      end
+                  end
+          in
+          visit entries
+        end
+      | Ok _ -> Ok ()
   in
   walk root "."
 
@@ -320,13 +346,9 @@ let run_glob ctx pattern path_opt =
   match compile_glob pattern with
   | Error message -> Error (`Invalid_input message)
   | Ok expression ->
-      let absolute =
-        Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) |> trim_slashes
-      in
-      let target_result = canonical_or_abs ctx absolute in
-      let request_path =
-        match target_result with Ok target -> target | Error _ -> absolute
-      in
+      let absolute = Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) in
+      let target_result = Tool.canonical_or_abs ctx absolute in
+      let request_path = Result.value target_result ~default:absolute in
       begin
         let* () =
           Tool.request ctx ~read_only:true ~tool:"glob" ~action:pattern ~path:request_path
@@ -341,21 +363,20 @@ let run_glob ctx pattern path_opt =
             in
             if not (Re.execp expression candidate) then Ok ()
             else
-              let* stat =
-                protect_io file (fun () -> Eio.Path.stat ~follow:true (path ctx file))
-              in
+              let* stat = Io.trap_await file (fun () -> Lwt_unix.stat file) in
               matches :=
-                { relative = relative_to_cwd ctx file; mtime = stat.Eio.File.Stat.mtime }
+                { relative = relative_to_cwd ctx file; mtime = stat.Unix.st_mtime }
                 :: !matches;
               Ok ()
           in
-          run_with_timeout ctx 30. (fun () ->
-              let* () =
-                collect_files ctx
-                  ~include_hidden:(pattern_mentions_hidden pattern)
-                  ~include_generated:(pattern_mentions_generated pattern)
-                  target callback
-              in
+          match
+            collect_files ctx ~timeout:30.
+              ~include_hidden:(pattern_mentions_hidden pattern)
+              ~include_generated:(pattern_mentions_generated pattern)
+              target callback
+          with
+          | Error _ as error -> error
+          | Ok () ->
               let sorted =
                 List.sort
                   (fun left right ->
@@ -370,7 +391,7 @@ let run_glob ctx pattern path_opt =
                 | [] -> "No files found"
                 | _ -> String.concat "\n" (List.map (fun item -> item.relative) sorted)
               in
-              Ok (output ctx text))
+              Ok (Tool.truncate ctx text)
         end
       end
 
@@ -426,13 +447,9 @@ let run_grep ctx pattern path_opt include_opt literal max_results =
     match (matcher, include_matcher) with
     | Error error, _ | _, Error error -> Error error
     | Ok matcher, Ok include_matcher ->
-        let absolute =
-          Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) |> trim_slashes
-        in
-        let target_result = canonical_or_abs ctx absolute in
-        let request_path =
-          match target_result with Ok target -> target | Error _ -> absolute
-        in
+        let absolute = Tool.absolute ctx (Option.value path_opt ~default:ctx.Tool.cwd) in
+        let target_result = Tool.canonical_or_abs ctx absolute in
+        let request_path = Result.value target_result ~default:absolute in
         begin
           let* () =
             Tool.request ctx ~read_only:true ~tool:"grep" ~action:pattern
@@ -452,17 +469,11 @@ let run_grep ctx pattern path_opt include_opt literal max_results =
               in
               if excluded then Ok ()
               else
-                match
-                  protect_io file (fun () -> Eio.Path.stat ~follow:true (path ctx file))
-                with
+                match Io.trap_await file (fun () -> Lwt_unix.stat file) with
                 | Error error -> Error error
-                | Ok stat
-                  when Optint.Int63.to_int stat.Eio.File.Stat.size > max_file_bytes ->
-                    Ok ()
+                | Ok stat when stat.Unix.st_size > max_file_bytes -> Ok ()
                 | Ok _ -> begin
-                    let* content =
-                      protect_io file (fun () -> Eio.Path.load (path ctx file))
-                    in
+                    let* content = Io.trap_await file (fun () -> load_file file) in
                     if binary content || not (String.is_valid_utf_8 content) then Ok ()
                     else
                       let lines = read_lines content in
@@ -487,14 +498,15 @@ let run_grep ctx pattern path_opt include_opt literal max_results =
                       visit 1 lines
                   end
             in
-            run_with_timeout ctx 5. (fun () ->
-                let* () = collect_files ctx target callback in
+            match collect_files ctx ~timeout:5. target callback with
+            | Error _ as error -> error
+            | Ok () ->
                 let lines = List.rev !output_lines in
                 let lines =
                   if !truncated then lines @ [ Fmt.str "(truncated at %d)" max_results ]
                   else lines
                 in
-                Ok (output ctx (String.concat "\n" lines)))
+                Ok (Tool.truncate ctx (String.concat "\n" lines))
           end
         end
 

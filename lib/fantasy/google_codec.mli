@@ -11,6 +11,12 @@
     can arrive on events after the one that carries [finishReason], the decoder keeps the
     terminal {!Stream_part.Finish} back until the stream ends.
 
+    Usage: [usageMetadata] is a cumulative snapshot, so the last one wins and is emitted
+    once, immediately before the terminal. [output] is [candidatesTokenCount] plus
+    [thoughtsTokenCount]: upstream's [mapUsage] keeps the two disjoint, but [Usage.t]
+    bills [reasoning] as a subset of [output], so the fold is required by this contract,
+    not by the wire.
+
     Source: [.references/fantasy/providers/google/google.go], function [prepareParams] for
     the request and [languageModel.Stream] for the response; [mapUsage] and
     [mapFinishReason] for the two mappings; recorded responses under

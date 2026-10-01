@@ -37,10 +37,7 @@ val jsont : (string * credential) list Jsont.t
 (** [jsont] is the object-shaped credential file codec. *)
 
 val create :
-  path:Eio.Fs.dir_ty Eio.Path.t ->
-  clock:float Eio.Time.clock_ty Eio.Resource.t ->
-  unit ->
-  (t, error) result
+  path:string -> clock:Charamel_os.Time.clock -> unit -> (t, error) result Lwt.t
 (** [create ~path ~clock ()] captures [path] and [clock], loads the credential file, and
     returns a fresh resource. A missing file means no stored entries. *)
 
@@ -51,11 +48,11 @@ val find : t -> provider:string -> credential option
 val providers : t -> string list
 (** [providers resource] lists cached provider ids in stable file order. *)
 
-val set : t -> provider:string -> credential -> (unit, error) result
+val set : t -> provider:string -> credential -> (unit, error) result Lwt.t
 (** [set resource ~provider credential] persists one provider replacement and publishes it
     into [resource]. *)
 
-val remove : t -> provider:string -> (unit, error) result
+val remove : t -> provider:string -> (unit, error) result Lwt.t
 (** [remove resource ~provider] persistently removes one provider and publishes the result
     into [resource]. *)
 
@@ -68,35 +65,31 @@ val resolve :
   config:Config.t ->
   env:(string -> string option) ->
   provider:string ->
-  (credential option, error) result
+  (credential option, error) result Lwt.t
 (** [resolve resource ~config ~env ~provider] reloads the resource and applies stored,
     configured, and environment API-key precedence. Fallback keys are not persisted. A
     persistence-faulted resource returns its fault. *)
 
 val ensure_fresh :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
   config:Config.t ->
   env:(string -> string option) ->
   t ->
   provider:string ->
-  (Charamel_fantasy.Provider.auth, refresh_error) result
-(** [ensure_fresh ~sw ~net ~config ~env resource ~provider] reloads the resource, returns
-    a configured or environment API key without persisting it, and refreshes an expiring
+  (Charamel_fantasy.Provider.auth, refresh_error) result Lwt.t
+(** [ensure_fresh ~config ~env resource ~provider] reloads the resource, returns a
+    configured or environment API key without persisting it, and refreshes an expiring
     OAuth credential under the resource transaction. *)
 
 val refresh :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
   config:Config.t ->
   env:(string -> string option) ->
   t ->
   provider:string ->
   rejected:Charamel_fantasy.Provider.auth ->
-  (Charamel_fantasy.Provider.auth, refresh_error) result
-(** [refresh ~sw ~net ~config ~env resource ~provider ~rejected] performs a conditional
-    OAuth recovery. It rotates only when [rejected] is still the current stored
-    credential; a replacement is returned through normal freshness handling. *)
+  (Charamel_fantasy.Provider.auth, refresh_error) result Lwt.t
+(** [refresh ~config ~env resource ~provider ~rejected] performs a conditional OAuth
+    recovery. It rotates only when [rejected] is still the current stored credential; a
+    replacement is returned through normal freshness handling. *)
 
 val disable :
   t ->
@@ -104,7 +97,7 @@ val disable :
   rejected:Charamel_fantasy.Provider.auth ->
   reason:string ->
   now_ms:int ->
-  (unit, error) result
+  (unit, error) result Lwt.t
 (** [disable resource ~provider ~rejected ~reason ~now_ms] disables only the credential
     equal to [rejected], so a newer login or rotation is never disabled. *)
 
@@ -116,13 +109,13 @@ module Login : sig
   (** [redirect_uri] is the callback URI used for OAuth. *)
 
   val anthropic :
-    sw:Eio.Switch.t ->
-    net:_ Eio.Net.t ->
     open_browser:(string -> unit) ->
-    prompt_paste:(unit -> string option) ->
+    prompt_paste:(unit -> string option Lwt.t) ->
     t ->
-    (unit, login_error) result
-  (** [anthropic ~sw ~net ~open_browser ~prompt_paste resource] completes an Anthropic
-      browser or paste login and mutates [resource] through its persistent Anthropic
-      entry. Interactive waiting does not hold the store lock. *)
+    (unit, login_error) result Lwt.t
+  (** [anthropic ~open_browser ~prompt_paste resource] completes an Anthropic browser or
+      paste login and mutates [resource] through its persistent Anthropic entry.
+      [open_browser] is asked to show the authorization URL and is not awaited;
+      [prompt_paste] may be cancelled when the loopback callback wins the race.
+      Interactive waiting does not hold the store lock. *)
 end

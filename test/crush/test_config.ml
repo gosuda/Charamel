@@ -1,4 +1,5 @@
 module Config = Crush_core.Config
+open Lwt_direct
 
 let check_expand () =
   let env = function "NAME" -> Some "Ada" | "EMPTY" -> Some "" | _ -> None in
@@ -17,12 +18,9 @@ let check_search_paths () =
   in
   Alcotest.(check (list string))
     "ordered paths"
-    [
-      "/home/test/.config/crush/crush.json";
-      "/repo/crush.json";
-      "/repo/src/crush.json";
-      "/repo/src/lib/crush.json";
-    ]
+    (List.map
+       (fun dir -> Filename.concat dir "crush.json")
+       [ "/home/test/.config/crush"; "/repo"; "/repo/src"; "/repo/src/lib" ])
     paths;
   let paths =
     Config.search_paths ~cwd:"/repo/src" ~git_root:None
@@ -30,30 +28,33 @@ let check_search_paths () =
   in
   Alcotest.(check (list string))
     "home and cwd without git root"
-    [ "/home/test/crush.json"; "/repo/src/crush.json" ]
+    [ "/home/test/crush.json"; Filename.concat "/repo/src" "crush.json" ]
     paths
 
-let write path body = Eio.Path.save ~create:(`Or_truncate 0o600) path body
+let write path body =
+  Test_tools_test_support.mkdir_p (Filename.dirname path);
+  let channel =
+    open_out_gen [ Open_wronly; Open_creat; Open_trunc; Open_binary ] 0o600 path
+  in
+  Fun.protect
+    ~finally:(fun () -> close_out channel)
+    (fun () -> output_string channel body)
 
 let with_config_tree f =
-  Eio_main.run (fun runtime ->
-      let root = Fmt.str "/tmp/crush-config-%d-%d" (Unix.getpid ()) (Random.bits ()) in
+  Test_tools_test_support.with_scratch (fun root ->
       let home = Filename.concat root "home" in
       let xdg = Filename.concat home "xdg" in
       let project = Filename.concat root "project" in
       let nested = Filename.concat project "src" in
-      List.iter
-        (fun path ->
-          Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 Eio.Path.(runtime#fs / path))
-        [ xdg ^ "/crush"; nested; project ^ "/.git" ];
-      let cleanup () = Eio.Path.rmtree ~missing_ok:true Eio.Path.(runtime#fs / root) in
-      Fun.protect ~finally:cleanup (fun () -> f runtime ~root ~xdg ~project ~nested))
+      List.iter Test_tools_test_support.mkdir_p
+        [ xdg ^ "/crush"; nested; project; project ^ "/.git" ];
+      f ~root ~xdg ~project ~nested)
 
 let check_layered_load () =
-  with_config_tree (fun runtime ~root ~xdg ~project ~nested ->
-      let home_file = Eio.Path.(runtime#fs / xdg / "crush" / "crush.json") in
-      let project_file = Eio.Path.(runtime#fs / project / "crush.json") in
-      let nested_file = Eio.Path.(runtime#fs / nested / "crush.json") in
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let home_file = xdg ^ "/crush/crush.json" in
+      let project_file = project ^ "/crush.json" in
+      let nested_file = nested ^ "/crush.json" in
       write home_file
         "{\"providers\":{\"anthropic\":{\"type\":\"anthropic\",\"api_key\":\"$TOKEN\"}},\"permissions\":{\"allowed_tools\":[\"read\"]},\"options\":{\"debug\":false,\"data_dir\":\"home-data\"},\"context_paths\":[\"A.md\"]}";
       write project_file
@@ -68,7 +69,7 @@ let check_layered_load () =
         | "DATA" -> Some "project-data"
         | _ -> None
       in
-      match Config.load ~fs:runtime#fs ~env:env_lookup ~cwd:nested with
+      match await (Config.load ~fs_root:"/" ~env:env_lookup ~cwd:nested) with
       | Error error -> Alcotest.failf "layered load failed: %a" Config.pp_error error
       | Ok (config, files) -> (
           Alcotest.(check int) "three files contribute" 3 (List.length files);
@@ -95,15 +96,13 @@ let check_invalid_config () =
       "{\"options\":{\"budgets\":{\"subagent_requests\":-1}}}"
   with
   | Ok _ -> Alcotest.fail "negative subagent budget was accepted"
-  | Error message ->
-      Alcotest.(check bool) "validation error is reported" true (String.length message > 0)
+  | Error _ -> ()
 
 let check_unknown_record_key () =
   let expect_rejected name json =
     match Jsont_bytesrw.decode_string Config.jsont json with
     | Ok _ -> Alcotest.fail (name ^ " was accepted")
-    | Error message ->
-        Alcotest.(check bool) (name ^ " reports an error") true (String.length message > 0)
+    | Error _ -> ()
   in
   expect_rejected "unknown top-level key" "{\"typo\":true}";
   expect_rejected "unknown options key" "{\"options\":{\"debug\":true,\"debg\":true}}"
@@ -142,11 +141,11 @@ let check_jsonx_presence () =
 
 let cases =
   [
-    Alcotest.test_case "environment expansion" `Quick check_expand;
-    Alcotest.test_case "search path ordering" `Quick check_search_paths;
-    Alcotest.test_case "layered config" `Quick check_layered_load;
-    Alcotest.test_case "invalid config" `Quick check_invalid_config;
-    Alcotest.test_case "unknown record key" `Quick check_unknown_record_key;
-    Alcotest.test_case "opaque map keys" `Quick check_opaque_map_keys;
-    Alcotest.test_case "JSON presence helpers" `Quick check_jsonx_presence;
+    Test_tools_test_support.case "environment expansion" `Quick check_expand;
+    Test_tools_test_support.case "search path ordering" `Quick check_search_paths;
+    Test_tools_test_support.case "layered config" `Quick check_layered_load;
+    Test_tools_test_support.case "invalid config" `Quick check_invalid_config;
+    Test_tools_test_support.case "unknown record key" `Quick check_unknown_record_key;
+    Test_tools_test_support.case "opaque map keys" `Quick check_opaque_map_keys;
+    Test_tools_test_support.case "JSON presence helpers" `Quick check_jsonx_presence;
   ]

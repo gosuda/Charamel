@@ -1,26 +1,44 @@
 type source = Stdin | File of string | Execute of string
 type loaded = { text : string; path : string option }
 
-let read_flow flow =
+let read_channel channel =
   let buffer = Buffer.create 4096 in
-  let sink = Eio.Flow.buffer_sink buffer in
-  try
-    Eio.Flow.copy flow sink;
-    Ok (Buffer.contents buffer)
-  with
-  | End_of_file -> Ok (Buffer.contents buffer)
-  | Eio.Io _ -> Error "could not read input"
+  let rec loop () =
+    Lwt.bind (Lwt_io.read ~count:65536 channel) (fun chunk ->
+        if chunk = "" then Lwt.return (Ok (Buffer.contents buffer))
+        else begin
+          Buffer.add_string buffer chunk;
+          loop ()
+        end)
+  in
+  loop ()
 
-let read ~fs ~stdin = function
-  | Stdin -> Result.map (fun text -> { text; path = None }) (read_flow stdin)
-  | File path -> (
-      try Ok { text = Eio.Path.(load (fs / path)); path = Some path } with
-      | Eio.Io _ -> Error (Fmt.str "file not found: %s" path)
-      | Unix.Unix_error (error, function_name, argument) ->
-          Error
-            (Fmt.str "could not read %s: %s (%s %s)" path (Unix.error_message error)
-               function_name argument))
-  | Execute _ -> Error "execute input must be captured through a PTY"
+let resolve ~fs_root path =
+  if Filename.is_relative path then Filename.concat fs_root path else path
+
+let read ~fs_root ~stdin = function
+  | Stdin ->
+      Lwt.bind (read_channel stdin) (function
+        | Ok text -> Lwt.return (Ok { text; path = None })
+        | Error error -> Lwt.return (Error error))
+  | File path ->
+      let resolved = resolve ~fs_root path in
+      Lwt.catch
+        (fun () ->
+          Lwt_io.with_file ~mode:Lwt_io.Input resolved (fun channel ->
+              Lwt.bind (read_channel channel) (function
+                | Ok text -> Lwt.return (Ok { text; path = Some path })
+                | Error error -> Lwt.return (Error error))))
+        (function
+          | Unix.Unix_error (error, function_name, argument) ->
+              Lwt.return
+                (Error
+                   (Fmt.str "could not read %s: %s (%s %s)" path
+                      (Unix.error_message error) function_name argument))
+          | End_of_file | Sys_error _ ->
+              Lwt.return (Error (Fmt.str "file not found: %s" path))
+          | exn -> Lwt.fail exn)
+  | Execute _ -> Lwt.return (Error "execute input must be captured through a PTY")
 
 let rec cut_lines ~lines text =
   match lines with

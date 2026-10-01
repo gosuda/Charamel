@@ -1,3 +1,4 @@
+module Env = Charamel_cli.Env
 open Result.Syntax
 
 type error =
@@ -29,8 +30,6 @@ type options = {
   selected_style : Gum_style.t;
 }
 
-let style ?foreground ?bold () = Gum_style.defaults ?foreground ?bold ()
-
 let default_options =
   {
     separator = ",";
@@ -47,10 +46,10 @@ let default_options =
     return_column = 0;
     timeout = None;
     padding = "0 0";
-    border_style = style ();
-    cell_style = style ();
-    header_style = style ~bold:true ();
-    selected_style = style ~foreground:"212" ~bold:true ();
+    border_style = Gum_style.defaults ();
+    cell_style = Gum_style.defaults ();
+    header_style = Gum_style.defaults ~bold:true ();
+    selected_style = Gum_style.defaults ~foreground:"212" ~bold:true ();
   }
 
 let error_message = function
@@ -182,11 +181,6 @@ type model = {
 
 type msg = Table of Charamel_bubbles.Table.msg | Key of Charamel_tea.Key.t
 
-let key_name key = Charamel_tea.Key.to_string key
-let is_abort key = String.equal (key_name key) "ctrl+c"
-let is_submit key = match key_name key with "enter" | "ctrl+q" -> true | _ -> false
-let is_quit key = match key_name key with "q" | "esc" -> true | _ -> false
-
 let make_model (options : options) ~headers ~rows ~padding =
   let widths = resolve_widths options headers rows in
   let columns =
@@ -220,11 +214,7 @@ let make_model (options : options) ~headers ~rows ~padding =
     border_style = Gum_style.to_style options.border_style;
   }
 
-let table_view model =
-  let base = Charamel_bubbles.Table.view model.table in
-  let help =
-    if model.show_help then "\n" ^ Charamel_bubbles.Table.help_view model.table else ""
-  in
+let table_frame model body =
   let count =
     if model.hide_count then ""
     else
@@ -232,22 +222,31 @@ let table_view model =
       if total = 0 then ""
       else Fmt.str "\n%d/%d" (Charamel_bubbles.Table.cursor model.table + 1) total
   in
-  let content = base ^ count ^ help in
-  let content = Charamel_lipgloss.Style.render model.border_style content in
+  let help =
+    if model.show_help then "\n" ^ Charamel_bubbles.Table.help_view model.table else ""
+  in
+  let content = Charamel_lipgloss.Style.render model.border_style (body ^ count ^ help) in
   Charamel_lipgloss.Style.render
     (Charamel_lipgloss.Style.padding model.padding Charamel_lipgloss.Style.empty)
     content
 
+let table_view model = table_frame model (Charamel_bubbles.Table.view model.table)
+
+let table_cursor model =
+  Gum_io.place_cursor ~frame:(table_frame model)
+    (Charamel_bubbles.Table.view_cursor model.table)
+
 let make_app model =
   let update message model =
     match message with
-    | Key key when is_abort key ->
+    | Key key when Gum_flag.is_abort key ->
         ({ model with status = Aborted }, Charamel_tea.Cmd.interrupt)
-    | Key key when is_submit key -> (
+    | Key key when Gum_flag.is_submit key -> (
         match Charamel_bubbles.Table.selected_row model.table with
         | Some row -> ({ model with status = Selected row }, Charamel_tea.Cmd.quit)
         | None -> ({ model with status = Quit }, Charamel_tea.Cmd.quit))
-    | Key key when is_quit key -> ({ model with status = Quit }, Charamel_tea.Cmd.quit)
+    | Key key when Gum_flag.is_quit key ->
+        ({ model with status = Quit }, Charamel_tea.Cmd.quit)
     | Key key -> (
         match Charamel_bubbles.Table.key model.table key with
         | None -> (model, Charamel_tea.Cmd.none)
@@ -258,7 +257,10 @@ let make_app model =
         let table, command = Charamel_bubbles.Table.update message model.table in
         ({ model with table }, Charamel_tea.Cmd.map (fun msg -> Table msg) command)
   in
-  let view model = Charamel_tea.View.v ~alt_screen:false (table_view model) in
+  let view model =
+    let view = Charamel_tea.View.v ~alt_screen:false (table_view model) in
+    { view with cursor = table_cursor model }
+  in
   let subscriptions _ = Charamel_tea.Sub.key (fun key -> Key key) in
   {
     Charamel_tea.init = (fun () -> (model, Charamel_tea.Cmd.none));
@@ -267,66 +269,80 @@ let make_app model =
     subscriptions;
   }
 
-let write_result env ~separator row =
+let write_result (env : Charamel_cli.Env.t) ~separator row =
   let text = Csv.write_row ~separator row in
-  Eio.Flow.copy_string text env#stdout
+  Lwt_io.write env.Env.stdout text
 
-let read_input env (options : options) =
+let read_input (env : Charamel_cli.Env.t) (options : options) =
   if options.file <> "" then
-    try Ok (Eio.Path.load Eio.Path.(env#fs / options.file))
-    with Eio.Io _ -> Error (Fmt.str "could not render file: %s" options.file)
+    let resolved =
+      if Filename.is_relative options.file then Filename.concat env.Env.cwd options.file
+      else options.file
+    in
+    Lwt.catch
+      (fun () ->
+        Lwt.map
+          (fun text -> Ok text)
+          (Lwt_io.with_file ~mode:Lwt_io.Input resolved Lwt_io.read))
+      (function
+        | Unix.Unix_error _ | Sys_error _ ->
+            Lwt.return (Error (Fmt.str "could not render file: %s" options.file))
+        | exn -> Lwt.fail exn)
   else
-    match Gum_io.read_stdin ~strip_ansi:false env with
-    | Ok text -> Ok text
-    | Error `Empty -> Error "no data provided"
-    | Error (`Read text) -> Ok text
+    Lwt.map
+      (function
+        | Ok text -> Ok text
+        | Error `Empty -> Error "no data provided"
+        | Error (`Read text) -> Ok text)
+      (Gum_io.read_stdin ~strip_ansi:false env)
 
 let run env (options : options) =
-  let input =
-    match read_input env options with
-    | Ok input -> input
-    | Error message -> Charamel_cli.error message
-  in
-  let headers, rows =
-    match parse_input options input with
-    | Ok value -> value
-    | Error error -> Charamel_cli.error (error_message error)
-  in
-  if options.print then
-    match render_static options ~headers ~rows with
-    | Ok rendered -> Gum_io.println env rendered
-    | Error error -> Charamel_cli.error (error_message error)
-  else
-    let padding =
-      match Gum_flag.parse_padding options.padding with
-      | Ok value -> value
-      | Error (`Msg message) -> Charamel_cli.error message
-    in
-    let model = make_model options ~headers ~rows ~padding in
-    let model =
-      try
-        Gum_run.run ?timeout:options.timeout env (make_app model) ~finished:(fun model ->
-            match model.status with
-            | Selected _ -> Gum_run.Submitted
-            | Quit -> Gum_run.Quit
-            | Aborted -> Gum_run.Aborted
-            | Running -> Gum_run.Quit)
-      with Gum_io.No_tty -> Charamel_cli.error "table: requires a terminal"
-    in
-    match model.status with
-    | Selected row ->
-        let separator = Result.get_ok (separator_char options.separator) in
-        let row =
-          if options.return_column = 0 then row
-          else if options.return_column > 0 && options.return_column <= List.length row
-          then [ List.nth row (options.return_column - 1) ]
-          else
-            Charamel_cli.error
-              (error_message (`Invalid_return_column options.return_column))
+  Lwt.bind (read_input env options) (fun input_result ->
+      let input =
+        match input_result with
+        | Ok input -> input
+        | Error message -> Charamel_cli.error message
+      in
+      let headers, rows =
+        match parse_input options input with
+        | Ok value -> value
+        | Error error -> Charamel_cli.error (error_message error)
+      in
+      if options.print then
+        match render_static options ~headers ~rows with
+        | Ok rendered -> Gum_io.println env rendered
+        | Error error -> Charamel_cli.error (error_message error)
+      else
+        let padding =
+          match Gum_flag.parse_padding options.padding with
+          | Ok value -> value
+          | Error (`Msg message) -> Charamel_cli.error message
         in
-        write_result env ~separator row
-    | Quit | Running -> Charamel_cli.error "nothing selected"
-    | Aborted -> Charamel_cli.exit 130
+        let model = make_model options ~headers ~rows ~padding in
+        Lwt.bind
+          (Gum_run.run_tui ~name:"table" ?timeout:options.timeout env (make_app model)
+             ~finished:(fun model ->
+               match model.status with
+               | Selected _ -> Gum_run.Submitted
+               | Quit -> Gum_run.Quit
+               | Aborted -> Gum_run.Aborted
+               | Running -> Gum_run.Quit))
+          (fun model ->
+            match model.status with
+            | Selected row ->
+                let separator = Result.get_ok (separator_char options.separator) in
+                let row =
+                  if options.return_column = 0 then row
+                  else if
+                    options.return_column > 0 && options.return_column <= List.length row
+                  then [ List.nth row (options.return_column - 1) ]
+                  else
+                    Charamel_cli.error
+                      (error_message (`Invalid_return_column options.return_column))
+                in
+                write_result env ~separator row
+            | Quit | Running -> Charamel_cli.error "nothing selected"
+            | Aborted -> Charamel_cli.exit 130))
 
 let options separator columns widths height print file border show_help hide_count
     lazy_quotes fields_per_record return_column timeout padding border_style cell_style
@@ -438,18 +454,9 @@ let cmd env =
     Gum_flag.seconds ~cmd:"table" ~doc:"Abort after this duration." "timeout"
   in
   let typed_padding =
-    let parse value =
-      match Gum_flag.parse_padding value with
-      | Ok _ -> Ok value
-      | Error (`Msg message) -> Error (`Msg message)
-    in
-    let padding_conv =
-      Arg.conv (parse, fun formatter _ -> Stdlib.Format.pp_print_string formatter "")
-    in
-    Arg.(
-      value
-        (opt padding_conv "0 0"
-           (info [ "padding" ] ~env:(Gum_flag.env ~cmd:"table" "padding") ~doc:"Padding.")))
+    Gum_flag.validated_padding_term ~doc:"Padding."
+      ~pp:(fun formatter _ -> Stdlib.Format.pp_print_string formatter "")
+      ~cmd:"table" ()
   in
   let border_style =
     Gum_style.term ~cmd:"table" ~prefix:"border" ~defaults:default_options.border_style ()

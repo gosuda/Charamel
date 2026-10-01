@@ -33,6 +33,9 @@ let array_of = function Jsont.Array (items, _) -> Some items | _ -> None
 let strings_of_json j =
   match Jsont.Json.decode Jsont.(list string) j with Ok l -> Some l | Error _ -> None
 
+let valid_json s =
+  match Jsont_bytesrw.decode_string Jsont.json s with Ok _ -> true | Error _ -> false
+
 let json_of_string s = Jsont_bytesrw.decode_string Jsont.json s
 
 (* The minified writer is used because indented output would put newlines

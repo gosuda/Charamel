@@ -1,0 +1,27 @@
+(library
+ (name charamel_os_win32)
+ (public_name charamel.os.win32)
+ (enabled_if
+  (= %{os_type} "Win32"))
+ (modules charamel_os_win32)
+ (libraries ctypes ctypes.foreign integers))
+
+(library
+ (name charamel_os)
+ (public_name charamel.os)
+ (modules :standard \ charamel_os_win32)
+ (libraries
+  ctypes
+  ctypes.foreign
+  integers
+  lwt
+  lwt.unix
+  mtime
+  mtime.clock
+  threads.posix
+  unix
+  (select
+   os_platform.ml
+   from
+   (charamel.os.win32 -> os_platform.win32.ml)
+   (-> os_platform.unix.ml))))

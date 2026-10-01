@@ -5,20 +5,24 @@ type 'msg t =
   | Map : ('a -> 'b) * 'a t -> 'b t
   | Msg of 'msg
   | Perform of (unit -> 'msg)
+  | Await of 'msg Lwt.t
   | After of float * (unit -> 'msg)
   | Quit
   | Interrupt
   | Suspend
   | Exec of { argv : string list; on_exit : int -> 'msg }
   | Print of string
-  | Set_clipboard of string
+  | Set_clipboard of { selection : [ `System | `Primary ]; content : string }
+  | Read_clipboard of [ `System | `Primary ]
+  | Raw of string
   | Query of
       [ `Background
       | `Foreground
       | `Cursor_color
       | `Terminal_version
       | `Kitty_flags
-      | `Cursor_position ]
+      | `Cursor_position
+      | `Capability of string ]
   | Window_size
 
 let none = None_
@@ -27,12 +31,15 @@ let seq cmds = Seq cmds
 let map f cmd = Map (f, cmd)
 let msg m = Msg m
 let perform thunk = Perform thunk
+let await promise = Await promise
 let after seconds thunk = After (seconds, thunk)
 let quit = Quit
 let interrupt = Interrupt
 let suspend = Suspend
 let exec ~argv on_exit = Exec { argv; on_exit }
 let print s = Print s
-let set_clipboard s = Set_clipboard s
+let set_clipboard ?(selection = `System) content = Set_clipboard { selection; content }
+let read_clipboard selection = Read_clipboard selection
+let raw bytes = Raw bytes
 let query kind = Query kind
 let window_size = Window_size

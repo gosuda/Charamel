@@ -9,30 +9,24 @@
   charamel.tea
   charamel.ansi
   charamel.lipgloss
-  eio
-  eio.unix
-  eio_main
+  charamel.os
   cmdliner
   fmt
   jsont
   jsont.bytesrw
-  cohttp-eio
   cohttp
+  cohttp-lwt
+  cohttp-lwt-unix
+  conduit-lwt-unix
   tls
-  tls-eio
+  tls-lwt
   ca-certs
   uri
   domain-name
+  lwt
+  lwt.unix
   unix
-  re)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  re))
 
 (executable
  (name main)
@@ -47,17 +41,9 @@
   charamel.tea
   charamel.ansi
   charamel.lipgloss
-  eio
-  eio.unix
-  eio_main
+  charamel.os
   cmdliner
   fmt
-  unix)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  lwt
+  lwt.unix
+  unix))

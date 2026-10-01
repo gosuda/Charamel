@@ -1,0 +1,6 @@
+(test
+ (name test_examples)
+ (package charamel)
+ (modules test_examples)
+ (libraries bubbletea alcotest alcotest-lwt lwt lwt.unix unix test_support)
+ (deps %{exe:../../examples/bubbletea_examples.exe}))

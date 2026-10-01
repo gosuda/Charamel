@@ -1,6 +1,7 @@
 module Key = Charamel_ssh_keygen
 module Mnemonic = Melt_core.Mnemonic
-open Result.Syntax
+module Env = Charamel_cli.Env
+open Lwt.Infix
 
 type error =
   [ `No_home
@@ -10,21 +11,20 @@ type error =
   | `Mnemonic of Mnemonic.error
   | `Write_key of Key.error ]
 
-let home_dir () =
-  match Sys.getenv_opt "HOME" with
-  | Some home when home <> "" && not (Filename.is_relative home) -> Ok home
-  | _ -> Error `No_home
-
 let resolve_path path =
-  let length = String.length path in
-  if String.equal path "~" then Result.map (fun home -> home) (home_dir ())
-  else if length >= 2 && Char.equal path.[0] '~' && Char.equal path.[1] '/' then
-    Result.map
-      (fun home -> Filename.concat home (String.sub path 2 (length - 2)))
-      (home_dir ())
-  else if Filename.is_relative path then Ok (Filename.concat (Sys.getcwd ()) path)
-  else Ok path
+  Result.map
+    (fun expanded ->
+      if Filename.is_relative expanded then Filename.concat (Sys.getcwd ()) expanded
+      else expanded)
+    (Charamel_os.Dirs.expand_tilde path)
 
+(* The key both subcommands act on when the user names none: the conventional OpenSSH
+   Ed25519 location in the user's home. *)
+let default_key_path = "~/.ssh/id_ed25519"
+
+(* Mnemonic phrases are separated by any ASCII whitespace — a backup printed one word per
+   line must restore from a file pasted with its newlines intact. Shell word splitting is
+   the wrong tool here: it knows only spaces and tabs. *)
 let split_words text =
   let is_space = function ' ' | '\t' | '\n' | '\r' | '\012' -> true | _ -> false in
   let length = String.length text in
@@ -61,59 +61,78 @@ let pp_error ppf = function
   | `Write_key error ->
       Fmt.pf ppf "melt: could not write key: %s" (key_error_message error)
 
-let read_key ~fs path =
-  try Ok (Eio.Path.load Eio.Path.(Eio.Path.of_dir fs / path)) with
-  | Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Read_key (path, Fmt.str "%a" Eio.Exn.pp exn))
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (`Read_key
-           (path, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
+let read_key path =
+  Lwt.catch
+    (fun () ->
+      Lwt_io.with_file ~mode:Lwt_io.input path (fun channel -> Lwt_io.read channel)
+      >|= fun body -> Ok body)
+    (function
+      | Unix.Unix_error (error, function_name, argument) ->
+          Lwt.return
+            (Error
+               (`Read_key
+                  ( path,
+                    Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument
+                  )))
+      | Lwt.Canceled as exn -> Lwt.fail exn
+      | exn -> Lwt.return (Error (`Read_key (path, Printexc.to_string exn))))
 
-let backup ~fs ~path =
-  let* path = resolve_path path in
-  let* private_key = read_key ~fs path in
-  match Key.of_openssh_private private_key with
-  | Error `Unsupported_type -> Error `Unsupported_key
-  | Error error -> Error (`Parse_key error)
-  | Ok key -> (
-      match Key.ed25519_seed key with
-      | None -> Error `Unsupported_key
-      | Some seed ->
-          Result.map_error (fun error -> `Mnemonic error) (Mnemonic.encode seed))
+let backup ~fs_root:_ ~path =
+  match resolve_path path with
+  | Error _ as e -> Lwt.return e
+  | Ok path -> (
+      read_key path >>= function
+      | Error _ as e -> Lwt.return e
+      | Ok private_key -> (
+          match Key.of_openssh_private private_key with
+          | Error `Unsupported_type -> Lwt.return (Error `Unsupported_key)
+          | Error error -> Lwt.return (Error (`Parse_key error))
+          | Ok key -> (
+              match Key.ed25519_seed key with
+              | None -> Lwt.return (Error `Unsupported_key)
+              | Some seed ->
+                  Lwt.return
+                    (Result.map_error
+                       (fun error -> `Mnemonic error)
+                       (Mnemonic.encode seed)))))
 
-let restore ~fs ~words ~output =
-  let* output = resolve_path output in
-  match Mnemonic.decode (split_words words) with
-  | Error error -> Error (`Mnemonic error)
-  | Ok seed -> (
-      match Key.of_ed25519_seed seed with
-      | Error error -> Error (`Write_key error)
-      | Ok key ->
-          Result.map_error
-            (fun error -> `Write_key error)
-            (Key.write ~fs ~path:output key))
+let restore ~fs_root ~words ~output =
+  match resolve_path output with
+  | Error _ as e -> Lwt.return e
+  | Ok output -> (
+      match Mnemonic.decode (split_words words) with
+      | Error error -> Lwt.return (Error (`Mnemonic error))
+      | Ok seed -> (
+          match Key.of_ed25519_seed seed with
+          | Error error -> Lwt.return (Error (`Write_key error))
+          | Ok key ->
+              Key.write ~fs_root ~path:output key >|= fun result ->
+              Result.map_error (fun error -> `Write_key error) result))
 
 let run_backup env path =
-  match backup ~fs:(fst env#fs) ~path with
+  backup ~fs_root:env.Env.fs_root ~path >>= function
   | Error error -> Charamel_cli.error (Fmt.str "%a" pp_error error)
-  | Ok words -> Eio.Flow.copy_string (String.concat " " words ^ "\n") env#stdout
+  | Ok words -> Lwt_io.write env.Env.stdout (String.concat " " words ^ "\n")
 
 let run_restore env words output =
-  match restore ~fs:(fst env#fs) ~words ~output with
+  restore ~fs_root:env.Env.fs_root ~words ~output >>= function
   | Error error -> Charamel_cli.error (Fmt.str "%a" pp_error error)
-  | Ok () -> ()
+  | Ok () -> Lwt.return_unit
 
 let backup_path_arg () =
   let open Cmdliner in
   Arg.(
     value
-      (pos 0 (some string) (Some "~/.ssh/id_ed25519")
-         (info [] ~docv:"KEY_PATH" ~doc:"OpenSSH Ed25519 private key to back up.")))
+      (pos 0 string default_key_path
+         (info [] ~docv:"KEY_PATH"
+            ~doc:
+              (Fmt.str "OpenSSH Ed25519 private key to back up (default: %s)."
+                 default_key_path))))
 
-let backup_term (env : Eio_unix.Stdenv.base) =
+let backup_term (env : Charamel_cli.Env.t) =
   let open Cmdliner.Term.Syntax in
   let+ path = backup_path_arg () in
-  run_backup env (Option.value path ~default:"~/.ssh/id_ed25519")
+  run_backup env path
 
 let restore_words_arg () =
   let open Cmdliner in
@@ -126,11 +145,11 @@ let restore_output_arg () =
   let open Cmdliner in
   Arg.(
     value
-      (opt string "~/.ssh/id_ed25519"
+      (opt string default_key_path
          (info [ "output" ] ~docv:"PATH"
-            ~doc:"Private-key output path (default: ~/.ssh/id_ed25519).")))
+            ~doc:(Fmt.str "Private-key output path (default: %s)." default_key_path))))
 
-let restore_term (env : Eio_unix.Stdenv.base) =
+let restore_term (env : Charamel_cli.Env.t) =
   let open Cmdliner.Term.Syntax in
   let+ words = restore_words_arg () and+ output = restore_output_arg () in
   run_restore env words output

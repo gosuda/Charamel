@@ -1,4 +1,5 @@
 module String_map = Map.Make (String)
+open Lwt.Infix
 open Result.Syntax
 
 type provider_kind = Anthropic | Openai | Openai_compatible | Openai_responses | Google
@@ -109,55 +110,6 @@ let string_map_codec =
       List.fold_left (fun map (key, value) -> M.add key value map) M.empty values)
     map_codec
 
-let model_codec : Charamel_fantasy.Model.t Jsont.t =
-  let open Jsont in
-  Object.map
-    (fun
-      id
-      name
-      cost_in
-      cost_out
-      cost_cache_write
-      cost_cache_read
-      context_window
-      default_max_tokens
-      can_reason
-      supports_attachments
-    ->
-      ({
-         Charamel_fantasy.Model.id;
-         name;
-         provider = "";
-         context_window;
-         default_max_tokens;
-         can_reason;
-         supports_attachments;
-         cost_in;
-         cost_out;
-         cost_cache_read;
-         cost_cache_write;
-       }
-        : Charamel_fantasy.Model.t))
-  |> Object.mem "id" string ~enc:(fun model -> model.Charamel_fantasy.Model.id)
-  |> Object.mem "name" string ~enc:(fun model -> model.Charamel_fantasy.Model.name)
-  |> Object.mem "cost_per_1m_in" number ~enc:(fun model ->
-      model.Charamel_fantasy.Model.cost_in)
-  |> Object.mem "cost_per_1m_out" number ~enc:(fun model ->
-      model.Charamel_fantasy.Model.cost_out)
-  |> Object.mem "cost_per_1m_in_cached" number ~dec_absent:0. ~enc:(fun model ->
-      model.Charamel_fantasy.Model.cost_cache_write)
-  |> Object.mem "cost_per_1m_out_cached" number ~dec_absent:0. ~enc:(fun model ->
-      model.Charamel_fantasy.Model.cost_cache_read)
-  |> Object.mem "context_window" int ~enc:(fun model ->
-      model.Charamel_fantasy.Model.context_window)
-  |> Object.mem "default_max_tokens" int ~enc:(fun model ->
-      model.Charamel_fantasy.Model.default_max_tokens)
-  |> Object.mem "can_reason" bool ~dec_absent:false ~enc:(fun model ->
-      model.Charamel_fantasy.Model.can_reason)
-  |> Object.mem "supports_attachments" bool ~dec_absent:false ~enc:(fun model ->
-      model.Charamel_fantasy.Model.supports_attachments)
-  |> Object.error_unknown |> Object.finish
-
 let provider_kind_codec =
   Jsont.enum
     [
@@ -202,7 +154,9 @@ let provider_codec : provider Jsont.t =
        ~enc_omit:Option.is_none
   |> Object.mem "headers" string_map_codec ~dec_absent:[]
        ~enc:(fun (provider : provider) -> provider.headers)
-  |> Object.mem "models" (list model_codec) ~dec_absent:[]
+  |> Object.mem "models"
+       (list (Charamel_fantasy.Model.jsont ~unknown:`Error))
+       ~dec_absent:[]
        ~enc:(fun (provider : provider) -> provider.models)
   |> Object.error_unknown |> Object.finish
 
@@ -795,40 +749,45 @@ let search_paths ~cwd ~git_root ~home_config =
 let absolute_path path =
   if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
 
-let find_git_root (fs : Eio.Fs.dir_ty Eio.Path.t) cwd =
-  let rec walk path =
-    let marker = Eio.Path.(Eio.Path.of_dir (fst fs) / Filename.concat path ".git") in
-    let found =
-      try
-        match Eio.Path.kind ~follow:false marker with `Not_found -> false | _ -> true
-      with
-      | Eio.Io _ -> false
-      | Unix.Unix_error _ -> false
-    in
-    if found then Some path
-    else
-      let parent = Filename.dirname path in
-      if parent = path then None else walk parent
-  in
-  walk (absolute_path cwd)
+let exists fs_root path =
+  Lwt.catch
+    (fun () -> Lwt_unix.lstat (Path.under ~root:fs_root path) >|= fun _ -> true)
+    (function Unix.Unix_error _ | Sys_error _ -> Lwt.return_false | exn -> Lwt.fail exn)
+
+let rec find_git_root fs_root cwd =
+  exists fs_root (Filename.concat cwd ".git") >>= fun found ->
+  if found then Lwt.return (Some cwd)
+  else
+    let parent = Filename.dirname cwd in
+    if String.equal parent cwd then Lwt.return_none else find_git_root fs_root parent
 
 let io_message exn =
   match exn with
-  | Eio.Io (Eio.Fs.E _, _) -> Fmt.str "%a" Eio.Exn.pp exn
   | Unix.Unix_error (error, function_name, argument) ->
       Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument
+  | Charamel_os.Fs.E (`Not_found, target) -> Fmt.str "not found: %s" target
+  | Charamel_os.Fs.E (`Permission_denied, target) ->
+      Fmt.str "permission denied: %s" target
+  | Charamel_os.Fs.E (`Already_exists, target) -> Fmt.str "already exists: %s" target
+  | Charamel_os.Fs.E (`Is_directory, target) -> Fmt.str "is a directory: %s" target
   | exn -> Printexc.raise_with_backtrace exn (Printexc.get_raw_backtrace ())
 
-let read_file (fs : Eio.Fs.dir_ty Eio.Path.t) path =
-  let file = Eio.Path.(Eio.Path.of_dir (fst fs) / path) in
-  try
-    match Eio.Path.kind ~follow:true file with
-    | `Not_found -> Ok None
-    | `Regular_file -> Ok (Some (Eio.Path.load file))
-    | _ -> Error (`Io (path, "configuration path is not a regular file"))
-  with
-  | Eio.Io _ as exn -> Error (`Io (path, io_message exn))
-  | Unix.Unix_error _ as exn -> Error (`Io (path, io_message exn))
+let read_file fs_root path =
+  let file = Path.under ~root:fs_root path in
+  Lwt.catch
+    (fun () ->
+      Lwt_unix.stat file >>= fun stats ->
+      if stats.Unix.st_kind <> Unix.S_REG then
+        Lwt.return_error (`Io (path, "configuration path is not a regular file"))
+      else
+        Lwt_io.with_file ~mode:Lwt_io.Input file (fun channel -> Lwt_io.read channel)
+        >|= fun contents -> Ok (Some contents))
+    (function
+      | Unix.Unix_error (Unix.ENOENT, _, _) | Unix.Unix_error (Unix.ENOTDIR, _, _) ->
+          Lwt.return_ok None
+      | (Unix.Unix_error _ | Charamel_os.Fs.E _ | Sys_error _) as exn ->
+          Lwt.return_error (`Io (path, io_message exn))
+      | exn -> Lwt.fail exn)
 
 let environment env name =
   match env name with Some _ as value -> value | None -> Sys.getenv_opt name
@@ -843,45 +802,48 @@ let config_home ~env =
           Filename.concat home ".config/crush"
       | _ -> Charamel_cli.Xdg.config_dir ~app:"crush")
 
-let load ~(fs : Eio.Fs.dir_ty Eio.Path.t) ~env ~cwd =
+let load ~fs_root ~env ~cwd =
   let cwd = absolute_path cwd in
-  let git_root = find_git_root fs cwd in
-  let paths = search_paths ~cwd ~git_root ~home_config:(config_home ~env) in
+  let home_config = config_home ~env in
   let rec read_all paths merged contributors =
     match paths with
-    | [] -> Ok (merged, List.rev contributors)
+    | [] -> Lwt.return_ok (merged, List.rev contributors)
     | path :: rest -> (
-        let* contents = read_file fs path in
-        match contents with
-        | None -> read_all rest merged contributors
-        | Some text -> (
+        read_file fs_root path >>= function
+        | Error _ as failure -> Lwt.return failure
+        | Ok None -> read_all rest merged contributors
+        | Ok (Some text) -> (
             match Jsonx.json_of_string text with
-            | Error message -> Error (`Parse (path, message))
+            | Error message -> Lwt.return_error (`Parse (path, message))
             | Ok json -> (
                 match Jsont.Json.decode jsont json with
-                | Error message -> Error (`Parse (path, message))
+                | Error message -> Lwt.return_error (`Parse (path, message))
                 | Ok _ -> read_all rest (merge_json merged json) (path :: contributors))))
   in
-  let* merged, contributors = read_all paths (Jsont.Json.object' []) [] in
-  match Jsont.Json.decode jsont merged with
-  | Error message ->
-      let path =
-        match List.rev contributors with
-        | path :: _ -> path
-        | [] -> "<merged configuration>"
-      in
-      Error (`Parse (path, message))
-  | Ok config -> (
-      let config = expand_config ~env config in
-      match validate config with
-      | Ok () -> Ok (config, contributors)
+  find_git_root fs_root cwd >>= fun git_root ->
+  read_all (search_paths ~cwd ~git_root ~home_config) (Jsont.Json.object' []) []
+  >>= function
+  | Error _ as failure -> Lwt.return failure
+  | Ok (merged, contributors) -> (
+      match Jsont.Json.decode jsont merged with
       | Error message ->
           let path =
             match List.rev contributors with
             | path :: _ -> path
-            | [] -> "<expanded configuration>"
+            | [] -> "<merged configuration>"
           in
-          Error (`Parse (path, message)))
+          Lwt.return_error (`Parse (path, message))
+      | Ok config -> (
+          let config = expand_config ~env config in
+          match validate config with
+          | Ok () -> Lwt.return_ok (config, contributors)
+          | Error message ->
+              let path =
+                match List.rev contributors with
+                | path :: _ -> path
+                | [] -> "<expanded configuration>"
+              in
+              Lwt.return_error (`Parse (path, message))))
 
 let data_dir config ~cwd =
   if Filename.is_relative config.options.data_dir then

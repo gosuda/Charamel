@@ -1,12 +1,14 @@
 (test
  (name test_lipgloss)
  (package charamel)
- (libraries charamel.lipgloss charamel.ansi alcotest fmt)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+ (libraries
+  charamel.lipgloss
+  charamel.lipgloss.terminal
+  charamel.ansi
+  charamel.colorprofile
+  alcotest
+  fmt
+  lwt
+  lwt.unix
+  qcheck-core
+  test_support))

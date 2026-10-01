@@ -1,4 +1,4 @@
 (** Freeze command entry point. *)
 
-val run : Eio_unix.Stdenv.base -> Freeze_core.Config.cli -> unit
-(** [run env cli] runs one freeze invocation under the supplied Eio environment. *)
+val run : Charamel_cli.Env.t -> Freeze_core.Config.cli -> unit Lwt.t
+(** [run env cli] runs one freeze invocation under the supplied environment. *)

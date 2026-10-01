@@ -1,10 +1,5 @@
 module Text = Charamel_ansi.Text
 
-let check_string name expected actual =
-  Alcotest.check Alcotest.string name expected actual
-
-let check_int name expected actual = Alcotest.check Alcotest.int name expected actual
-
 type truncate_case = {
   name : string;
   input : string;
@@ -337,9 +332,11 @@ let truncate_vectors =
 
 let truncate_case c =
   Alcotest.test_case ("truncate/" ^ c.name) `Quick (fun () ->
-      check_string "right" c.expect_right
+      Alcotest.(check string)
+        "right" c.expect_right
         (Text.truncate ~tail:c.extra ~width:c.width c.input);
-      check_string "left" c.expect_left
+      Alcotest.(check string)
+        "left" c.expect_left
         (Text.truncate_left ~prefix:c.extra ~width:c.width c.input))
 
 type wrap_case = { name : string; input : string; expected : string; width : int }
@@ -511,11 +508,26 @@ let hardwrap_vectors =
       expected = "V\nE\nR\nT\nI\nC\nA\nL";
       preserve_space = false;
     };
+    {
+      name = "over_wide_cluster_owns_its_line";
+      input = "漢x";
+      width = 1;
+      expected = "漢\nx";
+      preserve_space = false;
+    };
+    {
+      name = "over_wide_cluster_breaks_to_its_own_line";
+      input = "a漢";
+      width = 1;
+      expected = "a\n漢";
+      preserve_space = false;
+    };
   ]
 
 let hardwrap_case c =
   Alcotest.test_case ("hardwrap/" ^ c.name) `Quick (fun () ->
-      check_string "wrapped" c.expected
+      Alcotest.(check string)
+        "wrapped" c.expected
         (Text.hardwrap ~preserve_space:c.preserve_space ~width:c.width c.input))
 
 type wordwrap_case = {
@@ -669,7 +681,8 @@ let wordwrap_vectors =
 
 let wordwrap_case c =
   Alcotest.test_case ("wordwrap/" ^ c.name) `Quick (fun () ->
-      check_string "wrapped" c.expected
+      Alcotest.(check string)
+        "wrapped" c.expected
         (Text.wordwrap ~breakpoints:c.breakpoints ~width:c.width c.input))
 
 (* The combined table in wrap_test.go has a different shape from the hard and
@@ -1000,11 +1013,41 @@ let wrap_vectors =
 霊ミ考整ス静将ず業巨職ノラホ収
 嗅ざな。|};
     };
+    {
+      name = "trailing_space_drops_when_it_overflows";
+      input = "ab ";
+      expected = "ab";
+      width = 2;
+    };
+    {
+      name = "trailing_space_survives_inside_the_box";
+      input = "ab ";
+      expected = "ab ";
+      width = 3;
+    };
+    {
+      name = "space_run_drops_at_a_line_break";
+      input = "ab  cd";
+      expected = "ab\ncd";
+      width = 3;
+    };
+    {
+      name = "over_wide_cluster_owns_its_line";
+      input = "漢x";
+      expected = "漢\nx";
+      width = 1;
+    };
+    {
+      name = "overfull_separator_drops_before_a_break";
+      input = "foo -bar";
+      expected = "foo\n-ba\nr";
+      width = 3;
+    };
   ]
 
 let wrap_case (c : wrap_case) =
   Alcotest.test_case ("wrap/" ^ c.name) `Quick (fun () ->
-      check_string "wrapped" c.expected (Text.wrap ~width:c.width c.input))
+      Alcotest.(check string) "wrapped" c.expected (Text.wrap ~width:c.width c.input))
 
 type width_case = { name : string; input : string; stripped : string; width : int }
 
@@ -1079,8 +1122,8 @@ let width_vectors =
 
 let width_case c =
   Alcotest.test_case ("width/" ^ c.name) `Quick (fun () ->
-      check_string "strip" c.stripped (Text.strip c.input);
-      check_int "width" c.width (Text.width c.input))
+      Alcotest.(check string) "strip" c.stripped (Text.strip c.input);
+      Alcotest.(check int) "width" c.width (Text.width c.input))
 
 let cut_vectors =
   [
@@ -1118,66 +1161,75 @@ let cut_vectors =
 
 let cut_case (name, input, left, right, expected) =
   Alcotest.test_case ("cut/" ^ name) `Quick (fun () ->
-      check_string "cut" expected (Text.cut ~left ~right input))
+      Alcotest.(check string) "cut" expected (Text.cut ~left ~right input))
 
 let escape_state_regressions =
   [
     Alcotest.test_case "truncate/preserves SGR around tail" `Quick (fun () ->
         let input = "\x1b[31mhello\x1b[0m" in
-        check_string "tail" "\x1b[31mhel…\x1b[0m" (Text.truncate ~tail:"…" ~width:4 input));
+        Alcotest.(check string)
+          "tail" "\x1b[31mhel…\x1b[0m"
+          (Text.truncate ~tail:"…" ~width:4 input));
     Alcotest.test_case "truncate_left/preserves SGR around prefix" `Quick (fun () ->
         let input = "\x1b[31mhello\x1b[0m" in
-        check_string "prefix" "\x1b[31m…o\x1b[0m"
+        Alcotest.(check string)
+          "prefix" "\x1b[31m…o\x1b[0m"
           (Text.truncate_left ~prefix:"…" ~width:4 input));
     Alcotest.test_case "truncate/preserves OSC8 around tail" `Quick (fun () ->
         let input = "\x1b]8;;https://example.com\x1b\\hello\x1b]8;;\x1b\\" in
-        check_string "tail" "\x1b]8;;https://example.com\x1b\\he…\x1b]8;;\x1b\\"
+        Alcotest.(check string)
+          "tail" "\x1b]8;;https://example.com\x1b\\he…\x1b]8;;\x1b\\"
           (Text.truncate ~tail:"…" ~width:3 input));
     Alcotest.test_case "truncate_left/preserves OSC8 around prefix" `Quick (fun () ->
         let input = "\x1b]8;;https://example.com\x1b\\hello\x1b]8;;\x1b\\" in
-        check_string "prefix" "\x1b]8;;https://example.com\x1b\\…lo\x1b]8;;\x1b\\"
+        Alcotest.(check string)
+          "prefix" "\x1b]8;;https://example.com\x1b\\…lo\x1b]8;;\x1b\\"
           (Text.truncate_left ~prefix:"…" ~width:3 input));
   ]
 
 let unicode_regressions =
   [
     Alcotest.test_case "strip/keeps precomposed Unicode" `Quick (fun () ->
-        check_string "precomposed" "Ü" (Text.strip "Ü");
-        check_int "precomposed width" 1 (Text.width "Ü"));
+        Alcotest.(check string) "precomposed" "Ü" (Text.strip "Ü");
+        Alcotest.(check int) "precomposed width" 1 (Text.width "Ü"));
     Alcotest.test_case "strip/keeps emoji unchanged" `Quick (fun () ->
-        check_string "emoji" "👋🫧" (Text.strip "👋🫧"));
+        Alcotest.(check string) "emoji" "👋🫧" (Text.strip "👋🫧"));
     Alcotest.test_case "strip/keeps non-ASCII OSC payload out" `Quick (fun () ->
-        check_string "payload" "visible" (Text.strip "\x1b]2;題名👨‍👩‍👦\x07visible"));
+        Alcotest.(check string) "payload" "visible" (Text.strip "\x1b]2;題名👨‍👩‍👦\x07visible"));
     Alcotest.test_case "strip/retains C0 controls" `Quick (fun () ->
         let controls = "\x00\x01\x07\x08\x09\x0a\x0b\x0c\x0d\x1f" in
-        check_string "controls" controls (Text.strip controls));
+        Alcotest.(check string) "controls" controls (Text.strip controls));
     Alcotest.test_case "width/retains zero-width tab" `Quick (fun () ->
-        check_string "tab" "a\tb" (Text.strip "a\tb");
-        check_int "tab width" 2 (Text.width "a\tb"));
+        Alcotest.(check string) "tab" "a\tb" (Text.strip "a\tb");
+        Alcotest.(check int) "tab width" 2 (Text.width "a\tb"));
     Alcotest.test_case "truncate/does not split combining cluster" `Quick (fun () ->
         let input = "e\u{0301}x" in
-        check_string "right" "e\u{0301}" (Text.truncate ~width:1 input);
-        check_string "left" "x" (Text.truncate_left ~width:1 input);
-        check_string "cut" "e\u{0301}" (Text.cut ~left:0 ~right:1 input));
+        Alcotest.(check string) "right" "e\u{0301}" (Text.truncate ~width:1 input);
+        Alcotest.(check string) "left" "x" (Text.truncate_left ~width:1 input);
+        Alcotest.(check string) "cut" "e\u{0301}" (Text.cut ~left:0 ~right:1 input));
     Alcotest.test_case "truncate/does not split emoji cluster" `Quick (fun () ->
         let input = "👋x" in
-        check_string "right" "👋" (Text.truncate ~width:2 input);
-        check_string "left" "x" (Text.truncate_left ~width:2 input);
-        check_string "cut" "👋" (Text.cut ~left:0 ~right:2 input));
+        Alcotest.(check string) "right" "👋" (Text.truncate ~width:2 input);
+        Alcotest.(check string) "left" "x" (Text.truncate_left ~width:2 input);
+        Alcotest.(check string) "cut" "👋" (Text.cut ~left:0 ~right:2 input));
     Alcotest.test_case "truncate/does not split wide cluster" `Quick (fun () ->
         let input = "你x" in
-        check_string "right" "你" (Text.truncate ~width:2 input);
-        check_string "left" "x" (Text.truncate_left ~width:2 input);
-        check_string "cut" "你" (Text.cut ~left:0 ~right:2 input));
+        Alcotest.(check string) "right" "你" (Text.truncate ~width:2 input);
+        Alcotest.(check string) "left" "x" (Text.truncate_left ~width:2 input);
+        Alcotest.(check string) "cut" "你" (Text.cut ~left:0 ~right:2 input));
     Alcotest.test_case "wordwrap/keeps long word" `Quick (fun () ->
         let input = "abcdefgh" in
-        check_string "wordwrap" input (Text.wordwrap ~width:4 input);
-        check_string "wrap" "abcd\nefgh" (Text.wrap ~width:4 input));
+        Alcotest.(check string) "wordwrap" input (Text.wordwrap ~width:4 input);
+        Alcotest.(check string) "wrap" "abcd\nefgh" (Text.wrap ~width:4 input));
     Alcotest.test_case "pad_right/escape state and cell width" `Quick (fun () ->
-        check_string "ascii" "foo  " (Text.pad_right ~width:5 "foo");
-        check_string "wide" "你   " (Text.pad_right ~width:5 "你");
-        check_string "combining" "e\u{0301}  " (Text.pad_right ~width:3 "e\u{0301}");
-        check_string "open SGR" "\x1b[31mfoo  " (Text.pad_right ~width:5 "\x1b[31mfoo"));
+        Alcotest.(check string) "ascii" "foo  " (Text.pad_right ~width:5 "foo");
+        Alcotest.(check string) "wide" "你   " (Text.pad_right ~width:5 "你");
+        Alcotest.(check string)
+          "combining" "e\u{0301}  "
+          (Text.pad_right ~width:3 "e\u{0301}");
+        Alcotest.(check string)
+          "open SGR" "\x1b[31mfoo  "
+          (Text.pad_right ~width:5 "\x1b[31mfoo"));
   ]
 
 let cases : unit Alcotest.test_case list =

@@ -130,21 +130,22 @@ let spec =
     ~strings:[ ("\"", "\"", true) ]
     ~raw_strings:[ ("{|", "|}") ]
     ~number:
-      (alt
+      (Re.alt
          [
-           seq [ str "0x"; rep1 (set "_0123456789abcdefABCDEF") ];
-           seq [ str "0X"; rep1 (set "_0123456789abcdefABCDEF") ];
-           seq [ str "0o"; rep1 (set "_01234567") ];
-           seq [ str "0O"; rep1 (set "_01234567") ];
-           seq [ str "0b"; rep1 (set "_01") ];
-           seq [ str "0B"; rep1 (set "_01") ];
-           seq [ decimal; opt (set "lLn") ];
+           Re.seq [ Re.str "0x"; Re.rep1 (Re.set "_0123456789abcdefABCDEF") ];
+           Re.seq [ Re.str "0X"; Re.rep1 (Re.set "_0123456789abcdefABCDEF") ];
+           Re.seq [ Re.str "0o"; Re.rep1 (Re.set "_01234567") ];
+           Re.seq [ Re.str "0O"; Re.rep1 (Re.set "_01234567") ];
+           Re.seq [ Re.str "0b"; Re.rep1 (Re.set "_01") ];
+           Re.seq [ Re.str "0B"; Re.rep1 (Re.set "_01") ];
+           Re.seq [ decimal; Re.opt (Re.set "lLn") ];
          ])
     ~ident:
-      (seq
+      (Re.seq
          [
-           set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
-           rep (set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'");
+           Re.set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+           Re.rep
+             (Re.set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'");
          ])
     ~operators:
       [
@@ -183,10 +184,11 @@ let spec =
       ]
     ~attribute:
       (Some
-         (seq
+         (Re.seq
             [
-              alt [ str "[@@@"; str "[@@"; str "[@" ];
-              set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
-              rep (set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'");
+              Re.alt [ Re.str "[@@@"; Re.str "[@@"; Re.str "[@" ];
+              Re.set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+              Re.rep
+                (Re.set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'");
             ]))
     ()

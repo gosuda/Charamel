@@ -1,34 +1,38 @@
-type t = { fs : Eio.Fs.dir_ty Eio.Path.t; dir : string; mutex : Eio.Mutex.t }
+open Lwt.Infix
+
+type t = { fs_root : string; dir : string; mutex : Lwt_mutex.t }
 
 let max_inline_bytes = 65_536
 let head_lines = 50
 let tail_lines = 20
-let path t name = Eio.Path.(t.fs / Filename.concat t.dir name)
-let error_message exn = Fmt.str "%a" Eio.Exn.pp exn
+let path t name = Filename.concat (Path.under ~root:t.fs_root t.dir) name
 
-let protect_io path f =
-  try Ok (Eio.Cancel.protect f) with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found path)
-  | Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (path, error_message exn))
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (`Io (path, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
+let create_dir path =
+  Lwt.catch
+    (fun () -> Lwt_unix.mkdir path 0o700)
+    (function
+      | Unix.Unix_error (Unix.EEXIST, _, _) -> Lwt.return_unit
+      | Unix.Unix_error (Unix.ENOENT, _, _) -> (
+          Charamel_os.Fs.mkdir_p path >>= function
+          | Ok () -> Lwt.return_unit
+          | Error error -> Lwt.fail (Charamel_os.Fs.E (error, path)))
+      | exn -> Lwt.fail exn)
 
 let save_path path contents =
-  try
-    Eio.Cancel.protect (fun () -> Eio.Path.save ~create:(`Exclusive 0o600) path contents);
-    Ok ()
-  with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Already_exists _), _) -> Error `Exists
-  | Eio.Io (Eio.Fs.E _, _) as exn ->
-      Error (`Io (Fmt.str "%a" Eio.Path.pp path, error_message exn))
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (`Io
-           ( Fmt.str "%a" Eio.Path.pp path,
-             Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument ))
+  Lwt.catch
+    (fun () ->
+      Lwt_unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600
+      >>= fun fd ->
+      let channel = Lwt_io.of_fd ~mode:Lwt_io.Output fd in
+      Lwt.finalize
+        (fun () -> Lwt_io.write channel contents)
+        (fun () -> Lwt_io.close channel)
+      >>= fun () -> Lwt.return_ok ())
+    (function
+      | Unix.Unix_error (Unix.EEXIST, _, _) -> Lwt.return_error `Exists
+      | exn -> Lwt.return_error (`Io (path, Io.message exn)))
 
-let create ~fs ~dir = { fs; dir; mutex = Eio.Mutex.create () }
+let create ~fs_root ~dir = { fs_root; dir; mutex = Lwt_mutex.create () }
 let hex_byte c = Fmt.str "%02x" (Char.code c)
 
 let id_of_random random =
@@ -38,24 +42,22 @@ let id_of_random random =
   else "art-" ^ String.concat "" (List.init 4 (fun index -> hex_byte bytes.[index]))
 
 let save t ~random contents =
-  Eio.Mutex.use_rw ~protect:true t.mutex (fun () ->
-      let result =
-        protect_io t.dir (fun () ->
-            Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 Eio.Path.(t.fs / t.dir))
-      in
-      match result with
-      | Error (`Not_found path) -> Error (`Io (path, "artifact directory does not exist"))
-      | Error (`Io (path, message)) -> Error (`Io (path, message))
+  Lwt_mutex.with_lock t.mutex (fun () ->
+      let directory = Path.under ~root:t.fs_root t.dir in
+      Io.trap t.dir (fun () -> create_dir directory) >>= function
+      | Error (`Not_found path) ->
+          Lwt.return_error (`Io (path, "artifact directory does not exist"))
+      | Error (`Io _) as error -> Lwt.return error
       | Ok () ->
           let rec attempt remaining =
             if remaining = 0 then
-              Error (`Io (t.dir, "could not allocate a unique artifact id"))
+              Lwt.return_error (`Io (t.dir, "could not allocate a unique artifact id"))
             else
               let id = id_of_random random in
-              match save_path (path t (id ^ ".txt")) contents with
-              | Ok () -> Ok id
+              save_path (path t (id ^ ".txt")) contents >>= function
+              | Ok () -> Lwt.return_ok id
               | Error `Exists -> attempt (remaining - 1)
-              | Error (`Io (_, message)) -> Error (`Io (t.dir, message))
+              | Error (`Io (_, message)) -> Lwt.return_error (`Io (t.dir, message))
           in
           attempt 32)
 
@@ -69,17 +71,18 @@ let valid_id id =
   in
   loop 4
 
+let read_all path =
+  Lwt_io.with_file ~mode:Lwt_io.Input path (fun channel -> Lwt_io.read channel)
+
 let load t ~id =
-  if not (valid_id id) then Error (`Not_found id)
+  if not (valid_id id) then Lwt.return_error (`Not_found id)
   else
     let target = Filename.concat t.dir (id ^ ".txt") in
-    match
-      protect_io target (fun () -> Eio.Path.kind ~follow:false (path t (id ^ ".txt")))
-    with
-    | Error error -> Error error
-    | Ok `Regular_file ->
-        protect_io target (fun () -> Eio.Path.load (path t (id ^ ".txt")))
-    | Ok _ -> Error (`Not_found target)
+    let file = path t (id ^ ".txt") in
+    Io.trap target (fun () -> Lwt_unix.lstat file) >>= function
+    | Error error -> Lwt.return_error error
+    | Ok { Unix.st_kind = Unix.S_REG; _ } -> Io.trap target (fun () -> read_all file)
+    | Ok _ -> Lwt.return_error (`Not_found target)
 
 let is_utf8_continuation c = Char.code c land 0xC0 = 0x80
 
@@ -150,8 +153,8 @@ let preview ~contents ~id =
     if trailing then result ^ "\n" else result
 
 let truncate t ~random contents =
-  if String.length contents <= max_inline_bytes then (contents, None)
+  if String.length contents <= max_inline_bytes then Lwt.return (contents, None)
   else
-    match save t ~random contents with
-    | Ok id -> (preview ~contents ~id, Some id)
-    | Error _ -> (contents, None)
+    save t ~random contents >>= function
+    | Ok id -> Lwt.return (preview ~contents ~id, Some id)
+    | Error _ -> Lwt.return (contents, None)

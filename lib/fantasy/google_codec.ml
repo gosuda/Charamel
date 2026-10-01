@@ -186,10 +186,7 @@ let thinking_config = function
       Some [ (n "includeThoughts", bool true); (n "thinkingBudget", int 32768) ]
 
 let generation_config (r : Request.t) =
-  let cap =
-    if r.Request.max_tokens > 0 then r.Request.max_tokens
-    else r.Request.model.Model.default_max_tokens
-  in
+  let cap = Request.effective_max_tokens r in
   let temperature =
     match r.Request.temperature with Some t -> [ (n "temperature", num t) ] | None -> []
   in
@@ -209,18 +206,7 @@ let tools_member = function
       ]
 
 let encode (r : Request.t) =
-  let message_system =
-    List.concat_map
-      (fun (m : Message.t) ->
-        match m.Message.role with
-        | Message.System ->
-            List.filter_map
-              (function Message.Text s -> Some s | _ -> None)
-              m.Message.parts
-        | Message.User | Message.Assistant | Message.Tool -> [])
-      r.Request.messages
-  in
-  let system = r.Request.system @ message_system in
+  let system = Request.system_blocks r in
   obj
     (system_instruction system
     @ [
@@ -232,9 +218,7 @@ let encode (r : Request.t) =
 (* Response decoding *)
 
 type state = {
-  mutable pending_finish : Stream_part.t option;
-  mutable usage : Usage.t option;
-  mutable finished : bool;
+  term : Codec_state.t;
   mutable saw_tool_call : bool;
   mutable anonymous_calls : int;
 }
@@ -242,14 +226,14 @@ type state = {
 type t = state
 
 let create () =
-  {
-    pending_finish = None;
-    usage = None;
-    finished = false;
-    saw_tool_call = false;
-    anonymous_calls = 0;
-  }
+  { term = Codec_state.create (); saw_tool_call = false; anonymous_calls = 0 }
 
+(* Gemini's [usageMetadata] is a cumulative snapshot of the turn, not a delta:
+   the second event of TestGoogleCommon/gemini-2.5-flash/tool_streaming.yaml
+   reports prompt 127 / candidates 4 and the third prompt 127 / candidates 12
+   for the same turn. Emitting one [Usage] per event and folding them with
+   [Usage.add] double counts the prompt, so the last snapshot is kept and
+   emitted once, immediately before the terminal event. *)
 let usage_of_metadata j =
   let cache_read = int_mem j "cachedContentTokenCount" in
   let reasoning = int_mem j "thoughtsTokenCount" in
@@ -273,32 +257,6 @@ let finish_of_string = function
       `Error (Fmt.str "provider ended with finish reason %s" reason)
   | other -> `Error (Fmt.str "unknown finish reason %s" other)
 
-(* Gemini's [usageMetadata] is a cumulative snapshot of the turn, not a delta:
-   the second event of TestGoogleCommon/gemini-2.5-flash/tool_streaming.yaml
-   reports prompt 127 / candidates 4 and the third prompt 127 / candidates 12
-   for the same turn. Emitting one [Usage] per event and folding them with
-   [Usage.add] double counts the prompt, so the last snapshot is kept and
-   emitted once, immediately before the terminal event. *)
-let usage_events (st : state) =
-  match st.usage with Some u -> [ Stream_part.Usage u ] | None -> []
-
-let terminal (st : state) msg =
-  st.finished <- true;
-  st.pending_finish <- None;
-  let usage = usage_events st in
-  st.usage <- None;
-  usage @ [ Stream_part.Finish (`Error msg) ]
-
-let release (st : state) =
-  match st.pending_finish with
-  | None -> []
-  | Some f ->
-      st.finished <- true;
-      st.pending_finish <- None;
-      let usage = usage_events st in
-      st.usage <- None;
-      usage @ [ f ]
-
 let call_id (st : state) (fc : Jsont.json) =
   match string_mem fc "id" with
   | Some i when i <> "" -> i
@@ -308,7 +266,7 @@ let call_id (st : state) (fc : Jsont.json) =
 
 let function_call_parts (st : state) (fc : Jsont.json) =
   match string_mem fc "name" with
-  | None -> terminal st "function call without a name"
+  | None -> Codec_state.terminal st.term "function call without a name"
   | Some name ->
       st.saw_tool_call <- true;
       let id = call_id st fc in
@@ -325,7 +283,7 @@ let decode_part (st : state) (p : Jsont.json) : Stream_part.t list =
       if bool_mem p "thought" then [ Stream_part.Reasoning_delta s ]
       else [ Stream_part.Text_delta s ]
   | Some (Jsont.String _), _ -> []
-  | Some _, _ -> terminal st "candidate part has a non-string text field"
+  | Some _, _ -> Codec_state.terminal st.term "candidate part has a non-string text field"
   | None, Some fc -> function_call_parts st fc
   | None, None -> []
 
@@ -333,12 +291,12 @@ let decode_part (st : state) (p : Jsont.json) : Stream_part.t list =
    [finishMessage] "Model generated function call(s)." ; google.go:866-871
    upgrades such a turn to the tool-calls terminal. Only [STOP] is upgraded, so
    a length or safety stop that happens to carry a call keeps its reason. *)
-let record_finish (st : state) (reason : string) =
-  if not st.finished then begin
+let upgrade_stop_with_calls (st : state) (reason : string) =
+  if not st.term.finished then begin
     let reason =
       if st.saw_tool_call && reason = "STOP" then `Tool_calls else finish_of_string reason
     in
-    st.pending_finish <- Some (Stream_part.Finish reason)
+    st.term.pending_finish <- Some (Stream_part.Finish reason)
   end
 
 let rec decode_candidate (st : state) (c : Jsont.json) : Stream_part.t list =
@@ -349,14 +307,16 @@ let rec decode_candidate (st : state) (c : Jsont.json) : Stream_part.t list =
         | Some ps -> (
             match objects_of_json ps with
             | Some parts -> parts_of st parts
-            | None -> terminal st "candidate content parts is not an array of objects")
+            | None ->
+                Codec_state.terminal st.term
+                  "candidate content parts is not an array of objects")
         | None -> [])
     | None -> []
   in
   match string_mem c "finishReason" with
   | None -> parts
   | Some reason ->
-      record_finish st reason;
+      upgrade_stop_with_calls st reason;
       parts
 
 (* A part that fails to decode ends the stream, so decoding stops there: the
@@ -366,7 +326,7 @@ and parts_of (st : state) (parts : Jsont.json list) : Stream_part.t list =
     | [] -> List.rev acc
     | p :: tl ->
         let acc = List.rev_append (decode_part st p) acc in
-        if st.finished then List.rev acc else go acc tl
+        if st.term.finished then List.rev acc else go acc tl
   in
   go [] parts
 
@@ -389,19 +349,19 @@ let blocked_reason j =
       | _ -> None)
 
 let decode_event (st : state) (j : Jsont.json) : Stream_part.t list =
-  if not (is_object j) then terminal st "event is not a JSON object"
-  else if has_error j then terminal st (error_message j)
+  if not (is_object j) then Codec_state.terminal st.term "event is not a JSON object"
+  else if has_error j then Codec_state.terminal st.term (error_message j)
   else begin
     (match oopt j "usageMetadata" with
-    | Some u when is_object u -> st.usage <- Some (usage_of_metadata u)
+    | Some u when is_object u -> st.term.usage <- Some (usage_of_metadata u)
     | Some _ | None -> ());
     match blocked_reason j with
     | Some reason ->
         let reason =
           match finish_of_string reason with `Error _ -> `Content_filter | f -> f
         in
-        st.pending_finish <- Some (Stream_part.Finish reason);
-        release st
+        st.term.pending_finish <- Some (Stream_part.Finish reason);
+        Codec_state.release st.term
     | None -> (
         match oopt j "candidates" with
         | None -> []
@@ -409,25 +369,27 @@ let decode_event (st : state) (j : Jsont.json) : Stream_part.t list =
             match objects_of_json cs with
             | Some (c :: _) -> decode_candidate st c
             | Some [] -> []
-            | None -> terminal st "candidates is not an array of objects"))
+            | None -> Codec_state.terminal st.term "candidates is not an array of objects"
+            ))
   end
 
 let feed (st : t) ~event ~(data : string) =
-  if st.finished || (event <> "" && event <> "message") then []
+  if st.term.finished || (event <> "" && event <> "message") then []
   else
     match json_of_string data with
     | Error e ->
         Log.err (fun m -> m "malformed google event: %s" e);
-        terminal st (Fmt.str "malformed event: %s" e)
+        Codec_state.terminal st.term (Fmt.str "malformed event: %s" e)
     | Ok j ->
         let parts = decode_event st j in
-        if st.finished then parts @ release st else parts
+        if st.term.finished then parts @ Codec_state.release st.term else parts
 
 let finish (st : t) =
-  if st.finished then []
-  else if st.pending_finish = None && st.saw_tool_call then (
-    st.pending_finish <- Some (Stream_part.Finish `Tool_calls);
-    release st)
-  else if st.pending_finish = None then
-    terminal st "stream ended before the provider reported a finish reason"
-  else release st
+  if st.term.finished then []
+  else if st.term.pending_finish = None && st.saw_tool_call then (
+    st.term.pending_finish <- Some (Stream_part.Finish `Tool_calls);
+    Codec_state.release st.term)
+  else if st.term.pending_finish = None then
+    Codec_state.terminal st.term
+      "stream ended before the provider reported a finish reason"
+  else Codec_state.release st.term

@@ -6,7 +6,7 @@
     process; the MCP stdio cases re-enter this same executable in fixture mode through an
     environment variable read at module initialisation. *)
 
-val suites : (string * unit Alcotest.test_case list) list
+val suites : (string * unit Alcotest_lwt.test_case list) list
 (** [suites] is every Crush case module paired with the suite name it is reported under,
     ordered from the pure leaf contracts (hashline, configuration, model catalog,
     authentication, session store, state file, todos, tool boundary) through the policy

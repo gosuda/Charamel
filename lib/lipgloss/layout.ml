@@ -1,3 +1,5 @@
+type rune_index = [ `Grapheme | `Scalar ]
+
 let width s =
   Stdlib.List.fold_left
     (fun m line -> max m (Charamel_ansi.Text.width line))
@@ -21,15 +23,7 @@ let join_horizontal ?(pos = Position.top) blocks =
         Stdlib.List.map
           (fun (ls, w) ->
             let missing = h - Stdlib.List.length ls in
-            let top, bottom =
-              if pos = Position.top then (0, missing)
-              else if pos = Position.bottom then (missing, 0)
-              else
-                let cut =
-                  int_of_float (Float.round (float missing *. Position.to_float pos))
-                in
-                (cut, missing - cut)
-            in
+            let top, bottom = Position.split pos missing in
             ( Stdlib.List.init top (fun _ -> "")
               @ ls
               @ Stdlib.List.init bottom (fun _ -> ""),
@@ -58,13 +52,9 @@ let join_vertical ?(pos = Position.left) blocks =
               (fun line ->
                 let gap = widest - Charamel_ansi.Text.width line in
                 if gap <= 0 then line
-                else if pos = Position.left then line ^ spaces gap
-                else if pos = Position.right then spaces gap ^ line
                 else
-                  let left =
-                    int_of_float (Float.round (float gap *. Position.to_float pos))
-                  in
-                  spaces left ^ line ^ spaces (gap - left))
+                  let left, right = Position.split pos gap in
+                  spaces left ^ line ^ spaces right)
               ls)
           split
       in
@@ -72,27 +62,7 @@ let join_vertical ?(pos = Position.left) blocks =
 
 let fill ?(whitespace = (" ", Style.empty)) n =
   let chars, style = whitespace in
-  let chars = if chars = "" then " " else chars in
-  if n <= 0 then ""
-  else
-    let glyphs = Charamel_ansi.Width.graphemes chars in
-    let rec loop out i remaining =
-      if remaining <= 0 then ()
-      else
-        let g = Stdlib.List.nth glyphs (i mod Stdlib.List.length glyphs) in
-        let w = max 1 (Charamel_ansi.Width.grapheme_width g) in
-        if w <= remaining then begin
-          Buffer.add_string out g;
-          loop out (i + 1) (remaining - w)
-        end
-        else Buffer.add_string out (String.make remaining ' ')
-    in
-    let out = Buffer.create n in
-    loop out 0 n;
-    let contents = Buffer.contents out in
-    let short = n - Charamel_ansi.Text.width contents in
-    let contents = if short > 0 then contents ^ String.make short ' ' else contents in
-    Style.render style contents
+  if n <= 0 then "" else Style.render style (Whitespace.fill ~pattern:chars n)
 
 let place_horizontal ?(whitespace = (" ", Style.empty)) ~width:target ~pos text =
   let ls = lines text in
@@ -105,8 +75,8 @@ let place_horizontal ?(whitespace = (" ", Style.empty)) ~width:target ~pos text 
         if pos = Position.left then line ^ fill ~whitespace gap
         else if pos = Position.right then fill ~whitespace gap ^ line
         else
-          let right = int_of_float (Float.round (float gap *. Position.to_float pos)) in
-          fill ~whitespace (gap - right) ^ line ^ fill ~whitespace right)
+          let share, rest = Position.split pos gap in
+          fill ~whitespace rest ^ line ^ fill ~whitespace share)
       ls
     |> String.concat "\n"
 
@@ -120,8 +90,8 @@ let place_vertical ?(whitespace = (" ", Style.empty)) ~height:target ~pos text =
       if pos = Position.bottom then (gap, 0)
       else if pos = Position.top then (0, gap)
       else
-        let cut = int_of_float (Float.round (float gap *. Position.to_float pos)) in
-        (gap - cut, cut)
+        let share, rest = Position.split pos gap in
+        (rest, share)
     in
     let empty_line = fill ~whitespace (width text) in
     String.concat "\n"
@@ -159,8 +129,109 @@ let style_ranges ranges text =
       Buffer.add_string out (Charamel_ansi.Text.truncate_left ~width:!last text);
       Buffer.contents out
 
-let style_runes matched unmatched text ~indices =
+let scalar_count cluster =
+  let n = String.length cluster in
+  let rec loop i count =
+    if i >= n then count
+    else
+      let decoded = String.get_utf_8_uchar cluster i in
+      if Uchar.utf_decode_is_valid decoded then
+        loop (i + Uchar.utf_decode_length decoded) (count + 1)
+      else loop (i + 1) count
+  in
+  loop 0 0
+
+let scalar_clusters plain indices =
+  let clusters = Charamel_ansi.Width.graphemes plain in
+  let scalars =
+    Stdlib.List.fold_left (fun n cluster -> n + scalar_count cluster) 0 clusters
+  in
+  let owner = Array.make scalars (-1) in
+  let position = ref 0 in
+  Stdlib.List.iteri
+    (fun cluster_index cluster ->
+      let width = scalar_count cluster in
+      for offset = 0 to width - 1 do
+        owner.(!position + offset) <- cluster_index
+      done;
+      position := !position + width)
+    clusters;
+  Stdlib.List.sort_uniq compare
+    (Stdlib.List.filter_map
+       (fun index -> if index >= 0 && index < scalars then Some owner.(index) else None)
+       indices)
+
+let link_params field =
+  Stdlib.List.filter_map
+    (fun text ->
+      match String.split_on_char '=' text with
+      | key :: value when key <> "" -> Some (key, String.concat "=" value)
+      | _ -> None)
+    (String.split_on_char ':' field)
+
+let wrap ?breakpoints ~width text =
+  let source =
+    if width <= 1 then text else Charamel_ansi.Text.wrap ?breakpoints ~width text
+  in
+  let parser = Charamel_ansi.Parser.create () in
+  let style = ref Charamel_ansi.Style.default in
+  let link = ref (None : Charamel_ansi.Link.t option) in
+  let out = Buffer.create (String.length source + 16) in
+  let styled () = not (Charamel_ansi.Style.equal !style Charamel_ansi.Style.default) in
+  let track chunk =
+    Stdlib.List.iter
+      (fun action ->
+        match action with
+        | Charamel_ansi.Parser.Csi { final = 'm'; params; _ } ->
+            let params = if params = [] then [ [ Some 0 ] ] else params in
+            style := Charamel_ansi.Style.of_sgr ~params !style
+        | Charamel_ansi.Parser.Osc ("8" :: parameters :: rest) ->
+            let uri = String.concat ";" rest in
+            link :=
+              if uri = "" then None
+              else Some { Charamel_ansi.Link.url = uri; params = link_params parameters }
+        | _ -> ())
+      (Charamel_ansi.Parser.feed parser chunk)
+  in
+  let start = ref 0 in
+  let emit stop =
+    if stop > !start then begin
+      let chunk = String.sub source !start (stop - !start) in
+      track chunk;
+      Buffer.add_string out chunk;
+      start := stop
+    end
+  in
+  let close () =
+    if styled () then
+      Buffer.add_string out (Charamel_ansi.Style.to_sgr Charamel_ansi.Style.default);
+    if !link <> None then Buffer.add_string out (Charamel_ansi.Link.osc8 None)
+  in
+  let reopen () =
+    (match !link with
+    | Some target -> Buffer.add_string out (Charamel_ansi.Link.osc8 (Some target))
+    | None -> ());
+    if styled () then Buffer.add_string out (Charamel_ansi.Style.to_sgr !style)
+  in
+  let n = String.length source in
+  for index = 0 to n - 1 do
+    if source.[index] = '\n' then begin
+      emit index;
+      close ();
+      Buffer.add_char out '\n';
+      reopen ();
+      start := index + 1
+    end
+  done;
+  emit n;
+  close ();
+  Buffer.contents out
+
+let style_runes ?(basis = `Grapheme) matched unmatched text ~indices =
   let plain = Charamel_ansi.Text.strip text in
+  let indices =
+    match basis with `Grapheme -> indices | `Scalar -> scalar_clusters plain indices
+  in
   let glyphs = Charamel_ansi.Width.graphemes plain in
   let runs_rev, _, _ =
     Stdlib.List.fold_left

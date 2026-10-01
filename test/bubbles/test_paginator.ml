@@ -37,7 +37,7 @@ let views_and_keys () =
 
 let cases =
   [
-    Alcotest.test_case "total pages and bounds" `Quick total_pages_and_bounds;
-    Alcotest.test_case "navigation clamps" `Quick navigation_clamps;
-    Alcotest.test_case "views and keys" `Quick views_and_keys;
+    Alcotest_lwt.test_case_sync "total pages and bounds" `Quick total_pages_and_bounds;
+    Alcotest_lwt.test_case_sync "navigation clamps" `Quick navigation_clamps;
+    Alcotest_lwt.test_case_sync "views and keys" `Quick views_and_keys;
   ]

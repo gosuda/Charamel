@@ -34,7 +34,8 @@ let custom_gradient_and_percentage () =
 
 let cases =
   [
-    Alcotest.test_case "spring convergence" `Quick settles_to_target;
-    Alcotest.test_case "solid fill" `Quick static_bar;
-    Alcotest.test_case "gradient and percentage" `Quick custom_gradient_and_percentage;
+    Alcotest_lwt.test_case_sync "spring convergence" `Quick settles_to_target;
+    Alcotest_lwt.test_case_sync "solid fill" `Quick static_bar;
+    Alcotest_lwt.test_case_sync "gradient and percentage" `Quick
+      custom_gradient_and_percentage;
   ]

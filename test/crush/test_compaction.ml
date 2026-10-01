@@ -40,7 +40,7 @@ let split_cases () =
 
 let cases =
   [
-    Alcotest.test_case "reserve" `Quick reserve_cases;
-    Alcotest.test_case "threshold" `Quick threshold_cases;
-    Alcotest.test_case "split" `Quick split_cases;
+    Test_tools_test_support.case "reserve" `Quick reserve_cases;
+    Test_tools_test_support.case "threshold" `Quick threshold_cases;
+    Test_tools_test_support.case "split" `Quick split_cases;
   ]

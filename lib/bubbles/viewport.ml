@@ -3,10 +3,7 @@ module Sub = Charamel_tea.Sub
 module Style = Charamel_lipgloss.Style
 module Text = Charamel_ansi.Text
 module Layout = Charamel_lipgloss.Layout
-
-let clamp n lo hi =
-  let lo, hi = if lo <= hi then (lo, hi) else (hi, lo) in
-  max lo (min hi n)
+module Width = Charamel_ansi.Width
 
 let normalize_crlf s =
   let b = Buffer.create (String.length s) in
@@ -185,7 +182,8 @@ let wrapped_line_count m =
     if w <= 0 then 0
     else
       Stdlib.List.fold_left
-        (fun n line -> n + max 1 ((Text.width line + w - 1) / w))
+        (fun n line ->
+          n + Stdlib.List.length (String.split_on_char '\n' (Text.hardwrap ~width:w line)))
         0 m.lines
 
 let max_y_offset m = max 0 (wrapped_line_count m - max_height m)
@@ -245,16 +243,13 @@ let build_visible m =
       concat_mapi
         (fun idx line ->
           let line = line |> apply_style_line m idx |> apply_highlights m idx in
-          let w = Text.width line in
-          if w <= mw then [ gutter m ~index:idx ~total_lines:total ~soft:false line ]
-          else
-            let count = max 1 ((w + mw - 1) / mw) in
-            Stdlib.List.init count (fun part ->
-                let chunk = chunk_line line ~left:(part * mw) ~right:((part + 1) * mw) in
-                gutter m ~index:idx ~total_lines:total ~soft:(part > 0) chunk))
+          Stdlib.List.mapi
+            (fun part chunk ->
+              gutter m ~index:idx ~total_lines:total ~soft:(part > 0) chunk)
+            (String.split_on_char '\n' (Text.hardwrap ~width:mw line)))
         m.lines
     in
-    let start = clamp m.y_offset 0 (max 0 (Stdlib.List.length chunks)) in
+    let start = Range.clamp 0 (max 0 (Stdlib.List.length chunks)) m.y_offset in
     let visible =
       if start >= Stdlib.List.length chunks then []
       else Stdlib.List.filteri (fun i _ -> i >= start && i < start + mh) chunks
@@ -268,7 +263,7 @@ let build_visible m =
     else visible
   else
     let total = Stdlib.List.length m.lines in
-    let start = clamp m.y_offset 0 total in
+    let start = Range.clamp 0 total m.y_offset in
     let selected =
       Stdlib.List.filteri (fun i _ -> i >= start && i < start + mh) m.lines
     in
@@ -329,10 +324,10 @@ let horizontal_scroll_percent m =
   if w >= total || total <= w then 1.0
   else max 0. (min 1. (float m.x_offset /. float (total - w)))
 
-let set_y_offset n m = { m with y_offset = clamp n 0 (max_y_offset m) }
+let set_y_offset n m = { m with y_offset = Range.clamp 0 (max_y_offset m) n }
 
 let set_x_offset n m =
-  if m.soft_wrap then m else { m with x_offset = clamp n 0 (max_x_offset m) }
+  if m.soft_wrap then m else { m with x_offset = Range.clamp 0 (max_x_offset m) n }
 
 let set_width n m =
   { m with width = max 0 n } |> fun m ->
@@ -399,53 +394,69 @@ let ensure_visible ~line ~colstart ~colend m =
     let y = find_y 0 0 m.lines in
     if y < m.y_offset || y >= m.y_offset + max_height m then set_y_offset y m else m
 
-let parse_highlights content matches =
-  let lines = line_split content in
-  let starts =
-    let rec loop offset acc = function
-      | [] -> Stdlib.List.rev acc
-      | line :: rest ->
-          let e = offset + String.length line in
-          loop (e + 1) ((offset, e) :: acc) rest
-    in
-    loop 0 [] lines
+let grapheme_layout content =
+  let rec loop line col acc = function
+    | [] -> Array.of_list (Stdlib.List.rev acc)
+    | g :: rest ->
+        let width = if g = "\n" then 0 else Width.grapheme_width g in
+        if g = "\n" then loop (line + 1) 0 ((line, col, 0) :: acc) rest
+        else loop line (col + width) ((line, col, width) :: acc) rest
   in
-  let line_for_byte byte =
-    let rec loop i = function
-      | [] -> (0, 0, 0)
-      | (a, b) :: rest -> if byte <= b then (i, a, b) else loop (i + 1) rest
-    in
-    loop 0 starts
+  loop 0 0 [] (Width.graphemes content)
+
+let parse_highlights content matches =
+  let layout = grapheme_layout content in
+  let count = Array.length layout in
+  let rec group i stop current acc =
+    if i >= stop then
+      match current with
+      | Some (line, start, last) -> (line, start, last) :: acc
+      | None -> acc
+    else
+      let line, col, width = layout.(i) in
+      match current with
+      | Some (line', start, last) when line = line' ->
+          group (i + 1) stop (Some (line', start, max last (col + width))) acc
+      | Some (line', start, last) ->
+          group (i + 1) stop (Some (line, col, col + width)) ((line', start, last) :: acc)
+      | None -> group (i + 1) stop (Some (line, col, col + width)) acc
   in
   let one (a, b) =
     let a, b = (min a b, max a b) in
-    let first, _, _ = line_for_byte a in
-    let last, _, _ = line_for_byte (max a (b - 1)) in
-    let ranges =
-      Stdlib.List.fold_left
-        (fun acc (idx, (ls, le)) ->
-          if idx < first || idx > last then acc
-          else
-            let local_a = max a ls - ls and local_b = min b le - ls in
-            let crosses_newline = b > le in
-            if local_b <= local_a && not crosses_newline then acc
-            else
-              let line = Stdlib.List.nth lines idx in
-              let clipped_a = min (String.length line) (max 0 local_a) in
-              let clipped_b = min (String.length line) (max 0 local_b) in
-              let sa = Text.width (String.sub line 0 clipped_a) in
-              let sb =
-                Text.width (String.sub line 0 clipped_b)
-                + if crosses_newline then 1 else 0
-              in
-              if sb <= sa then acc else (idx, sa, sb) :: acc)
-        []
-        (Stdlib.List.mapi (fun i x -> (i, x)) starts)
-      |> Stdlib.List.rev
+    let a = Range.clamp 0 count a in
+    let b = Range.clamp 0 count b in
+    let line_start =
+      if a < count then
+        let line, _, _ = layout.(a) in
+        line
+      else 0
     in
-    { line_start = first; ranges }
+    let ranges =
+      Stdlib.List.filter
+        (fun (_, start, last) -> last > start)
+        (Stdlib.List.rev (group a b None []))
+    in
+    { line_start; ranges }
   in
   Stdlib.List.map one matches
+
+let grapheme_ranges_of_byte_ranges m ranges =
+  let starts =
+    let rec loop pos acc = function
+      | [] -> Array.of_list (Stdlib.List.rev (pos :: acc))
+      | g :: rest -> loop (pos + String.length g) (pos :: acc) rest
+    in
+    loop 0 [] (Width.graphemes (content m))
+  in
+  let n = Array.length starts - 1 in
+  let one (a, b) =
+    let a, b = (min a b, max a b) in
+    let rec first i = if i >= n || starts.(i + 1) > a then i else first (i + 1) in
+    let rec last i = if i >= n || starts.(i + 1) >= b then i else last (i + 1) in
+    let f = first 0 in
+    if n = 0 then (0, 0) else if b <= a then (f, f) else (f, min n (last 0 + 1))
+  in
+  Stdlib.List.map one ranges
 
 let clear_highlights m = { m with highlights = []; highlight_index = -1 }
 

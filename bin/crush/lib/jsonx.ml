@@ -22,9 +22,17 @@ let encode ?(minify = true) codec value =
   | Error message -> invalid_arg (Fmt.str "JSON encoding failed: %s" message)
   | Ok json -> string_of_json ~minify json
 
+let array_members = function Jsont.Array (values, _) -> Some values | _ -> None
+let object_members = function Jsont.Object (members, _) -> Some members | _ -> None
+
 let member name = function
   | Jsont.Object (members, _) -> Option.map snd (Jsont.Json.find_mem name members)
   | _ -> None
+
+let array_member name value = Option.bind (member name value) array_members
+
+let object_member name value =
+  match member name value with Some (Jsont.Object _ as value) -> Some value | _ -> None
 
 let string_member name json =
   match member name json with Some (Jsont.String (value, _)) -> Some value | _ -> None

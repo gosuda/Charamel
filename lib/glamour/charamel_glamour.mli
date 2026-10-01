@@ -83,6 +83,12 @@ module Theme : sig
 
   val auto : is_dark:bool -> t
   (** [auto ~is_dark] selects [dark] when [is_dark] is true and [light] otherwise. *)
+
+  val of_name : is_dark:bool -> string -> (t, string) result
+  (** [of_name ~is_dark name] returns the theme called [name], or [Error name] when no
+      built-in theme answers. [name] is matched case-insensitively; [tokyo-night] and
+      [tokyo_night] are the same theme, and [notty] is an alias of [ascii]. [auto] selects
+      [dark] or [light] from [is_dark]. *)
 end
 
 type error = [ `Markdown of string ]

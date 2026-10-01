@@ -9,34 +9,29 @@ module Fuzzy = Charamel_bubbles.Fuzzy
 module Textinput = Charamel_bubbles.Textinput
 module Viewport = Charamel_bubbles.Viewport
 
-let key name =
-  match Key.of_string name with
-  | Ok value -> value
-  | Error (`Msg message) -> invalid_arg (Fmt.str "invalid filter key %s: %s" name message)
-
-let k_down = key "down"
-let k_ctrl_j = key "ctrl+j"
-let k_ctrl_n = key "ctrl+n"
-let k_up = key "up"
-let k_ctrl_k = key "ctrl+k"
-let k_ctrl_p = key "ctrl+p"
-let k_j = key "j"
-let k_k = key "k"
-let k_home = key "home"
-let k_g = key "g"
-let k_end = key "end"
-let k_shift_g = key "G"
-let k_tab = key "tab"
-let k_shift_tab = key "shift+tab"
-let k_ctrl_at = key "ctrl+@"
-let k_ctrl_a = key "ctrl+a"
-let k_slash = key "/"
-let k_escape = key "esc"
-let k_enter = key "enter"
-let k_ctrl_q = key "ctrl+q"
-let k_ctrl_c = key "ctrl+c"
-let is_key actual expected = Key.matches actual expected
-let any_key actual expected = List.exists (is_key actual) expected
+let k_down = Gum_flag.key ~cmd:"filter" "down"
+let k_ctrl_j = Gum_flag.key ~cmd:"filter" "ctrl+j"
+let k_ctrl_n = Gum_flag.key ~cmd:"filter" "ctrl+n"
+let k_up = Gum_flag.key ~cmd:"filter" "up"
+let k_ctrl_k = Gum_flag.key ~cmd:"filter" "ctrl+k"
+let k_ctrl_p = Gum_flag.key ~cmd:"filter" "ctrl+p"
+let k_j = Gum_flag.key ~cmd:"filter" "j"
+let k_k = Gum_flag.key ~cmd:"filter" "k"
+let k_home = Gum_flag.key ~cmd:"filter" "home"
+let k_g = Gum_flag.key ~cmd:"filter" "g"
+let k_end = Gum_flag.key ~cmd:"filter" "end"
+let k_shift_g = Gum_flag.key ~cmd:"filter" "G"
+let k_tab = Gum_flag.key ~cmd:"filter" "tab"
+let k_shift_tab = Gum_flag.key ~cmd:"filter" "shift+tab"
+let k_ctrl_at = Gum_flag.key ~cmd:"filter" "ctrl+@"
+let k_ctrl_a = Gum_flag.key ~cmd:"filter" "ctrl+a"
+let k_slash = Gum_flag.key ~cmd:"filter" "/"
+let k_escape = Gum_flag.key ~cmd:"filter" "esc"
+let k_enter = Gum_flag.key ~cmd:"filter" "enter"
+let k_ctrl_q = Gum_flag.key ~cmd:"filter" "ctrl+q"
+let k_ctrl_c = Gum_flag.key ~cmd:"filter" "ctrl+c"
+let is_key = Gum_flag.is_key
+let any_key = Gum_flag.any_key
 
 type options = {
   options : string list;
@@ -224,11 +219,6 @@ let candidate_matches (options : options) candidates query =
 let effective_limit (options : options) count =
   if options.no_limit then max 1 count else max 1 options.limit
 
-let parsed_padding value =
-  match Gum_flag.parse_padding value with
-  | Ok sides -> sides
-  | Error (`Msg message) -> invalid_arg message
-
 let input_styles (options : options) =
   let styles = Textinput.default_styles ~is_dark:true in
   let focused =
@@ -295,7 +285,7 @@ let make (options : options) =
       selected = [];
       submitted = false;
       quitting = false;
-      padding = parsed_padding options.padding;
+      padding = Gum_flag.parsed_padding options.padding;
     }
   in
   let model = recompute model in
@@ -457,33 +447,37 @@ let render_match model index (match_ : match_) =
   in
   indicator ^ Style.render prefix_style prefix ^ body
 
-let render model =
-  if model.quitting then ""
-  else
-    let lines =
-      model.matches
-      |> List.mapi (fun index match_ -> (index, render_match model index match_))
-      |> (fun lines -> if model.options.reverse then List.rev lines else lines)
-      |> List.mapi (fun display_index (_, line) -> (display_index, line))
-      |> List.filter (fun (index, _) ->
-          let start = Viewport.y_offset model.viewport in
-          let stop = start + max 1 (Viewport.height model.viewport) in
-          index >= start && index < stop)
-      |> List.map snd |> String.concat "\n"
-    in
-    let header =
-      if model.options.header = "" then ""
-      else
-        Style.render (Gum_style.to_style model.options.header_style) model.options.header
-        ^ "\n"
-    in
-    let view = header ^ Textinput.view model.input ^ "\n" ^ lines in
-    let view =
-      if model.options.show_help then
-        view ^ "\n\nenter submit • / search • tab toggle • esc quit"
-      else view
-    in
-    Style.render (Style.padding model.padding Style.empty) view
+let frame model body =
+  let lines =
+    model.matches
+    |> List.mapi (fun index match_ -> (index, render_match model index match_))
+    |> (fun lines -> if model.options.reverse then List.rev lines else lines)
+    |> List.mapi (fun display_index (_, line) -> (display_index, line))
+    |> List.filter (fun (index, _) ->
+        let start = Viewport.y_offset model.viewport in
+        let stop = start + max 1 (Viewport.height model.viewport) in
+        index >= start && index < stop)
+    |> List.map snd |> String.concat "\n"
+  in
+  let header =
+    if model.options.header = "" then ""
+    else
+      Style.render (Gum_style.to_style model.options.header_style) model.options.header
+      ^ "\n"
+  in
+  let view = header ^ body ^ "\n" ^ lines in
+  let view =
+    if model.options.show_help then
+      view ^ "\n\nenter submit • / search • tab toggle • esc quit"
+    else view
+  in
+  Style.render (Style.padding model.padding Style.empty) view
+
+let render model = if model.quitting then "" else frame model (Textinput.view model.input)
+
+let cursor model =
+  if model.quitting then None
+  else Gum_io.place_cursor ~frame:(frame model) (Textinput.cursor model.input)
 
 let update message model =
   match message with
@@ -505,7 +499,10 @@ let app options : (model, msg) Charamel_tea.app =
   {
     init = (fun () -> (make options, Cmd.none));
     update = (fun message model -> update message model);
-    view = (fun model -> View.v (render model));
+    view =
+      (fun model ->
+        let frame = View.v (render model) in
+        { frame with cursor = cursor model });
     subscriptions =
       (fun _ ->
         Sub.batch
@@ -516,61 +513,37 @@ let app options : (model, msg) Charamel_tea.app =
   }
 
 let read_text env (options : options) =
-  match Gum_io.read_stdin ~strip_ansi:options.strip_ansi env with
-  | Ok text -> text
-  | Error `Empty -> ""
-  | Error (`Read text) -> text
+  Lwt.map
+    (function Ok text -> text | Error `Empty -> "" | Error (`Read text) -> text)
+    (Gum_io.read_stdin ~strip_ansi:options.strip_ansi env)
 
 let normalized_options env (options : options) =
-  if options.options <> [] then options
+  if options.options <> [] then Lwt.return options
   else
-    let input = read_text env options in
-    if input <> "" then
-      { options with options = Gum_io.split ~delimiter:options.input_delimiter input }
-    else { options with options = Gum_io.list_files env }
+    Lwt.map
+      (fun input ->
+        if input <> "" then
+          { options with options = Gum_io.split ~delimiter:options.input_delimiter input }
+        else { options with options = Gum_io.list_files env })
+      (read_text env options)
 
 let run env (options : options) =
-  let options = normalized_options env options in
-  if options.options = [] then
-    Charamel_cli.error "no options provided, see `gum filter --help`";
-  match single_option options with
-  | Error message -> Charamel_cli.error message
-  | Ok (Some value) -> Gum_io.println env value
-  | Ok None ->
-      let model =
-        try
-          Gum_run.run ?timeout:options.timeout env (app options) ~finished:(fun model ->
-              if submitted model then Gum_run.Submitted else Gum_run.Quit)
-        with Gum_io.No_tty -> Charamel_cli.error "filter: requires a terminal"
-      in
-      if not (submitted model) then Charamel_cli.error "nothing selected";
-      let values = output_values model in
-      if values = [] then Charamel_cli.error "nothing selected"
-      else Gum_io.println env (String.concat options.output_delimiter values)
-
-let validated_padding_term ~cmd =
-  let open Cmdliner in
-  let parse value =
-    match Gum_flag.parse_padding value with
-    | Ok _ -> Ok value
-    | Error (`Msg message) -> Error (`Msg message)
-  in
-  let padding_conv =
-    Arg.conv (parse, fun ppf value -> Stdlib.Format.pp_print_string ppf value)
-  in
-  Arg.(
-    value
-      (opt padding_conv "0 0"
-         (info [ "padding" ] ~doc:"Padding as one to four integers."
-            ~env:(Gum_flag.env ~cmd "padding"))))
-
-let string_arg ~cmd name ~default ~doc =
-  Cmdliner.Arg.(
-    value (opt string default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
-
-let int_arg ~cmd name ~default ~doc =
-  Cmdliner.Arg.(
-    value (opt int default (info [ name ] ~doc ~env:(Gum_flag.env ~cmd name))))
+  Lwt.bind (normalized_options env options) (fun (options : options) ->
+      if options.options = [] then
+        Charamel_cli.error "no options provided, see `gum filter --help`";
+      match single_option options with
+      | Error message -> Charamel_cli.error message
+      | Ok (Some value) -> Gum_io.println env value
+      | Ok None ->
+          Lwt.bind
+            (Gum_run.run_tui ~name:"filter" ?timeout:options.timeout env (app options)
+               ~finished:(fun model ->
+                 if submitted model then Gum_run.Submitted else Gum_run.Quit))
+            (fun model ->
+              if not (submitted model) then Charamel_cli.error "nothing selected";
+              let values = output_values model in
+              if values = [] then Charamel_cli.error "nothing selected"
+              else Gum_io.println env (String.concat options.output_delimiter values)))
 
 let cmd env =
   let open Cmdliner in
@@ -629,9 +602,11 @@ let cmd env =
   let term =
     let+ options = options_arg
     and+ indicator =
-      string_arg ~cmd:"filter" "indicator" ~default:"•" ~doc:"Selection indicator."
+      Gum_flag.string_arg ~cmd:"filter" "indicator" ~default:"•"
+        ~doc:"Selection indicator."
     and+ limit =
-      int_arg ~cmd:"filter" "limit" ~default:1 ~doc:"Maximum number of options to pick."
+      Gum_flag.int_arg ~cmd:"filter" "limit" ~default:1
+        ~doc:"Maximum number of options to pick."
     and+ no_limit = Gum_flag.flag ~cmd:"filter" ~doc:"Pick unlimited options." "no-limit"
     and+ select_if_one =
       Gum_flag.flag ~cmd:"filter" ~doc:"Select a sole match without a terminal."
@@ -644,22 +619,26 @@ let cmd env =
       Gum_flag.negatable ~cmd:"filter" ~default:true ~doc:"Require a matching option."
         "strict"
     and+ selected_prefix =
-      string_arg ~cmd:"filter" "selected-prefix" ~default:" ◉ " ~doc:"Selected prefix."
+      Gum_flag.string_arg ~cmd:"filter" "selected-prefix" ~default:" ◉ "
+        ~doc:"Selected prefix."
     and+ unselected_prefix =
-      string_arg ~cmd:"filter" "unselected-prefix" ~default:" ○ "
+      Gum_flag.string_arg ~cmd:"filter" "unselected-prefix" ~default:" ○ "
         ~doc:"Unselected prefix."
-    and+ header = string_arg ~cmd:"filter" "header" ~default:"" ~doc:"Header value."
+    and+ header =
+      Gum_flag.string_arg ~cmd:"filter" "header" ~default:"" ~doc:"Header value."
     and+ placeholder =
-      string_arg ~cmd:"filter" "placeholder" ~default:"Filter..."
+      Gum_flag.string_arg ~cmd:"filter" "placeholder" ~default:"Filter..."
         ~doc:"Search placeholder."
-    and+ prompt = string_arg ~cmd:"filter" "prompt" ~default:"> " ~doc:"Search prompt."
+    and+ prompt =
+      Gum_flag.string_arg ~cmd:"filter" "prompt" ~default:"> " ~doc:"Search prompt."
     and+ width =
-      int_arg ~cmd:"filter" "width" ~default:0
+      Gum_flag.int_arg ~cmd:"filter" "width" ~default:0
         ~doc:"Input width (zero uses terminal width)."
     and+ height =
-      int_arg ~cmd:"filter" "height" ~default:0
+      Gum_flag.int_arg ~cmd:"filter" "height" ~default:0
         ~doc:"List height (zero uses terminal height)."
-    and+ value = string_arg ~cmd:"filter" "value" ~default:"" ~doc:"Initial filter value."
+    and+ value =
+      Gum_flag.string_arg ~cmd:"filter" "value" ~default:"" ~doc:"Initial filter value."
     and+ reverse =
       Gum_flag.flag ~cmd:"filter" ~doc:"Display matches from the bottom." "reverse"
     and+ fuzzy =
@@ -678,7 +657,7 @@ let cmd env =
     and+ strip_ansi =
       Gum_flag.negatable ~cmd:"filter" ~default:true ~doc:"Strip ANSI from stdin."
         "strip-ansi"
-    and+ padding = validated_padding_term ~cmd:"filter"
+    and+ padding = Gum_flag.validated_padding_term ~cmd:"filter" ()
     and+ indicator_style = indicator_style
     and+ selected_prefix_style = selected_prefix_style
     and+ unselected_prefix_style = unselected_prefix_style

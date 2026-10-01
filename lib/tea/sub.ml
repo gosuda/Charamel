@@ -10,6 +10,8 @@ type 'msg t =
   | Resize of (rows:int -> cols:int -> 'msg)
   | Every of float * (Mtime.t -> 'msg)
   | Terminal of (Event.t -> 'msg)
+  | Stream of 'msg Lwt_stream.t
+  | Resume of (unit -> 'msg)
 
 let none = None_
 let batch subs = Batch subs
@@ -22,3 +24,5 @@ let focus handler = Focus handler
 let resize handler = Resize handler
 let every seconds handler = Every (seconds, handler)
 let terminal handler = Terminal handler
+let stream source = Stream source
+let resume handler = Resume handler

@@ -14,13 +14,6 @@
   field_msg
   accessible
   field_impl
-  field_input
-  field_text
-  field_select
-  field_multiselect
-  field_confirm
-  field_note
-  field_file
   group
   layout
   form
@@ -31,16 +24,10 @@
   charamel.lipgloss
   charamel.tea
   charamel.bubbles
-  eio
-  eio.unix
+  charamel.os
+  lwt
+  lwt.unix
   fmt
   logs
-  unix)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  uucp
+  unix))

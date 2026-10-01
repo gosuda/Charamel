@@ -45,22 +45,16 @@ type error =
 (** [error] is an MCP transport or protocol failure. *)
 
 type t
-(** [t] is an MCP client attached to an Eio switch. *)
+(** [t] is an MCP client owning one connection fiber per configured server. *)
 
-val create :
-  sw:Eio.Switch.t ->
-  proc_mgr:Eio_unix.Process.mgr_ty Eio.Resource.t ->
-  net:Eio_unix.Net.t ->
-  clock:float Eio.Time.clock_ty Eio.Resource.t ->
-  cwd:string ->
-  config:Config.t ->
-  t
-(** [create ~sw ~proc_mgr ~net ~clock ~cwd ~config] starts one bounded connection fiber
-    per configured MCP server and waits concurrently for the ten-second readiness gate.
-    Ready servers are retained; failed or timed-out servers remain visible in [states]. *)
+val create : cwd:string -> config:Config.t -> t Lwt.t
+(** [create ~cwd ~config] starts one connection fiber per configured MCP server and waits
+    concurrently for the ten-second readiness gate. Ready servers are retained; failed or
+    timed-out servers remain visible in {!val:states}. *)
 
 val states : t -> (string * state) list
-(** [states t] is the current state of each configured server in config order. *)
+(** [states t] is the current state of each configured server in config order. This is a
+    synchronous view of the connection records and performs no I/O. *)
 
 val tools : t -> tool list
 (** [tools t] is the tools from every connected server. *)
@@ -74,17 +68,17 @@ val call :
   server:string ->
   tool:string ->
   input:Jsont.json ->
-  (content list * bool, error) result
+  (content list * bool, error) result Lwt.t
 (** [call t ~server ~tool ~input] invokes [tools/call] and returns its content and the
     server's [isError] flag. *)
 
-val resources : t -> server:string -> (resource list, error) result
+val resources : t -> server:string -> (resource list, error) result Lwt.t
 (** [resources t ~server] returns all resources, following [nextCursor]. *)
 
-val read_resource : t -> server:string -> uri:string -> (content list, error) result
+val read_resource : t -> server:string -> uri:string -> (content list, error) result Lwt.t
 (** [read_resource t ~server ~uri] invokes [resources/read] for [uri]. *)
 
-val prompts : t -> server:string -> (prompt list, error) result
+val prompts : t -> server:string -> (prompt list, error) result Lwt.t
 (** [prompts t ~server] returns all prompts, following [nextCursor]. *)
 
 val get_prompt :
@@ -92,13 +86,13 @@ val get_prompt :
   server:string ->
   name:string ->
   args:(string * string) list ->
-  (string, error) result
+  (string, error) result Lwt.t
 (** [get_prompt t ~server ~name ~args] invokes [prompts/get] and joins returned message
     text with a blank line. *)
 
-val close : t -> unit
-(** [close t] rejects pending calls, closes transports and terminates stdio children. It
-    is idempotent. *)
+val close : t -> unit Lwt.t
+(** [close t] rejects pending calls, stops the connection fibers, closes transports and
+    terminates stdio children. It is idempotent. *)
 
 val pp_error : error Fmt.t
 (** [pp_error] formats an MCP error. *)

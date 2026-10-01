@@ -1,6 +1,6 @@
 (** Gum command registry and executable entry point. *)
 
-val commands : (Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t) list
+val commands : (Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t) list
 (** [commands] are the fourteen visible gum subcommands; {!run} supplies each maker with
     the runtime environment. *)
 

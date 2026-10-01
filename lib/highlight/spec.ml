@@ -49,175 +49,188 @@ let make_spec ~names ?(keywords = []) ?(types = []) ?(builtins = []) ?(constants
     case_sensitive;
   }
 
-let seq = Re.seq
-let alt = Re.alt
-let str = Re.str
-let set = Re.set
-let rep = Re.rep
-let rep1 = Re.rep1
-let opt = Re.opt
 let not_chars chars = Re.diff Re.any (Re.set chars)
 
+let hex_literal ?suffix () =
+  Re.seq
+    ([ Re.str "0x"; Re.rep1 (Re.set "0123456789abcdefABCDEF") ]
+    @ match suffix with None -> [] | Some suffix -> [ Re.opt suffix ])
+
 let decimal =
-  seq
+  Re.seq
     [
-      set "0123456789";
-      rep (set "_0123456789");
-      opt (seq [ str "."; rep (set "_0123456789") ]);
-      opt (seq [ set "eE"; opt (set "+-"); set "0123456789"; rep (set "_0123456789") ]);
+      Re.set "0123456789";
+      Re.rep (Re.set "_0123456789");
+      Re.opt (Re.seq [ Re.str "."; Re.rep (Re.set "_0123456789") ]);
+      Re.opt
+        (Re.seq
+           [
+             Re.set "eE";
+             Re.opt (Re.set "+-");
+             Re.set "0123456789";
+             Re.rep (Re.set "_0123456789");
+           ]);
     ]
 
-let decimal_signed = seq [ opt (set "+-"); decimal ]
+let decimal_signed = Re.seq [ Re.opt (Re.set "+-"); decimal ]
 
 let float_number =
-  alt
+  Re.alt
     [
-      seq
+      Re.seq
         [
-          set "0123456789";
-          rep (set "_0123456789");
-          str ".";
-          rep (set "_0123456789");
-          opt (seq [ set "eE"; opt (set "+-"); rep1 (set "_0123456789") ]);
+          Re.set "0123456789";
+          Re.rep (Re.set "_0123456789");
+          Re.str ".";
+          Re.rep (Re.set "_0123456789");
+          Re.opt
+            (Re.seq [ Re.set "eE"; Re.opt (Re.set "+-"); Re.rep1 (Re.set "_0123456789") ]);
         ];
       decimal;
     ]
 
-let integer_number = seq [ set "0123456789"; rep (set "_0123456789") ]
+let integer_number = Re.seq [ Re.set "0123456789"; Re.rep (Re.set "_0123456789") ]
 
 let c_number =
-  alt
+  Re.alt
     [
-      seq [ str "0x"; rep1 (set "_0123456789abcdefABCDEF"); opt (set "uUlL") ];
-      seq [ str "0X"; rep1 (set "_0123456789abcdefABCDEF"); opt (set "uUlL") ];
-      seq [ str "0b"; rep1 (set "_01"); opt (set "uUlL") ];
-      seq [ str "0B"; rep1 (set "_01"); opt (set "uUlL") ];
-      seq [ str "0o"; rep1 (set "_01234567"); opt (set "uUlL") ];
-      seq [ str "0O"; rep1 (set "_01234567"); opt (set "uUlL") ];
-      seq [ decimal; opt (set "fFlLuU") ];
+      Re.seq
+        [
+          Re.str "0x"; Re.rep1 (Re.set "_0123456789abcdefABCDEF"); Re.opt (Re.set "uUlL");
+        ];
+      Re.seq
+        [
+          Re.str "0X"; Re.rep1 (Re.set "_0123456789abcdefABCDEF"); Re.opt (Re.set "uUlL");
+        ];
+      Re.seq [ Re.str "0b"; Re.rep1 (Re.set "_01"); Re.opt (Re.set "uUlL") ];
+      Re.seq [ Re.str "0B"; Re.rep1 (Re.set "_01"); Re.opt (Re.set "uUlL") ];
+      Re.seq [ Re.str "0o"; Re.rep1 (Re.set "_01234567"); Re.opt (Re.set "uUlL") ];
+      Re.seq [ Re.str "0O"; Re.rep1 (Re.set "_01234567"); Re.opt (Re.set "uUlL") ];
+      Re.seq [ decimal; Re.opt (Re.set "fFlLuU") ];
     ]
 
 let python_number =
-  alt
+  Re.alt
     [
-      seq [ str "0x"; rep1 (set "_0123456789abcdefABCDEF") ];
-      seq [ str "0X"; rep1 (set "_0123456789abcdefABCDEF") ];
-      seq [ str "0o"; rep1 (set "_01234567") ];
-      seq [ str "0O"; rep1 (set "_01234567") ];
-      seq [ str "0b"; rep1 (set "_01") ];
-      seq [ str "0B"; rep1 (set "_01") ];
-      seq [ float_number; opt (set "jJ") ];
-      seq [ integer_number; opt (set "jJ") ];
+      Re.seq [ Re.str "0x"; Re.rep1 (Re.set "_0123456789abcdefABCDEF") ];
+      Re.seq [ Re.str "0X"; Re.rep1 (Re.set "_0123456789abcdefABCDEF") ];
+      Re.seq [ Re.str "0o"; Re.rep1 (Re.set "_01234567") ];
+      Re.seq [ Re.str "0O"; Re.rep1 (Re.set "_01234567") ];
+      Re.seq [ Re.str "0b"; Re.rep1 (Re.set "_01") ];
+      Re.seq [ Re.str "0B"; Re.rep1 (Re.set "_01") ];
+      Re.seq [ float_number; Re.opt (Re.set "jJ") ];
+      Re.seq [ integer_number; Re.opt (Re.set "jJ") ];
     ]
 
 let rust_number =
-  alt
+  Re.alt
     [
-      seq
+      Re.seq
         [
-          str "0x";
-          rep1 (set "_0123456789abcdefABCDEF");
-          opt
-            (alt
+          Re.str "0x";
+          Re.rep1 (Re.set "_0123456789abcdefABCDEF");
+          Re.opt
+            (Re.alt
                [
-                 str "u8";
-                 str "u16";
-                 str "u32";
-                 str "u64";
-                 str "u128";
-                 str "usize";
-                 str "i8";
-                 str "i16";
-                 str "i32";
-                 str "i64";
-                 str "i128";
-                 str "isize";
+                 Re.str "u8";
+                 Re.str "u16";
+                 Re.str "u32";
+                 Re.str "u64";
+                 Re.str "u128";
+                 Re.str "usize";
+                 Re.str "i8";
+                 Re.str "i16";
+                 Re.str "i32";
+                 Re.str "i64";
+                 Re.str "i128";
+                 Re.str "isize";
                ]);
         ];
-      seq [ str "0o"; rep1 (set "_01234567") ];
-      seq [ str "0b"; rep1 (set "_01") ];
-      seq [ float_number; opt (alt [ str "f32"; str "f64" ]) ];
-      seq
+      Re.seq [ Re.str "0o"; Re.rep1 (Re.set "_01234567") ];
+      Re.seq [ Re.str "0b"; Re.rep1 (Re.set "_01") ];
+      Re.seq [ float_number; Re.opt (Re.alt [ Re.str "f32"; Re.str "f64" ]) ];
+      Re.seq
         [
           integer_number;
-          opt
-            (alt
+          Re.opt
+            (Re.alt
                [
-                 str "u8";
-                 str "u16";
-                 str "u32";
-                 str "u64";
-                 str "u128";
-                 str "usize";
-                 str "i8";
-                 str "i16";
-                 str "i32";
-                 str "i64";
-                 str "i128";
-                 str "isize";
+                 Re.str "u8";
+                 Re.str "u16";
+                 Re.str "u32";
+                 Re.str "u64";
+                 Re.str "u128";
+                 Re.str "usize";
+                 Re.str "i8";
+                 Re.str "i16";
+                 Re.str "i32";
+                 Re.str "i64";
+                 Re.str "i128";
+                 Re.str "isize";
                ]);
         ];
     ]
 
 let json_number =
-  seq
+  Re.seq
     [
-      opt (set "-");
-      alt [ str "0"; seq [ set "123456789"; rep (set "0123456789") ] ];
-      opt (seq [ str "."; rep1 (set "0123456789") ]);
-      opt (seq [ set "eE"; opt (set "+-"); rep1 (set "0123456789") ]);
+      Re.opt (Re.set "-");
+      Re.alt [ Re.str "0"; Re.seq [ Re.set "123456789"; Re.rep (Re.set "0123456789") ] ];
+      Re.opt (Re.seq [ Re.str "."; Re.rep1 (Re.set "0123456789") ]);
+      Re.opt (Re.seq [ Re.set "eE"; Re.opt (Re.set "+-"); Re.rep1 (Re.set "0123456789") ]);
     ]
 
 let css_number =
-  alt
+  Re.alt
     [
-      seq [ str "#"; rep1 (set "0123456789abcdefABCDEF") ];
-      seq
+      Re.seq [ Re.str "#"; Re.rep1 (Re.set "0123456789abcdefABCDEF") ];
+      Re.seq
         [
           decimal;
-          opt
-            (alt
+          Re.opt
+            (Re.alt
                [
-                 str "vmin";
-                 str "vmax";
-                 str "rem";
-                 str "px";
-                 str "em";
-                 str "ex";
-                 str "ch";
-                 str "vw";
-                 str "vh";
-                 str "cm";
-                 str "mm";
-                 str "in";
-                 str "pt";
-                 str "pc";
-                 str "deg";
-                 str "grad";
-                 str "rad";
-                 str "turn";
-                 str "Hz";
-                 str "kHz";
-                 str "ms";
-                 str "s";
-                 str "%";
+                 Re.str "vmin";
+                 Re.str "vmax";
+                 Re.str "rem";
+                 Re.str "px";
+                 Re.str "em";
+                 Re.str "ex";
+                 Re.str "ch";
+                 Re.str "vw";
+                 Re.str "vh";
+                 Re.str "cm";
+                 Re.str "mm";
+                 Re.str "in";
+                 Re.str "pt";
+                 Re.str "pc";
+                 Re.str "deg";
+                 Re.str "grad";
+                 Re.str "rad";
+                 Re.str "turn";
+                 Re.str "Hz";
+                 Re.str "kHz";
+                 Re.str "ms";
+                 Re.str "s";
+                 Re.str "%";
                ]);
         ];
     ]
 
-let ident = set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_"
-let ident_tail = set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
-let identifier = seq [ ident; rep ident_tail ]
+let ident = Re.set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_"
+let ident_tail = Re.set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+let identifier = Re.seq [ ident; Re.rep ident_tail ]
 
 let identifier_dash =
-  seq
+  Re.seq
     [
-      ident; rep (set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-");
+      ident;
+      Re.rep (Re.set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-");
     ]
 
 let identifier_dollar =
-  seq
+  Re.seq
     [
-      set "$ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
-      rep (set "$ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_");
+      Re.set "$ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+      Re.rep (Re.set "$ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_");
     ]

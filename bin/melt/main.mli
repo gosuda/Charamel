@@ -17,13 +17,14 @@ type error =
 val pp_error : error Fmt.t
 (** [pp_error ppf error] renders the user-facing diagnostic for [error]. *)
 
-val backup : fs:_ Eio.Fs.dir -> path:string -> (string list, error) result
-(** [backup ~fs ~path] reads the unencrypted OpenSSH private key at [path] and returns its
-    24-word Ed25519 seed phrase. [path] may be relative to the current directory or start
+val backup : fs_root:string -> path:string -> (string list, error) result Lwt.t
+(** [backup ~fs_root ~path] reads the unencrypted OpenSSH private key at [path] and
+    returns its 24-word Ed25519 seed phrase. [path] may be relative to [fs_root] or start
     with [~]. A non-Ed25519 key is rejected, and no file is written. *)
 
-val restore : fs:_ Eio.Fs.dir -> words:string -> output:string -> (unit, error) result
-(** [restore ~fs ~words ~output] decodes the whitespace-separated 24-word phrase [words],
-    reconstructs its Ed25519 key pair, and writes it at [output] and [output ^ ".pub"].
-    [output] may be relative to the current directory or start with [~]. Existing files
-    are never replaced. *)
+val restore :
+  fs_root:string -> words:string -> output:string -> (unit, error) result Lwt.t
+(** [restore ~fs_root ~words ~output] decodes the whitespace-separated 24-word phrase
+    [words], reconstructs its Ed25519 key pair, and writes it at [output] and
+    [output ^ ".pub"]. [output] may be relative to [fs_root] or start with [~]. Existing
+    files are never replaced. *)

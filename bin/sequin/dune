@@ -2,15 +2,7 @@
  (name sequin_core)
  (modules explain)
  (wrapped true)
- (libraries charamel.ansi fmt)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+ (libraries charamel.ansi fmt))
 
 (executable
  (name main)
@@ -21,16 +13,8 @@
   sequin_core
   charamel.ansi
   charamel.cli
-  eio
-  eio.unix
-  eio_main
+  lwt
+  lwt.unix
+  unix
   cmdliner
-  fmt)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  fmt))

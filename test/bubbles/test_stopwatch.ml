@@ -22,6 +22,6 @@ let toggle_and_view () =
 
 let cases =
   [
-    Alcotest.test_case "start stop reset" `Quick start_stop_reset;
-    Alcotest.test_case "toggle and view" `Quick toggle_and_view;
+    Alcotest_lwt.test_case_sync "start stop reset" `Quick start_stop_reset;
+    Alcotest_lwt.test_case_sync "toggle and view" `Quick toggle_and_view;
   ]

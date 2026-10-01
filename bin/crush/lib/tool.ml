@@ -1,4 +1,4 @@
-type diagnostic = Lsp.diagnostic
+open Lwt_direct
 
 type question = {
   header : string;
@@ -11,11 +11,8 @@ type question = {
 type answer = { header : string; selected : string list; text : string option }
 
 type ctx = {
-  sw : Eio.Switch.t;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
-  fs : Eio.Fs.dir_ty Eio.Path.t;
-  net : Eio_unix.Net.t;
-  proc_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
+  clock : Charamel_os.Time.clock;
+  fs_root : string;
   random : int -> string;
   env : string -> string option;
   cwd : string;
@@ -37,6 +34,8 @@ type ctx = {
   run_subagent : (prompt:string -> (string, string) result) option;
   read_tracker : (string, int) Hashtbl.t;
 }
+
+type diagnostic = Lsp.diagnostic
 
 type output = {
   content : string;
@@ -105,31 +104,6 @@ let decode codec value =
   | Ok decoded -> Ok decoded
   | Error message -> Error (`Invalid_input message)
 
-let split_components path =
-  String.split_on_char '/' path |> List.filter (fun part -> part <> "")
-
-let normalize_path path =
-  let is_absolute = String.length path > 0 && path.[0] = '/' in
-  let components = split_components path in
-  let stack = ref [] in
-  List.iter
-    (fun component ->
-      match component with
-      | "." -> ()
-      | ".." -> (
-          match !stack with
-          | top :: rest when top <> ".." -> stack := rest
-          | _ when not is_absolute -> stack := ".." :: !stack
-          | _ -> ())
-      | value -> stack := value :: !stack)
-    components;
-  let body = String.concat "/" (List.rev !stack) in
-  match (is_absolute, body = "") with
-  | true, true -> "/"
-  | true, false -> "/" ^ body
-  | false, true -> "."
-  | false, false -> body
-
 let home_dir ctx =
   match ctx.env "HOME" with Some home when home <> "" -> home | _ -> ctx.cwd
 
@@ -140,47 +114,25 @@ let absolute ctx path =
       Filename.concat (home_dir ctx) (String.sub path 2 (String.length path - 2))
     else path
   in
-  let path =
-    if String.length path > 0 && path.[0] = '/' then path
-    else Filename.concat ctx.cwd path
-  in
-  normalize_path path
-
-let component_prefix root path =
-  let root = normalize_path root in
-  let path = normalize_path path in
-  root = "/" || path = root
-  || String.length path > String.length root
-     && String.starts_with ~prefix:(root ^ "/") path
-
-let within_cwd ctx path = component_prefix ctx.cwd (absolute ctx path)
+  Path.normalize ~cwd:ctx.cwd path
 
 let unix_error path operation exception_ =
   match exception_ with
-  | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Error (`Not_found path)
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (`Io
-           ( path,
-             Fmt.str "%s: %s (%s %s)" operation (Unix.error_message error) function_name
-               argument ))
-  | Sys_error message -> Error (`Io (path, Fmt.str "%s: %s" operation message))
+  | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) | Charamel_os.Fs.E (`Not_found, _)
+    ->
+      Error (`Not_found path)
+  | (Unix.Unix_error _ | Charamel_os.Fs.E _ | Sys_error _) as exn ->
+      Error (`Io (path, Fmt.str "%s: %s" operation (Io.message exn)))
   | Invalid_argument message ->
       Error (`Invalid_input (Fmt.str "%s: %s" operation message))
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found path)
-  | Eio.Io (Eio.Fs.E _, _) as exception_ ->
-      Error (`Io (path, Fmt.str "%s: %a" operation Eio.Exn.pp exception_))
-  | Eio.Io _ as exception_ ->
-      Error (`Io (path, Fmt.str "%s: %a" operation Eio.Exn.pp exception_))
   | exception_ -> Printexc.raise_with_backtrace exception_ (Printexc.get_raw_backtrace ())
 
 let canonical ctx path =
   let path = absolute ctx path in
-  try Ok (Eio_unix.run_in_systhread (fun () -> Unix.realpath path)) with
+  try Ok (await (Lwt_preemptive.detach Unix.realpath path)) with
   | Unix.Unix_error _ as exception_ -> unix_error path "realpath" exception_
   | Sys_error _ as exception_ -> unix_error path "realpath" exception_
   | Invalid_argument _ as exception_ -> unix_error path "realpath" exception_
-  | Eio.Io _ as exception_ -> unix_error path "realpath" exception_
 
 let canonical_parent ctx path =
   let path = absolute ctx path in
@@ -196,6 +148,22 @@ let canonical_parent ctx path =
         | Ok resolved_parent -> Ok (Filename.concat resolved_parent base))
   | Error error -> Error error
 
+let canonical_or_abs ctx path =
+  let absolute = absolute ctx path in
+  match canonical ctx absolute with
+  | Error (`Not_found _) -> Ok absolute
+  | result -> result
+
+let request_path ctx path =
+  let absolute = absolute ctx path in
+  match canonical ctx absolute with Ok target -> target | Error _ -> absolute
+
+let truncate ?(diagnostics = []) ctx text =
+  let content, artifact =
+    await (Artifact.truncate ctx.artifacts ~random:ctx.random text)
+  in
+  ok ?artifact ~diagnostics content
+
 let request ctx ~read_only ~tool ~action ~path ~description =
   let request : Permission.request =
     { session = ctx.session; tool; action; path; description; read_only }
@@ -203,13 +171,6 @@ let request ctx ~read_only ~tool ~action ~path ~description =
   match Permission.resolve ctx.permission request with
   | Permission.Allowed -> Ok ()
   | Permission.Denied message -> Error (`Denied message)
-
-let with_timeout ctx seconds f =
-  if seconds < 0. then Error (`Invalid_input "timeout must not be negative")
-  else
-    match Eio.Time.with_timeout ctx.clock seconds (fun () -> Ok (f ())) with
-    | Ok value -> Ok value
-    | Error `Timeout -> Error (`Timeout seconds)
 
 let json_member name value = Jsont.Json.mem (Jsont.Json.name name) value
 let json_string value = Jsont.Json.string value

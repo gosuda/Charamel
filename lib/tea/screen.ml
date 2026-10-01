@@ -1,44 +1,9 @@
-type cell = {
-  text : string;
-  width : int;
-  style : Charamel_ansi.Style.t;
-  link : Charamel_ansi.Link.t option;
-  cont : bool;
-}
-
-let link_equal a b =
-  match (a, b) with
-  | None, None -> true
-  | Some (x : Charamel_ansi.Link.t), Some (y : Charamel_ansi.Link.t) ->
-      String.equal x.Charamel_ansi.Link.url y.Charamel_ansi.Link.url
-      && x.Charamel_ansi.Link.params = y.Charamel_ansi.Link.params
-  | _ -> false
-
-let cell_equal a b =
-  a.width = b.width && a.cont = b.cont && String.equal a.text b.text
-  && Charamel_ansi.Style.equal a.style b.style
-  && link_equal a.link b.link
-
-let blank_cell =
-  {
-    text = " ";
-    width = 1;
-    style = Charamel_ansi.Style.default;
-    link = None;
-    cont = false;
-  }
-
-let is_blank c = cell_equal c blank_cell
-
-let last_nonblank line =
-  let rec loop i = if i < 0 then -1 else if is_blank line.(i) then loop (i - 1) else i in
-  loop (Array.length line - 1)
+open Charamel_ansi.Raster
 
 let first_diff old_line new_line n =
   let rec loop i =
     if i >= n then None
-    else if i < Array.length old_line && cell_equal old_line.(i) new_line.(i) then
-      loop (i + 1)
+    else if i < Array.length old_line && equal old_line.(i) new_line.(i) then loop (i + 1)
     else Some i
   in
   loop 0
@@ -57,235 +22,6 @@ let line_bounds ~force old_line new_line =
         let last = if last < n - 1 && new_line.(last).cont then last + 1 else last in
         (first, last, clear_tail))
       (if force then Some 0 else first_diff old_line new_line n)
-
-let color_value = function Some n -> n | None -> 0
-
-let underline_of = function
-  | [] | [ None ] | [ Some 1 ] -> Charamel_ansi.Style.Single
-  | [ Some 0 ] -> Charamel_ansi.Style.No_underline
-  | [ Some 2 ] -> Charamel_ansi.Style.Double
-  | [ Some 3 ] -> Charamel_ansi.Style.Curly
-  | [ Some 4 ] -> Charamel_ansi.Style.Dotted
-  | [ Some 5 ] -> Charamel_ansi.Style.Dashed
-  | _ -> Charamel_ansi.Style.Single
-
-let extended_color subs rest =
-  let values, rest =
-    if subs <> [] then (subs, rest)
-    else
-      match rest with
-      | [ Some 5 ] :: index :: more -> ([ Some 5 ] @ index, more)
-      | [ Some 2 ] :: r :: g :: b :: more -> ([ Some 2 ] @ r @ g @ b, more)
-      | _ -> ([], rest)
-  in
-  let color =
-    match values with
-    | Some 5 :: index :: _ -> (
-        match Charamel_ansi.Color.indexed (color_value index) with
-        | Some color -> color
-        | None -> Charamel_ansi.Color.Default)
-    | Some 2 :: _colorspace :: r :: g :: b :: _ -> (
-        match Charamel_ansi.Color.rgb (color_value r) (color_value g) (color_value b) with
-        | Some color -> color
-        | None -> Charamel_ansi.Color.Default)
-    | Some 2 :: r :: g :: b :: _ -> (
-        match Charamel_ansi.Color.rgb (color_value r) (color_value g) (color_value b) with
-        | Some color -> color
-        | None -> Charamel_ansi.Color.Default)
-    | _ -> Charamel_ansi.Color.Default
-  in
-  (color, rest)
-
-let rec apply_sgr (style : Charamel_ansi.Style.t) params =
-  match params with
-  | [] -> style
-  | parameter :: rest -> (
-      match parameter with
-      | [] | [ None ] | [ Some 0 ] -> apply_sgr Charamel_ansi.Style.default rest
-      | [ Some 1 ] -> apply_sgr { style with bold = true } rest
-      | [ Some 2 ] -> apply_sgr { style with faint = true } rest
-      | [ Some 3 ] -> apply_sgr { style with italic = true } rest
-      | Some 4 :: subparameters ->
-          apply_sgr { style with underline = underline_of subparameters } rest
-      | [ Some 5 ] | [ Some 6 ] -> apply_sgr { style with blink = true } rest
-      | [ Some 7 ] -> apply_sgr { style with reverse = true } rest
-      | [ Some 8 ] -> apply_sgr { style with conceal = true } rest
-      | [ Some 9 ] -> apply_sgr { style with strike = true } rest
-      | [ Some 22 ] -> apply_sgr { style with bold = false; faint = false } rest
-      | [ Some 23 ] -> apply_sgr { style with italic = false } rest
-      | [ Some 24 ] ->
-          apply_sgr { style with underline = Charamel_ansi.Style.No_underline } rest
-      | [ Some 25 ] -> apply_sgr { style with blink = false } rest
-      | [ Some 27 ] -> apply_sgr { style with reverse = false } rest
-      | [ Some 28 ] -> apply_sgr { style with conceal = false } rest
-      | [ Some 29 ] -> apply_sgr { style with strike = false } rest
-      | Some 38 :: subparameters ->
-          let color, rest = extended_color subparameters rest in
-          apply_sgr { style with fg = color } rest
-      | [ Some 39 ] -> apply_sgr { style with fg = Charamel_ansi.Color.Default } rest
-      | Some 48 :: subparameters ->
-          let color, rest = extended_color subparameters rest in
-          apply_sgr { style with bg = color } rest
-      | [ Some 49 ] -> apply_sgr { style with bg = Charamel_ansi.Color.Default } rest
-      | Some 58 :: subparameters ->
-          let color, rest = extended_color subparameters rest in
-          apply_sgr { style with underline_color = color } rest
-      | [ Some 59 ] ->
-          apply_sgr { style with underline_color = Charamel_ansi.Color.Default } rest
-      | [ Some n ] when n >= 30 && n <= 37 ->
-          apply_sgr { style with fg = Charamel_ansi.Color.Basic (n - 30) } rest
-      | [ Some n ] when n >= 40 && n <= 47 ->
-          apply_sgr { style with bg = Charamel_ansi.Color.Basic (n - 40) } rest
-      | [ Some n ] when n >= 90 && n <= 97 ->
-          apply_sgr { style with fg = Charamel_ansi.Color.Basic (n - 90 + 8) } rest
-      | [ Some n ] when n >= 100 && n <= 107 ->
-          apply_sgr { style with bg = Charamel_ansi.Color.Basic (n - 100 + 8) } rest
-      | _ -> apply_sgr style rest)
-
-let valid_parameter s =
-  let len = String.length s in
-  let rec loop i =
-    if i >= len then true
-    else
-      let decoded = String.get_utf_8_uchar s i in
-      if not (Uchar.utf_decode_is_valid decoded) then false
-      else
-        let scalar = Uchar.to_int (Uchar.utf_decode_uchar decoded) in
-        scalar <> 0x07 && scalar <> 0x1b
-        && (scalar < 0x80 || scalar > 0x9f)
-        && loop (i + Uchar.utf_decode_length decoded)
-  in
-  loop 0
-
-let parse_link_params s =
-  if s = "" then []
-  else
-    String.split_on_char ':' s
-    |> List.filter_map (fun field ->
-        Option.bind (String.index_opt field '=') (fun index ->
-            let key = String.sub field 0 index in
-            let value = String.sub field (index + 1) (String.length field - index - 1) in
-            if
-              key <> ""
-              && (not (String.contains key ';'))
-              && (not (String.contains key ':'))
-              && (not (String.contains value ':'))
-              && (not (String.contains value ';'))
-              && valid_parameter key && valid_parameter value
-            then Some (key, value)
-            else None))
-
-let layout ~cols ~max_rows content =
-  if cols <= 0 || max_rows <= 0 then [||]
-  else begin
-    let rows = Dynarray.create () in
-    let current = ref (Array.make cols blank_cell) in
-    let column = ref 0 in
-    let style = ref Charamel_ansi.Style.default in
-    let link = ref None in
-    let full = ref false in
-    let finish_line () =
-      if not !full then begin
-        Dynarray.add_last rows !current;
-        if Dynarray.length rows >= max_rows then full := true
-      end;
-      current := Array.make cols blank_cell;
-      column := 0
-    in
-    let append_zero_width text =
-      if !column > 0 then begin
-        let index = ref (!column - 1) in
-        if !current.(!index).cont then decr index;
-        let previous = !current.(!index) in
-        !current.(!index) <- { previous with text = previous.text ^ text }
-      end
-    in
-    let clear_overlap width =
-      if !column < cols && !current.(!column).cont then begin
-        !current.(!column) <- blank_cell;
-        !current.(!column - 1) <- blank_cell
-      end
-      else if width = 1 && !column + 1 < cols && !current.(!column + 1).cont then
-        !current.(!column + 1) <- blank_cell
-    in
-    let rec put text width =
-      if !full then ()
-      else if width = 0 then append_zero_width text
-      else if width > cols then ()
-      else if !column + width > cols then begin
-        finish_line ();
-        put text width
-      end
-      else begin
-        clear_overlap width;
-        let cell = { text; width; style = !style; link = !link; cont = false } in
-        !current.(!column) <- cell;
-        if width = 2 then !current.(!column + 1) <- { cell with text = ""; cont = true };
-        column := !column + width
-      end
-    in
-    let tab () = column := min cols (((!column / 8) + 1) * 8) in
-    let pending = Buffer.create 16 in
-    let flush_print () =
-      if Buffer.length pending > 0 then begin
-        let text = Buffer.contents pending in
-        Buffer.clear pending;
-        List.iter
-          (fun grapheme -> put grapheme (Charamel_ansi.Width.grapheme_width grapheme))
-          (Charamel_ansi.Width.graphemes text)
-      end
-    in
-    let handle action =
-      match action with
-      | Charamel_ansi.Parser.Print text -> Buffer.add_string pending text
-      | Charamel_ansi.Parser.Execute '\n' ->
-          flush_print ();
-          finish_line ()
-      | Charamel_ansi.Parser.Execute '\r' ->
-          flush_print ();
-          column := 0
-      | Charamel_ansi.Parser.Execute '\t' ->
-          flush_print ();
-          tab ()
-      | Charamel_ansi.Parser.Execute '\b' ->
-          flush_print ();
-          column := max 0 (!column - 1)
-      | Charamel_ansi.Parser.Execute _ -> flush_print ()
-      | Charamel_ansi.Parser.Csi { final = 'm'; params = []; _ } ->
-          flush_print ();
-          style := apply_sgr !style [ [ Some 0 ] ]
-      | Charamel_ansi.Parser.Csi { final = 'm'; params; _ } ->
-          flush_print ();
-          style := apply_sgr !style params
-      | Charamel_ansi.Parser.Csi _ -> flush_print ()
-      | Charamel_ansi.Parser.Osc ("8" :: parameters :: rest) ->
-          flush_print ();
-          let uri = String.concat ";" rest in
-          link :=
-            if uri = "" || not (valid_parameter uri) then None
-            else
-              Some { Charamel_ansi.Link.url = uri; params = parse_link_params parameters }
-      | Charamel_ansi.Parser.Osc _ -> flush_print ()
-      | Charamel_ansi.Parser.Esc _ | Charamel_ansi.Parser.Dcs _
-      | Charamel_ansi.Parser.Apc _ | Charamel_ansi.Parser.Pm _
-      | Charamel_ansi.Parser.Sos _ ->
-          flush_print ()
-    in
-    let parser = Charamel_ansi.Parser.create () in
-    List.iter handle (Charamel_ansi.Parser.feed parser content);
-    List.iter handle (Charamel_ansi.Parser.flush parser);
-    flush_print ();
-    finish_line ();
-    Dynarray.to_array rows
-  end
-
-let pad_rows grid rows cols =
-  if rows <= 0 then [||]
-  else
-    let have = Array.length grid in
-    if have >= rows then Array.sub grid 0 rows
-    else
-      Array.append grid (Array.init (rows - have) (fun _ -> Array.make cols blank_cell))
 
 let mouse_modes = function
   | View.Mouse_off -> []
@@ -333,6 +69,12 @@ let applied_color = function
   | Some (Charamel_ansi.Color.Rgb _) as color -> color
   | _ -> None
 
+let snap_off_continuation grid row col =
+  if row < 0 || row >= Array.length grid then col
+  else
+    let line = grid.(row) in
+    if col > 0 && col < Array.length line && line.(col).cont then col - 1 else col
+
 let clamp_pct n = max 0 (min 100 n)
 
 let progress_osc = function
@@ -360,6 +102,7 @@ type t = {
   mutable focus : bool;
   mutable cursor_visible : bool;
   mutable cursor_shape_code : int;
+  mutable cursor_color : Charamel_ansi.Color.t option;
   mutable title : string option;
   mutable bg : Charamel_ansi.Color.t option;
   mutable fg : Charamel_ansi.Color.t option;
@@ -389,6 +132,7 @@ let create ~rows ~cols =
     focus = false;
     cursor_visible = true;
     cursor_shape_code = 1;
+    cursor_color = None;
     title = None;
     bg = None;
     fg = None;
@@ -425,6 +169,7 @@ let reset t =
   t.focus <- false;
   t.cursor_visible <- true;
   t.cursor_shape_code <- 1;
+  t.cursor_color <- None;
   t.title <- None;
   t.bg <- None;
   t.fg <- None;
@@ -467,12 +212,14 @@ let render_alt t buf (view : View.t) =
     reset_pen buf t;
     Buffer.add_string buf (Charamel_ansi.Seq.ed `All);
     Buffer.add_string buf (Charamel_ansi.Seq.cup ~row:1 ~col:1);
-    t.alt_grid <- Array.init t.rows (fun _ -> Array.make t.cols blank_cell);
+    t.alt_grid <- Array.init t.rows (fun _ -> Array.make t.cols blank);
     t.alt_needs_clear <- false;
     t.alt_pos <- Some (0, 0)
   end;
   let new_grid =
-    pad_rows (layout ~cols:t.cols ~max_rows:t.rows view.View.content) t.rows t.cols
+    pad_rows
+      (layout ~width:t.cols ~max_rows:t.rows view.View.content)
+      ~rows:t.rows ~width:t.cols
   in
   let emitted_style = ref t.emitted_style and link_open = ref t.link_open in
   let goto row col =
@@ -485,7 +232,7 @@ let render_alt t buf (view : View.t) =
     for row = 0 to min (t.rows - 1) (Array.length new_grid - 1) do
       let old_line =
         if row < Array.length t.alt_grid then t.alt_grid.(row)
-        else Array.make t.cols blank_cell
+        else Array.make t.cols blank
       in
       match line_bounds ~force:false old_line new_grid.(row) with
       | None -> ()
@@ -512,6 +259,7 @@ let render_alt t buf (view : View.t) =
   | Some cursor ->
       let row = if t.rows <= 0 then 0 else max 0 (min cursor.Cursor.row (t.rows - 1)) in
       let col = if t.cols <= 0 then 0 else max 0 (min cursor.Cursor.col (t.cols - 1)) in
+      let col = snap_off_continuation new_grid row col in
       if t.alt_pos <> Some (row, col) then begin
         Buffer.add_string buf (Charamel_ansi.Seq.cup ~row:(row + 1) ~col:(col + 1));
         t.alt_pos <- Some (row, col)
@@ -535,7 +283,7 @@ let move_inline buf ~from_row ~from_col ~to_row ~to_col =
   else if to_col < !col then Buffer.add_string buf (Charamel_ansi.Seq.cub (!col - to_col))
 
 let render_inline t buf (view : View.t) =
-  let new_window = layout ~cols:t.cols ~max_rows:t.rows view.View.content in
+  let new_window = layout ~width:t.cols ~max_rows:t.rows view.View.content in
   let h_new = Array.length new_window in
   let h_prev = t.h_prev in
   let old_window = t.inline_grid in
@@ -552,11 +300,9 @@ let render_inline t buf (view : View.t) =
   for row = 0 to max h_new h_prev - 1 do
     let old_line =
       if row < h_prev && row < Array.length old_window then old_window.(row)
-      else Array.make t.cols blank_cell
+      else Array.make t.cols blank
     in
-    let new_line =
-      if row < h_new then new_window.(row) else Array.make t.cols blank_cell
-    in
+    let new_line = if row < h_new then new_window.(row) else Array.make t.cols blank in
     match line_bounds ~force:t.inline_poison old_line new_line with
     | None -> ()
     | Some (lo, hi, clear_tail) ->
@@ -578,6 +324,7 @@ let render_inline t buf (view : View.t) =
   | Some cursor ->
       let row = if h_new <= 0 then 0 else max 0 (min cursor.Cursor.row (h_new - 1)) in
       let col = if t.cols <= 0 then 0 else max 0 (min cursor.Cursor.col (t.cols - 1)) in
+      let col = snap_off_continuation new_window row col in
       goto row col
   | None ->
       if h_new > 0 then begin
@@ -638,14 +385,26 @@ let cursor_visibility_and_shape buf t (cursor : Cursor.t option) =
          Charamel_ansi.Seq.cursor_visible);
     t.cursor_visible <- visible
   end;
-  match cursor with
+  (match cursor with
   | None -> ()
   | Some cursor ->
       let code = cursor_style_code cursor in
       if code <> t.cursor_shape_code then begin
         Buffer.add_string buf (if code = 1 then "\x1b[0 q" else Fmt.str "\x1b[%d q" code);
         t.cursor_shape_code <- code
-      end
+      end);
+  let target_color =
+    match cursor with Some cursor -> applied_color cursor.Cursor.color | None -> None
+  in
+  if not (Option.equal Charamel_ansi.Color.equal target_color t.cursor_color) then begin
+    (match target_color with
+    | Some color -> (
+        match hex_of_color color with
+        | Some hex -> Buffer.add_string buf (Fmt.str "\x1b]12;%s\x1b\\" hex)
+        | None -> ())
+    | None -> Buffer.add_string buf "\x1b]112\x1b\\");
+    t.cursor_color <- target_color
+  end
 
 let render t (view : View.t) =
   let buf = Buffer.create 256 in
@@ -666,7 +425,7 @@ let render t (view : View.t) =
   else if entering_alt then begin
     Buffer.add_string buf (Charamel_ansi.Seq.decset Charamel_ansi.Seq.alt_screen);
     t.alt <- true;
-    t.alt_grid <- Array.init t.rows (fun _ -> Array.make t.cols blank_cell);
+    t.alt_grid <- Array.init t.rows (fun _ -> Array.make t.cols blank);
     t.alt_needs_clear <- true;
     t.alt_pos <- Some (0, 0);
     apply_kitty buf t target_kflags
@@ -734,6 +493,18 @@ let render t (view : View.t) =
     ^ Buffer.contents buf
     ^ Charamel_ansi.Seq.decrst Charamel_ansi.Seq.sync_output
 
+let move_to_anchor t anchor =
+  match anchor with
+  | `Column_start ->
+      t.inline_pos <- (fst t.inline_pos, 0);
+      "\r"
+  | `Fresh_line ->
+      t.inline_grid <- [||];
+      t.h_prev <- 0;
+      t.inline_poison <- true;
+      t.inline_pos <- (0, 0);
+      "\r\n"
+
 let clear t =
   if t.alt || t.h_prev = 0 then ""
   else begin
@@ -775,6 +546,9 @@ let restore t =
   | None -> ());
   (match t.bg with Some _ -> Buffer.add_string buf "\x1b]111\x07" | None -> ());
   (match t.fg with Some _ -> Buffer.add_string buf "\x1b]110\x07" | None -> ());
+  (match t.cursor_color with
+  | Some _ -> Buffer.add_string buf "\x1b]112\x1b\\"
+  | None -> ());
   if t.progress <> View.Progress_none then
     Buffer.add_string buf (progress_osc View.Progress_none);
   (match t.link_open with

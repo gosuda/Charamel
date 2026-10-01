@@ -39,8 +39,13 @@ val encode : Request.t -> Jsont.json
 
 type t
 (** The type for incremental stream decoders. A decoder holds the tool calls opened so far
-    keyed by chunk index, the reasoning block state per index, token usage accumulated
-    from the stream, the pending finish reason, and whether the stream has ended. *)
+    keyed by chunk index, the ids of the calls already closed, the reasoning block state
+    per index, token usage accumulated from the stream, the pending finish reason, and
+    whether the stream has ended.
+
+    The closed-call set is keyed by call id, not by a per-index flag: DeepSeek/Kimi style
+    streams can carry one id on several indices or re-issue a completed call, and the
+    id-keyed set is what guarantees one [Tool_call_end] per id. *)
 
 val create : unit -> t
 (** [create ()] is a decoder for one stream. *)

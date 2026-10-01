@@ -1,5 +1,6 @@
 open Charamel_fantasy
 open Stream_test_support
+open Lwt.Infix
 
 let fixture_body path =
   let ic = open_in_bin path in
@@ -8,7 +9,7 @@ let fixture_body path =
   close_in ic;
   s
 
-let sse = fixture_body "data/anthropic_codec.sse"
+let sse () = fixture_body "data/anthropic_codec.sse"
 
 let model =
   {
@@ -31,29 +32,24 @@ let text role s = { Message.role; parts = [ Message.Text s ] }
 let usage ~input ~output ~cache_read ~cache_write =
   Stream_part.Usage { Usage.input; output; cache_read; cache_write; reasoning = 0 }
 
-let call ?(body = sse) ?(auth = api_key) ?(reasoning = `Off) ?temperature ?max_tokens
+let base_url server = Uri.to_string (Fixture_http.uri server "")
+
+let call ?(body = sse ()) ?(auth = api_key) ?(reasoning = `Off) ?temperature ?max_tokens
     ?(system = []) ?(tools = []) ?truncate messages =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let server = Fixture_server.start ~sw ~net:env#net () in
-  Fixture_server.respond server body;
-  (match truncate with Some n -> Fixture_server.trunc server n | None -> ());
-  let provider = Provider.anthropic ~base_url:(Fixture_server.base_url server) ~auth () in
-  let parts =
-    Provider.stream provider ~sw ~clock:env#clock ~net:env#net ~model ?temperature
-      ?max_tokens ~reasoning ~system ~tools messages
-  in
-  let observed = drain parts in
-  (observed, Fixture_server.last_path server, Fixture_server.last_body server)
+  Stream_test_support.with_fixture (fun server ->
+      (match truncate with
+      | Some n -> Fixture_http.respond server ~truncate:n body
+      | None -> Fixture_http.respond server body);
+      let provider = Provider.anthropic ~base_url:(base_url server) ~auth () in
+      let parts =
+        Provider.stream provider ~clock:Charamel_os.Time.lwt ~model ?temperature
+          ?max_tokens ~reasoning ~system ~tools messages
+      in
+      Stream_test_support.drain parts >|= fun observed ->
+      (observed, Fixture_http.last_path server, Fixture_http.last_body server))
 
-let expect_parts name expected observed = Alcotest.(check parts) name expected observed
-
-let parse_body = function
-  | None -> Alcotest.fail "no request body was posted"
-  | Some s -> (
-      match Jsont_bytesrw.decode_string Jsont.json s with
-      | Ok j -> j
-      | Error e -> Alcotest.failf "posted body is not JSON: %s" e)
+let expect_parts name expected observed =
+  Stream_test_support.expect_parts ~label:name expected observed
 
 let mem (j : Jsont.json) k =
   match j with
@@ -70,7 +66,7 @@ let last_of = function
   | _ -> None
 
 let test_fixture_stream () =
-  let parts, path, _ = call [ text Message.User "hi" ] in
+  call [ text Message.User "hi" ] >|= fun (parts, path, _) ->
   Alcotest.(check (option string)) "posts to /v1/messages" (Some "/v1/messages") path;
   expect_parts "fixture decodes through the public provider"
     [
@@ -111,7 +107,7 @@ data: {"type":"message_stop"}
 |}
 
 let test_split_tool_accumulation () =
-  let parts, _, _ = call ~body:split_tool_body [ text Message.User "hi" ] in
+  call ~body:split_tool_body [ text Message.User "hi" ] >|= fun (parts, _, _) ->
   expect_parts "split deltas accumulate on one id"
     [
       Stream_part.Tool_call_start { id = "a"; name = "t" };
@@ -179,7 +175,7 @@ data: {"type":"message_stop"}
 |}
 
 let test_interleaved_blocks () =
-  let parts, _, _ = call ~body:interleaved_body [ text Message.User "hi" ] in
+  call ~body:interleaved_body [ text Message.User "hi" ] >|= fun (parts, _, _) ->
   expect_parts "thinking, text and two tool blocks arrive in stream order"
     [
       Stream_part.Reasoning_delta "checking";
@@ -242,7 +238,7 @@ data: {"type":"message_stop"}
 |}
 
 let test_out_of_order_blocks () =
-  let parts, _, _ = call ~body:out_of_order_body [ text Message.User "hi" ] in
+  call ~body:out_of_order_body [ text Message.User "hi" ] >|= fun (parts, _, _) ->
   expect_parts "each index keeps the id of the block that opened it"
     [
       Stream_part.Tool_call_start { id = "toolu_a"; name = "t1" };
@@ -277,7 +273,7 @@ data: not json at all
 |}
 
 let test_malformed_event () =
-  let parts, _, _ = call ~body:malformed_body [ text Message.User "hi" ] in
+  call ~body:malformed_body [ text Message.User "hi" ] >|= fun (parts, _, _) ->
   match parts with
   | [ Stream_part.Finish (`Error m) ] ->
       Alcotest.(check bool)
@@ -295,11 +291,10 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
 |}
 
 let test_premature_eof () =
-  let parts, _, _ =
-    call ~body:premature_body
-      ~truncate:(String.length premature_body - 1)
-      [ text Message.User "hi" ]
-  in
+  call ~body:premature_body
+    ~truncate:(String.length premature_body - 1)
+    [ text Message.User "hi" ]
+  >|= fun (parts, _, _) ->
   expect_parts "EOF before message_stop keeps usage and reports an error"
     [
       Stream_part.Text_delta "partial";
@@ -331,7 +326,7 @@ data: {"type":"message_stop"}
 |}
 
 let test_cumulative_usage_replaces_present_fields () =
-  let parts, _, _ = call ~body:cumulative_usage_body [ text Message.User "hi" ] in
+  call ~body:cumulative_usage_body [ text Message.User "hi" ] >|= fun (parts, _, _) ->
   expect_parts "later message_delta snapshots replace output and preserve the rest"
     [
       usage ~input:100 ~output:100 ~cache_read:600 ~cache_write:300;
@@ -356,7 +351,7 @@ data: {"type":"message_stop"}
 |}
 
 let test_cumulative_usage_explicit_zero_replaces () =
-  let parts, _, _ = call ~body:zero_replaces_usage_body [ text Message.User "hi" ] in
+  call ~body:zero_replaces_usage_body [ text Message.User "hi" ] >|= fun (parts, _, _) ->
   expect_parts "an explicit zero replaces a previously reported cache-write count"
     [ usage ~input:50 ~output:5 ~cache_read:0 ~cache_write:0; Stream_part.Finish `Stop ]
     parts
@@ -373,21 +368,19 @@ data: {"type":"message_stop"}
     reason
 
 let stop_of ~body () =
-  let parts, _, _ = call ~body [ text Message.User "hi" ] in
+  call ~body [ text Message.User "hi" ] >|= fun (parts, _, _) ->
   match parts with
   | [ Stream_part.Finish f ] -> finish_name f
   | _ -> Alcotest.failf "expected exactly one finish, got %d parts" (List.length parts)
 
 let test_stop_reasons () =
-  Alcotest.(check string)
-    "end_turn stops" "Stop"
-    (stop_of ~body:(stop_reason_body "end_turn") ());
-  Alcotest.(check string)
-    "max_tokens is a length stop" "Length"
-    (stop_of ~body:(stop_reason_body "max_tokens") ());
-  Alcotest.(check string)
-    "refusal is a content filter stop" "Content_filter"
-    (stop_of ~body:(stop_reason_body "refusal") ())
+  stop_of ~body:(stop_reason_body "end_turn") () >>= fun reason ->
+  Alcotest.(check string) "end_turn stops" "Stop" reason;
+  stop_of ~body:(stop_reason_body "max_tokens") () >>= fun reason ->
+  Alcotest.(check string) "max_tokens is a length stop" "Length" reason;
+  stop_of ~body:(stop_reason_body "refusal") () >>= fun reason ->
+  Alcotest.(check string) "refusal is a content filter stop" "Content_filter" reason;
+  Lwt.return_unit
 
 let tool =
   Tool.v ~name:"read" ~description:"read a file"
@@ -397,10 +390,9 @@ let tool =
           [ mem (name "type") (string "object"); mem (name "properties") (object' []) ])
 
 let test_request_encoding () =
-  let _, path, body =
-    call ~system:[ "be terse" ] ~tools:[ tool ]
-      [ text Message.User "one"; text Message.User "two"; text Message.User "three" ]
-  in
+  call ~system:[ "be terse" ] ~tools:[ tool ]
+    [ text Message.User "one"; text Message.User "two"; text Message.User "three" ]
+  >>= fun (_, path, body) ->
   Alcotest.(check (option string)) "messages endpoint" (Some "/v1/messages") path;
   let j = parse_body body in
   Alcotest.(check (option string)) "model id" (Some model.Model.id) (str_mem "model" j);
@@ -443,9 +435,8 @@ let test_request_encoding () =
         account = None;
       }
   in
-  let _, _, oauth_body =
-    call ~auth:oauth ~system:[ "be terse" ] [ text Message.User "hi" ]
-  in
+  call ~auth:oauth ~system:[ "be terse" ] [ text Message.User "hi" ]
+  >|= fun (_, _, oauth_body) ->
   let oauth_json = parse_body oauth_body in
   match mem oauth_json "system" with
   | Some (Jsont.Array ([ first; last ], _)) ->
@@ -464,7 +455,7 @@ let test_request_encoding () =
    would ask for the impossible. Both sides are pinned: the level survives
    when the window admits it and is capped when it does not. *)
 let thinking_field ?max_tokens reasoning =
-  let _, _, body = call ?max_tokens ~reasoning [ text Message.User "hi" ] in
+  call ?max_tokens ~reasoning [ text Message.User "hi" ] >|= fun (_, _, body) ->
   let j = parse_body body in
   match mem j "thinking" with
   | Some t ->
@@ -474,10 +465,11 @@ let thinking_field ?max_tokens reasoning =
   | None -> Alcotest.fail "no thinking block"
 
 let test_thinking_budget () =
+  thinking_field ~max_tokens:16_000 `Medium >>= fun (budget, _) ->
   Alcotest.(check (option (float 0.)))
-    "a wide window keeps the medium budget" (Some 8192.)
-    (fst (thinking_field ~max_tokens:16_000 `Medium));
-  (match thinking_field `Medium with
+    "a wide window keeps the medium budget" (Some 8192.) budget;
+  thinking_field `Medium >>= fun (budget, cap) ->
+  (match (budget, cap) with
   | Some budget, Some cap ->
       Alcotest.(check (float 0.)) "the default window caps the budget" 4095. budget;
       Alcotest.(check (float 0.)) "the cap is the declared default" 4096. cap;
@@ -485,46 +477,51 @@ let test_thinking_budget () =
         "the budget stays strictly below max_tokens" true (budget < cap)
   | None, _ -> Alcotest.fail "the medium request carries no budget_tokens"
   | Some _, None -> Alcotest.fail "the request carries no max_tokens");
-  Alcotest.(check (option (float 0.)))
-    "a low level needs no clamp" (Some 1024.)
-    (fst (thinking_field ~max_tokens:16_000 `Low));
-  Alcotest.(check (option (float 0.)))
-    "a high level is clamped too" (Some 2047.)
-    (fst (thinking_field ~max_tokens:2048 `High));
+  thinking_field ~max_tokens:16_000 `Low >>= fun (budget, _) ->
+  Alcotest.(check (option (float 0.))) "a low level needs no clamp" (Some 1024.) budget;
+  thinking_field ~max_tokens:2048 `High >>= fun (budget, _) ->
+  Alcotest.(check (option (float 0.))) "a high level is clamped too" (Some 2047.) budget;
   (* A window of one token leaves no positive budget, so the block is omitted
      rather than sent at zero, which the API rejects. *)
-  let _, _, tiny = call ~max_tokens:1 ~reasoning:`Medium [ text Message.User "hi" ] in
+  call ~max_tokens:1 ~reasoning:`Medium [ text Message.User "hi" ] >|= fun (_, _, tiny) ->
   Alcotest.(check bool)
     "an unfillable window drops thinking" true
     (mem (parse_body tiny) "thinking" = None)
 
 let test_temperature_and_thinking () =
-  let _, _, body = call ~reasoning:`Low ~temperature:0.5 [ text Message.User "hi" ] in
+  call ~reasoning:`Low ~temperature:0.5 [ text Message.User "hi" ] >>= fun (_, _, body) ->
   let j = parse_body body in
   Alcotest.(check bool)
     "temperature is omitted with thinking" true
     (mem j "temperature" = None);
-  let _, _, body = call ~temperature:0.5 [ text Message.User "hi" ] in
+  call ~temperature:0.5 [ text Message.User "hi" ] >|= fun (_, _, body) ->
   let j = parse_body body in
   Alcotest.(check (option (float 0.)))
     "temperature is sent without thinking" (Some 0.5) (number_mem "temperature" j)
 
 let cases =
   [
-    ("fixture stream", `Quick, test_fixture_stream);
-    ("split tool accumulation", `Quick, test_split_tool_accumulation);
-    ("interleaved blocks", `Quick, test_interleaved_blocks);
-    ("out-of-order blocks", `Quick, test_out_of_order_blocks);
-    ("malformed event", `Quick, test_malformed_event);
-    ("premature eof", `Quick, test_premature_eof);
-    ( "cumulative usage replaces present fields",
-      `Quick,
-      test_cumulative_usage_replaces_present_fields );
-    ( "cumulative usage explicit zero replaces",
-      `Quick,
-      test_cumulative_usage_explicit_zero_replaces );
-    ("stop reasons", `Quick, test_stop_reasons);
-    ("request encoding", `Quick, test_request_encoding);
-    ("thinking budget", `Quick, test_thinking_budget);
-    ("temperature and thinking", `Quick, test_temperature_and_thinking);
+    Alcotest_lwt.test_case "fixture stream" `Quick (fun _switch () ->
+        test_fixture_stream ());
+    Alcotest_lwt.test_case "split tool accumulation" `Quick (fun _switch () ->
+        test_split_tool_accumulation ());
+    Alcotest_lwt.test_case "interleaved blocks" `Quick (fun _switch () ->
+        test_interleaved_blocks ());
+    Alcotest_lwt.test_case "out-of-order blocks" `Quick (fun _switch () ->
+        test_out_of_order_blocks ());
+    Alcotest_lwt.test_case "malformed event" `Quick (fun _switch () ->
+        test_malformed_event ());
+    Alcotest_lwt.test_case "premature eof" `Quick (fun _switch () ->
+        test_premature_eof ());
+    Alcotest_lwt.test_case "cumulative usage replaces present fields" `Quick
+      (fun _switch () -> test_cumulative_usage_replaces_present_fields ());
+    Alcotest_lwt.test_case "cumulative usage explicit zero replaces" `Quick
+      (fun _switch () -> test_cumulative_usage_explicit_zero_replaces ());
+    Alcotest_lwt.test_case "stop reasons" `Quick (fun _switch () -> test_stop_reasons ());
+    Alcotest_lwt.test_case "request encoding" `Quick (fun _switch () ->
+        test_request_encoding ());
+    Alcotest_lwt.test_case "thinking budget" `Quick (fun _switch () ->
+        test_thinking_budget ());
+    Alcotest_lwt.test_case "temperature and thinking" `Quick (fun _switch () ->
+        test_temperature_and_thinking ());
   ]

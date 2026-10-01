@@ -451,6 +451,34 @@ let of_hex s =
     end
   else None
 
+let of_hex_or ?(default = Default) s =
+  match of_hex s with Some color -> color | None -> default
+
+let decimal_magnitude s =
+  let length = String.length s in
+  let start = if length > 0 && (s.[0] = '+' || s.[0] = '-') then 1 else 0 in
+  if start >= length then None
+  else
+    let value = ref 0 and valid = ref true in
+    let index = ref start in
+    while !index < length && !valid do
+      let digit = Char.code s.[!index] - Char.code '0' in
+      if digit < 0 || digit > 9 then valid := false
+      else if !value > (max_int - digit) / 10 then valid := false
+      else value := (!value * 10) + digit;
+      incr index
+    done;
+    if !valid then Some !value else None
+
+let of_string s =
+  if String.length s > 0 && s.[0] = '#' then of_hex s
+  else
+    match decimal_magnitude s with
+    | None -> None
+    | Some n when n < 16 -> Some (Basic n)
+    | Some n when n < 256 -> Some (Indexed n)
+    | Some n -> Some (Rgb ((n lsr 16) land 0xff, (n lsr 8) land 0xff, n land 0xff))
+
 let to_ansi256 = function
   | Default -> Default
   | Indexed n -> Indexed (in_256_range n)
@@ -490,6 +518,11 @@ let to_rgb = function
         Some (g, g, g)
       end
   | Rgb (r, g, b) -> Some (in_byte_range r, in_byte_range g, in_byte_range b)
+
+let is_dark t =
+  match to_rgb t with
+  | None -> true
+  | Some (red, green, blue) -> (299 * red) + (587 * green) + (114 * blue) <= 128_000
 
 let equal = ( = )
 

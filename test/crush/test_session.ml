@@ -1,13 +1,9 @@
 module Session = Crush_core.Session
 module Jsonx = Crush_core.Jsonx
+open Lwt_direct
 
 let model = { Session.provider = "anthropic"; model = "claude-test" }
-
-let temporary_directory prefix =
-  let path = Filename.temp_file prefix "" in
-  Unix.unlink path;
-  Unix.mkdir path 0o700;
-  path
+let clock = Charamel_os.Time.lwt
 
 let restore_environment name previous =
   match previous with Some value -> Unix.putenv name value | None -> Unix.putenv name ""
@@ -18,33 +14,18 @@ let with_environment name value f =
   Fun.protect f ~finally:(fun () -> restore_environment name previous)
 
 let with_store f =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun _sw ->
-  let directory = temporary_directory "charamel-session-" in
-  with_environment "XDG_DATA_HOME" directory (fun () ->
-      let result =
-        Fun.protect
-          (fun () -> f env directory)
-          ~finally:(fun () ->
-            Eio.Path.rmtree ~missing_ok:true Eio.Path.(env#fs / directory))
-      in
-      result)
+  Test_tools_test_support.with_scratch (fun directory ->
+      with_environment "XDG_DATA_HOME" directory (fun () -> f directory))
 
-let random_source () =
-  let counter = ref 0 in
-  fun length ->
-    let seed = !counter in
-    incr counter;
-    String.init length (fun index -> Char.chr ((seed + index) land 0xFF))
-
-let contains_substring text needle =
-  let rec loop offset =
-    if offset + String.length needle > String.length text then false
-    else if String.sub text offset (String.length needle) = needle then true
-    else loop (offset + 1)
+let write_file path content =
+  let channel =
+    open_out_gen [ Open_wronly; Open_creat; Open_trunc; Open_binary ] 0o600 path
   in
-  loop 0
+  Fun.protect
+    ~finally:(fun () -> close_out channel)
+    (fun () -> output_string channel content)
 
+let random_source = Test_tools_test_support.random_source
 let text_message text = Charamel_fantasy.Message.text Charamel_fantasy.Message.User text
 
 let json_input =
@@ -109,34 +90,33 @@ let event_cases () =
   ]
 
 let event_round_trip () =
-  with_store (fun env _directory ->
-      let fs = env#fs in
-      let cwd = Eio.Path.native_exn env#cwd in
-      let store = Session.store ~fs ~cwd in
+  with_store (fun _directory ->
+      let cwd = Sys.getcwd () in
+      let store = Session.store ~fs_root:"/" ~cwd in
       let random = random_source () in
-      match Session.create store ~clock:env#clock ~random ~cwd ~model () with
+      match await (Session.create store ~clock ~random ~cwd ~model ()) with
       | Error error -> Alcotest.failf "create failed: %a" Session.pp_error error
       | Ok session ->
           let all_events = event_cases () in
           List.iter
             (fun event ->
-              match Session.append session ~clock:env#clock event with
+              match await (Session.append session ~clock event) with
               | Ok () -> ()
               | Error error -> Alcotest.failf "append failed: %a" Session.pp_error error)
             all_events;
-          begin match Session.set_title session ~title:"roundtrip" with
+          begin match await (Session.set_title session ~title:"roundtrip") with
           | Error error -> Alcotest.failf "set title failed: %a" Session.pp_error error
           | Ok () -> ()
           end;
           let after =
             Session.Message { ms = 9; message = text_message "after-summary" }
           in
-          begin match Session.append session ~clock:env#clock after with
+          begin match await (Session.append session ~clock after) with
           | Error error ->
               Alcotest.failf "append after summary failed: %a" Session.pp_error error
           | Ok () -> ()
           end;
-          begin match Session.open_ store ~id:(Session.id session) with
+          begin match await (Session.open_ store ~id:(Session.id session)) with
           | Error error -> Alcotest.failf "open failed: %a" Session.pp_error error
           | Ok reopened ->
               let expected =
@@ -167,32 +147,35 @@ let event_round_trip () =
           end)
 
 let index_and_concurrent_append () =
-  with_store (fun env _directory ->
-      let cwd = Eio.Path.native_exn env#cwd in
-      let store = Session.store ~fs:env#fs ~cwd in
+  with_store (fun _directory ->
+      let cwd = Sys.getcwd () in
+      let store = Session.store ~fs_root:"/" ~cwd in
       let random = random_source () in
-      match Session.create store ~clock:env#clock ~random ~cwd ~model () with
+      match await (Session.create store ~clock ~random ~cwd ~model ()) with
       | Error error -> Alcotest.failf "create failed: %a" Session.pp_error error
       | Ok session ->
           let errors = ref [] in
-          Eio.Fiber.List.iter
-            (fun index ->
-              match
-                Session.append session ~clock:env#clock
-                  (Session.Message
-                     { ms = index; message = text_message (string_of_int index) })
-              with
-              | Ok () -> ()
-              | Error error -> errors := error :: !errors)
-            (List.init 24 Fun.id);
+          await
+          @@ Lwt_list.iter_p
+               (fun index ->
+                 Lwt.bind
+                   (Session.append session ~clock
+                      (Session.Message
+                         { ms = index; message = text_message (string_of_int index) }))
+                   (function
+                     | Ok () -> Lwt.return_unit
+                     | Error error ->
+                         errors := error :: !errors;
+                         Lwt.return_unit))
+               (List.init 24 Fun.id);
           Alcotest.(check int) "concurrent appends complete" 0 (List.length !errors);
-          begin match Session.open_ store ~id:(Session.id session) with
+          begin match await (Session.open_ store ~id:(Session.id session)) with
           | Error error -> Alcotest.failf "open failed: %a" Session.pp_error error
           | Ok reopened ->
               Alcotest.(check int)
                 "all concurrent messages" 24
                 (Array.length (Session.events reopened));
-              begin match Session.list store with
+              begin match await (Session.list store) with
               | Error error -> Alcotest.failf "list failed: %a" Session.pp_error error
               | Ok [ entry ] ->
                   Alcotest.(check int)
@@ -202,26 +185,31 @@ let index_and_concurrent_append () =
               end
           end)
 
-let append_line env session line =
-  Eio.Path.save ~append:true ~create:(`If_missing 0o600)
-    Eio.Path.(env#fs / Session.path session)
-    line
+let append_line session line =
+  let channel =
+    open_out_gen
+      [ Open_append; Open_creat; Open_wronly; Open_binary ]
+      0o600 (Session.path session)
+  in
+  Fun.protect
+    ~finally:(fun () -> close_out channel)
+    (fun () -> output_string channel line)
 
 let final_corruption_is_repaired () =
-  with_store (fun env _directory ->
-      let cwd = Eio.Path.native_exn env#cwd in
-      let store = Session.store ~fs:env#fs ~cwd in
+  with_store (fun _directory ->
+      let cwd = Sys.getcwd () in
+      let store = Session.store ~fs_root:"/" ~cwd in
       let random = random_source () in
-      match Session.create store ~clock:env#clock ~random ~cwd ~model () with
+      match await (Session.create store ~clock ~random ~cwd ~model ()) with
       | Error error -> Alcotest.failf "create failed: %a" Session.pp_error error
       | Ok session ->
           let good = Session.Note { ms = 1; text = "complete" } in
-          begin match Session.append session ~clock:env#clock good with
+          begin match await (Session.append session ~clock good) with
           | Error error -> Alcotest.failf "append failed: %a" Session.pp_error error
           | Ok () -> ()
           end;
-          append_line env session "{\"t\":\"note\",\"ms\":\n";
-          begin match Session.open_ store ~id:(Session.id session) with
+          append_line session "{\"t\":\"note\",\"ms\":\n";
+          begin match await (Session.open_ store ~id:(Session.id session)) with
           | Error error ->
               Alcotest.failf "final partial line was not repaired: %a" Session.pp_error
                 error
@@ -229,7 +217,7 @@ let final_corruption_is_repaired () =
               Alcotest.(check int)
                 "partial line omitted" 1
                 (Array.length (Session.events reopened));
-              let contents = Eio.Path.load Eio.Path.(env#fs / Session.path session) in
+              let contents = Test_tools_test_support.load_file (Session.path session) in
               let expected =
                 Jsonx.encode Session.header_jsont (Session.header session)
                 ^ "\n"
@@ -240,11 +228,11 @@ let final_corruption_is_repaired () =
           end)
 
 let middle_corruption_is_not_repaired () =
-  with_store (fun env _directory ->
-      let cwd = Eio.Path.native_exn env#cwd in
-      let store = Session.store ~fs:env#fs ~cwd in
+  with_store (fun _directory ->
+      let cwd = Sys.getcwd () in
+      let store = Session.store ~fs_root:"/" ~cwd in
       let random = random_source () in
-      match Session.create store ~clock:env#clock ~random ~cwd ~model () with
+      match await (Session.create store ~clock ~random ~cwd ~model ()) with
       | Error error -> Alcotest.failf "create failed: %a" Session.pp_error error
       | Ok session ->
           let first = Session.Note { ms = 1; text = "first" } in
@@ -252,10 +240,9 @@ let middle_corruption_is_not_repaired () =
           let header_line = Jsonx.encode Session.header_jsont (Session.header session) in
           let first_line = Jsonx.encode Session.event_jsont first in
           let last_line = Jsonx.encode Session.event_jsont last in
-          Eio.Path.save ~create:(`Or_truncate 0o600)
-            Eio.Path.(env#fs / Session.path session)
+          write_file (Session.path session)
             (String.concat "\n" [ header_line; first_line; "not-json"; last_line ] ^ "\n");
-          begin match Session.open_ store ~id:(Session.id session) with
+          begin match await (Session.open_ store ~id:(Session.id session)) with
           | Error (`Session_corrupt (path, line)) ->
               Alcotest.(check string) "corrupt path" (Session.path session) path;
               Alcotest.(check int) "middle line" 3 line
@@ -263,17 +250,17 @@ let middle_corruption_is_not_repaired () =
               Alcotest.failf "wrong corruption error: %a" Session.pp_error error
           | Ok _ -> Alcotest.fail "middle corruption was silently repaired"
           end;
-          let contents = Eio.Path.load Eio.Path.(env#fs / Session.path session) in
+          let contents = Test_tools_test_support.load_file (Session.path session) in
           Alcotest.(check bool)
             "middle bad line retained" true
-            (contains_substring contents "not-json"))
+            (Test_support.contains ~needle:"not-json" ~haystack:contents))
 
 let header_id_mismatch_is_corrupt () =
-  with_store (fun env _directory ->
-      let cwd = Eio.Path.native_exn env#cwd in
-      let store = Session.store ~fs:env#fs ~cwd in
+  with_store (fun _directory ->
+      let cwd = Sys.getcwd () in
+      let store = Session.store ~fs_root:"/" ~cwd in
       let random = random_source () in
-      match Session.create store ~clock:env#clock ~random ~cwd ~model () with
+      match await (Session.create store ~clock ~random ~cwd ~model ()) with
       | Error error -> Alcotest.failf "create failed: %a" Session.pp_error error
       | Ok session ->
           let wrong =
@@ -282,10 +269,9 @@ let header_id_mismatch_is_corrupt () =
               id = Crush_core.Ulid.v ~now_ms:1 ~random:(fun n -> String.make n '\255');
             }
           in
-          Eio.Path.save ~create:(`Or_truncate 0o600)
-            Eio.Path.(env#fs / Session.path session)
+          write_file (Session.path session)
             (Jsonx.encode Session.header_jsont wrong ^ "\n");
-          begin match Session.open_ store ~id:(Session.id session) with
+          begin match await (Session.open_ store ~id:(Session.id session)) with
           | Error (`Session_corrupt (path, line)) ->
               Alcotest.(check string) "mismatch path" (Session.path session) path;
               Alcotest.(check int) "mismatch line" 1 line
@@ -295,20 +281,21 @@ let header_id_mismatch_is_corrupt () =
           end)
 
 let permission_boundary () =
-  with_store (fun env _directory ->
+  with_store (fun _directory ->
       if Unix.getuid () = 0 then ()
       else
-        let cwd = Eio.Path.native_exn env#cwd in
-        let store = Session.store ~fs:env#fs ~cwd in
+        let cwd = Sys.getcwd () in
+        let store = Session.store ~fs_root:"/" ~cwd in
         let random = random_source () in
-        match Session.create store ~clock:env#clock ~random ~cwd ~model () with
+        match await (Session.create store ~clock ~random ~cwd ~model ()) with
         | Error error -> Alcotest.failf "create failed: %a" Session.pp_error error
         | Ok session ->
             let native = Session.path session in
             Unix.chmod native 0o400;
             begin match
-              Session.append session ~clock:env#clock
-                (Session.Note { ms = 1; text = "blocked" })
+              await
+                (Session.append session ~clock
+                   (Session.Note { ms = 1; text = "blocked" }))
             with
             | Error (`Io _) -> ()
             | Error error ->
@@ -319,14 +306,15 @@ let permission_boundary () =
 
 let cases =
   [
-    Alcotest.test_case "JSONL event variants and replay" `Quick event_round_trip;
-    Alcotest.test_case "serialized appends and index are concurrent-safe" `Quick
+    Test_tools_test_support.case "JSONL event variants and replay" `Quick event_round_trip;
+    Test_tools_test_support.case "serialized appends and index are concurrent-safe" `Quick
       index_and_concurrent_append;
-    Alcotest.test_case "final malformed line is repaired" `Quick
+    Test_tools_test_support.case "final malformed line is repaired" `Quick
       final_corruption_is_repaired;
-    Alcotest.test_case "middle malformed line is corruption" `Quick
+    Test_tools_test_support.case "middle malformed line is corruption" `Quick
       middle_corruption_is_not_repaired;
-    Alcotest.test_case "header id mismatch is corruption" `Quick
+    Test_tools_test_support.case "header id mismatch is corruption" `Quick
       header_id_mismatch_is_corrupt;
-    Alcotest.test_case "file permissions are enforced" `Quick permission_boundary;
+    Test_tools_test_support.case "file permissions are enforced" `Quick
+      permission_boundary;
   ]

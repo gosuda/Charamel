@@ -14,6 +14,7 @@ module Viewport = Charamel_bubbles.Viewport
 module Bubble_list = Charamel_bubbles.List
 module Huh = Charamel_huh
 open Result.Syntax
+open Lwt.Infix
 
 type session = { id : string; title : string; model : string; created_ms : int }
 
@@ -30,9 +31,9 @@ module Bridge = struct
   type 'a queue = {
     capacity : int;
     values : 'a Queue.t;
-    mutex : Eio.Mutex.t;
-    not_empty : Eio.Condition.t;
-    not_full : Eio.Condition.t;
+    mutex : Lwt_mutex.t;
+    not_empty : unit Lwt_condition.t;
+    not_full : unit Lwt_condition.t;
     mutable closed : bool;
   }
 
@@ -40,13 +41,13 @@ module Bridge = struct
 
   type ask_request = {
     questions : Tool.question list;
-    resolver : answer_result Eio.Promise.u;
+    resolver : answer_result Lwt.u;
     mutable answered : bool;
   }
 
   type permission_request = {
     request : Permission.request;
-    resolver : Permission.decision Eio.Promise.u;
+    resolver : Permission.decision Lwt.u;
     mutable answered : bool;
   }
 
@@ -54,9 +55,8 @@ module Bridge = struct
     events : Agent.event queue;
     questions : ask_request queue;
     permissions : permission_request queue;
-    pending_mutex : Eio.Mutex.t;
-    pending_questions : ask_request list ref;
-    pending_permissions : permission_request list ref;
+    mutable pending_questions : ask_request list;
+    mutable pending_permissions : permission_request list;
   }
 
   let queue capacity =
@@ -64,9 +64,9 @@ module Bridge = struct
     {
       capacity;
       values = Queue.create ();
-      mutex = Eio.Mutex.create ();
-      not_empty = Eio.Condition.create ();
-      not_full = Eio.Condition.create ();
+      mutex = Lwt_mutex.create ();
+      not_empty = Lwt_condition.create ();
+      not_full = Lwt_condition.create ();
       closed = false;
     }
 
@@ -75,137 +75,141 @@ module Bridge = struct
       events = queue capacity;
       questions = queue capacity;
       permissions = queue capacity;
-      pending_mutex = Eio.Mutex.create ();
-      pending_questions = ref [];
-      pending_permissions = ref [];
+      pending_questions = [];
+      pending_permissions = [];
     }
 
+  (* [closed] and the pending-request lists are mutated only by plain, non-yielding
+     statements (no [Lwt.bind] between a check and its mutation), so under Lwt's
+     cooperative scheduler no other task can interleave mid-mutation; unlike [mutex]
+     below, which guards genuinely yielding critical sections, these need no lock, the
+     same reasoning [Permission] already applies to drop its [policy_mutex]. *)
   let close_queue q =
-    Eio.Mutex.use_rw q.mutex ~protect:true (fun () ->
-        q.closed <- true;
-        Eio.Condition.broadcast q.not_empty;
-        Eio.Condition.broadcast q.not_full)
+    q.closed <- true;
+    Lwt_condition.broadcast q.not_empty ();
+    Lwt_condition.broadcast q.not_full ()
 
   let resolve_question (request : ask_request) (answer : answer_result) =
     if not request.answered then begin
       request.answered <- true;
-      Eio.Promise.resolve request.resolver answer
+      Lwt.wakeup_later request.resolver answer
     end
 
   let resolve_permission (request : permission_request) (decision : Permission.decision) =
     if not request.answered then begin
       request.answered <- true;
-      Eio.Promise.resolve request.resolver decision
+      Lwt.wakeup_later request.resolver decision
     end
 
   let close t =
-    Eio.Cancel.protect (fun () ->
-        close_queue t.events;
-        close_queue t.questions;
-        close_queue t.permissions;
-        Eio.Mutex.use_rw t.pending_mutex ~protect:false (fun () ->
-            List.iter
-              (fun request -> resolve_question request (Error `Aborted))
-              !(t.pending_questions);
-            List.iter
-              (fun request -> resolve_permission request Permission.Deny)
-              !(t.pending_permissions);
-            t.pending_questions := [];
-            t.pending_permissions := []))
-
-  let with_queue_lock q f =
-    Eio.Mutex.lock q.mutex;
-    let unlock () = Eio.Cancel.protect (fun () -> Eio.Mutex.unlock q.mutex) in
-    match f () with
-    | value ->
-        unlock ();
-        value
-    | exception ex ->
-        unlock ();
-        raise ex
+    close_queue t.events;
+    close_queue t.questions;
+    close_queue t.permissions;
+    List.iter
+      (fun request -> resolve_question request (Error `Aborted))
+      t.pending_questions;
+    List.iter
+      (fun request -> resolve_permission request Permission.Deny)
+      t.pending_permissions;
+    t.pending_questions <- [];
+    t.pending_permissions <- []
 
   let push_queue q value =
-    with_queue_lock q (fun () ->
-        while (not q.closed) && Queue.length q.values >= q.capacity do
-          Eio.Condition.await q.not_full q.mutex
-        done;
-        if q.closed then false
-        else begin
-          Queue.add value q.values;
-          Eio.Condition.broadcast q.not_empty;
-          true
-        end)
+    Lwt_mutex.lock q.mutex >>= fun () ->
+    let rec wait_for_space () =
+      if (not q.closed) && Queue.length q.values >= q.capacity then
+        Lwt_condition.wait ~mutex:q.mutex q.not_full >>= wait_for_space
+      else Lwt.return_unit
+    in
+    wait_for_space () >>= fun () ->
+    let accepted =
+      if q.closed then false
+      else begin
+        Queue.add value q.values;
+        Lwt_condition.broadcast q.not_empty ();
+        true
+      end
+    in
+    Lwt_mutex.unlock q.mutex;
+    Lwt.return accepted
 
   let take_queue q =
-    with_queue_lock q (fun () ->
-        while (not q.closed) && Queue.is_empty q.values do
-          Eio.Condition.await q.not_empty q.mutex
-        done;
-        if Queue.is_empty q.values then None
-        else begin
-          let value = Queue.take q.values in
-          Eio.Condition.broadcast q.not_full;
-          Some value
-        end)
+    Lwt_mutex.lock q.mutex >>= fun () ->
+    let rec wait_for_value () =
+      if (not q.closed) && Queue.is_empty q.values then
+        Lwt_condition.wait ~mutex:q.mutex q.not_empty >>= wait_for_value
+      else Lwt.return_unit
+    in
+    wait_for_value () >>= fun () ->
+    let result =
+      if Queue.is_empty q.values then None
+      else begin
+        let value = Queue.take q.values in
+        Lwt_condition.broadcast q.not_full ();
+        Some value
+      end
+    in
+    Lwt_mutex.unlock q.mutex;
+    Lwt.return result
 
-  let push t event = ignore (push_queue t.events event)
+  let push t event = push_queue t.events event >>= fun _accepted -> Lwt.return_unit
   let take_event t = take_queue t.events
-  let queue_closed q = Eio.Mutex.use_ro q.mutex (fun () -> q.closed)
+  let queue_closed q = q.closed
 
   let remove_question t request =
-    Eio.Mutex.use_rw t.pending_mutex ~protect:false (fun () ->
-        t.pending_questions :=
-          List.filter (fun value -> not (value == request)) !(t.pending_questions))
+    t.pending_questions <-
+      List.filter (fun value -> not (value == request)) t.pending_questions
 
   let remove_permission t request =
-    Eio.Mutex.use_rw t.pending_mutex ~protect:false (fun () ->
-        t.pending_permissions :=
-          List.filter (fun value -> not (value == request)) !(t.pending_permissions))
+    t.pending_permissions <-
+      List.filter (fun value -> not (value == request)) t.pending_permissions
 
   let ask t questions =
-    if queue_closed t.questions then Error `Aborted
+    if queue_closed t.questions then Lwt.return (Error `Aborted)
     else begin
-      let promise, resolver = Eio.Promise.create () in
+      let promise, resolver = Lwt.wait () in
       let request = { questions; resolver; answered = false } in
-      let accepted = ref false in
-      Eio.Mutex.use_rw t.pending_mutex ~protect:false (fun () ->
-          if not (queue_closed t.questions) then begin
-            t.pending_questions := request :: !(t.pending_questions);
-            accepted := true
-          end);
-      if not !accepted then Error `Aborted
+      let accepted =
+        if queue_closed t.questions then false
+        else begin
+          t.pending_questions <- request :: t.pending_questions;
+          true
+        end
+      in
+      if not accepted then Lwt.return (Error `Aborted)
       else
-        match push_queue t.questions request with
+        push_queue t.questions request >>= function
         | false ->
             remove_question t request;
-            Error `Aborted
+            Lwt.return (Error `Aborted)
         | true ->
-            let result = Eio.Promise.await promise in
+            promise >>= fun result ->
             remove_question t request;
-            result
+            Lwt.return result
     end
 
   let ask_permission t request =
-    if queue_closed t.permissions then Permission.Deny
+    if queue_closed t.permissions then Lwt.return Permission.Deny
     else begin
-      let promise, resolver = Eio.Promise.create () in
+      let promise, resolver = Lwt.wait () in
       let item = { request; resolver; answered = false } in
-      let accepted = ref false in
-      Eio.Mutex.use_rw t.pending_mutex ~protect:false (fun () ->
-          if not (queue_closed t.permissions) then begin
-            t.pending_permissions := item :: !(t.pending_permissions);
-            accepted := true
-          end);
-      if not !accepted then Permission.Deny
+      let accepted =
+        if queue_closed t.permissions then false
+        else begin
+          t.pending_permissions <- item :: t.pending_permissions;
+          true
+        end
+      in
+      if not accepted then Lwt.return Permission.Deny
       else
-        match push_queue t.permissions item with
+        push_queue t.permissions item >>= function
         | false ->
             remove_permission t item;
-            Permission.Deny
+            Lwt.return Permission.Deny
         | true ->
-            let result = Eio.Promise.await promise in
+            promise >>= fun result ->
             remove_permission t item;
-            result
+            Lwt.return result
     end
 
   let take_question t = take_queue t.questions
@@ -228,8 +232,7 @@ type history_item = { role : string; text : string }
 type backend = {
   agent : Agent.t ref;
   events : Bridge.t;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
-  env : Eio_unix.Stdenv.base;
+  clock : Charamel_os.Time.clock;
   form_env : Huh.Form.Env.t;
   project : string;
   session_id : unit -> string;
@@ -285,9 +288,12 @@ type dialog_request =
 
 type ui_model = {
   backend : backend;
+  feeds : ui_msg Lwt_stream.t list;
   mutable viewport : Viewport.t;
   mutable editor : Textarea.t;
+  mutable session_rows : session list;
   mutable sessions : session Bubble_list.t;
+  mutable model_rows : model list;
   mutable chat : chat_item list;
   mutable status : string;
   mutable dialog : dialog option;
@@ -296,25 +302,25 @@ type ui_model = {
   mutable rows : int;
   mutable cols : int;
   mutable dark : bool;
-  mutable closed_events : bool;
-  mutable closed_questions : bool;
-  mutable closed_permissions : bool;
   mutable pending_prompt : string option;
   mutable last_ctrl_c : bool;
 }
 
-type ui_msg =
+and ui_msg =
   | Agent_event of Agent.event
-  | Agent_stream_closed
   | Question_request of Bridge.ask_request
-  | Question_stream_closed
   | Permission_request of Bridge.permission_request
-  | Permission_stream_closed
   | Editor_msg of Textarea.msg
+  | Viewport_msg of Viewport.msg
   | Dialog_msg of Huh.Form.msg
   | Submit_prompt
   | Prompt_result of (Agent.finish, Agent.error) result
   | Command_result of string
+  | New_session_result of (Agent.t, string) result
+  | Resume_session_result of string * (Agent.t, string) result
+  | Sessions_refreshed of session list
+  | Models_refreshed of model list
+  | Noop
   | Tick
   | Resize of int * int
   | Key of Key.t
@@ -387,7 +393,7 @@ let status_text m =
     Charamel_fantasy.Usage.pp usage cost context (m.backend.lsp_status ())
     (m.backend.mcp_status ())
 
-let sessions_list (backend : backend) =
+let sessions_widget (backend : backend) (rows : session list) =
   let delegate =
     Bubble_list.default_delegate ~is_dark:(backend.dark ())
       ~title:(fun (value : session) -> value.title)
@@ -396,11 +402,11 @@ let sessions_list (backend : backend) =
   in
   Bubble_list.v ~title:"Sessions" ~width:28 ~height:7 ~is_dark:(backend.dark ()) ~delegate
     ~filter_value:(fun (value : session) -> value.title ^ " " ^ value.id)
-    (backend.sessions ())
+    rows
 
 let sidebar m =
   let model_line =
-    match m.backend.models () with
+    match m.model_rows with
     | [] -> "model: unavailable"
     | model :: _ -> Fmt.str "model: %s/%s" model.provider model.id
   in
@@ -418,25 +424,44 @@ let sidebar m =
       "ctrl+g plan  ctrl+c quit";
     ]
 
+let line_count text = List.length (String.split_on_char '\n' text)
+
+let dialog_heading (value : dialog) =
+  match value.kind with
+  | Permission_dialog request ->
+      Fmt.str "\n\nPermission: %a" Permission.pp_request (Bridge.permission request)
+  | _ -> "\n\nDialog"
+
+let frame_cursor m ~body_rows ~editor_rows heading =
+  let place origin_row (cursor : Charamel_tea.Cursor.t) =
+    { cursor with row = cursor.row + origin_row }
+  in
+  match m.dialog with
+  | Some value ->
+      Option.map
+        (place (body_rows + editor_rows + line_count heading + 2))
+        (Huh.Form.cursor value.form)
+  | None -> Option.map (place (body_rows + 1)) (Textarea.cursor m.editor)
+
 let view (m : ui_model) =
   let body = Layout.join_horizontal [ sidebar m; Viewport.view m.viewport ] in
-  let dialog =
+  let editor = Textarea.view m.editor in
+  let heading, dialog =
     match m.dialog with
-    | None -> ""
+    | None -> ("", "")
     | Some value ->
-        let heading =
-          match value.kind with
-          | Permission_dialog request ->
-              Fmt.str "\n\nPermission: %a" Permission.pp_request
-                (Bridge.permission request)
-          | _ -> "\n\nDialog"
+        let heading = dialog_heading value in
+        let form =
+          Style.render (Style.bold true Style.empty) (Huh.Form.view value.form)
         in
-        heading ^ "\n"
-        ^ Style.render (Style.bold true Style.empty) (Huh.Form.view value.form)
+        (heading, heading ^ "\n" ^ form)
   in
   let footer = status_text m ^ if m.status = "" then "" else " | " ^ m.status in
   View.v ~alt_screen:true ~mouse:View.Mouse_click ~title:m.title
-    (body ^ "\n\n" ^ Textarea.view m.editor ^ "\n" ^ footer ^ dialog)
+    ?cursor:
+      (frame_cursor m ~body_rows:(line_count body) ~editor_rows:(line_count editor)
+         heading)
+    (body ^ "\n\n" ^ editor ^ "\n" ^ footer ^ dialog)
 
 let make_field (question : Tool.question) =
   let title =
@@ -486,14 +511,11 @@ let make_dialog backend (kind : dialog_kind) questions =
   let form, init_cmd = Huh.Form.init backend.form_env form in
   ({ kind; form; fields }, Cmd.map (fun value -> Dialog_msg value) init_cmd)
 
-let session_dialog (backend : backend) =
+let session_dialog (backend : backend) (rows : session list) =
   let options =
-    List.map
-      (fun (value : session) -> (value.id, value.title ^ " — " ^ value.model))
-      (backend.sessions ())
+    List.map (fun (value : session) -> (value.id, value.title ^ " — " ^ value.model)) rows
   in
-  make_dialog backend
-    (Session_dialog (backend.sessions ()))
+  make_dialog backend (Session_dialog rows)
     [
       {
         Tool.header = "session";
@@ -504,14 +526,11 @@ let session_dialog (backend : backend) =
       };
     ]
 
-let model_dialog (backend : backend) =
+let model_dialog (backend : backend) (rows : model list) =
   let options =
-    List.map
-      (fun (value : model) -> (value.id, value.provider ^ " — " ^ value.id))
-      (backend.models ())
+    List.map (fun (value : model) -> (value.id, value.provider ^ " — " ^ value.id)) rows
   in
-  make_dialog backend
-    (Model_dialog (backend.models ()))
+  make_dialog backend (Model_dialog rows)
     [
       {
         Tool.header = "model";
@@ -766,30 +785,19 @@ let append_agent_event (m : ui_model) = function
           expanded = true;
         }
 
-let next_event backend =
-  match Bridge.take_event backend.events with
-  | Some event -> Agent_event event
-  | None -> Agent_stream_closed
+(* One stream per bridge queue, built once per run in [init]. [Charamel_tea] reads each
+   distinct stream with a single task, so the queues are drained continuously while the
+   program runs, and a queue that closes ends its stream without stopping the run. *)
 
-let next_question backend =
-  match Bridge.take_question backend.events with
-  | Some request -> Question_request request
-  | None -> Question_stream_closed
+let feed take wrap backend =
+  Lwt_stream.from (fun () -> take backend.events >|= Option.map wrap)
 
-let next_permission backend =
-  match Bridge.take_permission backend.events with
-  | Some request -> Permission_request request
-  | None -> Permission_stream_closed
-
-let poll_events m =
-  if m.closed_events then Cmd.none else Cmd.perform (fun () -> next_event m.backend)
-
-let poll_questions m =
-  if m.closed_questions then Cmd.none else Cmd.perform (fun () -> next_question m.backend)
-
-let poll_permissions m =
-  if m.closed_permissions then Cmd.none
-  else Cmd.perform (fun () -> next_permission m.backend)
+let feeds backend =
+  [
+    feed Bridge.take_event (fun event -> Agent_event event) backend;
+    feed Bridge.take_question (fun request -> Question_request request) backend;
+    feed Bridge.take_permission (fun request -> Permission_request request) backend;
+  ]
 
 let prompt_attachments backend text =
   let tokens = String.split_on_char ' ' text in
@@ -810,28 +818,29 @@ let prompt_command m text =
     Cmd.none
   end
   else
-    match prompt_attachments m.backend text with
-    | Error error ->
-        m.status <- error;
-        Cmd.none
-    | Ok (prompt, attachments) ->
-        if String.trim prompt = "" then Cmd.none
-        else begin
-          append m
-            {
-              kind = User;
-              text = prompt;
-              id = None;
-              name = None;
-              input = None;
-              elapsed_ms = None;
-              expanded = true;
-            };
-          m.pending_prompt <- Some text;
-          Cmd.perform (fun () ->
-              Agent.prompt !(m.backend.agent) ~attachments prompt |> fun result ->
-              Prompt_result result)
-        end
+    Cmd.await
+      (Lwt_direct.spawn (fun () ->
+           match prompt_attachments m.backend text with
+           | Error error -> Command_result error
+           | Ok (prompt, attachments) ->
+               if String.trim prompt = "" then Noop
+               else begin
+                 append m
+                   {
+                     kind = User;
+                     text = prompt;
+                     id = None;
+                     name = None;
+                     input = None;
+                     elapsed_ms = None;
+                     expanded = true;
+                   };
+                 m.pending_prompt <- Some text;
+                 let result =
+                   Lwt_direct.await (Agent.prompt !(m.backend.agent) ~attachments prompt)
+                 in
+                 Prompt_result result
+               end))
 
 let command m text =
   let words =
@@ -846,32 +855,28 @@ let command m text =
         "/model /sessions /new /compact /plan /propose /yolo /login /logout /quit";
       Cmd.none
   | [ "/sessions" ] ->
-      let dialog, cmd = session_dialog m.backend in
+      let dialog, cmd = session_dialog m.backend m.session_rows in
       m.dialog <- Some dialog;
       cmd
   | [ "/models" ] | [ "/model" ] ->
-      let dialog, cmd = model_dialog m.backend in
+      let dialog, cmd = model_dialog m.backend m.model_rows in
       m.dialog <- Some dialog;
       cmd
   | [ "/new" ] ->
-      (match m.backend.new_session () with
-      | Ok agent ->
-          m.backend.agent := agent;
-          m.chat <- [];
-          refresh_viewport m;
-          m.status <- "new conversation"
-      | Error error -> m.status <- error);
-      Cmd.none
+      Cmd.await
+        (Lwt_direct.spawn (fun () -> New_session_result (m.backend.new_session ())))
   | [ "/compact" ] ->
-      Cmd.perform (fun () ->
-          match Agent.compact !(m.backend.agent) with
-          | Ok () -> Command_result "compacted"
-          | Error error -> Command_result (Fmt.str "%a" Agent.pp_error error))
+      Cmd.await
+        (Lwt_direct.spawn (fun () ->
+             match Lwt_direct.await (Agent.compact !(m.backend.agent)) with
+             | Ok () -> Command_result "compacted"
+             | Error error -> Command_result (Fmt.str "%a" Agent.pp_error error)))
   | [ "/plan" ] ->
-      (match m.backend.set_plan_mode true with
-      | Ok () -> m.status <- "plan mode enabled"
-      | Error error -> m.status <- error);
-      Cmd.none
+      Cmd.await
+        (Lwt_direct.spawn (fun () ->
+             match m.backend.set_plan_mode true with
+             | Ok () -> Command_result "plan mode enabled"
+             | Error error -> Command_result error))
   | [ "/propose" ] ->
       if m.backend.plan_mode () then (
         let dialog, cmd = proposal_dialog m.backend in
@@ -881,19 +886,21 @@ let command m text =
         m.status <- "not in plan mode";
         Cmd.none)
   | [ "/yolo" ] ->
-      (match m.backend.approve_session () with
-      | Ok () -> m.status <- "session permissions approved"
-      | Error error -> m.status <- error);
-      Cmd.none
+      Cmd.await
+        (Lwt_direct.spawn (fun () ->
+             match m.backend.approve_session () with
+             | Ok () -> Command_result "session permissions approved"
+             | Error error -> Command_result error))
   | [ "/login"; provider ] ->
       let dialog, cmd = oauth_dialog m.backend provider in
       m.dialog <- Some dialog;
       cmd
   | [ "/logout"; provider ] ->
-      (match m.backend.logout provider with
-      | Ok () -> m.status <- "logged out " ^ provider
-      | Error error -> m.status <- error);
-      Cmd.none
+      Cmd.await
+        (Lwt_direct.spawn (fun () ->
+             match m.backend.logout provider with
+             | Ok () -> Command_result ("logged out " ^ provider)
+             | Error error -> Command_result error))
   | _ ->
       m.status <- "unknown command; /help for commands";
       Cmd.none
@@ -932,33 +939,41 @@ let complete_dialog (m : ui_model) (dialog : dialog) =
   let values = field_answers dialog in
   match dialog.kind with
   | Session_dialog _ ->
-      (match selected_value values "session" with
-      | Some id -> (
-          match m.backend.resume_session id with
-          | Ok agent ->
-              m.backend.agent := agent;
-              m.chat <- history_chat m.backend;
-              refresh_viewport m;
-              m.status <- "resumed " ^ id
-          | Error error -> m.status <- error)
-      | None -> ());
-      finish_dialog m Cmd.none
+      let command =
+        match selected_value values "session" with
+        | Some id ->
+            Cmd.await
+              (Lwt_direct.spawn (fun () ->
+                   Resume_session_result (id, m.backend.resume_session id)))
+        | None -> Cmd.none
+      in
+      finish_dialog m command
   | Model_dialog _ ->
-      (match selected_value values "model" with
-      | Some id -> (
-          match m.backend.select_model id with
-          | Ok () -> m.status <- "model " ^ id
-          | Error error -> m.status <- error)
-      | None -> ());
-      finish_dialog m Cmd.none
+      let command =
+        match selected_value values "model" with
+        | Some id ->
+            Cmd.await
+              (Lwt_direct.spawn (fun () ->
+                   match m.backend.select_model id with
+                   | Ok () -> Command_result ("model " ^ id)
+                   | Error error -> Command_result error))
+        | None -> Cmd.none
+      in
+      finish_dialog m command
   | Proposal_dialog ->
-      if selected_value values "approve" = Some "yes" then
-        begin match m.backend.set_plan_mode false with
-        | Ok () -> m.status <- "plan approved; execution enabled"
-        | Error error -> m.status <- error
+      let command =
+        if selected_value values "approve" = Some "yes" then
+          Cmd.await
+            (Lwt_direct.spawn (fun () ->
+                 match m.backend.set_plan_mode false with
+                 | Ok () -> Command_result "plan approved; execution enabled"
+                 | Error error -> Command_result error))
+        else begin
+          m.status <- "kept planning";
+          Cmd.none
         end
-      else m.status <- "kept planning";
-      finish_dialog m Cmd.none
+      in
+      finish_dialog m command
   | OAuth_dialog provider ->
       let code =
         match List.find_opt (fun answer -> answer.Tool.header = "code") values with
@@ -966,15 +981,16 @@ let complete_dialog (m : ui_model) (dialog : dialog) =
         | _ -> ""
       in
       let command =
-        Cmd.perform (fun () ->
-            match m.backend.login provider code with
-            | Ok () -> Command_result ("logged in " ^ provider)
-            | Error error -> Command_result error)
+        Cmd.await
+          (Lwt_direct.spawn (fun () ->
+               match m.backend.login provider code with
+               | Ok () -> Command_result ("logged in " ^ provider)
+               | Error error -> Command_result error))
       in
       finish_dialog m command
   | Questions_dialog request ->
       Bridge.answer m.backend.events request (Ok values);
-      finish_dialog m (poll_questions m)
+      finish_dialog m Cmd.none
   | Permission_dialog request ->
       let decision =
         match selected_value values "decision" with
@@ -983,7 +999,7 @@ let complete_dialog (m : ui_model) (dialog : dialog) =
         | _ -> Permission.Deny
       in
       Bridge.answer_permission m.backend.events request decision;
-      finish_dialog m (poll_permissions m)
+      finish_dialog m Cmd.none
 
 let update_dialog (m : ui_model) (dialog : dialog) message =
   let form, command = Huh.Form.update message dialog.form in
@@ -996,10 +1012,10 @@ let update_dialog (m : ui_model) (dialog : dialog) message =
         match dialog.kind with
         | Questions_dialog request ->
             Bridge.answer m.backend.events request (Error `Aborted);
-            finish_dialog m (poll_questions m)
+            finish_dialog m Cmd.none
         | Permission_dialog request ->
             Bridge.answer_permission m.backend.events request Permission.Deny;
-            finish_dialog m (poll_permissions m)
+            finish_dialog m Cmd.none
         | _ -> finish_dialog m Cmd.none
       in
       Cmd.batch [ command; continuation ]
@@ -1010,18 +1026,13 @@ let update_dialog (m : ui_model) (dialog : dialog) message =
 let rec update (m : ui_model) = function
   | Agent_event event ->
       append_agent_event m event;
-      poll_events m
-  | Agent_stream_closed ->
-      m.closed_events <- true;
       Cmd.none
   | Question_request request -> enqueue_dialog m (Question_dialog_request request)
-  | Question_stream_closed ->
-      m.closed_questions <- true;
-      Cmd.none
-  | Permission_stream_closed ->
-      m.closed_permissions <- true;
-      Cmd.none
   | Permission_request request -> enqueue_dialog m (Permission_dialog_request request)
+  | Viewport_msg message ->
+      let viewport, command = Viewport.update message m.viewport in
+      m.viewport <- viewport;
+      Cmd.map (fun _ -> Tick) command
   | Editor_msg message ->
       let editor, command = Textarea.update message m.editor in
       m.editor <- editor;
@@ -1050,15 +1061,47 @@ let rec update (m : ui_model) = function
   | Command_result text ->
       m.status <- text;
       Cmd.none
+  | New_session_result result ->
+      (match result with
+      | Ok agent ->
+          m.backend.agent := agent;
+          m.chat <- [];
+          refresh_viewport m;
+          m.status <- "new conversation"
+      | Error error -> m.status <- error);
+      Cmd.none
+  | Resume_session_result (id, result) ->
+      (match result with
+      | Ok agent ->
+          m.backend.agent := agent;
+          m.chat <- history_chat m.backend;
+          refresh_viewport m;
+          m.status <- "resumed " ^ id
+      | Error error -> m.status <- error);
+      Cmd.none
+  | Sessions_refreshed rows ->
+      m.session_rows <- rows;
+      m.sessions <- sessions_widget m.backend rows;
+      Cmd.none
+  | Models_refreshed rows ->
+      m.model_rows <- rows;
+      Cmd.none
+  | Noop -> Cmd.none
   | Tick ->
       let dark = m.backend.dark () in
       if dark <> m.dark then begin
         m.dark <- dark;
         m.editor <- Textarea.set_styles (Textarea.default_styles ~is_dark:dark) m.editor
       end;
-      m.sessions <- sessions_list m.backend;
       refresh_viewport m;
-      Cmd.none
+      (* The refresh functions are pure and synchronous, so delivering their results as
+         an already-resolved promise keeps the command shape while avoiding the
+         [Lwt_main]-only spawn queue. *)
+      Cmd.batch
+        [
+          Cmd.await (Lwt.return (Sessions_refreshed (m.backend.sessions ())));
+          Cmd.await (Lwt.return (Models_refreshed (m.backend.models ())));
+        ]
   | Resize (rows, cols) ->
       m.rows <- max 1 rows;
       m.cols <- max 1 cols;
@@ -1073,10 +1116,10 @@ let rec update (m : ui_model) = function
           match dialog.kind with
           | Questions_dialog request ->
               Bridge.answer m.backend.events request (Error `Aborted);
-              finish_dialog m (poll_questions m)
+              finish_dialog m Cmd.none
           | Permission_dialog request ->
               Bridge.answer_permission m.backend.events request Permission.Deny;
-              finish_dialog m (poll_permissions m)
+              finish_dialog m Cmd.none
           | _ -> finish_dialog m Cmd.none)
       | Some _ -> (
           match dialog_key key with None -> Cmd.none | Some msg -> update m msg)
@@ -1090,11 +1133,11 @@ let rec update (m : ui_model) = function
             m.status <- "press ctrl+c again to quit";
             Cmd.none)
       | None when name = "ctrl+p" ->
-          let dialog, cmd = session_dialog m.backend in
+          let dialog, cmd = session_dialog m.backend m.session_rows in
           m.dialog <- Some dialog;
           cmd
       | None when name = "ctrl+o" ->
-          let dialog, cmd = model_dialog m.backend in
+          let dialog, cmd = model_dialog m.backend m.model_rows in
           m.dialog <- Some dialog;
           cmd
       | None when name = "ctrl+g" ->
@@ -1102,12 +1145,12 @@ let rec update (m : ui_model) = function
             let dialog, cmd = proposal_dialog m.backend in
             m.dialog <- Some dialog;
             cmd)
-          else begin
-            (match m.backend.set_plan_mode true with
-            | Ok () -> m.status <- "plan mode enabled"
-            | Error error -> m.status <- error);
-            Cmd.none
-          end
+          else
+            Cmd.await
+              (Lwt_direct.spawn (fun () ->
+                   match m.backend.set_plan_mode true with
+                   | Ok () -> Command_result "plan mode enabled"
+                   | Error error -> Command_result error))
       | None when name = "ctrl+x" ->
           (match List.rev m.chat with
           | item :: rest when item.kind = Tool_start || item.kind = Tool_result ->
@@ -1121,10 +1164,7 @@ let rec update (m : ui_model) = function
           | Some message -> update m (Editor_msg message)
           | None -> (
               match Viewport.key m.viewport key with
-              | Some message ->
-                  let viewport, command = Viewport.update message m.viewport in
-                  m.viewport <- viewport;
-                  Cmd.map (fun _ -> Tick) command
+              | Some message -> update m (Viewport_msg message)
               | None -> Cmd.none)))
 
 let init (backend : backend) =
@@ -1137,9 +1177,12 @@ let init (backend : backend) =
   let model =
     {
       backend;
+      feeds = feeds backend;
       viewport = Viewport.v ~width:(cols - 28) ~height:(rows - 7) ~soft_wrap:true ();
       editor;
-      sessions = sessions_list backend;
+      session_rows = [];
+      sessions = sessions_widget backend [];
+      model_rows = [];
       chat = history_chat backend;
       status = "";
       dialog = None;
@@ -1148,9 +1191,6 @@ let init (backend : backend) =
       rows;
       cols;
       dark = backend.dark ();
-      closed_events = false;
-      closed_questions = false;
-      closed_permissions = false;
       pending_prompt = None;
       last_ctrl_c = false;
     }
@@ -1159,21 +1199,28 @@ let init (backend : backend) =
   ( model,
     Cmd.batch
       [
-        poll_events model;
-        poll_questions model;
-        poll_permissions model;
         Cmd.map (fun value -> Editor_msg value) editor_cmd;
+        Cmd.await (Lwt.return (Sessions_refreshed (backend.sessions ())));
+        Cmd.await (Lwt.return (Models_refreshed (backend.models ())));
         Cmd.msg Tick;
       ] )
 
+let mouse_msg (m : ui_model) mouse =
+  match Viewport.mouse m.viewport mouse with
+  | Some message -> Viewport_msg message
+  | None -> Noop
+
 let subscriptions m =
   Sub.batch
-    [
-      Sub.key (fun key -> Key key);
-      Sub.resize (fun ~rows ~cols -> Resize (rows, cols));
-      Sub.map (fun value -> Editor_msg value) (Textarea.subscriptions m.editor);
-      Sub.map (fun _ -> Tick) (Bubble_list.subscriptions m.sessions);
-    ]
+    (List.append
+       [
+         Sub.key (fun key -> Key key);
+         Sub.resize (fun ~rows ~cols -> Resize (rows, cols));
+         Sub.mouse (mouse_msg m);
+         Sub.map (fun value -> Editor_msg value) (Textarea.subscriptions m.editor);
+         Sub.map (fun _ -> Tick) (Bubble_list.subscriptions m.sessions);
+       ]
+       (List.map Sub.stream m.feeds))
 
 let app backend : (ui_model, ui_msg) Charamel_tea.app =
   {
@@ -1184,11 +1231,12 @@ let app backend : (ui_model, ui_msg) Charamel_tea.app =
   }
 
 let run backend =
-  Fun.protect
-    ~finally:(fun () ->
+  Lwt.finalize
+    (fun () -> Charamel_tea.run ~clock:backend.clock (app backend))
+    (fun () ->
       Agent.cancel !(backend.agent);
-      Bridge.close backend.events)
-    (fun () -> Charamel_tea.run ~clock:backend.clock (app backend) backend.env)
+      Bridge.close backend.events;
+      Lwt.return_unit)
 
 let run_with backend ~events ~size =
   let events = `Wait 0. :: events in

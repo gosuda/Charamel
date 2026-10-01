@@ -1,33 +1,29 @@
+open Json
+
 type item = bool -> Jsont.json
 
-let jstr s = Jsont.Json.string s
-let jint i = Jsont.Json.int i
-let jfloat f = Jsont.Json.number f
-let jlist l = Jsont.Json.list l
-let jobj ms = Jsont.Json.object' ms
-let jm k v = Jsont.Json.(mem (name k) v)
-let jtrue = Jsont.Json.bool true
-let cache_control = jobj [ jm "type" (jstr "ephemeral") ]
+let jm k v = Jsont.Json.mem (n k) v
+let cache_control = obj [ jm "type" (str "ephemeral") ]
 
 let with_cache (ms : Jsont.mem list) cache =
   if cache then ms @ [ jm "cache_control" cache_control ] else ms
 
 let base64_source mime data =
-  jobj [ jm "type" (jstr "base64"); jm "media_type" (jstr mime); jm "data" (jstr data) ]
+  obj [ jm "type" (str "base64"); jm "media_type" (str mime); jm "data" (str data) ]
 
-let text_source data = jobj [ jm "type" (jstr "text"); jm "data" (jstr data) ]
+let text_source data = obj [ jm "type" (str "text"); jm "data" (str data) ]
 
 let text_item s cache =
-  jobj (with_cache [ jm "type" (jstr "text"); jm "text" (jstr s) ] cache)
+  obj (with_cache [ jm "type" (str "text"); jm "text" (str s) ] cache)
 
 let image_item mime data cache =
-  jobj
-    (with_cache [ jm "type" (jstr "image"); jm "source" (base64_source mime data) ] cache)
+  obj
+    (with_cache [ jm "type" (str "image"); jm "source" (base64_source mime data) ] cache)
 
 let document_item ?name source cache =
-  let ms = [ jm "type" (jstr "document"); jm "source" source ] in
-  let ms = match name with Some n -> ms @ [ jm "title" (jstr n) ] | None -> ms in
-  jobj (with_cache ms cache)
+  let ms = [ jm "type" (str "document"); jm "source" source ] in
+  let ms = match name with Some n -> ms @ [ jm "title" (str n) ] | None -> ms in
+  obj (with_cache ms cache)
 
 let file_item ~mime ~data ?name cache =
   if String.starts_with ~prefix:"image/" mime then image_item mime data cache
@@ -44,32 +40,30 @@ let tool_result_item ~id output cache =
   in
   let ms =
     [
-      jm "type" (jstr "tool_result");
-      jm "tool_use_id" (jstr id);
-      jm "content" (jlist content);
+      jm "type" (str "tool_result"); jm "tool_use_id" (str id); jm "content" (arr content);
     ]
   in
-  let ms = if is_error then ms @ [ jm "is_error" jtrue ] else ms in
-  jobj (with_cache ms cache)
+  let ms = if is_error then ms @ [ jm "is_error" (bool true) ] else ms in
+  obj (with_cache ms cache)
 
 let tool_use_item ~id ~name input cache =
-  jobj
+  obj
     (with_cache
        [
-         jm "type" (jstr "tool_use");
-         jm "id" (jstr id);
-         jm "name" (jstr name);
+         jm "type" (str "tool_use");
+         jm "id" (str id);
+         jm "name" (str name);
          jm "input" input;
        ]
        cache)
 
 let thinking_item ~text ~signature cache =
-  jobj
+  obj
     (with_cache
        [
-         jm "type" (jstr "thinking");
-         jm "thinking" (jstr text);
-         jm "signature" (jstr signature);
+         jm "type" (str "thinking");
+         jm "thinking" (str text);
+         jm "signature" (str signature);
        ]
        cache)
 
@@ -98,25 +92,14 @@ let system_texts (r : Request.t) =
   let prefix =
     match r.Request.auth with Request.Oauth -> [ oauth_system ] | Request.Api_key -> []
   in
-  let from_messages =
-    List.concat_map
-      (fun (m : Message.t) ->
-        match m.Message.role with
-        | Message.System ->
-            List.filter_map
-              (fun p -> match p with Message.Text s -> Some s | _ -> None)
-              m.Message.parts
-        | Message.User | Message.Assistant | Message.Tool -> [])
-      r.Request.messages
-  in
-  prefix @ r.Request.system @ from_messages
+  prefix @ Request.system_blocks r
 
 let system_json (r : Request.t) =
   match system_texts r with
   | [] -> []
   | texts ->
       let last = List.length texts - 1 in
-      [ jm "system" (jlist (List.mapi (fun i s -> text_item s (i = last)) texts)) ]
+      [ jm "system" (arr (List.mapi (fun i s -> text_item s (i = last)) texts)) ]
 
 let wire_role (m : Message.t) =
   match m.Message.role with
@@ -148,10 +131,10 @@ let content_of is_user ms =
 let message_json is_user items cache =
   let last = List.length items - 1 in
   let role = if is_user then "user" else "assistant" in
-  jobj
+  obj
     [
-      jm "role" (jstr role);
-      jm "content" (jlist (List.mapi (fun i f -> f (cache && i = last)) items));
+      jm "role" (str role);
+      jm "content" (arr (List.mapi (fun i f -> f (cache && i = last)) items));
     ]
 
 let messages_json (r : Request.t) =
@@ -184,14 +167,14 @@ let tools_json (tools : Tool.t list) =
       let last = List.length tools - 1 in
       [
         jm "tools"
-          (jlist
+          (arr
              (List.mapi
                 (fun i (t : Tool.t) ->
-                  jobj
+                  obj
                     (with_cache
                        [
-                         jm "name" (jstr t.Tool.name);
-                         jm "description" (jstr t.Tool.description);
+                         jm "name" (str t.Tool.name);
+                         jm "description" (str t.Tool.description);
                          jm "input_schema" t.Tool.schema;
                        ]
                        (i = last)))
@@ -204,34 +187,30 @@ let budget = function
   | Request.Medium -> Some 8192
   | Request.High -> Some 32768
 
-let effective_max_tokens (r : Request.t) =
-  if r.Request.max_tokens > 0 then r.Request.max_tokens
-  else r.Request.model.Model.default_max_tokens
-
 let thinking_budget (r : Request.t) =
   Option.bind (budget r.Request.reasoning) (fun requested ->
-      let clamped = min requested (effective_max_tokens r - 1) in
+      let clamped = min requested (Request.effective_max_tokens r - 1) in
       if clamped > 0 then Some clamped else None)
 
 let thinking_json (r : Request.t) =
   match thinking_budget r with
   | None -> []
   | Some b ->
-      [ jm "thinking" (jobj [ jm "type" (jstr "enabled"); jm "budget_tokens" (jint b) ]) ]
+      [ jm "thinking" (obj [ jm "type" (str "enabled"); jm "budget_tokens" (int b) ]) ]
 
 let temperature_json (r : Request.t) =
   match (thinking_budget r, r.Request.temperature) with
   | Some _, _ -> []
   | None, None -> []
-  | None, Some t -> [ jm "temperature" (jfloat t) ]
+  | None, Some t -> [ jm "temperature" (num t) ]
 
 let encode (r : Request.t) =
-  jobj
+  obj
     ([
-       jm "model" (jstr r.Request.model.Model.id);
-       jm "max_tokens" (jint (effective_max_tokens r));
-       jm "stream" jtrue;
-       jm "messages" (jlist (messages_json r));
+       jm "model" (str r.Request.model.Model.id);
+       jm "max_tokens" (int (Request.effective_max_tokens r));
+       jm "stream" (bool true);
+       jm "messages" (arr (messages_json r));
      ]
     @ system_json r @ tools_json r.Request.tools @ thinking_json r @ temperature_json r)
 
@@ -257,13 +236,7 @@ let create () =
     terminated = false;
   }
 
-let valid_arguments args =
-  args = ""
-  ||
-  match Jsont_bytesrw.decode_string Jsont.json args with
-  | Ok _ -> true
-  | Error _ -> false
-
+let valid_arguments args = args = "" || Json.valid_json args
 let or_zero = Option.value ~default:0
 let replace_present current = function Some n -> n | None -> current
 
@@ -378,23 +351,21 @@ let content_block_stop t j =
       else malformed t "tool call arguments are not valid JSON"
   | Some Text | Some Thinking | None -> []
 
+let take_usage t usage =
+  match usage with
+  | Some u when Json.is_object u ->
+      t.usage <- snapshot_usage t.usage u;
+      t.have_usage <- true
+  | Some _ | None -> ()
+
 let message_start t j =
   (match Json.oopt j "message" with
-  | Some m when Json.is_object m -> (
-      match Json.oopt m "usage" with
-      | Some u when Json.is_object u ->
-          t.usage <- snapshot_usage t.usage u;
-          t.have_usage <- true
-      | Some _ | None -> ())
+  | Some m when Json.is_object m -> take_usage t (Json.oopt m "usage")
   | Some _ | None -> ());
   []
 
 let message_delta t j =
-  (match Json.oopt j "usage" with
-  | Some u when Json.is_object u ->
-      t.usage <- snapshot_usage t.usage u;
-      t.have_usage <- true
-  | Some _ | None -> ());
+  take_usage t (Json.oopt j "usage");
   (match Json.oopt j "delta" with
   | Some d -> (
       match Json.string_mem d "stop_reason" with

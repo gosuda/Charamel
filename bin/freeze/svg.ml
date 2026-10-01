@@ -4,70 +4,34 @@ type run = {
   text : string;
   fg : Charamel_ansi.Color.t;
   bg : Charamel_ansi.Color.t;
+  underline_color : Charamel_ansi.Color.t;
   bold : bool;
   faint : bool;
   italic : bool;
   underline : Charamel_ansi.Style.underline;
   strike : bool;
   conceal : bool;
-  blink : bool;
-  reverse : bool;
   link : string option;
 }
 
-type style = {
-  fg : Charamel_ansi.Color.t;
-  bg : Charamel_ansi.Color.t;
-  bold : bool;
-  faint : bool;
-  italic : bool;
-  underline : Charamel_ansi.Style.underline;
-  strike : bool;
-  conceal : bool;
-  blink : bool;
-  reverse : bool;
-  link : string option;
-}
+type style = { sgr : Charamel_ansi.Style.t; link : string option }
 
-let default_style =
-  {
-    fg = Charamel_ansi.Color.Default;
-    bg = Charamel_ansi.Color.Default;
-    bold = false;
-    faint = false;
-    italic = false;
-    underline = Charamel_ansi.Style.No_underline;
-    strike = false;
-    conceal = false;
-    blink = false;
-    reverse = false;
-    link = None;
-  }
-
-let style_equal a b =
-  Charamel_ansi.Color.equal a.fg b.fg
-  && Charamel_ansi.Color.equal a.bg b.bg
-  && Bool.equal a.bold b.bold && Bool.equal a.faint b.faint
-  && Bool.equal a.italic b.italic && a.underline = b.underline
-  && Bool.equal a.strike b.strike
-  && Bool.equal a.conceal b.conceal
-  && Bool.equal a.blink b.blink
-  && Bool.equal a.reverse b.reverse
-  && a.link = b.link
+let default_style = { sgr = Charamel_ansi.Style.default; link = None }
+let style_equal a b = Charamel_ansi.Style.equal a.sgr b.sgr && a.link = b.link
 
 let run_of_style style text =
+  let sgr = style.sgr in
   {
     text;
-    fg = style.fg;
-    bg = style.bg;
-    bold = style.bold;
-    faint = style.faint;
-    italic = style.italic;
-    underline = style.underline;
-    strike = style.strike;
-    conceal = style.conceal;
-    blink = style.blink;
-    reverse = style.reverse;
+    fg = sgr.fg;
+    bg = sgr.bg;
+    underline_color = sgr.underline_color;
+    bold = sgr.bold;
+    faint = sgr.faint;
+    italic = sgr.italic;
+    underline = sgr.underline;
+    strike = sgr.strike;
+    conceal = sgr.conceal;
     link = style.link;
   }
 
@@ -77,132 +41,30 @@ let parse_runs text =
     Charamel_ansi.Parser.feed parser text @ Charamel_ansi.Parser.flush parser
   in
   let lines = ref [] in
-  let current = ref [] in
+  let pending : (style * string) list ref = ref [] in
   let style = ref default_style in
   let push_run text =
     if text <> "" then
-      match !current with
-      | (previous : run) :: rest
-        when style_equal !style
-               {
-                 fg = previous.fg;
-                 bg = previous.bg;
-                 bold = previous.bold;
-                 faint = previous.faint;
-                 italic = previous.italic;
-                 underline = previous.underline;
-                 strike = previous.strike;
-                 conceal = previous.conceal;
-                 blink = previous.blink;
-                 reverse = previous.reverse;
-                 link = previous.link;
-               } ->
-          current := { previous with text = previous.text ^ text } :: rest
-      | _ -> current := run_of_style !style text :: !current
+      match !pending with
+      | (previous_style, previous_text) :: rest when style_equal !style previous_style ->
+          pending := (previous_style, previous_text ^ text) :: rest
+      | _ -> pending := (!style, text) :: !pending
   in
   let finish_line () =
-    lines := List.rev !current :: !lines;
-    current := []
+    let runs = List.map (fun (run_style, text) -> run_of_style run_style text) !pending in
+    lines := List.rev runs :: !lines;
+    pending := []
   in
-  let clamp value = max 0 (min 255 value) in
-  let rgb r g b =
-    match Charamel_ansi.Color.rgb (clamp r) (clamp g) (clamp b) with
-    | Some value -> value
-    | None -> Charamel_ansi.Color.Default
-  in
-  let param values index =
-    match List.nth_opt values index with
-    | Some (Some value :: _) -> Some value
-    | Some (None :: _) | Some [] | None -> None
-  in
-  let colon values index subindex =
-    Option.bind (List.nth_opt values index) (fun value ->
-        Option.bind (List.nth_opt value subindex) Fun.id)
-  in
-  let update_sgr values =
-    let values = if values = [] then [ [ Some 0 ] ] else values in
-    let next = ref !style in
-    let set_fg value = next := { !next with fg = value } in
-    let set_bg value = next := { !next with bg = value } in
-    let set_underline value = next := { !next with underline = value } in
-    let rec loop index =
-      if index >= List.length values then style := !next
-      else
-        match param values index with
-        | None -> loop (index + 1)
-        | Some value ->
-            let next_index = ref (index + 1) in
-            (match value with
-            | 0 -> next := default_style
-            | 1 -> next := { !next with bold = true }
-            | 2 -> next := { !next with faint = true }
-            | 3 -> next := { !next with italic = true }
-            | 4 ->
-                let underline =
-                  match colon values index 1 with
-                  | Some 2 -> Charamel_ansi.Style.Double
-                  | Some 3 -> Charamel_ansi.Style.Curly
-                  | Some 4 -> Charamel_ansi.Style.Dotted
-                  | Some 5 -> Charamel_ansi.Style.Dashed
-                  | _ -> Charamel_ansi.Style.Single
-                in
-                set_underline underline
-            | 5 | 6 -> next := { !next with blink = true }
-            | 7 -> next := { !next with reverse = true }
-            | 8 -> next := { !next with conceal = true }
-            | 9 -> next := { !next with strike = true }
-            | 22 -> next := { !next with bold = false; faint = false }
-            | 23 -> next := { !next with italic = false }
-            | 24 -> set_underline Charamel_ansi.Style.No_underline
-            | 25 -> next := { !next with blink = false }
-            | 27 -> next := { !next with reverse = false }
-            | 28 -> next := { !next with conceal = false }
-            | 29 -> next := { !next with strike = false }
-            | value when value >= 30 && value <= 37 ->
-                set_fg (Charamel_ansi.Color.Basic (value - 30))
-            | 39 -> set_fg Charamel_ansi.Color.Default
-            | value when value >= 40 && value <= 47 ->
-                set_bg (Charamel_ansi.Color.Basic (value - 40))
-            | 49 -> set_bg Charamel_ansi.Color.Default
-            | value when value >= 90 && value <= 97 ->
-                set_fg (Charamel_ansi.Color.Basic (value - 90 + 8))
-            | value when value >= 100 && value <= 107 ->
-                set_bg (Charamel_ansi.Color.Basic (value - 100 + 8))
-            | 38 | 48 | 58 -> (
-                let target =
-                  match value with
-                  | 38 -> `Foreground
-                  | 48 -> `Background
-                  | _ -> `Underline
-                in
-                let mode = param values (index + 1) in
-                match mode with
-                | Some 5 -> (
-                    next_index := index + 3;
-                    match param values (index + 2) with
-                    | Some palette -> (
-                        let color = Charamel_ansi.Color.Indexed (clamp palette) in
-                        match target with
-                        | `Foreground -> set_fg color
-                        | `Background -> set_bg color
-                        | `Underline -> ())
-                    | None -> ())
-                | Some 2 -> (
-                    next_index := index + 5;
-                    let r = Option.value (param values (index + 2)) ~default:0 in
-                    let g = Option.value (param values (index + 3)) ~default:0 in
-                    let b = Option.value (param values (index + 4)) ~default:0 in
-                    let color = rgb r g b in
-                    match target with
-                    | `Foreground -> set_fg color
-                    | `Background -> set_bg color
-                    | `Underline -> ())
-                | _ -> ())
-            | 59 -> ()
-            | _ -> ());
-            loop !next_index
+  let update_sgr params =
+    let params = if params = [] then [ [ Some 0 ] ] else params in
+    let resets =
+      List.exists (function [] | None :: _ | Some 0 :: _ -> true | _ -> false) params
     in
-    loop 0
+    style :=
+      {
+        sgr = Charamel_ansi.Style.of_sgr ~params !style.sgr;
+        link = (if resets then None else !style.link);
+      }
   in
   let handle = function
     | Charamel_ansi.Parser.Print text -> push_run text
@@ -284,6 +146,9 @@ let style_attrs (run : run) =
   in
   if decorations <> [] then
     Buffer.add_string buffer (attr "text-decoration" (String.concat " " decorations));
+  Option.iter
+    (fun color -> Buffer.add_string buffer (attr "undercolor" color))
+    (color_hex run.underline_color);
   Buffer.contents buffer
 
 let render_runs ~char_width ~line_height ~x ~y ~tab_width runs =
@@ -314,11 +179,26 @@ let render_runs ~char_width ~line_height ~x ~y ~tab_width runs =
     runs;
   (Buffer.contents backgrounds, Buffer.contents text)
 
-let read_font fs config =
+let read_font_bytes path =
+  let ic = open_in_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr ic)
+    (fun () ->
+      let length = in_channel_length ic in
+      let bytes = Bytes.create length in
+      really_input ic bytes 0 length;
+      Bytes.unsafe_to_string bytes)
+
+let read_font ~fs_root config =
   if config.Config.font.Config.file = "" then Ok ""
   else
+    let path =
+      if Filename.is_relative config.Config.font.Config.file then
+        Filename.concat fs_root config.Config.font.Config.file
+      else config.Config.font.Config.file
+    in
     try
-      let bytes = Eio.Path.(load (fs / config.Config.font.Config.file)) in
+      let bytes = read_font_bytes path in
       let encoded = Base64.encode_string bytes in
       let extension =
         String.lowercase_ascii (Filename.extension config.Config.font.Config.file)
@@ -339,13 +219,14 @@ let read_font fs config =
              (xml_escape config.Config.font.Config.family)
              format encoded format)
     with
-    | Eio.Io _ -> Error (Fmt.str "could not read font %s" config.Config.font.Config.file)
+    | Sys_error _ ->
+        Error (Fmt.str "could not read font %s" config.Config.font.Config.file)
     | Unix.Unix_error (error, function_name, argument) ->
         Error
           (Fmt.str "could not read font %s: %s (%s %s)" config.Config.font.Config.file
              (Unix.error_message error) function_name argument)
 
-let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
+let render ~fs_root ~(config : Config.t) ~language ~text ~is_ansi =
   let source =
     if is_ansi then text
     else
@@ -444,7 +325,7 @@ let render ~fs ~(config : Config.t) ~language ~text ~is_ansi =
     and terminal_height = max 1. terminal_height in
     let terminal_x = max margin.(3) (border_width /. 2.) in
     let terminal_y = max margin.(0) (border_width /. 2.) in
-    let font_css = read_font fs config in
+    let font_css = read_font ~fs_root config in
     match font_css with
     | Error _ as error -> error
     | Ok font_css ->

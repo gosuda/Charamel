@@ -5,15 +5,9 @@ module Layout = Charamel_lipgloss.Layout
 module Text = Charamel_ansi.Text
 module Color = Charamel_ansi.Color
 
-let clamp n lo hi =
-  let lo, hi = if lo <= hi then (lo, hi) else (hi, lo) in
-  max lo (min hi n)
-
-let color_hex value =
-  match Color.of_hex value with Some color -> color | None -> Color.Default
-
 let light_dark ~is_dark ~light ~dark =
-  Charamel_lipgloss.light_dark ~is_dark ~light:(color_hex light) ~dark:(color_hex dark)
+  Charamel_lipgloss.light_dark ~is_dark ~light:(Color.of_hex_or light)
+    ~dark:(Color.of_hex_or dark)
 
 type filter_state = Unfiltered | Filtering | Filter_applied
 type rank = { index : int; matched : int list }
@@ -105,7 +99,7 @@ let default_styles ~is_dark =
       Style.foreground (light_dark ~is_dark ~light:"#8E8E8E" ~dark:"#747373") Style.empty;
     filter_prompt =
       Style.foreground (light_dark ~is_dark ~light:"#04B575" ~dark:"#ECFD65") Style.empty;
-    filter_cursor = Style.foreground (color_hex "#EE6FF8") Style.empty;
+    filter_cursor = Style.foreground (Color.of_hex_or "#EE6FF8") Style.empty;
     default_filter_character_match = Style.underline true Style.empty;
     status_bar =
       Style.padding
@@ -137,10 +131,11 @@ type 'a item_context = {
   width : int;
 }
 
-type 'a delegate = {
+type ('a, 'msg) delegate = {
   height : int;
   spacing : int;
   render : 'a item_context -> 'a -> string;
+  update : 'a item_context -> Charamel_tea.Key.t -> 'a -> ('a * 'msg) option;
   short_help : Key_binding.t list;
   full_help : Key_binding.t list list;
 }
@@ -169,10 +164,10 @@ let default_item_styles ~is_dark =
   let selected_title =
     Style.padding
       (Charamel_lipgloss.Sides.v ~left:1 ())
-      (Style.foreground (color_hex "#EE6FF8")
+      (Style.foreground (Color.of_hex_or "#EE6FF8")
          (Style.border_left true
             (Style.border_foreground
-               (Charamel_lipgloss.Sides_color.v ~left:(color_hex "#F793FF") ())
+               (Charamel_lipgloss.Sides_color.v ~left:(Color.of_hex_or "#F793FF") ())
                (Style.border Charamel_lipgloss.Border.normal Style.empty))))
   in
   let selected_desc =
@@ -238,7 +233,14 @@ let default_delegate ?(show_description = true) ?(height = 2) ?(spacing = 1) ?st
     let title = Style.render title_style title in
     if show_description then title ^ "\n" ^ Style.render desc_style desc else title
   in
-  { height; spacing = max 0 spacing; render; short_help = []; full_help = [] }
+  {
+    height;
+    spacing = max 0 spacing;
+    render;
+    update = (fun _ _ _ -> None);
+    short_help = [];
+    full_help = [];
+  }
 
 type 'a msg =
   | Cursor_up
@@ -256,6 +258,7 @@ type 'a msg =
   | Status_timeout of int
   | Spinner of Spinner.msg
   | Set_items of 'a list
+  | Delegate_msg of 'a * 'a msg
 
 type 'a filtered_item = { index : int; item : 'a; matched : int list }
 
@@ -265,6 +268,7 @@ type 'a t = {
   height : int;
   keymap : keymap;
   styles : styles;
+  is_dark : bool;
   filter : filter;
   filtering_enabled : bool;
   show_title : bool;
@@ -276,7 +280,7 @@ type 'a t = {
   status_message_lifetime : float;
   item_name_singular : string;
   item_name_plural : string;
-  delegate : 'a delegate;
+  delegate : ('a, 'a msg) delegate;
   filter_value_fn : 'a -> string;
   items : 'a list;
   filtered_items : 'a filtered_item list;
@@ -306,7 +310,7 @@ let input_styles ~is_dark styles =
   ({ focused; blurred; cursor } : Textinput.styles)
 
 let set_input_styles m =
-  Textinput.set_styles (input_styles ~is_dark:true m.styles) m.filter_input
+  Textinput.set_styles (input_styles ~is_dark:m.is_dark m.styles) m.filter_input
 
 let rec help_keymap m =
   { Help.short_help = short_help_impl m; full_help = full_help_impl m }
@@ -465,10 +469,9 @@ let update_pagination m =
   let paginator = Paginator.set_total_pages ~items:count paginator in
   let idx = (Paginator.page paginator * per_page) + m.cursor in
   let page =
-    clamp
-      (if per_page = 0 then 0 else idx / per_page)
-      0
+    Range.clamp 0
       (max 0 (Paginator.total_pages paginator - 1))
+      (if per_page = 0 then 0 else idx / per_page)
   in
   let cursor = idx mod per_page in
   update_keymap { m with paginator = Paginator.set_page page paginator; cursor }
@@ -518,6 +521,7 @@ let v ?(title = "List") ?(width = 0) ?(height = 0) ?(keymap = default_keymap)
       height = max 0 height;
       keymap;
       styles;
+      is_dark;
       filter;
       filtering_enabled;
       show_title;
@@ -574,7 +578,7 @@ let set_items items m =
 let select n m =
   let per_page = max 1 (Paginator.per_page m.paginator) in
   let count = Stdlib.List.length (visible_items m) in
-  let n = clamp n 0 (max 0 (count - 1)) in
+  let n = Range.clamp 0 (max 0 (count - 1)) n in
   update_pagination
     {
       m with
@@ -634,9 +638,10 @@ let next_page m =
       m with
       paginator = p;
       cursor =
-        clamp m.cursor 0
+        Range.clamp 0
           (max 0
-             (Paginator.items_on_page ~total:(Stdlib.List.length (visible_items m)) p - 1));
+             (Paginator.items_on_page ~total:(Stdlib.List.length (visible_items m)) p - 1))
+          m.cursor;
     }
 
 let prev_page m =
@@ -646,9 +651,10 @@ let prev_page m =
       m with
       paginator = p;
       cursor =
-        clamp m.cursor 0
+        Range.clamp 0
           (max 0
-             (Paginator.items_on_page ~total:(Stdlib.List.length (visible_items m)) p - 1));
+             (Paginator.items_on_page ~total:(Stdlib.List.length (visible_items m)) p - 1))
+          m.cursor;
     }
 
 let go_to_start m = select 0 m
@@ -659,6 +665,12 @@ let go_to_end m =
 
 let filter_state m = m.filter_state
 let filter_value m = Textinput.value m.filter_input
+let filter_input m = m.filter_input
+
+let view_cursor m =
+  if m.filter_state <> Filtering || not m.show_filter then None
+  else Textinput.cursor m.filter_input
+
 let setting_filter m = m.filter_state = Filtering
 let is_filtered m = m.filter_state = Filter_applied
 let filtering_enabled m = m.filtering_enabled
@@ -761,6 +773,7 @@ let full_help m = full_help_impl m
 let paginator m = m.paginator
 let keymap m = m.keymap
 let styles m = m.styles
+let is_dark m = m.is_dark
 
 let set_styles styles m =
   update_pagination { m with styles; filter_input = set_input_styles { m with styles } }
@@ -768,10 +781,13 @@ let set_styles styles m =
 let infinite_scrolling m = m.infinite_scrolling
 let set_infinite_scrolling value m = { m with infinite_scrolling = value }
 
-let update message m =
+let rec update message m =
   let m, cmd =
     match message with
     | Set_items items -> (set_items items m, Cmd.none)
+    | Delegate_msg (item, inner) ->
+        let m = set_item (global_index m) item m in
+        update inner m
     | Cursor_up -> (cursor_up m, Cmd.none)
     | Cursor_down -> (cursor_down m, Cmd.none)
     | Next_page -> (next_page m, Cmd.none)
@@ -820,13 +836,32 @@ let update message m =
   in
   (m, cmd)
 
-let key m key =
-  if m.filter_state = Filtering then
-    if Key_binding.matches key m.keymap.cancel_while_filtering then Some Cancel_filter
-    else if Key_binding.matches key m.keymap.accept_while_filtering then
-      Some Accept_filter
-    else Option.map (fun msg -> Filter_input msg) (Textinput.key m.filter_input key)
-  else if Key_binding.matches key m.keymap.clear_filter then Some Clear_filter
+let selected_item_context m =
+  let global = index m in
+  let matched, item =
+    match m.filter_state with
+    | Unfiltered -> ([], Stdlib.List.nth_opt m.items global)
+    | _ -> (
+        match Stdlib.List.nth_opt m.filtered_items global with
+        | Some x -> (x.matched, Some x.item)
+        | None -> ([], None))
+  in
+  match item with
+  | None -> None
+  | Some item ->
+      Some
+        ( {
+            index = global;
+            selected = true;
+            filter_state = m.filter_state;
+            filter_text = filter_value m;
+            matched;
+            width = m.width;
+          },
+          item )
+
+let builtin_key m key =
+  if Key_binding.matches key m.keymap.clear_filter then Some Clear_filter
   else if Key_binding.matches key m.keymap.cursor_up then Some Cursor_up
   else if Key_binding.matches key m.keymap.cursor_down then Some Cursor_down
   else if Key_binding.matches key m.keymap.prev_page then Some Prev_page
@@ -837,6 +872,20 @@ let key m key =
   else if Key_binding.matches key m.keymap.show_full_help then Some Toggle_full_help
   else if Key_binding.matches key m.keymap.close_full_help then Some Toggle_full_help
   else None
+
+let key m key =
+  if m.filter_state = Filtering then
+    if Key_binding.matches key m.keymap.cancel_while_filtering then Some Cancel_filter
+    else if Key_binding.matches key m.keymap.accept_while_filtering then
+      Some Accept_filter
+    else Option.map (fun msg -> Filter_input msg) (Textinput.key m.filter_input key)
+  else
+    match selected_item_context m with
+    | Some (ctx, item) -> (
+        match m.delegate.update ctx key item with
+        | Some (item', msg) -> Some (Delegate_msg (item', msg))
+        | None -> builtin_key m key)
+    | None -> builtin_key m key
 
 let subscriptions m =
   let subs = ref [] in

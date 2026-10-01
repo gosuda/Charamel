@@ -164,5 +164,7 @@ let spec =
         "~";
         ".";
       ]
-    ~attribute:(Some (seq [ str "@"; identifier; rep (seq [ str "."; identifier ]) ]))
+    ~attribute:
+      (Some
+         (Re.seq [ Re.str "@"; identifier; Re.rep (Re.seq [ Re.str "."; identifier ]) ]))
     ()

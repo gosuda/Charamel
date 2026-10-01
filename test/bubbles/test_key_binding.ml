@@ -78,10 +78,10 @@ let matches_any () =
 
 let cases =
   [
-    Alcotest.test_case "enabled and matching" `Quick enabled_and_matching;
-    Alcotest.test_case "disabled and unbound" `Quick disabled_and_unbound;
-    Alcotest.test_case "matching ignores event fields" `Quick
+    Alcotest_lwt.test_case_sync "enabled and matching" `Quick enabled_and_matching;
+    Alcotest_lwt.test_case_sync "disabled and unbound" `Quick disabled_and_unbound;
+    Alcotest_lwt.test_case_sync "matching ignores event fields" `Quick
       matching_ignores_event_fields;
-    Alcotest.test_case "of_keys and updates" `Quick of_keys_and_updates;
-    Alcotest.test_case "matches_any" `Quick matches_any;
+    Alcotest_lwt.test_case_sync "of_keys and updates" `Quick of_keys_and_updates;
+    Alcotest_lwt.test_case_sync "matches_any" `Quick matches_any;
   ]

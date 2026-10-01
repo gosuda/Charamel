@@ -1,7 +1,7 @@
 (** Filesystem file picker.
 
     [t] is an immutable picker model. Directory reads are issued by [init] and [update] as
-    commands through the explicitly supplied Eio filesystem path. *)
+    commands over the explicitly supplied root directory. *)
 
 type keymap = {
   go_to_top : Key_binding.t;
@@ -61,7 +61,7 @@ type msg =
 type t
 
 val v :
-  fs:Eio.Fs.dir_ty Eio.Path.t ->
+  root:string ->
   ?current_directory:string ->
   ?allowed_types:string list ->
   ?show_permissions:bool ->
@@ -76,11 +76,11 @@ val v :
   ?styles:styles ->
   unit ->
   t
-(** [v ~fs ()] creates a picker rooted at [current_directory] (default [.]). It uses [fs]
-    for every directory and metadata operation. [allowed_types] contains filename
-    suffixes; an empty list allows every file. Defaults are permissions and sizes shown,
-    hidden entries omitted, files allowed, directories disallowed, automatic height
-    enabled, height [0], and cursor [">"]. *)
+(** [v ~root ()] creates a picker rooted at [current_directory] (default [.]) inside
+    [root]. Every directory and metadata operation is resolved against [root].
+    [allowed_types] contains filename suffixes; an empty list allows every file. Defaults
+    are permissions and sizes shown, hidden entries omitted, files allowed, directories
+    disallowed, automatic height enabled, height [0], and cursor [">"]. *)
 
 val init : t -> t * msg Charamel_tea.Cmd.t
 (** [init t] schedules a real read of [current_directory]. *)
@@ -119,3 +119,9 @@ val set_styles : styles -> t -> t
 val set_keymap : keymap -> t -> t
 val entries : t -> entry list
 val cursor : t -> int
+
+val selection_cursor : t -> Charamel_tea.Cursor.t option
+(** [selection_cursor t] is the cursor request for the selected entry, with coordinates
+    relative to {!view}: the row is the entry's place in the visible window and the column
+    is one past the cursor marker. [None] when the window holds no entries or the
+    selection sits outside it. The caller adds the picker's absolute origin. *)

@@ -73,9 +73,9 @@ val default : t
 val cli_term : cli Cmdliner.Term.t
 (** [cli_term] parses the positional input and all freeze options. *)
 
-val load : fs:Eio.Fs.dir_ty Eio.Path.t -> name:string -> (t, string) result
-(** [load ~fs ~name] loads a named preset, user JSON, or a path. Unknown preset names fall
-    back to the base preset, as the upstream command does. *)
+val load : fs_root:string -> name:string -> (t, string) result Lwt.t
+(** [load ~fs_root ~name] loads a named preset, user JSON, or a path. Unknown preset names
+    fall back to the base preset, as the upstream command does. *)
 
 val apply_cli : t -> cli -> t
 (** [apply_cli base cli] applies command-line values over [base]. *)
@@ -84,6 +84,7 @@ val expand_sides : scale:float -> float list -> float array
 (** [expand_sides ~scale values] expands one, two, or four values to top/right/bottom/left
     order. Other lengths produce four zeroes. *)
 
-val save_user : fs:Eio.Fs.dir_ty Eio.Path.t -> t -> (unit, string) result
-(** [save_user ~fs config] writes the JSON-compatible settings to the freeze user
-    configuration path. *)
+val save_user : t -> (unit, string) result Lwt.t
+(** [save_user config] writes the JSON-compatible settings to the freeze user
+    configuration path. The path is always the fixed XDG location, so no filesystem root
+    is needed to resolve it. *)

@@ -15,7 +15,8 @@ type error =
   | `Disabled of string
   | `Auth of Auth.error ]
 
-open Result.Syntax
+open Lwt.Infix
+open Lwt_result.Syntax
 
 let contains needle haystack =
   let needle = String.lowercase_ascii needle in
@@ -60,23 +61,33 @@ let catalog_json json =
       | None -> Error "providers cache has no providers member")
   | _ -> Error "providers cache must be an object"
 
-let load_cache fs =
-  let filename = catalog_cache_path () in
-  try
-    let file = Eio.Path.(fs / filename) in
-    match Eio.Path.kind ~follow:false file with
-    | `Regular_file -> (
-        let stat = Eio.Path.stat ~follow:false file in
-        if Optint.Int63.to_int stat.Eio.File.Stat.size > 10 * 1024 * 1024 then
-          Error "providers cache exceeds 10 MiB"
-        else
-          match Jsonx.json_of_string (Eio.Path.load file) with
-          | Ok json -> catalog_json json
-          | Error _ -> Error "providers cache is not valid JSON")
-    | _ -> Error "providers cache is not a regular file"
-  with
-  | Eio.Io _ -> Error "providers cache cannot be read"
-  | Unix.Unix_error _ -> Error "providers cache cannot be read"
+let cache_size_limit = 10 * 1024 * 1024
+let cache_path fs_root = Path.under ~root:fs_root (catalog_cache_path ())
+
+let read_cache_file path =
+  Lwt.catch
+    (fun () ->
+      Lwt_unix.lstat path >>= fun stat ->
+      if stat.Unix.st_kind <> Unix.S_REG then
+        Lwt.return (Error "providers cache is not a regular file")
+      else if stat.Unix.st_size > cache_size_limit then
+        Lwt.return (Error "providers cache exceeds 10 MiB")
+      else
+        Lwt_io.with_file ~mode:Lwt_io.Input path (fun channel -> Lwt_io.read channel)
+        >|= fun text -> Ok text)
+    (function
+      | Unix.Unix_error _ | Sys_error _ ->
+          Lwt.return (Error "providers cache cannot be read")
+      | exn -> Lwt.fail exn)
+
+let load_cache fs_root =
+  read_cache_file (cache_path fs_root) >>= function
+  | Error _ as failure -> Lwt.return failure
+  | Ok text ->
+      Lwt.return
+        (match Jsonx.json_of_string text with
+        | Ok json -> catalog_json json
+        | Error _ -> Error "providers cache is not valid JSON")
 
 let model_id model = model.Charamel_fantasy.Model.id
 
@@ -124,11 +135,10 @@ let configured_only config existing_ids =
             } ))
     config.Config.providers
 
-let catalog ~fs config =
+let catalog ~fs_root config =
+  load_cache fs_root >|= fun base ->
   let base =
-    match load_cache fs with
-    | Ok values -> values
-    | Error _ -> Charamel_fantasy.Catalog.embedded
+    match base with Ok values -> values | Error _ -> Charamel_fantasy.Catalog.embedded
   in
   let with_ids = List.map (fun p -> (p.Charamel_fantasy.Provider_info.id, p)) base in
   let known_ids = List.map fst with_ids in
@@ -247,22 +257,22 @@ let small_model_with_fallback _id models ~fallback_id =
   | None -> List.find_opt (fun model -> String.equal (model_id model) fallback_id) models
 
 let credential_for ~auth ~config ~env provider_id =
-  match Auth.resolve auth ~config ~env ~provider:provider_id with
-  | Error error -> Error (`Auth error)
-  | Ok None -> Error (`No_credential provider_id)
-  | Ok (Some (Auth.Disabled { reason; _ })) -> Error (`Disabled reason)
-  | Ok (Some credential) -> (
-      match Auth.to_fantasy credential with
-      | Some auth -> Ok auth
-      | None -> Error (`No_credential provider_id))
+  Auth.resolve auth ~config ~env ~provider:provider_id >>= function
+  | Error error -> Lwt.return (Error (`Auth error))
+  | Ok None -> Lwt.return (Error (`No_credential provider_id))
+  | Ok (Some (Auth.Disabled { reason; _ })) -> Lwt.return (Error (`Disabled reason))
+  | Ok (Some credential) ->
+      Lwt.return
+        (match Auth.to_fantasy credential with
+        | Some auth -> Ok auth
+        | None -> Error (`No_credential provider_id))
 
 let selection_for_role config role =
   match role with
   | `Large -> config.Config.models.Config.large
   | `Small -> config.Config.models.Config.small
 
-let resolve ~fs config ~auth ~env ~role =
-  let providers = catalog ~fs config in
+let select config ~providers ~auth ~env ~role =
   let inherited_small =
     role = `Small && Option.is_none config.Config.models.Config.small
   in
@@ -281,27 +291,27 @@ let resolve ~fs config ~auth ~env ~role =
         preferred configured_ids
     in
     let rec choose = function
-      | [] -> Error (`No_model role)
+      | [] -> Lwt.return (Error (`No_model role))
       | id :: rest -> (
           match find_provider providers id with
           | None -> choose rest
           | Some provider -> (
-              match credential_for ~auth ~config ~env id with
+              credential_for ~auth ~config ~env id >>= function
               | Error (`No_credential _) | Error (`Disabled _) -> choose rest
-              | Error error -> Error error
+              | Error error -> Lwt.return (Error error)
               | Ok _ -> (
                   match
                     preferred_model id provider.Charamel_fantasy.Provider_info.models
                   with
                   | None -> choose rest
-                  | Some model -> Ok (id, provider, model, None, None))))
+                  | Some model -> Lwt.return (Ok (id, provider, model, None, None)))))
     in
     choose candidates
   in
   match configured with
   | Some selected -> (
       match find_provider providers selected.Config.provider with
-      | None -> Error (`Unknown_provider selected.Config.provider)
+      | None -> Lwt.return (Error (`Unknown_provider selected.Config.provider))
       | Some provider -> (
           let model =
             if inherited_small then
@@ -317,30 +327,33 @@ let resolve ~fs config ~auth ~env ~role =
           in
           match model with
           | None ->
-              Error (`Unknown_model (selected.Config.provider, selected.Config.model))
+              Lwt.return
+                (Error (`Unknown_model (selected.Config.provider, selected.Config.model)))
           | Some model ->
               let* auth_value =
                 credential_for ~auth ~config ~env selected.Config.provider
               in
               let config_provider = provider_config selected.Config.provider config in
               let* provider_handle =
-                make_provider ~env ~catalog_provider:provider ~config_provider
-                  ~auth:auth_value ~id:selected.Config.provider config
+                Lwt.return
+                  (make_provider ~env ~catalog_provider:provider ~config_provider
+                     ~auth:auth_value ~id:selected.Config.provider config)
               in
               let reasoning = Option.value selected.Config.reasoning ~default:`Off in
               let max_tokens =
                 Option.value selected.Config.max_tokens
                   ~default:model.Charamel_fantasy.Model.default_max_tokens
               in
-              Ok
-                {
-                  role;
-                  provider_id = selected.Config.provider;
-                  provider = provider_handle;
-                  model;
-                  reasoning;
-                  max_tokens;
-                }))
+              Lwt.return
+                (Ok
+                   {
+                     role;
+                     provider_id = selected.Config.provider;
+                     provider = provider_handle;
+                     model;
+                     reasoning;
+                     max_tokens;
+                   })))
   | None ->
       let* provider_id, provider, large_model, _, _ = default_selection () in
       let model =
@@ -354,31 +367,37 @@ let resolve ~fs config ~auth ~env ~role =
       let config_provider = provider_config provider_id config in
       let* auth_value = credential_for ~auth ~config ~env provider_id in
       let* provider_handle =
-        make_provider ~env ~catalog_provider:provider ~config_provider ~auth:auth_value
-          ~id:provider_id config
+        Lwt.return
+          (make_provider ~env ~catalog_provider:provider ~config_provider ~auth:auth_value
+             ~id:provider_id config)
       in
       let reasoning = `Off in
-      Ok
-        {
-          role;
-          provider_id;
-          provider = provider_handle;
-          model;
-          reasoning;
-          max_tokens = model.Charamel_fantasy.Model.default_max_tokens;
-        }
+      Lwt.return
+        (Ok
+           {
+             role;
+             provider_id;
+             provider = provider_handle;
+             model;
+             reasoning;
+             max_tokens = model.Charamel_fantasy.Model.default_max_tokens;
+           })
 
-let with_auth ~fs config ~env resolved provider_auth =
-  let providers = catalog ~fs config in
+let resolve ~fs_root config ~auth ~env ~role =
+  catalog ~fs_root config >>= fun providers -> select config ~providers ~auth ~env ~role
+
+let with_auth ~fs_root config ~env resolved provider_auth =
+  catalog ~fs_root config >>= fun providers ->
   match find_provider providers resolved.provider_id with
-  | None -> Error (`Unknown_provider resolved.provider_id)
+  | None -> Lwt.return (Error (`Unknown_provider resolved.provider_id))
   | Some catalog_provider ->
       let config_provider = provider_config resolved.provider_id config in
       let* provider =
-        make_provider ~env ~catalog_provider ~config_provider ~auth:provider_auth
-          ~id:resolved.provider_id config
+        Lwt.return
+          (make_provider ~env ~catalog_provider ~config_provider ~auth:provider_auth
+             ~id:resolved.provider_id config)
       in
-      Ok { resolved with provider }
+      Lwt.return (Ok { resolved with provider })
 
 let cost (model : Charamel_fantasy.Model.t) (usage : Charamel_fantasy.Usage.t) =
   (float_of_int usage.Charamel_fantasy.Usage.input
@@ -391,18 +410,19 @@ let cost (model : Charamel_fantasy.Model.t) (usage : Charamel_fantasy.Usage.t) =
      *. model.Charamel_fantasy.Model.cost_cache_write)
   /. 1_000_000.
 
-let list ~fs config ~auth ~env =
-  let providers = catalog ~fs config in
-  List.map
+let list ~fs_root config ~auth ~env =
+  catalog ~fs_root config >>= fun providers ->
+  Lwt_list.map_s
     (fun provider ->
       let id = provider.Charamel_fantasy.Provider_info.id in
+      Auth.resolve auth ~config ~env ~provider:id >>= fun credential ->
       let state =
-        match Auth.resolve auth ~config ~env ~provider:id with
+        match credential with
         | Ok (Some (Auth.Disabled _)) -> `Disabled
         | Ok (Some credential) when Option.is_some (Auth.to_fantasy credential) -> `Ready
         | _ -> `No_credential
       in
-      (id, provider.Charamel_fantasy.Provider_info.models, state))
+      Lwt.return (id, provider.Charamel_fantasy.Provider_info.models, state))
     providers
 
 type update_result = Updated of string | Not_modified
@@ -410,20 +430,13 @@ type update_result = Updated of string | Not_modified
 type update_error =
   [ `Io of string * string | `Parse of string | `Fetch of Charamel_fantasy.Error.t ]
 
-let cache_etag fs =
-  let filename = catalog_cache_path () in
-  try
-    let file = Eio.Path.(fs / filename) in
-    match Eio.Path.kind ~follow:false file with
-    | `Regular_file -> (
-        let stat = Eio.Path.stat ~follow:false file in
-        if Optint.Int63.to_int stat.Eio.File.Stat.size > 10 * 1024 * 1024 then None
-        else
-          match Jsonx.json_of_string (Eio.Path.load file) with
-          | Ok json -> Jsonx.string_member "etag" json
-          | Error _ -> None)
-    | _ -> None
-  with Eio.Io _ | Unix.Unix_error _ -> None
+let cache_etag fs_root =
+  read_cache_file (cache_path fs_root) >|= function
+  | Error _ -> None
+  | Ok text -> (
+      match Jsonx.json_of_string text with
+      | Ok json -> Jsonx.string_member "etag" json
+      | Error _ -> None)
 
 let cache_document ~etag providers =
   let providers_text =
@@ -445,33 +458,40 @@ let pp_update_error ppf = function
   | `Parse message -> Fmt.pf ppf "catalog cache parse error: %s" message
   | `Fetch error -> Fmt.pf ppf "catalog fetch error: %a" Charamel_fantasy.Error.pp error
 
-let save_catalog ~fs ~etag providers =
-  let filename = catalog_cache_path () in
+let document_text filename ~etag providers =
   try
-    Eio.Cancel.protect (fun () ->
-        let parent = Filename.dirname filename in
-        Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 Eio.Path.(fs / parent);
-        let contents =
-          match
-            Jsont_bytesrw.encode_string Jsont.json (cache_document ~etag providers)
-          with
-          | Ok text -> text
-          | Error message -> raise (Invalid_argument message)
-        in
-        match State_file.replace Eio.Path.(fs / filename) contents with
-        | Ok () -> Ok ()
-        | Error (`Io (path, message)) -> Error (`Io (path, message)))
+    match Jsont_bytesrw.encode_string Jsont.json (cache_document ~etag providers) with
+    | Ok text -> Ok text
+    | Error message -> Error (`Parse (Fmt.str "%s: %s" filename message))
   with
-  | Eio.Io _ as exn -> Error (`Io (filename, Fmt.str "%a" Eio.Exn.pp exn))
-  | Unix.Unix_error (error, fn, arg) ->
-      Error (`Io (filename, Fmt.str "%s (%s %s)" (Unix.error_message error) fn arg))
-  | Invalid_argument message -> Error (`Parse (Fmt.str "%s: %s" filename message))
   | Failure message -> Error (`Parse (Fmt.str "%s: %s" filename message))
+  | Invalid_argument message -> Error (`Parse (Fmt.str "%s: %s" filename message))
 
-let update_catalog ?source ~fs ~net ~clock () =
-  let etag = cache_etag fs in
-  match Charamel_fantasy.Catalog.fetch ?base_url:source ?etag ~net ~clock () with
-  | Error `Not_modified -> Ok Not_modified
-  | Error (#Charamel_fantasy.Error.t as error) -> Error (`Fetch error)
+let prepare_dir path =
+  Charamel_os.Fs.mkdir_p path >>= function
+  | Error error -> Lwt.return (Error (`Io (path, Io.fs_error error)))
+  | Ok () ->
+      Lwt.catch (fun () -> Lwt_unix.chmod path 0o700) (fun _ -> Lwt.return_unit)
+      >|= fun () -> Ok ()
+
+let save_catalog ~fs_root ~etag providers =
+  let filename = cache_path fs_root in
+  let parent = Filename.dirname filename in
+  prepare_dir parent >>= function
+  | Error _ as failure -> Lwt.return failure
+  | Ok () -> (
+      match document_text filename ~etag providers with
+      | Error _ as failure -> Lwt.return failure
+      | Ok contents -> (
+          State_file.replace filename contents >|= function
+          | Ok () -> Ok ()
+          | Error (`Io (path, message)) -> Error (`Io (path, message))))
+
+let update_catalog ?source ~fs_root () =
+  cache_etag fs_root >>= fun etag ->
+  Charamel_fantasy.Catalog.fetch ?base_url:source ?etag () >>= function
+  | Error `Not_modified -> Lwt.return (Ok Not_modified)
+  | Error (#Charamel_fantasy.Error.t as error) -> Lwt.return (Error (`Fetch error))
   | Ok (providers, new_etag) ->
-      save_catalog ~fs ~etag:new_etag providers |> Result.map (fun () -> Updated new_etag)
+      save_catalog ~fs_root ~etag:new_etag providers
+      >|= Result.map (fun () -> Updated new_etag)

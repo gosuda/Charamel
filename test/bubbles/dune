@@ -7,11 +7,14 @@
   charamel.ansi
   charamel.lipgloss
   alcotest
-  eio
-  eio.unix
-  eio_main
+  alcotest-lwt
+  charamel.os
   fmt
-  optint)
+  lwt
+  lwt.unix
+  qcheck-core
+  unix
+  test_support)
  (modules
   test_bubbles
   test_key_binding
@@ -30,12 +33,4 @@
   test_timer
   test_stopwatch
   test_filepicker
-  test_tree)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  test_tree))

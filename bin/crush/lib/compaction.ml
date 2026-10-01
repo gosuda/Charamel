@@ -1,3 +1,5 @@
+open Lwt.Infix
+
 let reserve ~context_window =
   if context_window <= 0 then 0
   else min 20_000 (int_of_float (Float.floor (float_of_int context_window *. 0.2)))
@@ -8,36 +10,8 @@ let needed ~context_window ~prompt_tokens ~completion_tokens ~disabled =
     let remaining = context_window - (max 0 prompt_tokens + max 0 completion_tokens) in
     remaining <= reserve ~context_window
 
-let output_string = function
-  | `Text text -> text
-  | `Error text -> "error: " ^ text
-  | `Media (mime, data) -> Fmt.str "media <%s> (%d bytes)" mime (String.length data)
-
-let part_text = function
-  | Charamel_fantasy.Message.Text text -> text
-  | Charamel_fantasy.Message.Reasoning { text; _ } ->
-      "<reasoning>" ^ text ^ "</reasoning>"
-  | Charamel_fantasy.Message.File { mime; data; name } ->
-      Fmt.str "file <%s> <%s> (%d bytes)" mime
-        (Option.value ~default:"" name)
-        (String.length data)
-  | Charamel_fantasy.Message.Tool_call { id; name; input } ->
-      Fmt.str "call %s (%s): %s" id name (Jsonx.display_string input)
-  | Charamel_fantasy.Message.Tool_result { id; name; output } ->
-      Fmt.str "result %s (%s): %s" id name (output_string output)
-
-let message_text { Charamel_fantasy.Message.role; parts } =
-  let role =
-    match role with
-    | Charamel_fantasy.Message.System -> "system"
-    | Charamel_fantasy.Message.User -> "user"
-    | Charamel_fantasy.Message.Assistant -> "assistant"
-    | Charamel_fantasy.Message.Tool -> "tool"
-  in
-  role ^ ": " ^ String.concat "" (List.map part_text parts)
-
 let event_bytes = function
-  | Session.Message { message; _ } -> String.length (message_text message)
+  | Session.Message { message; _ } -> String.length (Session.message_text message)
   | _ -> 0
 
 let suffix events first =
@@ -71,7 +45,7 @@ let render_prefix events through =
     let lines = ref [] in
     for index = 0 to limit do
       match events.(index) with
-      | Session.Message { message; _ } -> lines := message_text message :: !lines
+      | Session.Message { message; _ } -> lines := Session.message_text message :: !lines
       | Session.Summary { text; _ } -> lines := ("summary: " ^ text) :: !lines
       | Session.Note { text; _ } -> lines := ("note: " ^ text) :: !lines
       | Session.Tool_call { name; input; _ } ->
@@ -100,64 +74,67 @@ let render_prefix events through =
     done;
     String.concat "\n" (List.rev !lines)
 
-let run ~sw ~clock ~net ~(small : Models.resolved) ~auth session =
+let run ~sw ~clock ~(small : Models.resolved) ~auth session =
   ignore auth;
   let events = Session.events session in
   let through, _recent = split events ~keep_tokens:20_000 in
-  if through < 0 then Ok ""
+  if through < 0 then Lwt.return (Ok "")
   else
     let rendered = render_prefix events through in
     let messages =
       [ Charamel_fantasy.Message.text Charamel_fantasy.Message.User rendered ]
     in
     let stream =
-      Charamel_fantasy.Provider.stream small.Models.provider ~sw ~clock ~net
+      Charamel_fantasy.Provider.stream small.Models.provider ~stop:sw ~clock
         ~model:small.Models.model ~system:[ Prompt_summarize.text ] ~max_tokens:4096
         messages
     in
     let summary = Buffer.create 1024 in
     let usage = ref Charamel_fantasy.Usage.zero in
+    let persist text =
+      let ms = int_of_float (Charamel_os.Time.now clock *. 1000.) in
+      let model =
+        {
+          Session.provider = small.Models.provider_id;
+          model = small.Models.model.Charamel_fantasy.Model.id;
+        }
+      in
+      let persist_usage () =
+        if Charamel_fantasy.Usage.total !usage = 0 then Lwt.return (Ok ())
+        else
+          Session.append session ~clock
+            (Session.Usage
+               {
+                 ms;
+                 usage = !usage;
+                 cost_usd = Models.cost small.Models.model !usage;
+                 model;
+               })
+      in
+      persist_usage () >>= function
+      | Error error -> Lwt.return (Error (`Session error))
+      | Ok () -> (
+          Session.append session ~clock (Session.Summary { ms; text; through })
+          >|= function
+          | Ok () -> Ok text
+          | Error error -> Error (`Session error))
+    in
     let rec consume () =
-      match Eio.Stream.take stream with
-      | Charamel_fantasy.Stream_part.Text_delta text ->
+      Lwt_stream.get stream >>= fun (item : Charamel_fantasy.Stream_part.t option) ->
+      match item with
+      | None -> Lwt.return (Error (`Provider "compaction stream ended before completion"))
+      | Some (Text_delta text) ->
           Buffer.add_string summary text;
           consume ()
-      | Reasoning_delta _ -> consume ()
-      | Tool_call_start _ -> consume ()
-      | Tool_input_delta _ -> consume ()
-      | Tool_call_end _ -> consume ()
-      | Usage value ->
+      | Some (Reasoning_delta _) -> consume ()
+      | Some (Tool_call_start _) -> consume ()
+      | Some (Tool_input_delta _) -> consume ()
+      | Some (Tool_call_end _) -> consume ()
+      | Some (Usage value) ->
           usage := Charamel_fantasy.Usage.add !usage value;
           consume ()
-      | Finish (`Error message) -> Error (`Provider message)
-      | Finish (`Stop | `Length | `Content_filter | `Tool_calls) -> (
-          let text = String.trim (Buffer.contents summary) in
-          let ms = int_of_float (Eio.Time.now clock *. 1000.) in
-          let model =
-            {
-              Session.provider = small.Models.provider_id;
-              model = small.Models.model.Charamel_fantasy.Model.id;
-            }
-          in
-          let persist_usage () =
-            if Charamel_fantasy.Usage.total !usage = 0 then Ok ()
-            else
-              Session.append session ~clock
-                (Session.Usage
-                   {
-                     ms;
-                     usage = !usage;
-                     cost_usd = Models.cost small.Models.model !usage;
-                     model;
-                   })
-          in
-          match persist_usage () with
-          | Error error -> Error (`Session error)
-          | Ok () -> (
-              match
-                Session.append session ~clock (Session.Summary { ms; text; through })
-              with
-              | Ok () -> Ok text
-              | Error error -> Error (`Session error)))
+      | Some (Finish (`Error message)) -> Lwt.return (Error (`Provider message))
+      | Some (Finish (`Stop | `Length | `Content_filter | `Tool_calls)) ->
+          persist (String.trim (Buffer.contents summary))
     in
     consume ()

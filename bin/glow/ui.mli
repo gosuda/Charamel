@@ -1,16 +1,13 @@
 (** Glow's terminal browser and document pager. *)
 
 val run :
-  Eio_unix.Stdenv.base ->
+  Charamel_cli.Env.t ->
   config:Config.t ->
   location:Source.location ->
-  (unit, string) result
+  (unit, string) result Lwt.t
 (** [run env ~config ~location] runs the file browser or pager on a real terminal. The
     browser discovers Markdown files once, while the pager reflows on every resize event
     and never polls the filesystem. *)
-
-val split_words : string -> string list
-(** [split_words command] splits a pager or editor command without invoking a shell. *)
 
 type test_event =
   [ `Key of Charamel_tea.Key.t | `Text of string | `Resize of int * int | `Wait of float ]

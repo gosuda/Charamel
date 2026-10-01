@@ -33,10 +33,13 @@
   hand — automated wrap proven unsafe: compiler char ranges split tokens).
 
 ## Re-run recipe (fresh session, healthy subagents preferred)
-1. Flip flags: in every tracked dune file replace
-   `+a-4-9-29-30-40..42-44..46-48-58-66-67` with
-   `+a-9-29-30-45-46-48-58-66-67`; root `dune` release env holds
-   `-warn-error +a` (temporarily `-a` for harvesting only, restore after).
+1. Flip flags in the root `dune` env only: the `release` and `_`
+   sections each carry `+a-4-9-29-30-40..42-44..46-48-58-66-67`;
+   replace it with `+a-9-29-30-45-46-48-58-66-67` in both sections.
+   The `release` section also holds `-warn-error +a` (temporarily
+   `-a` for harvesting only, restore after). The per-stanza
+   `(flags ...)` blocks were deleted when the flags hoisted into
+   the root env (DES-06, 2026-09-25).
 2. Build ONLY as `eval $(opam env --switch=rd --set-switch) && dune ...`
    (bare PATH = system OCaml 5.4.0 → CMI failures; switch rd = 5.5.1).
 3. Harvest with `dune clean && dune build --profile release 2> log`

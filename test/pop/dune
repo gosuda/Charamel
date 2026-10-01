@@ -1,26 +1,20 @@
 (test
  (name test_pop)
  (package pop)
- (modules test_pop test_mime test_smtp test_cli fixture_smtp)
+ (modules test_pop test_mime test_smtp test_cli)
  (libraries
   pop_core
   charamel.cli
   charamel.huh
   charamel.glamour
   cmarkit
-  eio
-  eio.unix
-  eio_main
   fmt
   ptime
   alcotest
-  eio.mock
-  mirage-crypto-rng.unix)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  alcotest-lwt
+  lwt
+  lwt.unix
+  mirage-crypto-rng.unix
+  net_test_support
+  test_support
+  unix))

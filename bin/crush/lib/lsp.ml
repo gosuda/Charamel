@@ -1,6 +1,7 @@
 let log_src = Logs.Src.create "crush.lsp"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
+open Lwt.Infix
 open Result.Syntax
 
 type diagnostic = {
@@ -25,7 +26,7 @@ type error =
   | `Io of string * string ]
 
 type rpc_reply = [ `Result of Jsont.json | `Error of int * string ]
-type pending = { condition : Eio.Condition.t; mutable reply : rpc_reply option }
+type pending = { condition : unit Lwt_condition.t; mutable reply : rpc_reply option }
 
 type document = {
   uri : string;
@@ -41,34 +42,31 @@ type server = {
   name : string;
   config : Config.lsp;
   mutable state : server_state;
-  mutable process : Eio_unix.Process.ty Eio.Resource.t option;
-  mutable stdin : [ Eio.Flow.sink_ty | Eio.Resource.close_ty ] Eio.Resource.t option;
-  mutable stdout : [ Eio.Flow.source_ty | Eio.Resource.close_ty ] Eio.Resource.t option;
-  mutable stderr : [ Eio.Flow.source_ty | Eio.Resource.close_ty ] Eio.Resource.t option;
-  mutable exit_status : Eio.Process.exit_status option;
-  process_wait_lock : Eio.Mutex.t;
+  mutable process : Charamel_os.Process.t option;
+  mutable stdin : Lwt_io.output_channel option;
+  mutable stdout : Lwt_io.input_channel option;
+  mutable stderr : Lwt_io.input_channel option;
+  mutable exit_status : int option;
+  process_wait_lock : Lwt_mutex.t;
   mutable generation : int;
   mutable stopping : bool;
   mutable next_id : int;
   pending : (int, pending) Hashtbl.t;
   documents : (string, document) Hashtbl.t;
-  state_condition : Eio.Condition.t;
-  write_lock : Eio.Mutex.t;
+  state_condition : unit Lwt_condition.t;
+  write_lock : Lwt_mutex.t;
 }
 
 type t = {
-  sw : Eio.Switch.t;
-  proc_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
-  clock : float Eio.Time.clock_ty Eio.Resource.t;
-  fs : Eio.Fs.dir_ty Eio.Path.t;
+  clock : Charamel_os.Time.clock;
+  fs_root : string;
   cwd : string;
   servers_table : server list;
-  lock : Eio.Mutex.t;
+  lock : Lwt_mutex.t;
   diagnostics_table : (string, diagnostic_state) Hashtbl.t;
 }
 
 let max_frame_size = 16 * 1024 * 1024
-let max_stderr_size = 1024 * 1024
 
 let pp_error ppf = function
   | `No_server path -> Fmt.pf ppf "no LSP server for %s" path
@@ -131,15 +129,6 @@ let json_object fields =
   Jsont.Json.object'
     (List.map (fun (name, value) -> Jsont.Json.mem (Jsont.Json.name name) value) fields)
 
-let object_value value =
-  match value with Jsont.Object (members, _) -> Some members | _ -> None
-
-let array_value value =
-  match value with Jsont.Array (values, _) -> Some values | _ -> None
-
-let trim_ascii text = String.trim text
-let lowercase text = String.lowercase_ascii text
-
 let percent_hex value =
   let digits = "0123456789ABCDEF" in
   String.init 2 (fun index -> digits.[(value lsr ((1 - index) * 4)) land 0xF])
@@ -199,33 +188,6 @@ let path_of_uri uri =
 
 let uri_of_path path = "file://" ^ uri_escape path
 
-let normalize_path ~cwd path =
-  let absolute =
-    if String.starts_with ~prefix:"/" path then path else Filename.concat cwd path
-  in
-  let pieces = String.split_on_char '/' absolute in
-  let result =
-    List.fold_left
-      (fun stack piece ->
-        match piece with
-        | "" | "." -> stack
-        | ".." -> ( match stack with [] -> [] | _ :: tail -> tail)
-        | _ -> piece :: stack)
-      [] pieces
-    |> List.rev
-  in
-  "/" ^ String.concat "/" result
-
-let inside ~cwd root path =
-  let root = normalize_path ~cwd root and path = normalize_path ~cwd path in
-  path = root || root = "/" || String.starts_with ~prefix:(root ^ "/") path
-
-let parent_path ~cwd path =
-  let path = normalize_path ~cwd path in
-  match String.rindex_opt path '/' with
-  | None | Some 0 -> "/"
-  | Some index -> String.sub path 0 index
-
 let extension path =
   let base =
     match String.rindex_opt path '/' with
@@ -238,38 +200,37 @@ let extension path =
         (String.sub base (index + 1) (String.length base - index - 1))
   | _ -> ""
 
-let marker_matches fs directory marker =
+let marker_matches fs_root directory marker =
   try
+    let inside = Path.under ~root:fs_root directory in
     if String.starts_with ~prefix:"*." marker then
       let suffix = String.sub marker 1 (String.length marker - 1) in
-      Eio.Path.read_dir Eio.Path.(fs / directory)
-      |> List.exists (fun entry ->
+      Array.exists
+        (fun entry ->
           String.length entry >= String.length suffix && String.ends_with ~suffix entry)
-    else
-      match Eio.Path.kind ~follow:false Eio.Path.(fs / directory / marker) with
-      | `Not_found -> false
-      | _ -> true
-  with
-  | Eio.Io _ -> false
-  | Unix.Unix_error _ -> false
+        (Sys.readdir inside)
+    else Sys.file_exists (Filename.concat inside marker)
+  with Unix.Unix_error _ | Sys_error _ -> false
 
 let has_root_marker t server =
   match server.config.Config.root_markers with
   | [] -> true
   | markers ->
       let rec check directory =
-        if List.exists (marker_matches t.fs directory) markers then true
-        else if directory = "/" then false
-        else check (parent_path ~cwd:t.cwd directory)
+        if List.exists (marker_matches t.fs_root directory) markers then true
+        else
+          match Path.parent directory with None -> false | Some parent -> check parent
       in
       check t.cwd
 
 let extension_supported server ext =
-  List.exists (fun value -> lowercase value = ext) server.config.Config.filetypes
+  List.exists
+    (fun value -> String.lowercase_ascii value = ext)
+    server.config.Config.filetypes
 
 let server_for_path t path =
-  let path = normalize_path ~cwd:t.cwd path in
-  if not (inside ~cwd:t.cwd t.cwd path) then None
+  let path = Path.normalize ~cwd:t.cwd path in
+  if not (Path.within ~root:t.cwd path) then None
   else
     let ext = extension path in
     List.find_opt (fun server -> extension_supported server ext) t.servers_table
@@ -278,9 +239,10 @@ let find_server_by_name t name =
   List.find_opt (fun server -> server.name = name) t.servers_table
 
 let set_state t server state =
-  Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
+  Lwt_mutex.with_lock t.lock (fun () ->
       server.state <- state;
-      Eio.Condition.broadcast server.state_condition)
+      Lwt_condition.broadcast server.state_condition ();
+      Lwt.return_unit)
 
 let mark_pending server reply =
   let pending = Hashtbl.fold (fun _ value acc -> value :: acc) server.pending [] in
@@ -288,33 +250,34 @@ let mark_pending server reply =
   List.iter
     (fun pending ->
       if Option.is_none pending.reply then pending.reply <- Some reply;
-      Eio.Condition.broadcast pending.condition)
+      Lwt_condition.broadcast pending.condition ())
     pending
 
 let fail_server t server failure_message =
-  let process =
-    Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
-        let process = server.process in
-        (match server.state with
-        | Not_started | Disabled -> ()
-        | Starting | Ready -> server.state <- Failed failure_message
-        | Failed _ -> ());
-        mark_pending server (`Error (-32000, failure_message));
-        Eio.Condition.broadcast server.state_condition;
-        process)
-  in
-  Log.debug (fun m -> m "server %s failed: %s" server.name failure_message);
-  Option.iter (fun process -> Eio.Process.signal process Sys.sigterm) process
-
-let read_header_line reader = Eio.Buf_read.line reader
+  Lwt_mutex.with_lock t.lock (fun () ->
+      let process = server.process in
+      (match server.state with
+      | Not_started | Disabled -> ()
+      | Starting | Ready -> server.state <- Failed failure_message
+      | Failed _ -> ());
+      mark_pending server (`Error (-32000, failure_message));
+      Lwt_condition.broadcast server.state_condition ();
+      Lwt.return process)
+  >>= function
+  | None -> Lwt.return_unit
+  | Some process ->
+      Log.debug (fun m -> m "server %s failed: %s" server.name failure_message);
+      (try Charamel_os.Process.terminate process
+       with Unix.Unix_error (Unix.EPERM, _, _) -> ());
+      Lwt.return_unit
 
 let parse_content_length line =
   match String.index_opt line ':' with
   | None -> Error "header has no colon"
   | Some index -> (
-      let key = lowercase (trim_ascii (String.sub line 0 index)) in
+      let key = String.lowercase_ascii (String.trim (String.sub line 0 index)) in
       let value =
-        trim_ascii (String.sub line (index + 1) (String.length line - index - 1))
+        String.trim (String.sub line (index + 1) (String.length line - index - 1))
       in
       if key <> "content-length" then Ok None
       else
@@ -324,48 +287,62 @@ let parse_content_length line =
           else Error "invalid Content-Length"
         with Failure _ -> Error "invalid Content-Length")
 
-let read_frame reader =
+let read_exact channel length =
+  let buffer = Bytes.create length in
+  let rec fill offset =
+    if offset = length then Lwt.return buffer
+    else
+      Lwt_io.read_into channel buffer offset (length - offset) >>= fun read ->
+      if read = 0 then Lwt.fail End_of_file else fill (offset + read)
+  in
+  fill 0 >|= Bytes.to_string
+
+let read_frame channel =
   let rec read_headers length =
-    let line = read_header_line reader in
-    if line = "" then
+    Lwt_io.read_line channel >>= fun line ->
+    if String.length line = 0 then
       match length with
-      | Some length -> Ok length
-      | None -> Error "missing Content-Length"
+      | Some length -> Lwt.return_ok length
+      | None -> Lwt.return_error "missing Content-Length"
     else
       match parse_content_length line with
-      | Error message -> Error message
+      | Error message -> Lwt.return_error message
       | Ok None -> read_headers length
       | Ok (Some value) -> (
           match length with
-          | Some previous when previous <> value -> Error "duplicate Content-Length"
+          | Some previous when previous <> value ->
+              Lwt.return_error "duplicate Content-Length"
           | _ -> read_headers (Some value))
   in
-  let* length = read_headers None in
-  try
-    let body = Eio.Buf_read.take length reader in
-    match Jsonx.json_of_string body with
-    | Ok value -> Ok value
-    | Error message -> Error ("invalid JSON: " ^ message)
-  with
-  | Eio.Buf_read.Buffer_limit_exceeded -> Error "JSON frame exceeds the buffer limit"
-  | End_of_file -> Error "truncated JSON frame"
+  read_headers None >>= function
+  | Error message -> Lwt.return_error message
+  | Ok length ->
+      Lwt.catch
+        (fun () ->
+          read_exact channel length >|= fun body ->
+          match Jsonx.json_of_string body with
+          | Ok value -> Ok value
+          | Error message -> Error ("invalid JSON: " ^ message))
+        (function
+          | End_of_file -> Lwt.return_error "truncated JSON frame" | exn -> Lwt.fail exn)
 
 let send_json server value =
   let payload = Jsonx.string_of_json value in
   let frame = Fmt.str "Content-Length: %d\r\n\r\n%s" (String.length payload) payload in
-  Eio.Mutex.use_rw ~protect:true server.write_lock (fun () ->
+  Lwt_mutex.with_lock server.write_lock (fun () ->
       match server.stdin with
-      | None -> Error "server input is closed"
-      | Some sink -> (
-          try
-            Eio.Flow.copy_string frame sink;
-            Ok ()
-          with
-          | Eio.Io (_, _) as exception_ -> Error (Fmt.str "%a" Eio.Exn.pp exception_)
-          | Unix.Unix_error (error, function_name, argument) ->
-              Error
-                (Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument)
-          | End_of_file -> Error "server input reached EOF"))
+      | None -> Lwt.return_error "server input is closed"
+      | Some sink ->
+          Lwt.catch
+            (fun () ->
+              Lwt_io.write sink frame >>= fun () ->
+              Lwt_io.flush sink >|= fun () -> Ok ())
+            (function
+              | End_of_file -> Lwt.return_error "server input reached EOF"
+              | Lwt_io.Channel_closed where ->
+                  Lwt.return_error (Fmt.str "server input is closed: %s" where)
+              | Unix.Unix_error _ as exn -> Lwt.return_error (Io.message exn)
+              | exn -> Lwt.fail exn))
 
 let notification server ~method_ ~params =
   send_json server
@@ -377,15 +354,14 @@ let notification server ~method_ ~params =
        ])
 
 let cancel_request server id =
-  Eio.Cancel.protect (fun () ->
-      ignore
-        (send_json server
-           (json_object
-              [
-                ("jsonrpc", json_string "2.0");
-                ("method", json_string "$/cancelRequest");
-                ("params", json_object [ ("id", json_int id) ]);
-              ])))
+  send_json server
+    (json_object
+       [
+         ("jsonrpc", json_string "2.0");
+         ("method", json_string "$/cancelRequest");
+         ("params", json_object [ ("id", json_int id) ]);
+       ])
+  >|= ignore
 
 let next_request server =
   let id = server.next_id in
@@ -393,13 +369,12 @@ let next_request server =
   id
 
 let request t server ~timeout ~method_ ~params =
-  let pending = { condition = Eio.Condition.create (); reply = None } in
-  let id =
-    Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
-        let id = next_request server in
-        Hashtbl.replace server.pending id pending;
-        id)
-  in
+  let pending = { condition = Lwt_condition.create (); reply = None } in
+  Lwt_mutex.with_lock t.lock (fun () ->
+      let id = next_request server in
+      Hashtbl.replace server.pending id pending;
+      Lwt.return id)
+  >>= fun id ->
   let request_json =
     json_object
       [
@@ -410,40 +385,42 @@ let request t server ~timeout ~method_ ~params =
       ]
   in
   let remove_pending () =
-    Eio.Mutex.use_rw ~protect:true t.lock (fun () -> Hashtbl.remove server.pending id)
+    Lwt_mutex.with_lock t.lock (fun () ->
+        Hashtbl.remove server.pending id;
+        Lwt.return_unit)
   in
-  match send_json server request_json with
+  send_json server request_json >>= function
   | Error message ->
-      remove_pending ();
-      fail_server t server message;
-      Error (`Rpc (server.name, message))
-  | Ok () -> (
+      remove_pending () >>= fun () ->
+      fail_server t server message >>= fun () ->
+      Lwt.return_error (`Rpc (server.name, message))
+  | Ok () ->
       let wait_reply () =
-        Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
+        Lwt_mutex.with_lock t.lock (fun () ->
             let rec wait () =
               match pending.reply with
-              | Some reply -> reply
-              | None ->
-                  Eio.Condition.await pending.condition t.lock;
-                  wait ()
+              | Some reply -> Lwt.return reply
+              | None -> Lwt_condition.wait ~mutex:t.lock pending.condition >>= wait
             in
             wait ())
       in
-      let timed =
-        try Eio.Time.with_timeout t.clock timeout (fun () -> Ok (wait_reply ()))
-        with Eio.Cancel.Cancelled _ as exception_ ->
-          remove_pending ();
-          cancel_request server id;
-          raise exception_
-      in
-      remove_pending ();
-      match timed with
-      | Error `Timeout ->
-          cancel_request server id;
-          Error (`Timeout server.name)
-      | Ok (`Result value) -> Ok value
-      | Ok (`Error (code, message)) ->
-          Error (`Rpc (server.name, Fmt.str "[%d] %s" code message)))
+      Lwt.catch
+        (fun () ->
+          Lwt_unix.with_timeout timeout wait_reply >>= fun reply ->
+          remove_pending () >>= fun () ->
+          match reply with
+          | `Result value -> Lwt.return_ok value
+          | `Error (code, message) ->
+              Lwt.return_error (`Rpc (server.name, Fmt.str "[%d] %s" code message)))
+        (function
+          | Lwt_unix.Timeout ->
+              remove_pending () >>= fun () ->
+              cancel_request server id >>= fun () ->
+              Lwt.return_error (`Timeout server.name)
+          | Lwt.Canceled ->
+              remove_pending () >>= fun () ->
+              cancel_request server id >>= fun () -> Lwt.fail Lwt.Canceled
+          | exn -> Lwt.fail exn)
 
 let response_id value = Jsonx.int_member "id" value
 
@@ -483,7 +460,7 @@ let location_of_json ~cwd ~server value =
       | Ok (line, col, end_line, end_col) ->
           Ok
             {
-              path = normalize_path ~cwd (path_of_uri uri);
+              path = Path.normalize ~cwd (path_of_uri uri);
               line = line + 1;
               col = col + 1;
               end_line = end_line + 1;
@@ -554,7 +531,7 @@ let rec symbol_of_json ~cwd ~server ~path ~depth value =
           | Ok (line, col, end_line, end_col) ->
               let range_path =
                 match Jsonx.string_member "uri" location_value with
-                | Some uri -> normalize_path ~cwd (path_of_uri uri)
+                | Some uri -> Path.normalize ~cwd (path_of_uri uri)
                 | None -> path
               in
               Ok
@@ -622,9 +599,9 @@ let update_diagnostics t value =
   match Jsonx.member "params" value with
   | Some params -> (
       match Jsonx.string_member "uri" params with
-      | None -> ()
+      | None -> Lwt.return_unit
       | Some uri ->
-          let path = normalize_path ~cwd:t.cwd (path_of_uri uri) in
+          let path = Path.normalize ~cwd:t.cwd (path_of_uri uri) in
           let values =
             match Jsonx.member "diagnostics" params with
             | Some (Jsont.Array (diagnostics, _)) ->
@@ -637,7 +614,7 @@ let update_diagnostics t value =
                 |> List.rev
             | _ -> []
           in
-          Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
+          Lwt_mutex.with_lock t.lock (fun () ->
               let state =
                 match Hashtbl.find_opt t.diagnostics_table path with
                 | Some state -> state
@@ -647,24 +624,25 @@ let update_diagnostics t value =
                     state
               in
               state.values <- values;
-              state.serial <- state.serial + 1))
-  | None -> ()
+              state.serial <- state.serial + 1;
+              Lwt.return_unit))
+  | None -> Lwt.return_unit
 
 let send_response server ~id value =
-  ignore
-    (send_json server
-       (json_object [ ("jsonrpc", json_string "2.0"); ("id", id); ("result", value) ]))
+  send_json server
+    (json_object [ ("jsonrpc", json_string "2.0"); ("id", id); ("result", value) ])
+  >|= ignore
 
 let send_error_response server ~id code message =
-  ignore
-    (send_json server
-       (json_object
-          [
-            ("jsonrpc", json_string "2.0");
-            ("id", id);
-            ( "error",
-              json_object [ ("code", json_int code); ("message", json_string message) ] );
-          ]))
+  send_json server
+    (json_object
+       [
+         ("jsonrpc", json_string "2.0");
+         ("id", id);
+         ( "error",
+           json_object [ ("code", json_int code); ("message", json_string message) ] );
+       ])
+  >|= ignore
 
 let handle_response t server value =
   match response_id value with
@@ -684,19 +662,20 @@ let handle_response t server value =
             | Some result -> `Result result
             | None -> `Error (-32603, "response has no result"))
       in
-      Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
-          match Hashtbl.find_opt server.pending id with
+      Lwt_mutex.with_lock t.lock (fun () ->
+          (match Hashtbl.find_opt server.pending id with
           | None -> ()
           | Some pending ->
               pending.reply <- Some reply;
-              Eio.Condition.broadcast pending.condition)
+              Lwt_condition.broadcast pending.condition ());
+          Lwt.return_unit)
 
 let handle_server_request server ~id ~method_ =
   if method_ = "workspace/configuration" then send_response server ~id (json_array [])
   else send_error_response server ~id (-32601) (Fmt.str "method not found: %s" method_)
 
 let handle_message t server value =
-  match object_value value with
+  match Jsonx.object_members value with
   | None -> fail_server t server "JSON-RPC message is not an object"
   | Some _ -> (
       match Jsonx.string_member "method" value with
@@ -706,78 +685,65 @@ let handle_message t server value =
           | None ->
               if method_ = "textDocument/publishDiagnostics" then
                 update_diagnostics t value
-              else if method_ = "window/showMessage" then ()
-              else ())
+              else if method_ = "window/showMessage" then Lwt.return_unit
+              else Lwt.return_unit)
       | None -> handle_response t server value)
 
 let reader_loop t server generation source =
   let fail message =
     if server.generation = generation then fail_server t server message
+    else Lwt.return_unit
   in
-  let reader = Eio.Buf_read.of_flow source ~max_size:max_frame_size in
   let rec loop () =
-    match read_frame reader with
+    read_frame source >>= function
     | Error message -> fail message
-    | Ok value ->
-        handle_message t server value;
-        loop ()
+    | Ok value -> handle_message t server value >>= loop
   in
-  try loop () with
-  | End_of_file -> fail "server EOF"
-  | Eio.Buf_read.Buffer_limit_exceeded -> fail "server frame exceeds buffer limit"
-  | Eio.Io (_, _) as exception_ -> fail (Fmt.str "%a" Eio.Exn.pp exception_)
-  | Unix.Unix_error (error, function_name, argument) ->
-      fail (Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument)
-  | Failure message -> fail message
-  | Eio.Cancel.Cancelled _ -> fail "server reader cancelled"
+  Lwt.catch loop (function
+    | End_of_file -> fail "server EOF"
+    | Lwt_io.Channel_closed _ -> fail "server stream closed"
+    | Unix.Unix_error _ as exn -> fail (Io.message exn)
+    | Failure message -> fail message
+    | Lwt.Canceled -> fail "server reader cancelled"
+    | exn -> Lwt.fail exn)
 
 let stderr_loop source =
-  let buffer = Buffer.create 256 in
-  let captured = ref 0 in
-  let chunk = Cstruct.create 65536 in
+  let chunk = Bytes.create 4096 in
   let rec loop () =
-    match Eio.Flow.single_read source chunk with
-    | count when count > 0 ->
-        let remaining = max_stderr_size - !captured in
-        let keep = min remaining count in
-        if keep > 0 then
-          Buffer.add_substring buffer
-            (Cstruct.to_string (Cstruct.sub chunk 0 keep))
-            0 keep;
-        captured := min max_stderr_size (!captured + count);
-        loop ()
-    | _ -> loop ()
+    Lwt.catch
+      (fun () -> Lwt_io.read_into source chunk 0 4096)
+      (function
+        | End_of_file | Lwt_io.Channel_closed _ | Unix.Unix_error _ | Sys_error _ ->
+            Lwt.return 0
+        | exn -> Lwt.fail exn)
+    >>= fun read -> if read = 0 then Lwt.return_unit else loop ()
   in
-  try loop () with
-  | End_of_file -> ()
-  | Eio.Io _ -> ()
-  | Unix.Unix_error _ -> ()
-  | Eio.Cancel.Cancelled _ -> ()
+  loop ()
 
 let await_process t server generation process =
-  Eio.Mutex.use_rw ~protect:true server.process_wait_lock (fun () ->
+  Lwt_mutex.with_lock server.process_wait_lock (fun () ->
       match server.exit_status with
-      | Some status -> status
+      | Some status -> Lwt.return status
       | None ->
-          let status = Eio.Process.await process in
-          Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
-              if server.generation = generation then server.exit_status <- Some status);
-          status)
+          Charamel_os.Process.await process >>= fun status ->
+          Lwt_mutex.with_lock t.lock (fun () ->
+              if server.generation = generation then server.exit_status <- Some status;
+              Lwt.return_unit)
+          >>= fun () -> Lwt.return status)
 
 let monitor_process t server generation process =
-  try
-    ignore (await_process t server generation process);
+  let failed message =
     if server.generation = generation && not server.stopping then
-      fail_server t server "server exited"
-  with
-  | Eio.Io (_, _) as exception_ ->
-      if server.generation = generation && not server.stopping then
-        fail_server t server (Fmt.str "%a" Eio.Exn.pp exception_)
-  | Unix.Unix_error (error, function_name, argument) ->
-      if server.generation = generation && not server.stopping then
-        fail_server t server
-          (Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument)
-  | Eio.Cancel.Cancelled _ -> ()
+      fail_server t server message
+    else Lwt.return_unit
+  in
+  Lwt.catch
+    (fun () ->
+      await_process t server generation process >>= fun _ -> failed "server exited")
+    (function
+      | Unix.Unix_error _ as exn -> failed (Io.message exn)
+      | Lwt.Canceled -> Lwt.return_unit
+      | exn -> Lwt.fail exn)
 
 let initialize_params t server =
   let root_uri = uri_of_path t.cwd in
@@ -806,119 +772,111 @@ let initialize_params t server =
         Option.value ~default:(json_null ()) server.config.Config.init_options );
     ]
 
+let ignore_closed promise =
+  Lwt.catch
+    (fun () -> promise)
+    (function
+      | Lwt_io.Channel_closed _ | Unix.Unix_error _ | Sys_error _ -> Lwt.return_unit
+      | exn -> Lwt.fail exn)
+
+let close_input = function
+  | None -> Lwt.return_unit
+  | Some (channel : Lwt_io.input_channel) -> ignore_closed (Lwt_io.close channel)
+
+let close_output = function
+  | None -> Lwt.return_unit
+  | Some (channel : Lwt_io.output_channel) -> ignore_closed (Lwt_io.close channel)
+
 let cleanup_streams server =
-  Eio.Mutex.use_rw ~protect:true server.write_lock (fun () ->
-      Option.iter Eio.Flow.close server.stdin;
-      Option.iter Eio.Flow.close server.stdout;
-      Option.iter Eio.Flow.close server.stderr;
+  Lwt_mutex.with_lock server.write_lock (fun () ->
+      let stdin = server.stdin in
+      let stdout = server.stdout in
+      let stderr = server.stderr in
       server.stdin <- None;
       server.stdout <- None;
-      server.stderr <- None)
+      server.stderr <- None;
+      Lwt.join [ close_output stdin; close_input stdout; close_input stderr ])
+
+let read_whole_file path = Lwt_io.with_file ~mode:Lwt_io.Input path Lwt_io.read
 
 let start_server t server =
-  try
-    let stdin_source, stdin_sink = Eio.Process.pipe ~sw:t.sw t.proc_mgr in
-    let stdout_source, stdout_sink = Eio.Process.pipe ~sw:t.sw t.proc_mgr in
-    let stderr_source, stderr_sink = Eio.Process.pipe ~sw:t.sw t.proc_mgr in
-    let argv = server.config.Config.command :: server.config.Config.args in
-    let process_result =
-      try
-        Ok
-          (Eio.Process.spawn ~sw:t.sw t.proc_mgr
-             ~cwd:Eio.Path.(t.fs / t.cwd)
-             ~stdin:stdin_source ~stdout:stdout_sink ~stderr:stderr_sink argv)
-      with
-      | Eio.Io (_, _) as exception_ -> Error (Fmt.str "%a" Eio.Exn.pp exception_)
-      | Unix.Unix_error (error, function_name, argument) ->
-          Error (Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument)
-      | Failure message -> Error message
-    in
-    Eio.Flow.close stdin_source;
-    Eio.Flow.close stdout_sink;
-    Eio.Flow.close stderr_sink;
-    match process_result with
-    | Error message ->
-        Eio.Flow.close stdin_sink;
-        Eio.Flow.close stdout_source;
-        Eio.Flow.close stderr_source;
-        set_state t server (Failed message)
-    | Ok process -> (
-        let generation =
-          Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
-              server.process <- Some process;
-              server.stdin <- Some stdin_sink;
-              server.stdout <- Some stdout_source;
-              server.stderr <- Some stderr_source;
-              server.exit_status <- None;
-              server.generation <- server.generation + 1;
-              server.stopping <- false;
-              server.generation)
-        in
-        Eio.Fiber.fork ~sw:t.sw (fun () -> reader_loop t server generation stdout_source);
-        Eio.Fiber.fork ~sw:t.sw (fun () -> stderr_loop stderr_source);
-        Eio.Fiber.fork ~sw:t.sw (fun () -> monitor_process t server generation process);
-        match
-          request t server ~timeout:30. ~method_:"initialize"
-            ~params:(initialize_params t server)
-        with
-        | Error error ->
-            let message = Fmt.str "%a" pp_error error in
-            fail_server t server message
-        | Ok _ -> (
-            match notification server ~method_:"initialized" ~params:(json_object []) with
-            | Error message -> fail_server t server message
-            | Ok () -> set_state t server Ready))
-  with
-  | Eio.Cancel.Cancelled _ as exc ->
-      Eio.Cancel.protect (fun () ->
-          set_state t server (Failed "server startup cancelled"));
-      raise exc
-  | Eio.Io (_, _) as exception_ ->
-      set_state t server (Failed (Fmt.str "%a" Eio.Exn.pp exception_))
-  | Unix.Unix_error (error, function_name, argument) ->
-      set_state t server
-        (Failed (Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
-  | Failure message -> set_state t server (Failed message)
+  let argv = server.config.Config.command :: server.config.Config.args in
+  Lwt.catch
+    (fun () ->
+      let process =
+        Charamel_os.Process.spawn ~cwd:t.cwd ~stdin:`Pipe ~stdout:`Pipe ~stderr:`Pipe argv
+      in
+      let stdin = Charamel_os.Process.stdin_w process in
+      let stdout = Charamel_os.Process.stdout_r process in
+      let stderr = Charamel_os.Process.stderr_r process in
+      Lwt_mutex.with_lock t.lock (fun () ->
+          server.process <- Some process;
+          server.stdin <- Some stdin;
+          server.stdout <- Some stdout;
+          server.stderr <- Some stderr;
+          server.exit_status <- None;
+          server.generation <- server.generation + 1;
+          server.stopping <- false;
+          Lwt.return server.generation)
+      >>= fun generation ->
+      Lwt.async (fun () -> reader_loop t server generation stdout);
+      Lwt.async (fun () -> stderr_loop stderr);
+      Lwt.async (fun () -> monitor_process t server generation process);
+      request t server ~timeout:30. ~method_:"initialize"
+        ~params:(initialize_params t server)
+      >>= function
+      | Error error ->
+          let message = Fmt.str "%a" pp_error error in
+          fail_server t server message
+      | Ok _ -> (
+          notification server ~method_:"initialized" ~params:(json_object []) >>= function
+          | Error message -> fail_server t server message
+          | Ok () -> set_state t server Ready))
+    (function
+      | Lwt.Canceled ->
+          set_state t server (Failed "server startup cancelled") >>= fun () ->
+          Lwt.fail Lwt.Canceled
+      | Unix.Unix_error _ as exn -> set_state t server (Failed (Io.message exn))
+      | Invalid_argument message | Failure message -> set_state t server (Failed message)
+      | exn -> Lwt.fail exn)
 
 let wait_started t server =
-  Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
+  Lwt_mutex.with_lock t.lock (fun () ->
       let rec loop () =
         match server.state with
-        | Ready -> Ok ()
-        | Failed message -> Error (`Not_ready message)
-        | Disabled -> Error (`Not_ready server.name)
-        | Not_started -> Error (`Not_ready server.name)
-        | Starting ->
-            Eio.Condition.await server.state_condition t.lock;
-            loop ()
+        | Ready -> Lwt.return_ok ()
+        | Failed message -> Lwt.return_error (`Not_ready message)
+        | Disabled -> Lwt.return_error (`Not_ready server.name)
+        | Not_started -> Lwt.return_error (`Not_ready server.name)
+        | Starting -> Lwt_condition.wait ~mutex:t.lock server.state_condition >>= loop
       in
       loop ())
 
 let ensure_started t server =
-  let start =
-    Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
-        match server.state with
-        | Not_started ->
-            server.state <- Starting;
-            true
-        | Starting | Ready | Failed _ | Disabled -> false)
-  in
-  if start then start_server t server;
+  Lwt_mutex.with_lock t.lock (fun () ->
+      match server.state with
+      | Not_started ->
+          server.state <- Starting;
+          Lwt.return true
+      | Starting | Ready | Failed _ | Disabled -> Lwt.return false)
+  >>= fun start ->
   if start then
+    start_server t server >>= fun () ->
     match server.state with
-    | Ready -> Ok ()
-    | Failed message -> Error (`Not_ready message)
-    | _ -> Error (`Not_ready server.name)
+    | Ready -> Lwt.return_ok ()
+    | Failed message -> Lwt.return_error (`Not_ready message)
+    | _ -> Lwt.return_error (`Not_ready server.name)
   else
-    Eio.Time.with_timeout t.clock 30. (fun () -> wait_started t server) |> function
-    | Ok () -> Ok ()
-    | Error (`Not_ready message) -> Error (`Not_ready message)
-    | Error `Timeout -> Error (`Not_ready server.name)
+    Lwt.catch
+      (fun () -> Lwt_unix.with_timeout 30. (fun () -> wait_started t server))
+      (function
+        | Lwt_unix.Timeout -> Lwt.return_error (`Not_ready server.name)
+        | exn -> Lwt.fail exn)
 
 let send_document t server path text =
   let ext = extension path in
-  let document =
-    Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
+  Lwt_mutex.with_lock t.lock (fun () ->
+      let document =
         match Hashtbl.find_opt server.documents path with
         | Some document ->
             document.version <- (if document.opened then document.version + 1 else 1);
@@ -935,96 +893,98 @@ let send_document t server path text =
               }
             in
             Hashtbl.add server.documents path document;
-            document)
-  in
-  let result =
-    if document.opened then
-      notification server ~method_:"textDocument/didChange"
-        ~params:
-          (json_object
-             [
-               ( "textDocument",
-                 json_object
-                   [
-                     ("uri", json_string document.uri);
-                     ("version", json_int document.version);
-                   ] );
-               ( "contentChanges",
-                 json_array [ json_object [ ("text", json_string document.text) ] ] );
-             ])
-    else
-      notification server ~method_:"textDocument/didOpen"
-        ~params:
-          (json_object
-             [
-               ( "textDocument",
-                 json_object
-                   [
-                     ("uri", json_string document.uri);
-                     ("languageId", json_string document.language_id);
-                     ("version", json_int document.version);
-                     ("text", json_string document.text);
-                   ] );
-             ])
-  in
-  match result with
-  | Ok () -> document.opened <- true
+            document
+      in
+      Lwt.return document)
+  >>= fun document ->
+  (if document.opened then
+     notification server ~method_:"textDocument/didChange"
+       ~params:
+         (json_object
+            [
+              ( "textDocument",
+                json_object
+                  [
+                    ("uri", json_string document.uri);
+                    ("version", json_int document.version);
+                  ] );
+              ( "contentChanges",
+                json_array [ json_object [ ("text", json_string document.text) ] ] );
+            ])
+   else
+     notification server ~method_:"textDocument/didOpen"
+       ~params:
+         (json_object
+            [
+              ( "textDocument",
+                json_object
+                  [
+                    ("uri", json_string document.uri);
+                    ("languageId", json_string document.language_id);
+                    ("version", json_int document.version);
+                    ("text", json_string document.text);
+                  ] );
+            ]))
+  >>= function
+  | Ok () ->
+      document.opened <- true;
+      Lwt.return_unit
   | Error message -> fail_server t server message
 
 let touch t ~path =
-  let path = normalize_path ~cwd:t.cwd path in
+  let path = Path.normalize ~cwd:t.cwd path in
   match server_for_path t path with
-  | None -> ()
-  | Some server when not (has_root_marker t server) -> ()
+  | None -> Lwt.return_unit
+  | Some server when not (has_root_marker t server) -> Lwt.return_unit
   | Some server -> (
-      let text =
-        try Some (Eio.Path.load Eio.Path.(t.fs / path)) with
-        | Eio.Io _ -> None
-        | Unix.Unix_error _ -> None
-      in
-      match text with
-      | None -> ()
+      Lwt.catch
+        (fun () -> read_whole_file path >|= Option.some)
+        (function
+          | Unix.Unix_error _ | Sys_error _ -> Lwt.return_none | exn -> Lwt.fail exn)
+      >>= function
+      | None -> Lwt.return_unit
       | Some text -> (
-          match ensure_started t server with
+          ensure_started t server >>= function
           | Ok () -> send_document t server path text
-          | Error _ -> ()))
+          | Error _ -> Lwt.return_unit))
 
 let servers t =
-  Eio.Mutex.use_ro t.lock (fun () ->
-      List.map (fun server -> (server.name, server.state)) t.servers_table)
+  Lwt_mutex.with_lock t.lock (fun () ->
+      Lwt.return (List.map (fun server -> (server.name, server.state)) t.servers_table))
 
 let handles t ~path =
   Option.map
     (fun server -> server.name)
-    (server_for_path t (normalize_path ~cwd:t.cwd path))
+    (server_for_path t (Path.normalize ~cwd:t.cwd path))
 
 let diagnostic_snapshot t path =
-  Eio.Mutex.use_ro t.lock (fun () ->
-      match Hashtbl.find_opt t.diagnostics_table path with
-      | None -> ([], 0)
-      | Some state -> (state.values, state.serial))
+  match Hashtbl.find_opt t.diagnostics_table path with
+  | None -> ([], 0)
+  | Some state -> (state.values, state.serial)
 
 let diagnostics t ~path ~wait =
-  let path = normalize_path ~cwd:t.cwd path in
+  let path = Path.normalize ~cwd:t.cwd path in
   let initial_values, initial_serial = diagnostic_snapshot t path in
-  let deadline = Eio.Time.now t.clock +. max 0. (min 1. wait) in
-  let first_publication = ref None in
-  let serial = ref initial_serial in
-  let rec loop () =
-    let values, current_serial = diagnostic_snapshot t path in
-    if current_serial <> !serial then (
-      serial := current_serial;
-      first_publication := Some (Eio.Time.now t.clock));
-    let now = Eio.Time.now t.clock in
-    if now >= deadline then values
-    else
-      match !first_publication with
-      | Some published when now -. published >= 0.3 -> values
-      | _ ->
-          Eio.Time.sleep t.clock (min 0.05 (max 0.001 (deadline -. now)));
-          loop ()
-  in
-  if wait <= 0. then initial_values else loop ()
+  if wait <= 0. then Lwt.return initial_values
+  else
+    let deadline = Charamel_os.Time.now t.clock +. max 0. (min 1. wait) in
+    let first_publication = ref None in
+    let serial = ref initial_serial in
+    let rec loop () =
+      let values, current_serial = diagnostic_snapshot t path in
+      if current_serial <> !serial then (
+        serial := current_serial;
+        first_publication := Some (Charamel_os.Time.now t.clock));
+      let now = Charamel_os.Time.now t.clock in
+      if now >= deadline then Lwt.return values
+      else
+        match !first_publication with
+        | Some published when now -. published >= 0.3 -> Lwt.return values
+        | _ ->
+            Charamel_os.Time.sleep t.clock (min 0.05 (max 0.001 (deadline -. now)))
+            >>= loop
+    in
+    loop ()
 
 let valid_position line col = line >= 1 && col >= 1
 
@@ -1038,54 +998,63 @@ let position_params ~path ~line ~col =
     ]
 
 let prepare_request t path =
-  let path = normalize_path ~cwd:t.cwd path in
+  let path = Path.normalize ~cwd:t.cwd path in
   match server_for_path t path with
-  | None -> Error (`No_server path)
-  | Some server when not (has_root_marker t server) -> Error (`No_server path)
-  | Some server ->
-      touch t ~path;
-      let* () = ensure_started t server in
-      Ok (server, path)
+  | None -> Lwt.return_error (`No_server path)
+  | Some server when not (has_root_marker t server) -> Lwt.return_error (`No_server path)
+  | Some server -> (
+      touch t ~path >>= fun () ->
+      ensure_started t server >>= function
+      | Ok () -> Lwt.return_ok (server, path)
+      | Error _ as e -> Lwt.return e)
 
 let definition t ~path ~line ~col =
-  if not (valid_position line col) then Error (`Rpc ("client", "invalid position"))
+  if not (valid_position line col) then
+    Lwt.return_error (`Rpc ("client", "invalid position"))
   else
-    let* server, path = prepare_request t path in
-    let* value =
-      request t server ~timeout:10. ~method_:"textDocument/definition"
-        ~params:(position_params ~path ~line ~col)
-    in
-    locations_of_result ~cwd:t.cwd server value
+    prepare_request t path >>= function
+    | Error _ as e -> Lwt.return e
+    | Ok (server, path) -> (
+        request t server ~timeout:10. ~method_:"textDocument/definition"
+          ~params:(position_params ~path ~line ~col)
+        >>= function
+        | Error _ as e -> Lwt.return e
+        | Ok value -> Lwt.return (locations_of_result ~cwd:t.cwd server value))
 
 let references t ~path ~line ~col =
-  if not (valid_position line col) then Error (`Rpc ("client", "invalid position"))
+  if not (valid_position line col) then
+    Lwt.return_error (`Rpc ("client", "invalid position"))
   else
-    let* server, path = prepare_request t path in
-    let params =
-      json_object
-        [
-          ("textDocument", json_object [ ("uri", json_string (uri_of_path path)) ]);
-          ( "position",
-            json_object
-              [ ("line", json_int (line - 1)); ("character", json_int (col - 1)) ] );
-          ("context", json_object [ ("includeDeclaration", json_bool true) ]);
-        ]
-    in
-    let* value =
-      request t server ~timeout:10. ~method_:"textDocument/references" ~params
-    in
-    locations_of_result ~cwd:t.cwd server value
+    prepare_request t path >>= function
+    | Error _ as e -> Lwt.return e
+    | Ok (server, path) -> (
+        let params =
+          json_object
+            [
+              ("textDocument", json_object [ ("uri", json_string (uri_of_path path)) ]);
+              ( "position",
+                json_object
+                  [ ("line", json_int (line - 1)); ("character", json_int (col - 1)) ] );
+              ("context", json_object [ ("includeDeclaration", json_bool true) ]);
+            ]
+        in
+        request t server ~timeout:10. ~method_:"textDocument/references" ~params
+        >>= function
+        | Error _ as e -> Lwt.return e
+        | Ok value -> Lwt.return (locations_of_result ~cwd:t.cwd server value))
 
 let document_symbols t ~path =
-  let* server, path = prepare_request t path in
-  let params =
-    json_object
-      [ ("textDocument", json_object [ ("uri", json_string (uri_of_path path)) ]) ]
-  in
-  let* value =
-    request t server ~timeout:10. ~method_:"textDocument/documentSymbol" ~params
-  in
-  symbols_of_result ~cwd:t.cwd server ~path value
+  prepare_request t path >>= function
+  | Error _ as e -> Lwt.return e
+  | Ok (server, path) -> (
+      let params =
+        json_object
+          [ ("textDocument", json_object [ ("uri", json_string (uri_of_path path)) ]) ]
+      in
+      request t server ~timeout:10. ~method_:"textDocument/documentSymbol" ~params
+      >>= function
+      | Error _ as e -> Lwt.return e
+      | Ok value -> Lwt.return (symbols_of_result ~cwd:t.cwd server ~path value))
 
 let rec find_exact name (symbols : symbol list) =
   match symbols with
@@ -1113,10 +1082,12 @@ let rec find_suffix name (symbols : symbol list) =
         | None -> find_suffix name rest)
 
 let find_symbol t ~path ~name =
-  let* symbols = document_symbols t ~path in
-  match find_exact name symbols with
-  | Some symbol -> Ok (Some symbol)
-  | None -> Ok (find_suffix name symbols)
+  document_symbols t ~path >>= function
+  | Error _ as e -> Lwt.return e
+  | Ok symbols -> (
+      match find_exact name symbols with
+      | Some symbol -> Lwt.return_ok (Some symbol)
+      | None -> Lwt.return_ok (find_suffix name symbols))
 
 let current_version server path =
   Option.map (fun document -> document.version) (Hashtbl.find_opt server.documents path)
@@ -1147,7 +1118,7 @@ let parse_text_edit server value =
   Ok { range; new_text }
 
 let parse_file_edits server path value =
-  match array_value value with
+  match Jsonx.array_members value with
   | None -> Error (`Rpc (server.name, "workspace edits must be arrays"))
   | Some values ->
       let rec collect acc = function
@@ -1170,13 +1141,13 @@ let merge_group path edits groups =
 let parse_workspace_edit ~cwd server value =
   let groups = ref [] in
   let parse_changes changes =
-    match object_value changes with
+    match Jsonx.object_members changes with
     | None -> Error (`Rpc (server.name, "workspace changes is not an object"))
     | Some members ->
         let rec loop = function
           | [] -> Ok ()
           | ((name, _), edits) :: rest ->
-              let path = normalize_path ~cwd (path_of_uri name) in
+              let path = Path.normalize ~cwd (path_of_uri name) in
               let* values = parse_file_edits server path edits in
               groups := merge_group path values !groups;
               loop rest
@@ -1184,7 +1155,7 @@ let parse_workspace_edit ~cwd server value =
         loop members
   in
   let parse_document_changes changes =
-    match array_value changes with
+    match Jsonx.array_members changes with
     | None -> Error (`Rpc (server.name, "documentChanges is not an array"))
     | Some values ->
         let rec loop = function
@@ -1201,7 +1172,7 @@ let parse_workspace_edit ~cwd server value =
                 | Some uri -> Ok uri
                 | None -> Error (`Rpc (server.name, "document change has no URI"))
               in
-              let path = normalize_path ~cwd (path_of_uri uri) in
+              let path = Path.normalize ~cwd (path_of_uri uri) in
               let* () =
                 match Jsonx.int_member "version" document with
                 | Some version -> (
@@ -1236,24 +1207,27 @@ let parse_workspace_edit ~cwd server value =
   Ok !groups
 
 let rename t ~path ~line ~col ~new_name =
-  if not (valid_position line col) then Error (`Rpc ("client", "invalid position"))
-  else if new_name = "" then Error (`Rpc ("client", "new name is empty"))
+  if not (valid_position line col) then
+    Lwt.return_error (`Rpc ("client", "invalid position"))
+  else if new_name = "" then Lwt.return_error (`Rpc ("client", "new name is empty"))
   else
-    let* server, path = prepare_request t path in
-    let params =
-      json_object
-        [
-          ("textDocument", json_object [ ("uri", json_string (uri_of_path path)) ]);
-          ( "position",
-            json_object
-              [ ("line", json_int (line - 1)); ("character", json_int (col - 1)) ] );
-          ("newName", json_string new_name);
-        ]
-    in
-    let* value = request t server ~timeout:10. ~method_:"textDocument/rename" ~params in
-    match value with
-    | Jsont.Null _ -> Ok []
-    | _ -> parse_workspace_edit ~cwd:t.cwd server value
+    prepare_request t path >>= function
+    | Error _ as e -> Lwt.return e
+    | Ok (server, path) -> (
+        let params =
+          json_object
+            [
+              ("textDocument", json_object [ ("uri", json_string (uri_of_path path)) ]);
+              ( "position",
+                json_object
+                  [ ("line", json_int (line - 1)); ("character", json_int (col - 1)) ] );
+              ("newName", json_string new_name);
+            ]
+        in
+        request t server ~timeout:10. ~method_:"textDocument/rename" ~params >>= function
+        | Error _ as e -> Lwt.return e
+        | Ok (Jsont.Null _) -> Lwt.return_ok []
+        | Ok value -> Lwt.return (parse_workspace_edit ~cwd:t.cwd server value))
 
 let line_starts text =
   let starts = ref [ 0 ] in
@@ -1316,120 +1290,124 @@ let location_bytes text starts location =
     Error "edit range is reversed"
   else Ok (start_byte, end_byte)
 
-let apply_file_edits ~cwd fs path edits =
-  let path = normalize_path ~cwd (path_of_uri path) in
-  let original =
-    try Ok (Eio.Path.load Eio.Path.(fs / path)) with
-    | Eio.Io (_, _) as exception_ ->
-        Error (`Io (path, Fmt.str "%a" Eio.Exn.pp exception_))
-    | Unix.Unix_error (error, function_name, argument) ->
-        Error
-          (`Io
-             (path, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
+let compute_replacement path original edits =
+  let starts = line_starts original in
+  let ranges =
+    List.map
+      (fun edit ->
+        match location_bytes original starts edit.range with
+        | Ok (start_byte, end_byte) -> Ok (start_byte, end_byte, edit.new_text)
+        | Error message -> Error (`Io (path, message)))
+      edits
   in
-  let* original = original in
-  if not (String.is_valid_utf_8 original) then
-    Error (`Io (path, "source is not valid UTF-8"))
-  else
-    let starts = line_starts original in
-    let ranges =
-      List.map
-        (fun edit ->
-          match location_bytes original starts edit.range with
-          | Ok (start_byte, end_byte) -> Ok (start_byte, end_byte, edit.new_text)
-          | Error message -> Error (`Io (path, message)))
-        edits
-    in
-    let rec collect acc = function
-      | [] -> Ok (List.rev acc)
-      | Ok value :: rest -> collect (value :: acc) rest
-      | Error error :: _ -> Error error
-    in
-    let* ranges = collect [] ranges in
-    let sorted =
-      List.sort
-        (fun (left_start, left_end, _) (right_start, right_end, _) ->
-          match Int.compare left_start right_start with
-          | 0 -> Int.compare left_end right_end
-          | result -> result)
-        ranges
-    in
-    let rec validate previous_end = function
-      | [] -> Ok ()
-      | (start_byte, _end_byte, _) :: _ when start_byte < previous_end ->
-          Error (`Io (path, "workspace edits overlap"))
-      | (start_byte, end_byte, _) :: rest ->
-          if end_byte < start_byte then Error (`Io (path, "workspace edit is reversed"))
-          else validate end_byte rest
-    in
-    let* () = validate 0 sorted in
-    let buffer = Buffer.create (String.length original + 64) in
-    let cursor = ref 0 in
-    List.iter
-      (fun (start_byte, end_byte, new_text) ->
-        Buffer.add_substring buffer original !cursor (start_byte - !cursor);
-        Buffer.add_string buffer new_text;
-        cursor := end_byte)
-      sorted;
-    Buffer.add_substring buffer original !cursor (String.length original - !cursor);
-    let replacement = Buffer.contents buffer in
-    try
-      Eio.Cancel.protect (fun () ->
-          Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path) replacement);
-      Ok path
-    with
-    | Eio.Io (_, _) as exception_ ->
-        Error (`Io (path, Fmt.str "%a" Eio.Exn.pp exception_))
-    | Unix.Unix_error (error, function_name, argument) ->
-        Error
-          (`Io
-             (path, Fmt.str "%s (%s %s)" (Unix.error_message error) function_name argument))
-    | Eio.Cancel.Cancelled _ as exc -> raise exc
-
-let apply_edits ~cwd ~fs grouped =
-  let rec apply acc = function
+  let rec collect acc = function
     | [] -> Ok (List.rev acc)
-    | (path, edits) :: rest ->
-        let* touched = apply_file_edits ~cwd fs path edits in
-        apply (touched :: acc) rest
+    | Ok value :: rest -> collect (value :: acc) rest
+    | Error error :: _ -> Error error
+  in
+  let* ranges = collect [] ranges in
+  let sorted =
+    List.sort
+      (fun (left_start, left_end, _) (right_start, right_end, _) ->
+        match Int.compare left_start right_start with
+        | 0 -> Int.compare left_end right_end
+        | result -> result)
+      ranges
+  in
+  let rec validate previous_end = function
+    | [] -> Ok ()
+    | (start_byte, _end_byte, _) :: _ when start_byte < previous_end ->
+        Error (`Io (path, "workspace edits overlap"))
+    | (start_byte, end_byte, _) :: rest ->
+        if end_byte < start_byte then Error (`Io (path, "workspace edit is reversed"))
+        else validate end_byte rest
+  in
+  let* () = validate 0 sorted in
+  let buffer = Buffer.create (String.length original + 64) in
+  let cursor = ref 0 in
+  List.iter
+    (fun (start_byte, end_byte, new_text) ->
+      Buffer.add_substring buffer original !cursor (start_byte - !cursor);
+      Buffer.add_string buffer new_text;
+      cursor := end_byte)
+    sorted;
+  Buffer.add_substring buffer original !cursor (String.length original - !cursor);
+  Ok (Buffer.contents buffer)
+
+let apply_file_edits ~cwd path edits =
+  let path = Path.normalize ~cwd (path_of_uri path) in
+  Lwt.catch
+    (fun () -> read_whole_file path >|= fun text -> Ok text)
+    (function
+      | Unix.Unix_error _ as exn -> Lwt.return_error (`Io (path, Io.message exn))
+      | Sys_error message -> Lwt.return_error (`Io (path, message))
+      | exn -> Lwt.fail exn)
+  >>= function
+  | Error _ as e -> Lwt.return e
+  | Ok original when not (String.is_valid_utf_8 original) ->
+      Lwt.return_error (`Io (path, "source is not valid UTF-8"))
+  | Ok original -> (
+      match compute_replacement path original edits with
+      | Error _ as e -> Lwt.return e
+      | Ok replacement ->
+          Lwt.catch
+            (fun () ->
+              Charamel_os.Fs.with_open_out ~perm:0o644 path (fun channel ->
+                  Lwt_io.write channel replacement)
+              >|= fun () -> Ok path)
+            (function
+              | Charamel_os.Fs.E (error, fs_path) ->
+                  Lwt.return_error (`Io (fs_path, Io.fs_error error))
+              | Unix.Unix_error _ as exn -> Lwt.return_error (`Io (path, Io.message exn))
+              | exn -> Lwt.fail exn))
+
+let apply_edits ~cwd grouped =
+  let rec apply acc = function
+    | [] -> Lwt.return_ok (List.rev acc)
+    | (path, edits) :: rest -> (
+        apply_file_edits ~cwd path edits >>= function
+        | Error _ as e -> Lwt.return e
+        | Ok touched -> apply (touched :: acc) rest)
   in
   apply [] grouped
 
 let reopen_documents t server =
-  let documents =
-    Eio.Mutex.use_ro t.lock (fun () ->
-        Hashtbl.fold
-          (fun path document acc -> (path, document.text) :: acc)
-          server.documents [])
-  in
-  List.iter (fun (path, text) -> send_document t server path text) documents
+  Lwt_mutex.with_lock t.lock (fun () ->
+      Lwt.return
+        (Hashtbl.fold
+           (fun path document acc -> (path, document.text) :: acc)
+           server.documents []))
+  >>= fun documents ->
+  Lwt_list.iter_s (fun (path, text) -> send_document t server path text) documents
+
+(* [stop] has already forced the group away; the status wait is bounded the same way, so a
+   child the kernel will not reap cannot hold [stop_server] open forever. *)
+let stop_process t server generation process =
+  Charamel_os.Process.stop process >>= fun () ->
+  Lwt.choose
+    [
+      (Lwt.protected (await_process t server generation process) >|= fun _ -> ());
+      Lwt_unix.sleep Charamel_os.Process.grace;
+    ]
 
 let stop_server t server ~final =
   server.stopping <- true;
   let process = server.process in
   let generation = server.generation in
   (match server.state with
-  | Ready -> (
-      (match request t server ~timeout:2. ~method_:"shutdown" ~params:(json_null ()) with
-      | Ok _ | Error _ -> ());
-      match notification server ~method_:"exit" ~params:(json_null ()) with
-      | Ok () | Error _ -> ())
-  | _ -> ());
-  Option.iter (fun process -> Eio.Process.signal process Sys.sigterm) process;
-  Option.iter
-    (fun process ->
-      let awaited =
-        try
-          Eio.Time.with_timeout t.clock 2. (fun () ->
-              Ok (await_process t server generation process))
-        with Eio.Cancel.Cancelled _ -> Error `Timeout
-      in
-      match awaited with
-      | Ok _ -> ()
-      | Error `Timeout -> Eio.Process.signal process Sys.sigkill)
-    process;
-  Eio.Cancel.protect (fun () -> cleanup_streams server);
-  Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
+    | Ready ->
+        request t server ~timeout:2. ~method_:"shutdown" ~params:(json_null ())
+        >>= fun _ ->
+        notification server ~method_:"exit" ~params:(json_null ()) >>= fun _ ->
+        Lwt.return_unit
+    | _ -> Lwt.return_unit)
+  >>= fun () ->
+  (match process with
+    | None -> Lwt.return_unit
+    | Some process -> stop_process t server generation process)
+  >>= fun () ->
+  cleanup_streams server >>= fun () ->
+  Lwt_mutex.with_lock t.lock (fun () ->
       server.process <- None;
       Hashtbl.iter
         (fun _ document ->
@@ -1438,44 +1416,51 @@ let stop_server t server ~final =
         server.documents;
       mark_pending server (`Error (-32000, "server stopped"));
       if final then server.state <- Disabled else server.state <- Not_started;
-      Eio.Condition.broadcast server.state_condition)
+      Lwt_condition.broadcast server.state_condition ();
+      Lwt.return_unit)
 
 let restart t ~name =
-  let selected =
+  match
     match name with
     | None -> Ok t.servers_table
     | Some name -> (
         match find_server_by_name t name with
         | Some server -> Ok [ server ]
         | None -> Error (`No_server name))
-  in
-  let* selected = selected in
-  let restarted = ref [] and failed = ref [] in
-  List.iter
-    (fun server ->
-      stop_server t server ~final:false;
-      if not (has_root_marker t server) then failed := server.name :: !failed
-      else (
-        ignore (ensure_started t server);
-        match server.state with
-        | Ready ->
-            restarted := server.name :: !restarted;
-            reopen_documents t server
-        | Failed _ -> failed := server.name :: !failed
-        | _ -> failed := server.name :: !failed))
-    selected;
-  Ok (List.rev !restarted, List.rev !failed)
+  with
+  | Error _ as e -> Lwt.return e
+  | Ok selected ->
+      let restarted = ref [] and failed = ref [] in
+      Lwt_list.iter_s
+        (fun server ->
+          stop_server t server ~final:false >>= fun () ->
+          if not (has_root_marker t server) then (
+            failed := server.name :: !failed;
+            Lwt.return_unit)
+          else
+            ensure_started t server >>= fun _ ->
+            match server.state with
+            | Ready ->
+                restarted := server.name :: !restarted;
+                reopen_documents t server
+            | Failed _ ->
+                failed := server.name :: !failed;
+                Lwt.return_unit
+            | _ ->
+                failed := server.name :: !failed;
+                Lwt.return_unit)
+        selected
+      >>= fun () -> Lwt.return_ok (List.rev !restarted, List.rev !failed)
 
 let stop_all t =
-  List.iter (fun server -> stop_server t server ~final:true) t.servers_table
+  Lwt_list.iter_s (fun server -> stop_server t server ~final:true) t.servers_table
 
-let create ~sw ~proc_mgr ~clock ~fs ~cwd ~config =
+let create ~sw ~clock ~fs_root ~cwd ~config =
   (* A relative create-time cwd anchors at the process directory; every
      later normalization threads [t.cwd] explicitly. *)
-  let cwd = normalize_path ~cwd:(Sys.getcwd ()) cwd in
+  let cwd = Path.normalize ~cwd:(Sys.getcwd ()) cwd in
   let configured =
-    let defaults_by_name = defaults in
-    let base = if config.Config.options.Config.auto_lsp then defaults_by_name else [] in
+    let base = if config.Config.options.Config.auto_lsp then defaults else [] in
     let replace name value values =
       let rec loop acc = function
         | [] -> List.rev ((name, value) :: acc)
@@ -1488,7 +1473,7 @@ let create ~sw ~proc_mgr ~clock ~fs ~cwd ~config =
     List.fold_left
       (fun values ((name, value) : string * Config.lsp) ->
         let value =
-          match List.assoc_opt name defaults_by_name with
+          match List.assoc_opt name defaults with
           | Some default when value.Config.filetypes = [] ->
               {
                 value with
@@ -1500,7 +1485,6 @@ let create ~sw ~proc_mgr ~clock ~fs ~cwd ~config =
         replace name value values)
       base config.Config.lsp
   in
-  let lock = Eio.Mutex.create () in
   let servers_table =
     List.map
       (fun (name, config) ->
@@ -1513,28 +1497,26 @@ let create ~sw ~proc_mgr ~clock ~fs ~cwd ~config =
           stdout = None;
           stderr = None;
           exit_status = None;
-          process_wait_lock = Eio.Mutex.create ();
+          process_wait_lock = Lwt_mutex.create ();
           generation = 0;
           stopping = false;
           next_id = 1;
           pending = Hashtbl.create 32;
           documents = Hashtbl.create 32;
-          state_condition = Eio.Condition.create ();
-          write_lock = Eio.Mutex.create ();
+          state_condition = Lwt_condition.create ();
+          write_lock = Lwt_mutex.create ();
         })
       configured
   in
   let t =
     {
-      sw;
-      proc_mgr;
       clock;
-      fs;
+      fs_root;
       cwd;
       servers_table;
-      lock;
+      lock = Lwt_mutex.create ();
       diagnostics_table = Hashtbl.create 64;
     }
   in
-  Eio.Switch.on_release sw (fun () -> Eio.Cancel.protect (fun () -> stop_all t));
+  Lwt_switch.add_hook (Some sw) (fun () -> stop_all t);
   t

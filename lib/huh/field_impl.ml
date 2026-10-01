@@ -1,3 +1,5 @@
+open Lwt.Syntax
+
 type position = { is_first : bool; is_last : bool }
 
 type ctx = {
@@ -17,13 +19,14 @@ type ('value, 'state, 'message) impl = {
   key : 'value Key.t option;
   msg_id : 'message Type.Id.t;
   init : ctx -> 'state -> 'state * 'message Charamel_tea.Cmd.t;
-  reevaluate : ctx -> 'state -> 'state;
+  reevaluate : ctx -> 'state -> 'state * 'message Charamel_tea.Cmd.t;
   on_key :
     ctx -> Charamel_tea.Key.t -> 'state -> 'state * 'message Charamel_tea.Cmd.t * outcome;
   on_paste : ctx -> string -> 'state -> 'state;
   update : ctx -> 'message -> 'state -> 'state * 'message Charamel_tea.Cmd.t;
   subscriptions : ctx -> 'state -> 'message Charamel_tea.Sub.t;
   view : ctx -> focused:bool -> 'state -> string;
+  cursor : ctx -> focused:bool -> 'state -> Charamel_tea.Cursor.t option;
   focus : ctx -> 'state -> 'state * 'message Charamel_tea.Cmd.t;
   blur : ctx -> 'state -> 'state;
   value : 'state -> 'value;
@@ -32,7 +35,15 @@ type ('value, 'state, 'message) impl = {
   zoom : 'state -> bool;
   key_binds : ctx -> 'state -> Charamel_bubbles.Key_binding.t list;
   run_accessible :
-    name:string -> ctx -> out:(string -> unit) -> Accessible.reader -> 'state -> 'state;
+    name:string ->
+    ctx ->
+    out:(string -> unit Lwt.t) ->
+    Accessible.reader ->
+    'state ->
+    'state Lwt.t;
+  filtering_of : 'state -> bool option;
+  set_filtering_of : bool -> 'state -> 'state;
+  hovered : 'state -> string option;
 }
 
 type t = Field : ('value, 'state, 'message) impl * 'state -> t
@@ -48,22 +59,30 @@ let concat_nonempty parts =
 
 let field_label name = String.capitalize_ascii name ^ ":"
 
+let content_lines text =
+  if text = "" then 0 else List.length (String.split_on_char '\n' text)
+
 let field_style ctx focused =
   if focused then ctx.styles.Styles.focused else ctx.styles.Styles.blurred
 
 let textinput_styles (styles : Styles.t) : Charamel_bubbles.Textinput.styles =
   let defaults = Charamel_bubbles.Textinput.default_styles ~is_dark:true in
-  let state (custom : Styles.text_input) : Charamel_bubbles.Textinput.style_state =
+  let state (default : Charamel_bubbles.Textinput.style_state)
+      (custom : Styles.text_input) : Charamel_bubbles.Textinput.style_state =
     {
       text = custom.Styles.text;
       placeholder = custom.Styles.placeholder;
-      suggestion = custom.Styles.placeholder;
+      suggestion = default.Charamel_bubbles.Textinput.suggestion;
       prompt = custom.Styles.prompt;
     }
   in
   {
-    focused = state styles.Styles.focused.Styles.text_input;
-    blurred = state styles.Styles.blurred.Styles.text_input;
+    focused =
+      state defaults.Charamel_bubbles.Textinput.focused
+        styles.Styles.focused.Styles.text_input;
+    blurred =
+      state defaults.Charamel_bubbles.Textinput.blurred
+        styles.Styles.blurred.Styles.text_input;
     cursor = defaults.Charamel_bubbles.Textinput.cursor;
   }
 
@@ -129,21 +148,11 @@ let navigation_binds ctx ~prev ~next ~submit =
     binding_enabled submit ctx.position.is_last;
   ]
 
-let scalar_count text =
-  let rec loop offset count =
-    if offset >= String.length text then count
-    else
-      let decoded = String.get_utf_8_uchar text offset in
-      let step =
-        if Uchar.utf_decode_is_valid decoded then Uchar.utf_decode_length decoded else 1
-      in
-      loop (offset + max 1 step) (count + 1)
-  in
-  loop 0 0
+let grapheme_count text = Stdlib.List.length (Charamel_ansi.Width.graphemes text)
 
 let validate_string ~char_limit ~validate value =
   match char_limit with
-  | Some limit when limit > 0 && scalar_count value > limit ->
+  | Some limit when limit > 0 && grapheme_count value > limit ->
       Error (Fmt.str "Input cannot exceed %d characters" limit)
   | _ -> validate value
 
@@ -157,7 +166,7 @@ type input_state = {
   textinput : Charamel_bubbles.Textinput.t;
   title : string Dyn.t;
   description : string Dyn.t;
-  placeholder : string;
+  placeholder : string Dyn.t;
   prompt : string;
   suggestions : string list Dyn.t;
   char_limit : int;
@@ -186,7 +195,7 @@ let input_evaluate state results ~width ~styles =
       |> Charamel_bubbles.Textinput.set_show_suggestions (suggestions <> [])
       |> Charamel_bubbles.Textinput.set_char_limit state.char_limit
       |> Charamel_bubbles.Textinput.set_prompt state.prompt
-      |> Charamel_bubbles.Textinput.set_placeholder state.placeholder
+      |> Charamel_bubbles.Textinput.set_placeholder (Dyn.eval state.placeholder results)
       |> Charamel_bubbles.Textinput.set_width (max 1 width)
       |> Charamel_bubbles.Textinput.set_styles (textinput_styles styles)
     in
@@ -200,7 +209,8 @@ let input_init (ctx : ctx) state =
   (state, Charamel_tea.Cmd.none)
 
 let input_reevaluate (ctx : ctx) state =
-  input_evaluate state ctx.results ~width:ctx.width ~styles:ctx.styles
+  ( input_evaluate state ctx.results ~width:ctx.width ~styles:ctx.styles,
+    Charamel_tea.Cmd.none )
 
 let input_edit _ctx message state =
   let textinput, command = Charamel_bubbles.Textinput.update message state.textinput in
@@ -269,6 +279,19 @@ let input_view ctx ~focused state =
   in
   Charamel_lipgloss.Style.render (field_style ctx focused).Styles.base content
 
+let input_cursor ctx ~focused state =
+  match Charamel_bubbles.Textinput.cursor state.textinput with
+  | None -> None
+  | Some (cursor : Charamel_tea.Cursor.t) ->
+      let title = Dyn.eval state.title ctx.results in
+      let description = Dyn.eval state.description ctx.results in
+      let text =
+        render_title_description ctx ~focused ~title ~description ~error:state.err
+      in
+      if state.inline && title <> "" then
+        Some { cursor with col = cursor.col + Charamel_ansi.Text.width text + 1 }
+      else Some { cursor with row = cursor.row + content_lines text }
+
 let input_key_binds ctx _state =
   let km = ctx.keymap.Keymap.input in
   navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
@@ -278,23 +301,24 @@ let input_accessible ~name ctx ~out reader state =
   let title = Dyn.eval state.title ctx.results in
   let prompt = (if title = "" then field_label name else title) ^ " " in
   let validate value = input_validate state value in
-  let value =
+  let* value =
     match state.echo with
     | Charamel_bubbles.Textinput.Password ->
-        Accessible.prompt_password out reader ~prompt ~validate
+        Accessible.prompt_password ~out reader ~prompt ~validate
     | Charamel_bubbles.Textinput.No_echo | Charamel_bubbles.Textinput.Normal ->
         Accessible.prompt_string ~out reader ~prompt
           ~default:(Charamel_bubbles.Textinput.value state.textinput)
           ~validate
   in
   let textinput = Charamel_bubbles.Textinput.set_value value state.textinput in
-  { state with textinput; err = None }
+  Lwt.return { state with textinput; err = None }
 
 let input_impl key title description placeholder prompt char_limit suggestions echo inline
     default validate =
   let textinput =
-    make_input_textinput ~prompt ~placeholder ~suggestions:[] ~char_limit ~echo
-      ~value:default ~width:80
+    make_input_textinput ~prompt
+      ~placeholder:(Dyn.eval placeholder Results.empty)
+      ~suggestions:[] ~char_limit ~echo ~value:default ~width:80
   in
   let state =
     {
@@ -329,6 +353,7 @@ let input_impl key title description placeholder prompt char_limit suggestions e
             (fun message -> Input_edit message)
             (Charamel_bubbles.Textinput.subscriptions state.textinput));
       view = input_view;
+      cursor = input_cursor;
       focus = input_focus;
       blur = input_blur;
       value = (fun state -> Charamel_bubbles.Textinput.value state.textinput);
@@ -337,6 +362,9 @@ let input_impl key title description placeholder prompt char_limit suggestions e
       zoom = (fun _ -> false);
       key_binds = input_key_binds;
       run_accessible = input_accessible;
+      filtering_of = (fun _ -> None);
+      set_filtering_of = (fun _ state -> state);
+      hovered = (fun _ -> None);
     }
   in
   Field (impl, state)
@@ -349,7 +377,7 @@ type text_state = {
   textarea : Charamel_bubbles.Textarea.t;
   title : string Dyn.t;
   description : string Dyn.t;
-  placeholder : string;
+  placeholder : string Dyn.t;
   lines : int;
   char_limit : int;
   show_line_numbers : bool;
@@ -380,7 +408,8 @@ let text_reevaluate (ctx : ctx) state =
       state with
       textarea =
         state.textarea
-        |> Charamel_bubbles.Textarea.set_placeholder state.placeholder
+        |> Charamel_bubbles.Textarea.set_placeholder
+             (Dyn.eval state.placeholder ctx.results)
         |> Charamel_bubbles.Textarea.set_char_limit state.char_limit
         |> Charamel_bubbles.Textarea.set_show_line_numbers state.show_line_numbers
         |> Charamel_bubbles.Textarea.set_width (max 1 ctx.width)
@@ -394,6 +423,19 @@ let text_init ctx state =
   let state = text_reevaluate ctx state in
   (state, Charamel_tea.Cmd.none)
 
+let read_whole_file path =
+  match Stdlib.open_in_bin path with
+  | exception Sys_error _ -> None
+  | channel -> (
+      match
+        Fun.protect
+          ~finally:(fun () -> Stdlib.close_in channel)
+          (fun () ->
+            Stdlib.really_input_string channel (Stdlib.in_channel_length channel))
+      with
+      | text -> Some text
+      | exception Sys_error _ -> None)
+
 let text_update ctx message state =
   match message with
   | Text_edit child_message ->
@@ -404,12 +446,8 @@ let text_update ctx message state =
       ({ state with textarea; err = None }, command)
   | Editor_done (path, code) ->
       let state = { state with editor_path = None } in
-      let read_result =
-        if code = 0 then
-          try Some (Eio.Path.load Eio.Path.(ctx.env.Env.temp_dir / path))
-          with Eio.Io (Eio.Fs.E _, _) -> None
-        else None
-      in
+      let file = Filename.concat ctx.env.Env.temp_dir path in
+      let read_result = if code = 0 then read_whole_file file else None in
       let state =
         match read_result with
         | Some value ->
@@ -420,9 +458,29 @@ let text_update ctx message state =
         | None when code = 0 -> { state with err = Some "cannot read editor file" }
         | None -> state
       in
-      Eio.Cancel.protect (fun () ->
-          Eio.Path.unlink ~missing_ok:true Eio.Path.(ctx.env.Env.temp_dir / path));
+      (match Stdlib.Sys.remove file with () -> () | exception Sys_error _ -> ());
       (state, Charamel_tea.Cmd.none)
+
+let editor_words env = match env.Env.editor with Some argv -> argv | None -> []
+let editor_enabled env = editor_words env <> []
+
+let write_new_file path text =
+  let flags = [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] in
+  let buffer = Bytes.of_string text in
+  match Unix.openfile path flags 0o600 with
+  | exception Unix.Unix_error (Unix.EEXIST, _, _) -> `Exists
+  | exception Unix.Unix_error _ -> `Failed
+  | fd ->
+      let length = Bytes.length buffer in
+      let rec write offset =
+        if offset >= length then `Written
+        else
+          match Unix.write fd buffer offset (length - offset) with
+          | 0 -> `Failed
+          | written -> write (offset + written)
+          | exception Unix.Unix_error _ -> `Failed
+      in
+      Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> write 0)
 
 let text_make_editor_file ctx state =
   let rec attempt counter =
@@ -431,14 +489,11 @@ let text_make_editor_file ctx state =
       let filename =
         Fmt.str "huh-%d-%d.%s" (Unix.getpid ()) counter state.editor_extension
       in
-      let path = Eio.Path.(ctx.env.Env.temp_dir / filename) in
-      try
-        Eio.Path.save ~create:(`Exclusive 0o600) path
-          (Charamel_bubbles.Textarea.value state.textarea);
-        Ok (filename, counter + 1)
-      with
-      | Eio.Io (Eio.Fs.E (Eio.Fs.Already_exists _), _) -> attempt (counter + 1)
-      | Eio.Io (Eio.Fs.E _, _) -> Error "cannot create editor file"
+      let path = Filename.concat ctx.env.Env.temp_dir filename in
+      match write_new_file path (Charamel_bubbles.Textarea.value state.textarea) with
+      | `Exists -> attempt (counter + 1)
+      | `Failed -> Error "cannot create editor file"
+      | `Written -> Ok (filename, counter + 1)
   in
   attempt state.counter
 
@@ -460,16 +515,14 @@ let text_on_key ctx key state =
     ({ state with textarea }, Charamel_tea.Cmd.none, Stay)
   else if
     raw_matches key km.Keymap.editor
-    && state.editor && state.editor_path = None && ctx.env.Env.editor <> []
+    && state.editor && state.editor_path = None && editor_enabled ctx.env
   then
     match text_make_editor_file ctx state with
     | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
     | Ok (path, counter) ->
         let command =
           Charamel_tea.Cmd.exec
-            ~argv:
-              (ctx.env.Env.editor
-              @ [ Eio.Path.native_exn Eio.Path.(ctx.env.Env.temp_dir / path) ])
+            ~argv:(editor_words ctx.env @ [ Filename.concat ctx.env.Env.temp_dir path ])
             (fun code -> Editor_done (path, code))
         in
         ({ state with counter; editor_path = Some path }, command, Stay)
@@ -524,6 +577,17 @@ let text_view ctx ~focused state =
   in
   Charamel_lipgloss.Style.render style.Styles.base body
 
+let text_cursor ctx ~focused state =
+  match Charamel_bubbles.Textarea.cursor state.textarea with
+  | None -> None
+  | Some (cursor : Charamel_tea.Cursor.t) ->
+      let title = Dyn.eval state.title ctx.results in
+      let description = Dyn.eval state.description ctx.results in
+      let heading =
+        render_title_description ctx ~focused ~title ~description ~error:state.err
+      in
+      Some { cursor with row = cursor.row + content_lines heading }
+
 let text_key_binds ctx _state =
   let km = ctx.keymap.Keymap.text in
   navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
@@ -532,22 +596,24 @@ let text_key_binds ctx _state =
 let text_accessible ~name ctx ~out reader state =
   let title = Dyn.eval state.title ctx.results in
   let prompt = (if title = "" then field_label name else title) ^ " " in
-  let value =
+  let* value =
     Accessible.prompt_string ~out reader ~prompt
       ~default:(Charamel_bubbles.Textarea.value state.textarea)
       ~validate:(text_validate state)
   in
-  {
-    state with
-    textarea = Charamel_bubbles.Textarea.set_value value state.textarea;
-    err = None;
-  }
+  Lwt.return
+    {
+      state with
+      textarea = Charamel_bubbles.Textarea.set_value value state.textarea;
+      err = None;
+    }
 
 let text_impl key title description placeholder lines char_limit show_line_numbers editor
     editor_extension default validate =
   let textarea =
-    make_textarea ~placeholder ~lines ~char_limit ~show_line_numbers ~value:default
-      ~width:80
+    make_textarea
+      ~placeholder:(Dyn.eval placeholder Results.empty)
+      ~lines ~char_limit ~show_line_numbers ~value:default ~width:80
   in
   let state =
     {
@@ -574,7 +640,7 @@ let text_impl key title description placeholder lines char_limit show_line_numbe
       key = Some key;
       msg_id = text_msg_id;
       init = text_init;
-      reevaluate = text_reevaluate;
+      reevaluate = (fun ctx state -> (text_reevaluate ctx state, Charamel_tea.Cmd.none));
       on_key = text_on_key;
       on_paste = text_paste;
       update = text_update;
@@ -584,6 +650,7 @@ let text_impl key title description placeholder lines char_limit show_line_numbe
             (fun message -> Text_edit message)
             (Charamel_bubbles.Textarea.subscriptions state.textarea));
       view = text_view;
+      cursor = text_cursor;
       focus = text_focus;
       blur = text_blur;
       value = (fun state -> Charamel_bubbles.Textarea.value state.textarea);
@@ -592,33 +659,83 @@ let text_impl key title description placeholder lines char_limit show_line_numbe
       zoom = (fun _ -> false);
       key_binds = text_key_binds;
       run_accessible = text_accessible;
+      filtering_of = (fun _ -> None);
+      set_filtering_of = (fun _ state -> state);
+      hovered = (fun _ -> None);
     }
   in
   Field (impl, state)
 
 type 'a option_ = { key : string; value : 'a }
-type select_message = Select_filter of Charamel_bubbles.Textinput.msg
+type arity = One | Many
 
-type 'a select_state = {
+type 'a picker_message =
+  | Filter of Charamel_bubbles.Textinput.msg
+  | Options_loaded of 'a option_ list
+
+type 'a picker_state = {
   filter_input : Charamel_bubbles.Textinput.t;
   title : string Dyn.t;
   description : string Dyn.t;
   options : 'a option_ list Dyn.t;
+  all : 'a option_ list;
   filtered : 'a option_ list;
+  selected : bool list;
   height : int;
+  limit : int;
   inline : bool;
   filterable : bool;
-  default : string option;
-  validate : 'a -> (unit, string) result;
+  explicit_width : int option;
+  defaults : string list;
+  validate_one : 'a -> (unit, string) result;
+  validate_many : 'a list -> (unit, string) result;
   cursor : int;
   y_offset : int;
   filtering : bool;
   err : string option;
   last_version : int;
   width : int;
+  loading_since : float option;
 }
 
-let select_msg_id : select_message Type.Id.t = Type.Id.make ()
+let lower_fold text =
+  let buffer = Buffer.create (String.length text) in
+  let length = String.length text in
+  let rec loop offset =
+    if offset >= length then ()
+    else begin
+      let decoded = String.get_utf_8_uchar text offset in
+      if Uchar.utf_decode_is_valid decoded then
+        let u = Uchar.utf_decode_uchar decoded in
+        let mapped =
+          match Uucp.Case.Map.to_lower u with
+          | `Self -> u
+          | `Uchars (first :: _) -> first
+          | `Uchars [] -> u
+        in
+        Buffer.add_utf_8_uchar buffer mapped
+      else Buffer.add_utf_8_uchar buffer (Uchar.of_int 0xfffd);
+      loop (offset + max 1 (Uchar.utf_decode_length decoded))
+    end
+  in
+  loop 0;
+  Buffer.contents buffer
+
+let filter_options query options =
+  let query = lower_fold query in
+  if query = "" then options
+  else
+    Stdlib.List.filter
+      (fun option_ ->
+        let key = lower_fold option_.key in
+        let qlen = String.length query in
+        let rec contains offset =
+          if offset + qlen > String.length key then false
+          else if String.sub key offset qlen = query then true
+          else contains (offset + 1)
+        in
+        contains 0)
+      options
 
 let check_unique_options options =
   let rec loop seen = function
@@ -629,22 +746,6 @@ let check_unique_options options =
         else loop (option_.key :: seen) rest
   in
   loop [] options
-
-let filter_options query options =
-  let query = String.lowercase_ascii query in
-  if query = "" then options
-  else
-    Stdlib.List.filter
-      (fun option_ ->
-        let key = String.lowercase_ascii option_.key in
-        let qlen = String.length query in
-        let rec contains offset =
-          if offset + qlen > String.length key then false
-          else if String.sub key offset qlen = query then true
-          else contains (offset + 1)
-        in
-        contains 0)
-      options
 
 let option_key_at index options =
   Option.map (fun option_ -> option_.key) (List.nth_opt options index)
@@ -660,370 +761,6 @@ let index_of_key key options =
 let clamp_cursor cursor options =
   if options = [] then 0 else min (max 0 cursor) (Stdlib.List.length options - 1)
 
-let select_recompute ?(apply_default = true) state all old_key =
-  check_unique_options all;
-  let filtered =
-    filter_options (Charamel_bubbles.Textinput.value state.filter_input) all
-  in
-  let cursor =
-    match old_key with
-    | Some key -> (
-        match index_of_key key filtered with Some index -> index | None -> 0)
-    | None when apply_default -> (
-        match state.default with
-        | Some key -> (
-            match index_of_key key filtered with Some index -> index | None -> 0)
-        | None -> clamp_cursor state.cursor filtered)
-    | None -> 0
-  in
-  { state with filtered; cursor; y_offset = 0 }
-
-let select_reevaluate (ctx : ctx) state =
-  if state.last_version = Results.version ctx.results && state.width = ctx.width then
-    state
-  else
-    let old_key = option_key_at state.cursor state.filtered in
-    let all = Dyn.eval state.options ctx.results in
-    let state = select_recompute state all old_key in
-    {
-      state with
-      filter_input =
-        Charamel_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input;
-      width = ctx.width;
-      last_version = Results.version ctx.results;
-    }
-
-let select_init (ctx : ctx) state =
-  let all = Dyn.eval state.options ctx.results in
-  check_unique_options all;
-  let state = select_recompute state all None in
-  let filter_input =
-    Charamel_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input
-  in
-  ( {
-      state with
-      filter_input;
-      width = ctx.width;
-      last_version = Results.version ctx.results;
-    },
-    Charamel_tea.Cmd.none )
-
-let select_move_by delta state =
-  let length = Stdlib.List.length state.filtered in
-  if length = 0 then state
-  else { state with cursor = (state.cursor + delta + length) mod length }
-
-let select_set_filtering state filtering =
-  let filter_input =
-    if filtering then Charamel_bubbles.Textinput.focus state.filter_input |> fst
-    else Charamel_bubbles.Textinput.blur state.filter_input
-  in
-  { state with filtering; filter_input }
-
-let select_child_update ctx child state =
-  let filter_input, command =
-    Charamel_bubbles.Textinput.update child state.filter_input
-  in
-  let all = Dyn.eval state.options ctx.results in
-  let state = { state with filter_input; err = None } in
-  let state = select_recompute ~apply_default:false state all None in
-  (state, Charamel_tea.Cmd.map (fun child -> Select_filter child) command)
-
-let select_validate_current state =
-  match List.nth_opt state.filtered state.cursor with
-  | None -> Error "no options available"
-  | Some option_ -> (
-      match state.validate option_.value with
-      | Ok () -> Ok ()
-      | Error error -> Error error)
-
-let select_on_key ctx key state =
-  let state = { state with err = None } in
-  let km = ctx.keymap.Keymap.select in
-  if state.filtering then
-    if
-      raw_matches key km.Keymap.set_filter
-      || Charamel_tea.Key.matches key (Charamel_tea.Key.v Charamel_tea.Key.Escape)
-    then
-      let state =
-        if state.filtered = [] then
-          let filter_input = Charamel_bubbles.Textinput.set_value "" state.filter_input in
-          let all = Dyn.eval state.options ctx.results in
-          select_recompute ~apply_default:false { state with filter_input } all None
-        else state
-      in
-      ({ state with filtering = false }, Charamel_tea.Cmd.none, Stay)
-    else if raw_matches key km.Keymap.up then
-      (select_move_by (-1) state, Charamel_tea.Cmd.none, Stay)
-    else if raw_matches key km.Keymap.down then
-      (select_move_by 1 state, Charamel_tea.Cmd.none, Stay)
-    else if raw_matches key km.Keymap.goto_top then
-      ({ state with cursor = 0 }, Charamel_tea.Cmd.none, Stay)
-    else if raw_matches key km.Keymap.goto_bottom then
-      ( { state with cursor = max 0 (Stdlib.List.length state.filtered - 1) },
-        Charamel_tea.Cmd.none,
-        Stay )
-    else
-      match Charamel_bubbles.Textinput.key state.filter_input key with
-      | None -> (state, Charamel_tea.Cmd.none, Stay)
-      | Some child ->
-          let state, command = select_child_update ctx child state in
-          (state, command, Stay)
-  else if state.filterable && raw_matches key km.Keymap.filter then
-    let state = select_set_filtering state true in
-    (state, Charamel_tea.Cmd.none, Stay)
-  else if
-    raw_matches key km.Keymap.clear_filter
-    && Charamel_bubbles.Textinput.value state.filter_input <> ""
-  then
-    let filter_input = Charamel_bubbles.Textinput.set_value "" state.filter_input in
-    let all = Dyn.eval state.options ctx.results in
-    let state =
-      select_recompute ~apply_default:false { state with filter_input } all None
-    in
-    (state, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.prev && not ctx.position.is_first then
-    (state, Charamel_tea.Cmd.none, Prev)
-  else if raw_matches key km.Keymap.next && not ctx.position.is_last then
-    match select_validate_current state with
-    | Ok () -> (state, Charamel_tea.Cmd.none, Next)
-    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.submit && ctx.position.is_last then
-    match select_validate_current state with
-    | Ok () -> (state, Charamel_tea.Cmd.none, Submit)
-    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
-  else if state.inline && (raw_matches key km.Keymap.up || raw_matches key km.Keymap.down)
-  then (state, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.up then
-    (select_move_by (-1) state, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.down then
-    (select_move_by 1 state, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.left || raw_matches key km.Keymap.right then
-    ( select_move_by (if raw_matches key km.Keymap.left then -1 else 1) state,
-      Charamel_tea.Cmd.none,
-      Stay )
-  else if raw_matches key km.Keymap.half_page_up then
-    (select_move_by (-max 1 (state.height / 2)) state, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.half_page_down then
-    (select_move_by (max 1 (state.height / 2)) state, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.goto_top then
-    ({ state with cursor = 0 }, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.goto_bottom then
-    ( { state with cursor = max 0 (Stdlib.List.length state.filtered - 1) },
-      Charamel_tea.Cmd.none,
-      Stay )
-  else (state, Charamel_tea.Cmd.none, Stay)
-
-let select_update ctx message state =
-  match message with Select_filter child -> select_child_update ctx child state
-
-let select_paste _ _ state = state
-let select_focus _ state = (state, Charamel_tea.Cmd.none)
-
-let select_blur _ state =
-  match select_validate_current state with
-  | Ok () -> { state with err = None }
-  | Error error -> { state with err = Some error }
-
-let select_visible_range state =
-  let height = if state.inline then 1 else max 1 state.height in
-  let cursor = state.cursor in
-  let y_offset =
-    min cursor (max 0 (state.y_offset + max 0 (cursor - state.y_offset) - height + 1))
-  in
-  let y_offset =
-    max 0 (min y_offset (max 0 (Stdlib.List.length state.filtered - height)))
-  in
-  (y_offset, height)
-
-let select_view ctx ~focused state =
-  let style = field_style ctx focused in
-  let title = Dyn.eval state.title ctx.results in
-  let description = Dyn.eval state.description ctx.results in
-  let heading =
-    render_title_description ctx ~focused ~title ~description ~error:state.err
-  in
-  let option_rows =
-    let y_offset, height = select_visible_range state in
-    let visible =
-      state.filtered
-      |> Stdlib.List.mapi (fun index option_ -> (index, option_))
-      |> Stdlib.List.filter (fun (index, _) ->
-          index >= y_offset && index < y_offset + height)
-    in
-    visible
-    |> Stdlib.List.map (fun (index, option_) ->
-        let selected = index = state.cursor in
-        let selector =
-          if selected then style.Styles.indicators.Styles.select_selector else "  "
-        in
-        let row_style =
-          if selected then style.Styles.selected_option else style.Styles.option_
-        in
-        Charamel_lipgloss.Style.render style.Styles.select_selector selector
-        ^ Charamel_lipgloss.Style.render row_style option_.key)
-  in
-  let rows =
-    if state.filtering then
-      Charamel_bubbles.Textinput.view state.filter_input :: option_rows
-    else option_rows
-  in
-  let rows =
-    if state.filtering || state.inline then rows
-    else rows @ List.init (max 0 (state.height - List.length rows)) (fun _ -> "")
-  in
-  let rows = if rows = [] && not state.filtering then [ "" ] else rows in
-  let content = String.concat "\n" rows in
-  let content =
-    if state.inline then
-      Charamel_lipgloss.Style.render style.Styles.prev_indicator
-        style.Styles.indicators.Styles.prev_indicator
-      ^ content
-      ^ Charamel_lipgloss.Style.render style.Styles.next_indicator
-          style.Styles.indicators.Styles.next_indicator
-    else content
-  in
-  Charamel_lipgloss.Style.render style.Styles.base (concat_nonempty [ heading; content ])
-
-let select_key_binds ctx state =
-  let km = ctx.keymap.Keymap.select in
-  let navigation =
-    navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next
-      ~submit:km.Keymap.submit
-  in
-  if state.filtering then
-    navigation
-    @ [
-        binding_enabled km.Keymap.set_filter true;
-        km.Keymap.up;
-        km.Keymap.down;
-        km.Keymap.goto_top;
-        km.Keymap.goto_bottom;
-      ]
-  else
-    navigation
-    @ [
-        km.Keymap.up;
-        km.Keymap.down;
-        km.Keymap.left;
-        km.Keymap.right;
-        km.Keymap.filter;
-        binding_enabled km.Keymap.clear_filter
-          (Charamel_bubbles.Textinput.value state.filter_input <> "");
-        km.Keymap.half_page_up;
-        km.Keymap.half_page_down;
-        km.Keymap.goto_top;
-        km.Keymap.goto_bottom;
-      ]
-
-let select_accessible ~name ctx ~out reader state =
-  let title = Dyn.eval state.title ctx.results in
-  let options = Dyn.eval state.options ctx.results in
-  check_unique_options options;
-  let heading = (if title = "" then field_label name else title) ^ " \n" in
-  out heading;
-  Stdlib.List.iteri
-    (fun index option_ -> out (Fmt.str "%d. %s\n" (index + 1) option_.key))
-    options;
-  match options with
-  | [] -> { state with err = Some "no options available" }
-  | _ ->
-      let prompt =
-        if Stdlib.List.length options = 1 then
-          "There is only one option available; enter the number 1: "
-        else Fmt.str "Enter a number between 1 and %d: " (Stdlib.List.length options)
-      in
-      let rec loop state =
-        let choice =
-          Accessible.prompt_int out reader ~prompt ~low:1
-            ~high:(Stdlib.List.length options)
-            ~default:(Some (state.cursor + 1))
-        in
-        let state = { state with cursor = choice - 1; filtered = options } in
-        match select_validate_current state with
-        | Ok () -> { state with err = None }
-        | Error error ->
-            out (error ^ "\n");
-            loop { state with err = Some error }
-      in
-      loop state
-
-let select_subscriptions _ state =
-  Charamel_tea.Sub.map
-    (fun message -> Select_filter message)
-    (Charamel_bubbles.Textinput.subscriptions state.filter_input)
-
-let select_impl key title description height inline filterable default validate options =
-  let filter_input = Charamel_bubbles.Textinput.v ~prompt:"/ " ~width:80 () in
-  let state =
-    {
-      filter_input;
-      title;
-      description;
-      options;
-      filtered = [];
-      height = max 1 height;
-      inline;
-      filterable;
-      default;
-      validate;
-      cursor = 0;
-      y_offset = 0;
-      filtering = false;
-      err = None;
-      last_version = -1;
-      width = 80;
-    }
-  in
-  let impl =
-    {
-      name = "select";
-      key = Some key;
-      msg_id = select_msg_id;
-      init = select_init;
-      reevaluate = select_reevaluate;
-      on_key = select_on_key;
-      on_paste = select_paste;
-      update = select_update;
-      subscriptions = select_subscriptions;
-      view = select_view;
-      focus = select_focus;
-      blur = select_blur;
-      value = (fun state -> (List.nth state.filtered state.cursor).value);
-      error = (fun state -> state.err);
-      skip = (fun _ _ -> false);
-      zoom = (fun _ -> false);
-      key_binds = select_key_binds;
-      run_accessible = select_accessible;
-    }
-  in
-  Field (impl, state)
-
-type multi_message = Multi_filter of Charamel_bubbles.Textinput.msg
-
-type 'a multi_state = {
-  filter_input : Charamel_bubbles.Textinput.t;
-  title : string Dyn.t;
-  description : string Dyn.t;
-  options : 'a option_ list Dyn.t;
-  filtered : 'a option_ list;
-  all : 'a option_ list;
-  selected : bool list;
-  height : int;
-  limit : int;
-  filterable : bool;
-  default : string list;
-  validate : 'a list -> (unit, string) result;
-  cursor : int;
-  y_offset : int;
-  filtering : bool;
-  err : string option;
-  last_version : int;
-  width : int;
-}
-
-let multi_msg_id : multi_message Type.Id.t = Type.Id.make ()
-
 let bools_for_options options keys =
   Stdlib.List.map (fun option_ -> Stdlib.List.mem option_.key keys) options
 
@@ -1036,66 +773,110 @@ let selected_values state =
   in
   loop [] state.selected state.all
 
-let multi_recompute state all old_key =
+let picker_effective_width (state : _ picker_state) (ctx : ctx) =
+  match state.explicit_width with
+  | Some width -> max 1 (min width ctx.width)
+  | None -> max 1 ctx.width
+
+let picker_recompute ?(apply_default = true) arity (state : _ picker_state) all old_key =
   check_unique_options all;
-  let old_selected =
-    let rec assoc key flags options =
-      match (flags, options) with
-      | flag :: flags, option_ :: options ->
-          if String.equal key option_.key then Some flag else assoc key flags options
-      | _ -> None
-    in
-    assoc
-  in
-  let selected =
-    Stdlib.List.map
-      (fun option_ ->
-        match old_selected option_.key state.selected state.all with
-        | Some flag -> flag
-        | None -> Stdlib.List.mem option_.key state.default)
-      all
-  in
   let filtered =
     filter_options (Charamel_bubbles.Textinput.value state.filter_input) all
   in
-  let cursor =
+  let cursor_for filtered =
     match old_key with
     | Some key -> (
         match index_of_key key filtered with Some index -> index | None -> 0)
     | None -> clamp_cursor state.cursor filtered
   in
-  { state with all; filtered; selected; cursor; y_offset = 0 }
+  match arity with
+  | One ->
+      let cursor =
+        match old_key with
+        | Some key -> (
+            match index_of_key key filtered with Some index -> index | None -> 0)
+        | None when apply_default -> (
+            match state.defaults with
+            | [ key ] -> (
+                match index_of_key key filtered with Some index -> index | None -> 0)
+            | _ -> clamp_cursor state.cursor filtered)
+        | None -> 0
+      in
+      { state with all; filtered; cursor; y_offset = 0 }
+  | Many ->
+      let rec assoc key flags options =
+        match (flags, options) with
+        | flag :: flags, option_ :: options ->
+            if String.equal key option_.key then Some flag else assoc key flags options
+        | _ -> None
+      in
+      let selected =
+        Stdlib.List.map
+          (fun option_ ->
+            match assoc option_.key state.selected state.all with
+            | Some flag -> flag
+            | None -> Stdlib.List.mem option_.key state.defaults)
+          all
+      in
+      let cursor = cursor_for filtered in
+      { state with all; filtered; selected; cursor; y_offset = 0 }
 
-let multi_reevaluate (ctx : ctx) state =
+let picker_reevaluate arity (ctx : ctx) (state : _ picker_state) =
   if state.last_version = Results.version ctx.results && state.width = ctx.width then
-    state
+    (state, Charamel_tea.Cmd.none)
   else
-    let old_key = option_key_at state.cursor state.filtered in
-    let all = Dyn.eval state.options ctx.results in
-    let state = multi_recompute state all old_key in
-    {
-      state with
-      filter_input =
-        Charamel_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input;
-      width = ctx.width;
-      last_version = Results.version ctx.results;
-    }
+    let width = picker_effective_width state ctx in
+    let resized state =
+      {
+        state with
+        filter_input = Charamel_bubbles.Textinput.set_width width state.filter_input;
+        width = ctx.width;
+      }
+    in
+    match state.options with
+    | Dyn.Of_results_async _ when state.loading_since <> None ->
+        (state, Charamel_tea.Cmd.none)
+    | Dyn.Of_results_async produce ->
+        let results = ctx.results in
+        let command =
+          Charamel_tea.Cmd.perform (fun () -> Options_loaded (produce results))
+        in
+        let since = Charamel_os.Time.now ctx.env.Env.clock in
+        (resized { state with loading_since = Some since }, command)
+    | _ ->
+        let old_key = option_key_at state.cursor state.filtered in
+        let all = Dyn.eval state.options ctx.results in
+        let state = picker_recompute arity state all old_key in
+        let state =
+          { state with last_version = Results.version ctx.results; loading_since = None }
+        in
+        (resized state, Charamel_tea.Cmd.none)
 
-let multi_init (ctx : ctx) state =
+let picker_init arity (ctx : ctx) (state : _ picker_state) =
   let all = Dyn.eval state.options ctx.results in
-  let state = multi_recompute state all None in
-  let filter_input =
-    Charamel_bubbles.Textinput.set_width (max 1 ctx.width) state.filter_input
-  in
+  let state = picker_recompute arity state all None in
+  let width = picker_effective_width state ctx in
   ( {
       state with
-      filter_input;
+      filter_input = Charamel_bubbles.Textinput.set_width width state.filter_input;
       width = ctx.width;
       last_version = Results.version ctx.results;
     },
     Charamel_tea.Cmd.none )
 
-let multi_selected_at index state =
+let picker_move_by delta state =
+  let length = Stdlib.List.length state.filtered in
+  if length = 0 then state
+  else { state with cursor = (state.cursor + delta + length) mod length }
+
+let picker_set_filtering filtering state =
+  let filter_input =
+    if filtering then Charamel_bubbles.Textinput.focus state.filter_input |> fst
+    else Charamel_bubbles.Textinput.blur state.filter_input
+  in
+  { state with filtering; filter_input }
+
+let picker_selected_at index state =
   match List.nth_opt state.filtered index with
   | None -> false
   | Some option_ ->
@@ -1107,7 +888,7 @@ let multi_selected_at index state =
       in
       lookup option_ state.selected state.all
 
-let multi_set_selected_key key value state =
+let picker_set_selected_key key value state =
   let selected =
     Stdlib.List.map2
       (fun flag option_ -> if String.equal option_.key key then value else flag)
@@ -1115,84 +896,159 @@ let multi_set_selected_key key value state =
   in
   { state with selected }
 
-let multi_move_by delta state =
-  let length = Stdlib.List.length state.filtered in
-  if length = 0 then state
-  else { state with cursor = (state.cursor + delta + length) mod length }
-
-let multi_all_filtered_selected state =
+let picker_all_filtered_selected state =
   state.filtered <> []
   && Stdlib.List.for_all
        (fun option_ ->
          match index_of_key option_.key state.filtered with
          | None -> false
-         | Some index -> multi_selected_at index state)
+         | Some index -> picker_selected_at index state)
        state.filtered
 
-let multi_toggle_current state =
+let picker_toggle_current state =
   match List.nth_opt state.filtered state.cursor with
   | None -> state
   | Some option_ ->
-      let selected = multi_selected_at state.cursor state in
+      let selected = picker_selected_at state.cursor state in
       if
         (not selected) && state.limit > 0
         && List.length (selected_values state) >= state.limit
       then state
-      else multi_set_selected_key option_.key (not selected) state
+      else picker_set_selected_key option_.key (not selected) state
 
-let multi_validate state =
-  let values = selected_values state in
-  state.validate values
+let picker_validate arity state =
+  match arity with
+  | One -> (
+      match List.nth_opt state.filtered state.cursor with
+      | None -> Error "no options available"
+      | Some option_ -> state.validate_one option_.value)
+  | Many -> state.validate_many (selected_values state)
 
-let multi_filter_update ctx child state =
-  let filter_input, command =
-    Charamel_bubbles.Textinput.update child state.filter_input
-  in
-  let all = Dyn.eval state.options ctx.results in
-  let state = { state with filter_input; err = None } in
-  ( multi_recompute state all None,
-    Charamel_tea.Cmd.map (fun child -> Multi_filter child) command )
+type picker_keymap = {
+  prev : Keymap.binding;
+  next : Keymap.binding;
+  submit : Keymap.binding;
+  up : Keymap.binding;
+  down : Keymap.binding;
+  left : Keymap.binding;
+  right : Keymap.binding;
+  filter : Keymap.binding;
+  set_filter : Keymap.binding;
+  clear_filter : Keymap.binding;
+  half_page_up : Keymap.binding;
+  half_page_down : Keymap.binding;
+  goto_top : Keymap.binding;
+  goto_bottom : Keymap.binding;
+  toggle : Keymap.binding;
+  select_all : Keymap.binding;
+  select_none : Keymap.binding;
+}
 
-let multi_on_key ctx key state =
+let picker_keymap ctx arity =
+  let select = ctx.keymap.Keymap.select in
+  let multi = ctx.keymap.Keymap.multi_select in
+  match arity with
+  | One ->
+      {
+        prev = select.prev;
+        next = select.next;
+        submit = select.submit;
+        up = select.up;
+        down = select.down;
+        left = select.left;
+        right = select.right;
+        filter = select.filter;
+        set_filter = select.set_filter;
+        clear_filter = select.clear_filter;
+        half_page_up = select.half_page_up;
+        half_page_down = select.half_page_down;
+        goto_top = select.goto_top;
+        goto_bottom = select.goto_bottom;
+        toggle = multi.toggle;
+        select_all = multi.select_all;
+        select_none = multi.select_none;
+      }
+  | Many ->
+      {
+        prev = multi.prev;
+        next = multi.next;
+        submit = multi.submit;
+        up = multi.up;
+        down = multi.down;
+        left = select.left;
+        right = select.right;
+        filter = multi.filter;
+        set_filter = multi.set_filter;
+        clear_filter = multi.clear_filter;
+        half_page_up = multi.half_page_up;
+        half_page_down = multi.half_page_down;
+        goto_top = multi.goto_top;
+        goto_bottom = multi.goto_bottom;
+        toggle = multi.toggle;
+        select_all = multi.select_all;
+        select_none = multi.select_none;
+      }
+
+let picker_on_key arity (ctx : ctx) key (state : _ picker_state) =
   let state = { state with err = None } in
-  let km = ctx.keymap.Keymap.multi_select in
+  let km = picker_keymap ctx arity in
+  let recompute ?(apply_default = true) state all old_key =
+    picker_recompute ~apply_default arity state all old_key
+  in
+  let none = Charamel_tea.Cmd.none in
   if state.filtering then
-    if raw_matches key km.Keymap.set_filter then
+    if
+      raw_matches key km.set_filter
+      || arity = One
+         && Charamel_tea.Key.matches key (Charamel_tea.Key.v Charamel_tea.Key.Escape)
+    then begin
       let state =
         if state.filtered = [] then
           let filter_input = Charamel_bubbles.Textinput.set_value "" state.filter_input in
-          let all = Dyn.eval state.options ctx.results in
-          multi_recompute { state with filter_input } all None
+          recompute ~apply_default:false { state with filter_input }
+            (Dyn.eval state.options ctx.results)
+            None
         else state
       in
-      ({ state with filtering = false }, Charamel_tea.Cmd.none, Stay)
-    else if raw_matches key km.Keymap.up then
-      (multi_move_by (-1) state, Charamel_tea.Cmd.none, Stay)
-    else if raw_matches key km.Keymap.down then
-      (multi_move_by 1 state, Charamel_tea.Cmd.none, Stay)
+      ({ state with filtering = false }, none, Stay)
+    end
+    else if raw_matches key km.up then (picker_move_by (-1) state, none, Stay)
+    else if raw_matches key km.down then (picker_move_by 1 state, none, Stay)
+    else if arity = One && raw_matches key km.goto_top then
+      ({ state with cursor = 0 }, none, Stay)
+    else if arity = One && raw_matches key km.goto_bottom then
+      ({ state with cursor = max 0 (Stdlib.List.length state.filtered - 1) }, none, Stay)
     else
       match Charamel_bubbles.Textinput.key state.filter_input key with
-      | None -> (state, Charamel_tea.Cmd.none, Stay)
+      | None -> (state, none, Stay)
       | Some child ->
-          let state, command = multi_filter_update ctx child state in
-          (state, command, Stay)
-  else if state.filterable && raw_matches key km.Keymap.filter then
-    let filter_input = Charamel_bubbles.Textinput.focus state.filter_input |> fst in
-    ({ state with filtering = true; filter_input }, Charamel_tea.Cmd.none, Stay)
+          let filter_input, command =
+            Charamel_bubbles.Textinput.update child state.filter_input
+          in
+          let all = Dyn.eval state.options ctx.results in
+          let state = { state with filter_input; err = None } in
+          ( recompute ~apply_default:false state all None,
+            Charamel_tea.Cmd.map (fun child -> Filter child) command,
+            Stay )
+  else if state.filterable && raw_matches key km.filter then
+    (picker_set_filtering true state, none, Stay)
   else if
-    raw_matches key km.Keymap.clear_filter
+    raw_matches key km.clear_filter
     && Charamel_bubbles.Textinput.value state.filter_input <> ""
   then
     let filter_input = Charamel_bubbles.Textinput.set_value "" state.filter_input in
-    let all = Dyn.eval state.options ctx.results in
-    (multi_recompute { state with filter_input } all None, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.toggle then
-    let state = multi_toggle_current state in
-    match multi_validate state with
-    | Ok () -> (state, Charamel_tea.Cmd.none, Stay)
-    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.select_all && state.limit = 0 then
-    let all_selected = multi_all_filtered_selected state in
+    ( recompute ~apply_default:false { state with filter_input }
+        (Dyn.eval state.options ctx.results)
+        None,
+      none,
+      Stay )
+  else if arity = Many && raw_matches key km.toggle then
+    let state = picker_toggle_current state in
+    match picker_validate arity state with
+    | Ok () -> (state, none, Stay)
+    | Error error -> ({ state with err = Some error }, none, Stay)
+  else if arity = Many && raw_matches key km.select_all && state.limit = 0 then
+    let all_selected = picker_all_filtered_selected state in
     let selected =
       Stdlib.List.map
         (fun (flag, option_) ->
@@ -1205,10 +1061,10 @@ let multi_on_key ctx key state =
         (Stdlib.List.combine state.selected state.all)
     in
     let state = { state with selected } in
-    match multi_validate state with
-    | Ok () -> (state, Charamel_tea.Cmd.none, Stay)
-    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.select_none && state.limit = 0 then
+    match picker_validate arity state with
+    | Ok () -> (state, none, Stay)
+    | Error error -> ({ state with err = Some error }, none, Stay)
+  else if arity = Many && raw_matches key km.select_none && state.limit = 0 then
     let selected =
       Stdlib.List.map
         (fun (flag, option_) ->
@@ -1221,47 +1077,50 @@ let multi_on_key ctx key state =
         (Stdlib.List.combine state.selected state.all)
     in
     let state = { state with selected } in
-    match multi_validate state with
-    | Ok () -> (state, Charamel_tea.Cmd.none, Stay)
-    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.prev && not ctx.position.is_first then
-    (state, Charamel_tea.Cmd.none, Prev)
-  else if raw_matches key km.Keymap.next && not ctx.position.is_last then
-    match multi_validate state with
-    | Ok () -> (state, Charamel_tea.Cmd.none, Next)
-    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.submit && ctx.position.is_last then
-    match multi_validate state with
-    | Ok () -> (state, Charamel_tea.Cmd.none, Submit)
-    | Error error -> ({ state with err = Some error }, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.up then
-    (multi_move_by (-1) state, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.down then
-    (multi_move_by 1 state, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.half_page_up then
-    (multi_move_by (-max 1 (state.height / 2)) state, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.half_page_down then
-    (multi_move_by (max 1 (state.height / 2)) state, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.goto_top then
-    ({ state with cursor = 0 }, Charamel_tea.Cmd.none, Stay)
-  else if raw_matches key km.Keymap.goto_bottom then
-    ( { state with cursor = max 0 (List.length state.filtered - 1) },
-      Charamel_tea.Cmd.none,
-      Stay )
-  else (state, Charamel_tea.Cmd.none, Stay)
+    match picker_validate arity state with
+    | Ok () -> (state, none, Stay)
+    | Error error -> ({ state with err = Some error }, none, Stay)
+  else if raw_matches key km.prev && not ctx.position.is_first then (state, none, Prev)
+  else if raw_matches key km.next && not ctx.position.is_last then
+    match picker_validate arity state with
+    | Ok () -> (state, none, Next)
+    | Error error -> ({ state with err = Some error }, none, Stay)
+  else if raw_matches key km.submit && ctx.position.is_last then
+    match picker_validate arity state with
+    | Ok () -> (state, none, Submit)
+    | Error error -> ({ state with err = Some error }, none, Stay)
+  else if arity = One && state.inline && (raw_matches key km.up || raw_matches key km.down)
+  then (state, none, Stay)
+  else if raw_matches key km.up then (picker_move_by (-1) state, none, Stay)
+  else if raw_matches key km.down then (picker_move_by 1 state, none, Stay)
+  else if arity = One && (raw_matches key km.left || raw_matches key km.right) then
+    (picker_move_by (if raw_matches key km.left then -1 else 1) state, none, Stay)
+  else if raw_matches key km.half_page_up then
+    (picker_move_by (-max 1 (state.height / 2)) state, none, Stay)
+  else if raw_matches key km.half_page_down then
+    (picker_move_by (max 1 (state.height / 2)) state, none, Stay)
+  else if raw_matches key km.goto_top then ({ state with cursor = 0 }, none, Stay)
+  else if raw_matches key km.goto_bottom then
+    ({ state with cursor = max 0 (List.length state.filtered - 1) }, none, Stay)
+  else (state, none, Stay)
 
-let multi_update ctx message state =
-  match message with Multi_filter child -> multi_filter_update ctx child state
+let picker_update arity (ctx : ctx) message (state : _ picker_state) =
+  match message with
+  | Filter child ->
+      let filter_input, command =
+        Charamel_bubbles.Textinput.update child state.filter_input
+      in
+      let all = Dyn.eval state.options ctx.results in
+      let state = { state with filter_input; err = None } in
+      ( picker_recompute ~apply_default:false arity state all None,
+        Charamel_tea.Cmd.map (fun child -> Filter child) command )
+  | Options_loaded all ->
+      let old_key = option_key_at state.cursor state.filtered in
+      let state = picker_recompute arity state all old_key in
+      ( { state with last_version = Results.version ctx.results; loading_since = None },
+        Charamel_tea.Cmd.none )
 
-let multi_paste _ _ state = state
-let multi_focus _ state = (state, Charamel_tea.Cmd.none)
-
-let multi_blur _ state =
-  match multi_validate state with
-  | Ok () -> { state with err = None }
-  | Error error -> { state with err = Some error }
-
-let multi_view ctx ~focused state =
+let picker_view arity (ctx : ctx) ~focused (state : _ picker_state) =
   let style = field_style ctx focused in
   let title = Dyn.eval state.title ctx.results in
   let description = Dyn.eval state.description ctx.results in
@@ -1269,36 +1128,71 @@ let multi_view ctx ~focused state =
     render_title_description ctx ~focused ~title ~description ~error:state.err
   in
   let option_rows =
-    let y_offset =
-      min state.cursor
-        (max 0
-           (state.y_offset + max 0 (state.cursor - state.y_offset) - state.height + 1))
-    in
-    state.filtered
-    |> Stdlib.List.mapi (fun index option_ -> (index, option_))
-    |> Stdlib.List.filter (fun (index, _) ->
-        index >= y_offset && index < y_offset + max 1 state.height)
-    |> Stdlib.List.map (fun (index, option_) ->
-        let current = index = state.cursor in
-        let selected = multi_selected_at index state in
-        let selector =
-          if current then style.Styles.indicators.Styles.multi_select_selector else "  "
+    match arity with
+    | One ->
+        let selector = style.Styles.indicators.Styles.select_selector in
+        let height = if state.inline then 1 else max 1 state.height in
+        let y_offset =
+          min state.cursor
+            (max 0 (state.y_offset + max 0 (state.cursor - state.y_offset) - height + 1))
         in
-        let prefix =
-          if selected then style.Styles.indicators.Styles.selected_prefix
-          else style.Styles.indicators.Styles.unselected_prefix
+        let y_offset =
+          max 0 (min y_offset (max 0 (Stdlib.List.length state.filtered - height)))
         in
-        let prefix_style =
-          if selected then style.Styles.selected_prefix
-          else style.Styles.unselected_prefix
+        state.filtered
+        |> Stdlib.List.mapi (fun index option_ -> (index, option_))
+        |> Stdlib.List.filter (fun (index, _) ->
+            index >= y_offset && index < y_offset + height)
+        |> Stdlib.List.map (fun (index, option_) ->
+            let selected = index = state.cursor in
+            let selector =
+              if selected then selector
+              else String.make (Charamel_ansi.Text.width selector) ' '
+            in
+            let row_style =
+              if selected then style.Styles.selected_option else style.Styles.option_
+            in
+            Charamel_lipgloss.Style.render style.Styles.select_selector selector
+            ^ Charamel_lipgloss.Style.render row_style option_.key)
+    | Many ->
+        let selector = style.Styles.indicators.Styles.multi_select_selector in
+        let y_offset =
+          min state.cursor
+            (max 0
+               (state.y_offset + max 0 (state.cursor - state.y_offset) - state.height + 1))
         in
-        let option_style =
-          if selected then style.Styles.selected_option
-          else style.Styles.unselected_option
-        in
-        Charamel_lipgloss.Style.render style.Styles.multi_select_selector selector
-        ^ Charamel_lipgloss.Style.render prefix_style prefix
-        ^ Charamel_lipgloss.Style.render option_style option_.key)
+        state.filtered
+        |> Stdlib.List.mapi (fun index option_ -> (index, option_))
+        |> Stdlib.List.filter (fun (index, _) ->
+            index >= y_offset && index < y_offset + max 1 state.height)
+        |> Stdlib.List.map (fun (index, option_) ->
+            let current = index = state.cursor in
+            let selected = picker_selected_at index state in
+            let selector =
+              if current then selector
+              else String.make (Charamel_ansi.Text.width selector) ' '
+            in
+            let prefix =
+              if selected then style.Styles.indicators.Styles.selected_prefix
+              else style.Styles.indicators.Styles.unselected_prefix
+            in
+            let prefix_style =
+              if selected then style.Styles.selected_prefix
+              else style.Styles.unselected_prefix
+            in
+            let option_style =
+              if selected then style.Styles.selected_option
+              else style.Styles.unselected_option
+            in
+            Charamel_lipgloss.Style.render style.Styles.multi_select_selector selector
+            ^ Charamel_lipgloss.Style.render prefix_style prefix
+            ^ Charamel_lipgloss.Style.render option_style option_.key)
+  in
+  let option_rows =
+    match state.loading_since with
+    | Some since when Charamel_os.Time.now ctx.env.Env.clock -. since > 0.025 ->
+        [ Charamel_bubbles.Spinner.view (Charamel_bubbles.Spinner.v ()) ^ " Loading..." ]
+    | _ -> option_rows
   in
   let rows =
     if state.filtering then
@@ -1306,40 +1200,138 @@ let multi_view ctx ~focused state =
     else option_rows
   in
   let rows =
-    if state.filtering then rows
+    if state.filtering || (arity = One && state.inline) then rows
     else rows @ List.init (max 0 (state.height - List.length rows)) (fun _ -> "")
   in
   let rows = if rows = [] && not state.filtering then [ "" ] else rows in
-  Charamel_lipgloss.Style.render style.Styles.base
-    (concat_nonempty [ heading; String.concat "\n" rows ])
+  let content = String.concat "\n" rows in
+  let content =
+    if arity = One && state.inline then
+      Charamel_lipgloss.Style.render style.Styles.prev_indicator
+        style.Styles.indicators.Styles.prev_indicator
+      ^ content
+      ^ Charamel_lipgloss.Style.render style.Styles.next_indicator
+          style.Styles.indicators.Styles.next_indicator
+    else content
+  in
+  Charamel_lipgloss.Style.render style.Styles.base (concat_nonempty [ heading; content ])
 
-let multi_key_binds ctx state =
-  let km = ctx.keymap.Keymap.multi_select in
-  let selected_any = List.exists Fun.id state.selected in
-  let all_selected = multi_all_filtered_selected state in
-  navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
-  @ [
-      km.Keymap.toggle;
-      km.Keymap.up;
-      km.Keymap.down;
-      km.Keymap.filter;
-      binding_enabled km.Keymap.set_filter state.filtering;
-      binding_enabled km.Keymap.clear_filter
-        (Charamel_bubbles.Textinput.value state.filter_input <> "");
-      km.Keymap.half_page_up;
-      km.Keymap.half_page_down;
-      km.Keymap.goto_top;
-      km.Keymap.goto_bottom;
-      binding_enabled km.Keymap.select_all (state.limit = 0 && not all_selected);
-      binding_enabled km.Keymap.select_none (state.limit = 0 && selected_any);
-    ]
+let picker_cursor arity ctx ~focused (state : _ picker_state) =
+  match Charamel_bubbles.Textinput.cursor state.filter_input with
+  | None -> None
+  | Some (cursor : Charamel_tea.Cursor.t) ->
+      let title = Dyn.eval state.title ctx.results in
+      let description = Dyn.eval state.description ctx.results in
+      let heading =
+        render_title_description ctx ~focused ~title ~description ~error:state.err
+      in
+      let style = field_style ctx focused in
+      let prefix =
+        if arity = One && state.inline then
+          Charamel_ansi.Text.width
+            (Charamel_lipgloss.Style.render style.Styles.prev_indicator
+               style.Styles.indicators.Styles.prev_indicator)
+        else 0
+      in
+      Some
+        {
+          cursor with
+          row = cursor.row + content_lines heading;
+          col = cursor.col + prefix;
+        }
 
-let multi_accessible ~name ctx ~out reader state =
+let picker_key_binds arity (ctx : ctx) (state : _ picker_state) =
+  match arity with
+  | One ->
+      let km = ctx.keymap.Keymap.select in
+      let navigation =
+        navigation_binds ctx ~prev:km.prev ~next:km.next ~submit:km.submit
+      in
+      if state.filtering then
+        navigation
+        @ [
+            binding_enabled km.set_filter true;
+            km.up;
+            km.down;
+            km.goto_top;
+            km.goto_bottom;
+          ]
+      else
+        navigation
+        @ [
+            km.up;
+            km.down;
+            km.left;
+            km.right;
+            km.filter;
+            binding_enabled km.clear_filter
+              (Charamel_bubbles.Textinput.value state.filter_input <> "");
+            km.half_page_up;
+            km.half_page_down;
+            km.goto_top;
+            km.goto_bottom;
+          ]
+  | Many ->
+      let km = ctx.keymap.Keymap.multi_select in
+      let selected_any = List.exists Fun.id state.selected in
+      let all_selected = picker_all_filtered_selected state in
+      navigation_binds ctx ~prev:km.prev ~next:km.next ~submit:km.submit
+      @ [
+          km.toggle;
+          km.up;
+          km.down;
+          km.filter;
+          binding_enabled km.set_filter state.filtering;
+          binding_enabled km.clear_filter
+            (Charamel_bubbles.Textinput.value state.filter_input <> "");
+          km.half_page_up;
+          km.half_page_down;
+          km.goto_top;
+          km.goto_bottom;
+          binding_enabled km.select_all (state.limit = 0 && not all_selected);
+          binding_enabled km.select_none (state.limit = 0 && selected_any);
+        ]
+
+let picker_accessible_one ~name (ctx : ctx) ~out reader (state : _ picker_state) =
   let title = Dyn.eval state.title ctx.results in
   let options = Dyn.eval state.options ctx.results in
   check_unique_options options;
-  out ((if title = "" then field_label name else title) ^ " \n");
-  if options = [] then { state with err = Some "no options available" }
+  let heading = (if title = "" then field_label name else title) ^ " \n" in
+  let* () = out heading in
+  let* () =
+    Lwt_list.iteri_s
+      (fun index option_ -> out (Fmt.str "%d. %s\n" (index + 1) option_.key))
+      options
+  in
+  match options with
+  | [] -> Lwt.return { state with err = Some "no options available" }
+  | _ ->
+      let prompt =
+        if Stdlib.List.length options = 1 then
+          "There is only one option available; enter the number 1: "
+        else Fmt.str "Enter a number between 1 and %d: " (Stdlib.List.length options)
+      in
+      let rec loop state =
+        let* choice =
+          Accessible.prompt_int out reader ~prompt ~low:1
+            ~high:(Stdlib.List.length options)
+            ~default:(Some (state.cursor + 1))
+        in
+        let state = { state with cursor = choice - 1; filtered = options } in
+        match picker_validate One state with
+        | Ok () -> Lwt.return { state with err = None }
+        | Error error ->
+            let* () = out (error ^ "\n") in
+            loop { state with err = Some error }
+      in
+      loop state
+
+let picker_accessible_many ~name (ctx : ctx) ~out reader (state : _ picker_state) =
+  let title = Dyn.eval state.title ctx.results in
+  let options = Dyn.eval state.options ctx.results in
+  check_unique_options options;
+  let* () = out ((if title = "" then field_label name else title) ^ " \n") in
+  if options = [] then Lwt.return { state with err = Some "no options available" }
   else
     let limit = if state.limit > 0 then state.limit else List.length options in
     let state =
@@ -1347,11 +1339,11 @@ let multi_accessible ~name ctx ~out reader state =
         state with
         all = options;
         filtered = options;
-        selected = bools_for_options options state.default;
+        selected = bools_for_options options state.defaults;
       }
     in
     let print_options state =
-      Stdlib.List.iteri
+      Lwt_list.iteri_s
         (fun index option_ ->
           let selected =
             match index_of_key option_.key state.all with
@@ -1364,50 +1356,55 @@ let multi_accessible ~name ctx ~out reader state =
                option_.key))
         options
     in
-    out (Fmt.str "Select up to %d options.\n" limit);
-    print_options state;
-    out "0. Confirm selection\n";
+    let* () = out (Fmt.str "Select up to %d options.\n" limit) in
+    let* () = print_options state in
+    let* () = out "0. Confirm selection\n" in
     let rec loop state =
-      let choice =
+      let* choice =
         Accessible.prompt_int out reader
           ~prompt:(Fmt.str "Enter a number between 0 and %d: " (List.length options))
           ~low:0 ~high:(List.length options) ~default:(Some 0)
       in
-      if choice = 0 then (
-        match multi_validate state with
-        | Ok () -> { state with err = None }
+      if choice = 0 then
+        match picker_validate Many state with
+        | Ok () -> Lwt.return { state with err = None }
         | Error error ->
-            out (error ^ "\n");
-            loop { state with err = Some error })
+            let* () = out (error ^ "\n") in
+            loop { state with err = Some error }
       else
         let index = choice - 1 in
-        let selected = multi_selected_at index state in
+        let selected = picker_selected_at index state in
         if
           (not selected) && state.limit > 0
           && List.length (selected_values state) >= state.limit
-        then (
-          out (Fmt.str "You can't select more than %d options.\n" state.limit);
-          loop state)
+        then begin
+          let* () =
+            out (Fmt.str "You can't select more than %d options.\n" state.limit)
+          in
+          loop state
+        end
         else
           let option_ = List.nth options index in
-          let state = multi_set_selected_key option_.key (not selected) state in
-          print_options state;
-          out "0. Confirm selection\n";
-          match multi_validate state with
+          let state = picker_set_selected_key option_.key (not selected) state in
+          let* () = print_options state in
+          let* () = out "0. Confirm selection\n" in
+          match picker_validate Many state with
           | Ok () -> loop { state with err = None }
           | Error error ->
-              out (error ^ "\n");
+              let* () = out (error ^ "\n") in
               loop { state with err = Some error }
     in
     loop state
 
-let multi_subscriptions _ state =
-  Charamel_tea.Sub.map
-    (fun message -> Multi_filter message)
-    (Charamel_bubbles.Textinput.subscriptions state.filter_input)
+let picker_accessible arity ~name (ctx : ctx) ~out reader (state : _ picker_state) =
+  match arity with
+  | One -> picker_accessible_one ~name ctx ~out reader state
+  | Many -> picker_accessible_many ~name ctx ~out reader state
 
-let multi_impl key title description height limit filterable default validate options =
+let picker_impl arity ~name ~key ~value title description height inline limit filterable
+    explicit_width defaults validate_one validate_many options =
   let filter_input = Charamel_bubbles.Textinput.v ~prompt:"/ " ~width:80 () in
+  let msg_id = Type.Id.make () in
   let state =
     {
       filter_input;
@@ -1419,40 +1416,73 @@ let multi_impl key title description height limit filterable default validate op
       selected = [];
       height = max 1 height;
       limit = max 0 limit;
+      inline;
       filterable;
-      default;
-      validate;
+      explicit_width;
+      defaults;
+      validate_one;
+      validate_many;
       cursor = 0;
       y_offset = 0;
       filtering = false;
       err = None;
       last_version = -1;
       width = 80;
+      loading_since = None;
     }
   in
   let impl =
     {
-      name = "multi_select";
+      name;
       key = Some key;
-      msg_id = multi_msg_id;
-      init = multi_init;
-      reevaluate = multi_reevaluate;
-      on_key = multi_on_key;
-      on_paste = multi_paste;
-      update = multi_update;
-      subscriptions = multi_subscriptions;
-      view = multi_view;
-      focus = multi_focus;
-      blur = multi_blur;
-      value = selected_values;
+      msg_id;
+      init = picker_init arity;
+      reevaluate = picker_reevaluate arity;
+      on_key = picker_on_key arity;
+      on_paste = (fun _ _ state -> state);
+      update = picker_update arity;
+      subscriptions =
+        (fun _ state ->
+          Charamel_tea.Sub.map
+            (fun message -> Filter message)
+            (Charamel_bubbles.Textinput.subscriptions state.filter_input));
+      view = picker_view arity;
+      cursor = picker_cursor arity;
+      focus = (fun _ state -> (state, Charamel_tea.Cmd.none));
+      blur =
+        (fun _ state ->
+          match picker_validate arity state with
+          | Ok () -> { state with err = None }
+          | Error error -> { state with err = Some error });
+      value;
       error = (fun state -> state.err);
       skip = (fun _ _ -> false);
       zoom = (fun _ -> false);
-      key_binds = multi_key_binds;
-      run_accessible = multi_accessible;
+      key_binds = picker_key_binds arity;
+      run_accessible = picker_accessible arity;
+      filtering_of = (fun state -> Some state.filtering);
+      set_filtering_of = (fun filtering state -> picker_set_filtering filtering state);
+      hovered = (fun state -> option_key_at state.cursor state.filtered);
     }
   in
   Field (impl, state)
+
+let select_impl key title description height inline filterable explicit_width default
+    validate options =
+  picker_impl One ~name:"select" ~key
+    ~value:(fun state -> (List.nth state.filtered state.cursor).value)
+    title description height inline 0 filterable explicit_width
+    (match default with Some key -> [ key ] | None -> [])
+    validate
+    (fun _ -> Ok ())
+    options
+
+let multi_impl key title description height limit filterable explicit_width default
+    validate options =
+  picker_impl Many ~name:"multi_select" ~key ~value:selected_values title description
+    height false limit filterable explicit_width default
+    (fun _ -> Ok ())
+    validate options
 
 type confirm_message = unit
 
@@ -1462,6 +1492,7 @@ type confirm_state = {
   affirmative : string;
   negative : string option;
   inline : bool;
+  button_alignment : [ `Left | `Center | `Right ];
   value : bool;
   validate : bool -> (unit, string) result;
   err : string option;
@@ -1523,15 +1554,21 @@ let confirm_view ctx ~focused state =
       (if active then style.Styles.focused_button else style.Styles.blurred_button)
       label
   in
+  let position =
+    match state.button_alignment with
+    | `Left -> Charamel_lipgloss.Position.left
+    | `Center -> Charamel_lipgloss.Position.center
+    | `Right -> Charamel_lipgloss.Position.right
+  in
   let buttons =
     match state.negative with
     | None -> button state.affirmative state.value
     | Some negative ->
-        Charamel_lipgloss.Layout.join_horizontal ~pos:Charamel_lipgloss.Position.center
+        Charamel_lipgloss.Layout.join_horizontal ~pos:position
           [ button state.affirmative state.value; button negative (not state.value) ]
   in
   let buttons =
-    Charamel_lipgloss.Layout.place_horizontal ~pos:Charamel_lipgloss.Position.center
+    Charamel_lipgloss.Layout.place_horizontal ~pos:position
       ~width:(max (Charamel_ansi.Text.width heading) (Charamel_ansi.Text.width buttons))
       buttons
   in
@@ -1540,6 +1577,8 @@ let confirm_view ctx ~focused state =
     else concat_nonempty [ heading; buttons ]
   in
   Charamel_lipgloss.Style.render style.Styles.base content
+
+let confirm_cursor _ctx ~focused:_ _state = None
 
 let confirm_key_binds ctx state =
   let km = ctx.keymap.Keymap.confirm in
@@ -1558,16 +1597,17 @@ let confirm_accessible ~name ctx ~out reader state =
     ^ if state.value then "[Y/n] " else "[y/N] "
   in
   let rec loop state =
-    let value = Accessible.prompt_bool out reader ~prompt ~default:state.value in
+    let* value = Accessible.prompt_bool out reader ~prompt ~default:state.value in
     match confirm_validate state value with
-    | Ok () -> { state with value; err = None }
+    | Ok () -> Lwt.return { state with value; err = None }
     | Error error ->
-        out (error ^ "\n");
+        let* () = out (error ^ "\n") in
         loop { state with value; err = Some error }
   in
   loop state
 
-let confirm_impl key title description affirmative negative inline default validate =
+let confirm_impl key title description affirmative negative inline button_alignment
+    default validate =
   let state =
     {
       title;
@@ -1575,6 +1615,7 @@ let confirm_impl key title description affirmative negative inline default valid
       affirmative;
       negative;
       inline;
+      button_alignment;
       value = default;
       validate;
       err = None;
@@ -1587,12 +1628,14 @@ let confirm_impl key title description affirmative negative inline default valid
       key = Some key;
       msg_id = confirm_msg_id;
       init = confirm_init;
-      reevaluate = confirm_reevaluate;
+      reevaluate =
+        (fun ctx state -> (confirm_reevaluate ctx state, Charamel_tea.Cmd.none));
       on_key = confirm_on_key;
       on_paste = confirm_paste;
       update = confirm_update;
       subscriptions = (fun _ _ -> Charamel_tea.Sub.none);
       view = confirm_view;
+      cursor = confirm_cursor;
       focus = confirm_focus;
       blur = confirm_blur;
       value = (fun state -> state.value);
@@ -1601,6 +1644,9 @@ let confirm_impl key title description affirmative negative inline default valid
       zoom = (fun _ -> false);
       key_binds = confirm_key_binds;
       run_accessible = confirm_accessible;
+      filtering_of = (fun _ -> None);
+      set_filtering_of = (fun _ state -> state);
+      hovered = (fun _ -> None);
     }
   in
   Field (impl, state)
@@ -1693,6 +1739,8 @@ let note_view ctx ~focused state =
   in
   Charamel_lipgloss.Style.render style.Styles.card (String.concat "\n" padded)
 
+let note_cursor _ctx ~focused:_ _state = None
+
 let note_key_binds ctx _state =
   let km = ctx.keymap.Keymap.note in
   navigation_binds ctx ~prev:km.Keymap.prev ~next:km.Keymap.next ~submit:km.Keymap.submit
@@ -1700,9 +1748,9 @@ let note_key_binds ctx _state =
 let note_accessible ~name:_ ctx ~out _reader state =
   let title = Dyn.eval state.title ctx.results in
   let description = Dyn.eval state.description ctx.results in
-  if title <> "" then out (title ^ "\n");
-  if description <> "" then out (description ^ "\n");
-  state
+  let* () = if title = "" then Lwt.return_unit else out (title ^ "\n") in
+  let* () = if description = "" then Lwt.return_unit else out (description ^ "\n") in
+  Lwt.return state
 
 let note_impl title description height next =
   let state = { title; description; height; next } in
@@ -1712,12 +1760,13 @@ let note_impl title description height next =
       key = None;
       msg_id = note_msg_id;
       init = note_init;
-      reevaluate = note_reevaluate;
+      reevaluate = (fun ctx state -> (note_reevaluate ctx state, Charamel_tea.Cmd.none));
       on_key = note_on_key;
       on_paste = note_paste;
       update = note_update;
       subscriptions = (fun _ _ -> Charamel_tea.Sub.none);
       view = note_view;
+      cursor = note_cursor;
       focus = note_focus;
       blur = note_blur;
       value = (fun _ -> ());
@@ -1726,6 +1775,9 @@ let note_impl title description height next =
       zoom = (fun _ -> false);
       key_binds = note_key_binds;
       run_accessible = note_accessible;
+      filtering_of = (fun _ -> None);
+      set_filtering_of = (fun _ state -> state);
+      hovered = (fun _ -> None);
     }
   in
   Field (impl, state)
@@ -1746,6 +1798,7 @@ type file_state = {
   validate : string -> (unit, string) result;
   picker : Charamel_bubbles.Filepicker.t option;
   picking : bool;
+  cursor : string option;
   selected : string;
   err : string option;
 }
@@ -1753,10 +1806,10 @@ type file_state = {
 let file_msg_id : file_message Type.Id.t = Type.Id.make ()
 
 let make_picker ctx state =
-  Charamel_bubbles.Filepicker.v ~fs:ctx.env.Env.fs ~current_directory:state.dir
+  Charamel_bubbles.Filepicker.v ~root:ctx.env.Env.fs_root ~current_directory:state.dir
     ~allowed_types:state.allowed ~show_permissions:state.show_permissions
     ~show_size:state.show_size ~show_hidden:state.show_hidden ~dir_allowed:state.dirs
-    ~file_allowed:state.files ~height:(max 1 state.height) ()
+    ~file_allowed:state.files ~height:(max 1 state.height) ?cursor:state.cursor ()
 
 let file_init ctx state =
   let picker = make_picker ctx state in
@@ -1783,9 +1836,12 @@ let file_validate ctx state input =
       then Filename.concat state.dir input
       else input
     in
-    let path = Eio.Path.(ctx.env.Env.fs / relative) in
-    match Eio.Path.kind ~follow:true path with
-    | `Regular_file ->
+    let path =
+      if Filename.is_relative relative then Filename.concat ctx.env.Env.fs_root relative
+      else relative
+    in
+    match Unix.stat path with
+    | { Unix.st_kind = Unix.S_REG; _ } ->
         if
           state.allowed <> []
           && not
@@ -1794,7 +1850,8 @@ let file_validate ctx state input =
                   state.allowed)
         then Error (Fmt.str "cannot select: %s" input)
         else state.validate input
-    | _ -> Error "not a file"
+    | { Unix.st_kind = _; _ } -> Error "not a file"
+    | exception Unix.Unix_error _ -> Error "not a file"
 
 let file_on_key ctx key state =
   let state = { state with err = None } in
@@ -1917,6 +1974,20 @@ let file_view ctx ~focused state =
   in
   Charamel_lipgloss.Style.render style.Styles.base (concat_nonempty [ heading; body ])
 
+let file_cursor ctx ~focused state =
+  match state.picker with
+  | Some picker when state.picking -> (
+      match Charamel_bubbles.Filepicker.selection_cursor picker with
+      | None -> None
+      | Some (cursor : Charamel_tea.Cursor.t) ->
+          let title = Dyn.eval state.title ctx.results in
+          let description = Dyn.eval state.description ctx.results in
+          let heading =
+            render_title_description ctx ~focused ~title ~description ~error:state.err
+          in
+          Some { cursor with row = cursor.row + content_lines heading })
+  | _ -> None
+
 let file_key_binds ctx state =
   let km = ctx.keymap.Keymap.file in
   if state.picking then
@@ -1940,11 +2011,11 @@ let file_key_binds ctx state =
 let file_accessible ~name ctx ~out reader state =
   let title = Dyn.eval state.title ctx.results in
   let prompt = (if title = "" then field_label name else title) ^ " " in
-  let value =
+  let* value =
     Accessible.prompt_string ~out reader ~prompt ~default:state.selected
       ~validate:(file_validate ctx state)
   in
-  { state with selected = value; err = None }
+  Lwt.return { state with selected = value; err = None }
 
 let file_blur ctx state =
   match file_validate ctx state state.selected with
@@ -1952,7 +2023,7 @@ let file_blur ctx state =
   | Error error -> { state with err = Some error }
 
 let file_impl key title description dir show_hidden show_size show_permissions allowed
-    files dirs height validate =
+    files dirs height cursor picking validate =
   let state =
     {
       title;
@@ -1967,7 +2038,8 @@ let file_impl key title description dir show_hidden show_size show_permissions a
       height = max 1 height;
       validate;
       picker = None;
-      picking = false;
+      picking;
+      cursor;
       selected = "";
       err = None;
     }
@@ -1978,12 +2050,13 @@ let file_impl key title description dir show_hidden show_size show_permissions a
       key = Some key;
       msg_id = file_msg_id;
       init = file_init;
-      reevaluate = file_reevaluate;
+      reevaluate = (fun ctx state -> (file_reevaluate ctx state, Charamel_tea.Cmd.none));
       on_key = file_on_key;
       on_paste = (fun _ _ state -> state);
       update = file_update;
       subscriptions = (fun _ _ -> Charamel_tea.Sub.none);
       view = file_view;
+      cursor = file_cursor;
       focus = (fun _ state -> (state, Charamel_tea.Cmd.none));
       blur = file_blur;
       value = (fun state -> state.selected);
@@ -1992,6 +2065,9 @@ let file_impl key title description dir show_hidden show_size show_permissions a
       zoom = (fun state -> state.picking);
       key_binds = file_key_binds;
       run_accessible = file_accessible;
+      filtering_of = (fun _ -> None);
+      set_filtering_of = (fun _ state -> state);
+      hovered = (fun _ -> None);
     }
   in
   Field (impl, state)
@@ -2001,8 +2077,8 @@ let init (Field (impl, state)) ctx =
   (Field (impl, state), map_cmd impl.msg_id command)
 
 let reevaluate (Field (impl, state)) ctx =
-  let state = impl.reevaluate ctx state in
-  Field (impl, state)
+  let state, command = impl.reevaluate ctx state in
+  (Field (impl, state), map_cmd impl.msg_id command)
 
 let step_key (Field (impl, state)) ctx key =
   let state, command, outcome = impl.on_key ctx key state in
@@ -2021,6 +2097,7 @@ let subscriptions (Field (impl, state)) ctx =
   map_sub impl.msg_id (impl.subscriptions ctx state)
 
 let view (Field (impl, state)) ctx ~focused = impl.view ctx ~focused state
+let cursor (Field (impl, state)) ctx ~focused = impl.cursor ctx ~focused state
 
 let focus (Field (impl, state)) ctx =
   let state, command = impl.focus ctx state in
@@ -2032,9 +2109,16 @@ let skip (Field (impl, state)) ctx = impl.skip ctx state
 let zoom (Field (impl, state)) = impl.zoom state
 let key_name (Field (impl, _)) = Option.map Key.name impl.key
 let key_binds (Field (impl, state)) ctx = impl.key_binds ctx state
+let filtering (Field (impl, state)) = impl.filtering_of state
+
+let set_filtering value (Field (impl, state)) =
+  Field (impl, impl.set_filtering_of value state)
+
+let hovered (Field (impl, state)) = impl.hovered state
 
 let run_accessible (Field (impl, state)) ctx ~out reader =
-  Field (impl, impl.run_accessible ~name:impl.name ctx ~out reader state)
+  let* state = impl.run_accessible ~name:impl.name ctx ~out reader state in
+  Lwt.return (Field (impl, state))
 
 let commit (Field (impl, state)) results =
   match impl.key with
@@ -2048,9 +2132,10 @@ module Field = struct
   let option_ ~key value = { key; value }
   let options_of_strings values = Stdlib.List.map (fun key -> { key; value = key }) values
 
-  let input ?(title = Dyn.Const "") ?(description = Dyn.Const "") ?(placeholder = "")
-      ?(prompt = "> ") ?(char_limit = 0) ?(suggestions = Dyn.Const []) ?(echo = `Normal)
-      ?(inline = false) ?(default = "") ?(validate = noop_string) key =
+  let input ?(title = Dyn.Const "") ?(description = Dyn.Const "")
+      ?(placeholder = Dyn.Const "") ?(prompt = "> ") ?(char_limit = 0)
+      ?(suggestions = Dyn.Const []) ?(echo = `Normal) ?(inline = false) ?(default = "")
+      ?(validate = noop_string) key =
     let echo =
       match echo with
       | `Normal -> Charamel_bubbles.Textinput.Normal
@@ -2060,43 +2145,50 @@ module Field = struct
     input_impl key title description placeholder prompt char_limit suggestions echo inline
       default validate
 
-  let text ?(title = Dyn.Const "") ?(description = Dyn.Const "") ?(placeholder = "")
-      ?(lines = 5) ?(char_limit = 0) ?(show_line_numbers = false) ?(editor = true)
-      ?(editor_extension = "md") ?(default = "") ?(validate = noop_string) key =
+  let text ?(title = Dyn.Const "") ?(description = Dyn.Const "")
+      ?(placeholder = Dyn.Const "") ?(lines = 5) ?(char_limit = 0)
+      ?(show_line_numbers = false) ?(editor = true) ?(editor_extension = "md")
+      ?(default = "") ?(validate = noop_string) key =
     text_impl key title description placeholder lines char_limit show_line_numbers editor
       editor_extension default validate
 
-  let select ?(title = Dyn.Const "") ?(description = Dyn.Const "") ?(height = 10)
+  let select ?(title = Dyn.Const "") ?(description = Dyn.Const "") ?(height = 10) ?width
       ?(inline = false) ?(filterable = false) ?default ?(validate = fun _ -> Ok ())
       ~options key =
     (match options with
     | Dyn.Const values -> check_unique_options values
-    | Dyn.Of_results _ -> ());
-    select_impl key title description height inline filterable default validate options
+    | Dyn.Of_results _ | Dyn.Of_results_async _ -> ());
+    select_impl key title description height inline filterable width default validate
+      options
 
   let multi_select ?(title = Dyn.Const "") ?(description = Dyn.Const "") ?(height = 10)
-      ?(limit = 0) ?(filterable = true) ?(default = []) ?(validate = noop_list) ~options
-      key =
+      ?width ?(limit = 0) ?(filterable = true) ?(default = []) ?(validate = noop_list)
+      ~options key =
     (match options with
     | Dyn.Const values -> check_unique_options values
-    | Dyn.Of_results _ -> ());
-    multi_impl key title description height limit filterable default validate options
+    | Dyn.Of_results _ | Dyn.Of_results_async _ -> ());
+    multi_impl key title description height limit filterable width default validate
+      options
 
   let confirm ?(title = Dyn.Const "") ?(description = Dyn.Const "") ?(affirmative = "Yes")
-      ?(negative = Some "No") ?(inline = false) ?(default = false) ?(validate = noop_bool)
-      key =
-    confirm_impl key title description affirmative negative inline default validate
+      ?(negative = Some "No") ?(inline = false) ?(button_alignment = `Center)
+      ?(default = false) ?(validate = noop_bool) key =
+    confirm_impl key title description affirmative negative inline button_alignment
+      default validate
 
   let note ?(title = Dyn.Const "") ?(description = Dyn.Const "") ?(height = 0)
-      ?(next = None) () =
-    note_impl title description height next
+      ?(show_next = false) ?(next_label = "Next") () =
+    note_impl title description height (if show_next then Some next_label else None)
 
   let file ?(title = Dyn.Const "") ?(description = Dyn.Const "") ?(dir = ".")
       ?(show_hidden = false) ?(show_size = false) ?(show_permissions = false)
-      ?(allowed = []) ?(files = true) ?(dirs = false) ?(height = 10)
-      ?(validate = noop_string) key =
+      ?(allowed = []) ?(files = true) ?(dirs = false) ?(height = 10) ?cursor
+      ?(picking = false) ?(validate = noop_string) key =
     file_impl key title description dir show_hidden show_size show_permissions allowed
-      files dirs height validate
+      files dirs height cursor picking validate
 
   let key_name = key_name
+  let filtering = filtering
+  let set_filtering = set_filtering
+  let hovered = hovered
 end

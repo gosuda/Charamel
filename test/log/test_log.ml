@@ -8,7 +8,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 
 let user_tag = Logs.Tag.def "user" Fmt.string
 let note_tag = Logs.Tag.def "note" Fmt.string
-let clock = Eio_mock.Clock.make ()
+let clock = Charamel_os.Time.of_virtual (fst (Charamel_os.Time.create_virtual ()))
 
 let with_reporter ?format ?styles ?time_format ?report_timestamp ?report_caller
     ?(profile = Charamel_colorprofile.True_color) f =
@@ -21,11 +21,6 @@ let with_reporter ?format ?styles ?time_format ?report_timestamp ?report_caller
   Logs.set_reporter r;
   f ();
   Buffer.contents buf
-
-let contains ~needle haystack =
-  let nl = String.length needle and hl = String.length haystack in
-  let rec loop i = i + nl <= hl && (String.sub haystack i nl = needle || loop (i + 1)) in
-  nl = 0 || loop 0
 
 let count_char c s = String.fold_left (fun n ch -> if ch = c then n + 1 else n) 0 s
 let strip out = Charamel_ansi.Text.strip out
@@ -73,7 +68,7 @@ let test_text_caller_default_off () =
   in
   Alcotest.(check bool)
     "caller hidden when report_caller is off" false
-    (contains ~needle:"foo.ml:10" (strip out))
+    (Test_support.contains ~needle:"foo.ml:10" ~haystack:(strip out))
 
 let test_text_caller_on () =
   let out =
@@ -85,7 +80,6 @@ let test_text_caller_on () =
     (strip out)
 
 let test_text_timestamp () =
-  Eio_mock.Clock.set_time clock 0.0;
   let out =
     with_reporter ~format:Charamel_log.Text ~report_timestamp:true (fun () ->
         Log.err (fun m -> m "boom"))
@@ -100,7 +94,7 @@ let test_text_no_timestamp_by_default () =
   in
   Alcotest.(check bool)
     "no time field by default" false
-    (contains ~needle:"1970" (strip out))
+    (Test_support.contains ~needle:"1970" ~haystack:(strip out))
 
 (* {1 Logfmt format} *)
 
@@ -125,7 +119,9 @@ let test_logfmt_app_no_level () =
   let out =
     with_reporter ~format:Charamel_log.Logfmt (fun () -> Log.app (fun m -> m "launched"))
   in
-  Alcotest.(check bool) "no level key for App" false (contains ~needle:"level=" out)
+  Alcotest.(check bool)
+    "no level key for App" false
+    (Test_support.contains ~needle:"level=" ~haystack:out)
 
 (* {1 Json format} *)
 
@@ -179,7 +175,7 @@ let test_profile_true_color_keeps_index () =
   in
   Alcotest.(check bool)
     "full-fidelity indexed color present" true
-    (contains ~needle:"38;5;86" out)
+    (Test_support.contains ~needle:"38;5;86" ~haystack:out)
 
 let test_profile_ascii_drops_color () =
   let out =
@@ -187,9 +183,11 @@ let test_profile_ascii_drops_color () =
       (fun () -> Log.info (fun m -> m "x"))
   in
   Alcotest.(check bool)
-    "no escape byte at all under Ascii" false (contains ~needle:"\x1b" out);
+    "no escape byte at all under Ascii" false
+    (Test_support.contains ~needle:"\x1b" ~haystack:out);
   Alcotest.(check bool)
-    "label text itself still present" true (contains ~needle:"INFO" out)
+    "label text itself still present" true
+    (Test_support.contains ~needle:"INFO" ~haystack:out)
 
 let test_profile_no_tty_drops_color () =
   let out =
@@ -197,7 +195,8 @@ let test_profile_no_tty_drops_color () =
       (fun () -> Log.info (fun m -> m "x"))
   in
   Alcotest.(check bool)
-    "no escape byte at all under No_tty" false (contains ~needle:"\x1b" out)
+    "no escape byte at all under No_tty" false
+    (Test_support.contains ~needle:"\x1b" ~haystack:out)
 
 (* {1 Reporter lifecycle} *)
 

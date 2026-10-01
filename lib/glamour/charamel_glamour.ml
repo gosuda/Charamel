@@ -77,13 +77,11 @@ module Theme = struct
   let empty = block ()
   let indexed n = Some (Color.Indexed n)
   let rgb r g b = Some (Color.Rgb (r, g, b))
-  let code_no_highlight _ = Charamel_lipgloss.Style.empty
+  let code_no_highlight _ = Charamel_ansi.Style.default
   let code_charm_dark = Charamel_highlight.Theme.charm ~is_dark:true
   let code_charm_light = Charamel_highlight.Theme.charm ~is_dark:false
   let code_dracula = Charamel_highlight.Theme.dracula
-
-  let tokyo_color r g b =
-    Charamel_lipgloss.Style.foreground (Color.Rgb (r, g, b)) Charamel_lipgloss.Style.empty
+  let tokyo_color r g b = { Charamel_ansi.Style.default with fg = Color.Rgb (r, g, b) }
 
   let code_tokyo = function
     | Charamel_highlight.Keyword -> tokyo_color 0x2a 0xc3 0xde
@@ -464,6 +462,18 @@ module Theme = struct
 
   let notty = ascii
   let auto ~is_dark = if is_dark then dark else light
+
+  let of_name ~is_dark name =
+    match String.lowercase_ascii name with
+    | "dark" -> Ok dark
+    | "light" -> Ok light
+    | "dracula" -> Ok dracula
+    | "tokyo-night" | "tokyo_night" -> Ok tokyo_night
+    | "pink" -> Ok pink
+    | "ascii" -> Ok ascii
+    | "notty" -> Ok notty
+    | "auto" -> Ok (auto ~is_dark)
+    | value -> Error value
 end
 
 type error = [ `Markdown of string ]

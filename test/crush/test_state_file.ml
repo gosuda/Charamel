@@ -1,57 +1,62 @@
 module State_file = Crush_core.State_file
-
-let with_root f =
-  Eio_main.run (fun env ->
-      let root = Fmt.str "/tmp/crush-state-%d-%d" (Unix.getpid ()) (Random.bits ()) in
-      Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 Eio.Path.(env#fs / root);
-      Fun.protect
-        ~finally:(fun () -> Eio.Path.rmtree ~missing_ok:true Eio.Path.(env#fs / root))
-        (fun () -> f env Eio.Path.(env#fs / root)))
+open Lwt_direct
 
 let temp_entries root =
-  Eio.Path.read_dir root
+  Array.to_list (Sys.readdir root)
   |> List.filter (fun name ->
       String.starts_with ~prefix:"." name && String.contains name 'c')
 
 let check_replace_and_mode () =
-  with_root (fun _env root ->
-      let target = Eio.Path.(root / "state.json") in
-      (match State_file.replace target "first\n" with
+  Test_tools_test_support.with_scratch (fun root ->
+      let target = Filename.concat root "state.json" in
+      (match await (State_file.replace target "first\n") with
       | Error error -> Alcotest.failf "replace failed: %a" State_file.pp_error error
       | Ok () -> ());
-      Alcotest.(check string) "complete contents" "first\n" (Eio.Path.load target);
-      let stat = Eio.Path.stat ~follow:false target in
-      Alcotest.(check int) "private mode" 0o600 (stat.Eio.File.Stat.perm land 0o777);
+      Alcotest.(check string)
+        "complete contents" "first\n"
+        (Test_tools_test_support.load_file target);
+      Alcotest.(check int)
+        "private mode"
+        (if Sys.win32 then 0o666 else 0o600)
+        ((Unix.lstat target).Unix.st_perm land 0o777);
       Alcotest.(check (list string)) "no temporary sibling remains" [] (temp_entries root);
-      (match State_file.replace target "second\n" with
+      (match await (State_file.replace target "second\n") with
       | Error error ->
           Alcotest.failf "second replace failed: %a" State_file.pp_error error
       | Ok () -> ());
-      Alcotest.(check string) "replacement contents" "second\n" (Eio.Path.load target);
+      Alcotest.(check string)
+        "replacement contents" "second\n"
+        (Test_tools_test_support.load_file target);
       Alcotest.(check (list string)) "second replacement cleans up" [] (temp_entries root))
 
 let check_symlink_destination_is_replaced_not_followed () =
-  with_root (fun _env root ->
-      let original = Eio.Path.(root / "original") in
-      let alias = Eio.Path.(root / "alias") in
-      Eio.Path.save ~create:(`Exclusive 0o600) original "keep\n";
-      Eio.Path.symlink alias ~link_to:"original";
-      (match State_file.replace alias "replacement\n" with
+  Test_tools_test_support.with_scratch (fun root ->
+      let original = Filename.concat root "original" in
+      let alias = Filename.concat root "alias" in
+      let channel =
+        open_out_gen [ Open_wronly; Open_creat; Open_excl; Open_binary ] 0o600 original
+      in
+      output_string channel "keep\n";
+      close_out channel;
+      Unix.symlink "original" alias;
+      (match await (State_file.replace alias "replacement\n") with
       | Error error ->
           Alcotest.failf "symlink replacement failed: %a" State_file.pp_error error
       | Ok () -> ());
       Alcotest.(check string)
-        "original target is unchanged" "keep\n" (Eio.Path.load original);
+        "original target is unchanged" "keep\n"
+        (Test_tools_test_support.load_file original);
       Alcotest.(check string)
-        "symlink path now contains replacement" "replacement\n" (Eio.Path.load alias);
+        "symlink path now contains replacement" "replacement\n"
+        (Test_tools_test_support.load_file alias);
       Alcotest.(check bool)
         "alias is a regular file" true
-        (Eio.Path.kind ~follow:false alias = `Regular_file))
+        ((Unix.lstat alias).Unix.st_kind = Unix.S_REG))
 
 let check_missing_parent_is_error () =
-  with_root (fun _env root ->
-      let target = Eio.Path.(root / "missing" / "state.json") in
-      match State_file.replace target "value" with
+  Test_tools_test_support.with_scratch (fun root ->
+      let target = Filename.concat (Filename.concat root "missing") "state.json" in
+      match await (State_file.replace target "value") with
       | Ok () -> Alcotest.fail "replace unexpectedly created a missing parent"
       | Error (`Io (path, _)) ->
           Alcotest.(check bool)
@@ -60,8 +65,9 @@ let check_missing_parent_is_error () =
 
 let cases =
   [
-    Alcotest.test_case "atomic replacement and mode" `Quick check_replace_and_mode;
-    Alcotest.test_case "symlink destination" `Quick
+    Test_tools_test_support.case "atomic replacement and mode" `Quick
+      check_replace_and_mode;
+    Test_tools_test_support.case "symlink destination" `Quick
       check_symlink_destination_is_replaced_not_followed;
-    Alcotest.test_case "missing parent" `Quick check_missing_parent_is_error;
+    Test_tools_test_support.case "missing parent" `Quick check_missing_parent_is_error;
   ]

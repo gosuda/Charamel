@@ -1,4 +1,5 @@
 open Result.Syntax
+open Lwt_direct
 
 type todo_args = { todos : Todos.item list }
 type option_arg = { label : string; description : string option }
@@ -103,12 +104,6 @@ let info_schema = Tool.schema_object []
 let info_codec = Jsont.Object.map () |> Jsont.Object.finish
 let logs_schema = Tool.schema_object [ ("lines", Tool.s_int ~default:50 ()) ]
 
-let truncate_output (ctx : Tool.ctx) text =
-  let content, artifact =
-    Artifact.truncate ctx.Tool.artifacts ~random:ctx.Tool.random text
-  in
-  Tool.ok ?artifact content
-
 let render_todo_counts items =
   let pending, in_progress, completed =
     List.fold_left
@@ -129,7 +124,7 @@ let run_todos (ctx : Tool.ctx) input =
   in
   Todos.set ctx.Tool.todos todos;
   let text = Todos.render todos ^ render_todo_counts todos in
-  Ok (truncate_output ctx text)
+  Ok (Tool.truncate ctx text)
 
 let words_count text =
   let count = ref 0 in
@@ -214,7 +209,7 @@ let run_question (ctx : Tool.ctx) input =
             answer_text question.header (answer_for answers question.header))
           questions
       in
-      Ok (truncate_output ctx (String.concat "\n" lines))
+      Ok (Tool.truncate ctx (String.concat "\n" lines))
 
 let selected_model_text = function
   | None -> "none"
@@ -257,7 +252,7 @@ let lsp_lines (ctx : Tool.ctx) =
             | Lsp.Disabled -> "disabled"
           in
           Fmt.str "  %s: %s" name state)
-        (Lsp.servers lsp)
+        (await (Lsp.servers lsp))
 
 let mcp_lines (ctx : Tool.ctx) =
   List.map
@@ -321,14 +316,14 @@ let run_info (ctx : Tool.ctx) input =
         Fmt.str "  stop: %s" (hook_state ctx.Tool.hooks Config.Stop);
       ]
   in
-  Ok
-    (truncate_output ctx
-       (String.concat "\n" (List.filter (fun line -> line <> "") lines)))
+  Ok (Tool.truncate ctx (String.concat "\n" (List.filter (fun line -> line <> "") lines)))
 
 let read_log (ctx : Tool.ctx) =
-  try Ok (Eio.Path.load Eio.Path.(ctx.Tool.fs / ctx.Tool.log_path)) with
-  | Eio.Io (Eio.Fs.E (Eio.Fs.Not_found _), _) -> Error (`Not_found ctx.Tool.log_path)
-  | Eio.Io _ -> Error (`Io (ctx.Tool.log_path, "could not read log"))
+  try Ok (await (Lwt_io.with_file ~mode:Lwt_io.Input ctx.Tool.log_path Lwt_io.read)) with
+  | Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) ->
+      Error (`Not_found ctx.Tool.log_path)
+  | Unix.Unix_error _ | Sys_error _ ->
+      Error (`Io (ctx.Tool.log_path, "could not read log"))
 
 let tail_lines ~count body =
   let lines = Array.of_list (String.split_on_char '\n' body) in
@@ -349,7 +344,7 @@ let run_logs (ctx : Tool.ctx) input =
         ~description:"Read the crush log"
     in
     let* body = read_log ctx in
-    Ok (truncate_output ctx (tail_lines ~count:lines body))
+    Ok (Tool.truncate ctx (tail_lines ~count:lines body))
 
 let todos =
   {

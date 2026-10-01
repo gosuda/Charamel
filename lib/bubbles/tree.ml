@@ -5,7 +5,6 @@ module Color = Charamel_ansi.Color
 module Text = Charamel_ansi.Text
 module Sides = Charamel_lipgloss.Sides
 
-let clamp n lo hi = max lo (min hi n)
 let key_binding ?help names = Key_binding.v ?help names
 
 type node = { open_ : bool; value : string; children : node list }
@@ -70,20 +69,17 @@ let default_keymap =
     close_full_help = key_binding ~help:("?", "close help") [ "?" ];
   }
 
-let color_hex fallback text =
-  match Color.of_hex text with Some color -> color | None -> fallback
-
 let default_styles ~is_dark =
   let light_dark light dark = Charamel_lipgloss.light_dark ~is_dark ~light ~dark in
   let subdued =
     light_dark
-      (color_hex (Color.Indexed 245) "#9B9B9B")
-      (color_hex (Color.Indexed 245) "#5C5C5C")
+      (Color.of_hex_or ~default:(Color.Indexed 245) "#9B9B9B")
+      (Color.of_hex_or ~default:(Color.Indexed 245) "#5C5C5C")
   in
   let very_subdued =
     light_dark
-      (color_hex (Color.Indexed 245) "#DDDADA")
-      (color_hex (Color.Indexed 245) "#3C3C3C")
+      (Color.of_hex_or ~default:(Color.Indexed 245) "#DDDADA")
+      (Color.of_hex_or ~default:(Color.Indexed 245) "#3C3C3C")
   in
   {
     tree_style = Style.empty;
@@ -91,8 +87,8 @@ let default_styles ~is_dark =
     node_style =
       Style.foreground
         (light_dark
-           (color_hex (Color.Indexed 245) "#9B9B9B")
-           (color_hex (Color.Indexed 245) "#B0B0B0"))
+           (Color.of_hex_or ~default:(Color.Indexed 245) "#9B9B9B")
+           (Color.of_hex_or ~default:(Color.Indexed 245) "#B0B0B0"))
         Style.empty;
     selected_node_style =
       Style.bold true
@@ -100,7 +96,9 @@ let default_styles ~is_dark =
            (light_dark (Color.Indexed 249) (Color.Indexed 212))
            Style.empty);
     root_node_style =
-      Style.foreground (color_hex (Color.Indexed 212) "#EE6FF8") Style.empty;
+      Style.foreground
+        (Color.of_hex_or ~default:(Color.Indexed 212) "#EE6FF8")
+        Style.empty;
     parent_node_style =
       Style.foreground (light_dark (Color.Indexed 90) (Color.Indexed 99)) Style.empty;
     cursor_style =
@@ -215,9 +213,10 @@ let update_current_node f t =
   | None -> t
   | Some item ->
       let root = replace_at_path item.path f t.root in
-      { t with root; y_offset = clamp t.y_offset 0 (max 0 (size root - 1)) }
+      { t with root; y_offset = Range.clamp 0 (max 0 (size root - 1)) t.y_offset }
 
-let selected_index t = clamp t.y_offset 0 (max 0 (Stdlib.List.length (all_nodes t) - 1))
+let selected_index t =
+  Range.clamp 0 (max 0 (Stdlib.List.length (all_nodes t) - 1)) t.y_offset
 
 let set_y_offset offset t =
   { t with y_offset = selected_index { t with y_offset = offset } }
@@ -231,7 +230,7 @@ let set_height height t = { t with height = max 0 height }
 let set_size ~width ~height t = { t with width = max 0 width; height = max 0 height }
 
 let set_root root t =
-  { t with root; y_offset = clamp t.y_offset 0 (max 0 (size root - 1)) }
+  { t with root; y_offset = Range.clamp 0 (max 0 (size root - 1)) t.y_offset }
 
 let set_open_character open_character t = { t with open_character }
 let set_closed_character closed_character t = { t with closed_character }

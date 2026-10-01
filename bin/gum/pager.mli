@@ -27,9 +27,11 @@ type model
 val sanitize : string -> string
 (** [sanitize text] removes backspace-overwrite pairs from [text]. *)
 
-val search_lines : pattern:string -> string -> int list
-(** [search_lines ~pattern content] returns zero-based line numbers whose text contains
-    [pattern], case-insensitively. An invalid or empty pattern returns the empty list. *)
+val match_ranges : pattern:string -> string -> (int * int) list
+(** [match_ranges ~pattern content] returns the half-open byte ranges of every
+    case-insensitive occurrence of the regular expression [pattern] in [content]. An
+    invalid or empty pattern returns the empty list. Overlapping and empty matches advance
+    by one byte, so the ranges stay ordered and disjoint. *)
 
 val make : options -> model
 (** [make options] creates a pager model. *)
@@ -37,8 +39,8 @@ val make : options -> model
 val app : options -> (model, msg) Charamel_tea.app
 (** [app options] is the scripted or terminal pager application. *)
 
-val run : Eio_unix.Stdenv.base -> options -> unit
+val run : Charamel_cli.Env.t -> options -> unit Lwt.t
 (** [run env options] obtains content and runs the pager until quit. *)
 
-val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
+val cmd : Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t
 (** [cmd env] is the [gum pager] command. *)

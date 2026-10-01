@@ -65,11 +65,26 @@ let unicode_decomposed_and_emoji () =
     "emoji scalars map to one grapheme" [ 0 ] (matched emoji_matches);
   Alcotest.(check (list int)) "emoji scalar score" [ 15 ] (scores emoji_matches)
 
+let stable_ties () =
+  let tied = Charamel_bubbles.Fuzzy.find ~pattern:"a" [ "za"; "ba"; "ca" ] in
+  Alcotest.(check bool)
+    "the three candidates really tie" true
+    (match scores tied with [ a; b; c ] -> a = b && b = c | _ -> false);
+  Alcotest.(check (list int))
+    "tied candidates keep input order" [ 0; 1; 2 ] (indices tied);
+  let duplicates = Charamel_bubbles.Fuzzy.find ~pattern:"ba" [ "ba"; "ba"; "ba" ] in
+  Alcotest.(check (list int))
+    "duplicate candidates keep input order" [ 0; 1; 2 ] (indices duplicates);
+  let unsorted = Charamel_bubbles.Fuzzy.find_unsorted ~pattern:"a" [ "za"; "ba"; "ca" ] in
+  Alcotest.(check (list int)) "the unsorted variant agrees" [ 0; 1; 2 ] (indices unsorted)
+
 let cases =
   [
-    Alcotest.test_case "basic vectors" `Quick basic_vectors;
-    Alcotest.test_case "unsorted order" `Quick unsorted_preserves_input_order;
-    Alcotest.test_case "upstream scoring" `Quick upstream_scoring_vectors;
-    Alcotest.test_case "empty and NUL" `Quick empty_and_nul;
-    Alcotest.test_case "decomposed accents and emoji" `Quick unicode_decomposed_and_emoji;
+    Alcotest_lwt.test_case_sync "basic vectors" `Quick basic_vectors;
+    Alcotest_lwt.test_case_sync "unsorted order" `Quick unsorted_preserves_input_order;
+    Alcotest_lwt.test_case_sync "upstream scoring" `Quick upstream_scoring_vectors;
+    Alcotest_lwt.test_case_sync "empty and NUL" `Quick empty_and_nul;
+    Alcotest_lwt.test_case_sync "decomposed accents and emoji" `Quick
+      unicode_decomposed_and_emoji;
+    Alcotest_lwt.test_case_sync "stable ties" `Quick stable_ties;
   ]

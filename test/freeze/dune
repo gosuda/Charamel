@@ -6,16 +6,10 @@
   freeze_core
   charamel.ansi
   charamel.highlight
-  eio
-  eio.unix
-  eio_main
   alcotest
-  fmt)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  alcotest-lwt
+  lwt
+  lwt.unix
+  fmt
+  unix
+  test_support))

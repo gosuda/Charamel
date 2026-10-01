@@ -7,6 +7,40 @@ val env : cmd:string -> string -> Cmdliner.Cmd.Env.info
 (** [env ~cmd name] describes the environment variable [GUM_<CMD>_<NAME>], with dots and
     dashes converted to underscores. *)
 
+val key : cmd:string -> string -> Charamel_tea.Key.t
+(** [key ~cmd name] parses a key name and raises [Invalid_argument] with a diagnostic
+    naming [cmd] when [name] is invalid. *)
+
+val is_key : Charamel_tea.Key.t -> Charamel_tea.Key.t -> bool
+(** [is_key actual expected] is [true] when [actual] matches [expected]. *)
+
+val any_key : Charamel_tea.Key.t -> Charamel_tea.Key.t list -> bool
+(** [any_key actual expected] is [true] when [actual] matches one of [expected]. *)
+
+val key_name : Charamel_tea.Key.t -> string
+(** [key_name key] is the name of [key], spelled as a [GUM_<CMD>_*] key value spells it.
+*)
+
+val is_quit : Charamel_tea.Key.t -> bool
+(** [is_quit key] is [true] for [q] or [esc], the keys every interactive command leaves
+    with an empty result. *)
+
+val is_abort : Charamel_tea.Key.t -> bool
+(** [is_abort key] is [true] for [ctrl+c], which ends the command as an interrupt. *)
+
+val is_submit : Charamel_tea.Key.t -> bool
+(** [is_submit key] is [true] for [enter] or [ctrl+q], the keys that accept the current
+    selection. *)
+
+val string_arg :
+  cmd:string -> string -> default:string -> doc:string -> string Cmdliner.Term.t
+(** [string_arg ~cmd name ~default ~doc] parses a string option with command-scoped
+    environment fallback [GUM_<CMD>_<NAME>]. *)
+
+val int_arg : cmd:string -> string -> default:int -> doc:string -> int Cmdliner.Term.t
+(** [int_arg ~cmd name ~default ~doc] parses an integer option with command-scoped
+    environment fallback [GUM_<CMD>_<NAME>]. *)
+
 val negatable :
   cmd:string ->
   ?env:bool ->
@@ -49,9 +83,19 @@ val parse_padding : string -> (Charamel_lipgloss.Sides.t, [ `Msg of string ]) re
     bottom; four are top, right, bottom, and left. Spaces and commas separate values.
     Malformed input is a typed [Error], never a silent zero padding. *)
 
-val padding : cmd:string -> string Cmdliner.Term.t
-(** [padding ~cmd] parses the raw [--padding] value, defaulting to ["0 0"], with
-    environment fallback [GUM_<CMD>_PADDING]. *)
+val parsed_padding : string -> Charamel_lipgloss.Sides.t
+(** [parsed_padding text] parses padding and raises [Invalid_argument] with the parser
+    diagnostic when [text] is malformed. *)
+
+val validated_padding_term :
+  ?doc:string ->
+  ?pp:(Stdlib.Format.formatter -> string -> unit) ->
+  cmd:string ->
+  unit ->
+  string Cmdliner.Term.t
+(** [validated_padding_term ?doc ?pp ~cmd ()] is a command-line padding term that
+    preserves the raw value after validating one to four integer values. [doc] defaults to
+    ["Padding as one to four integers."]. [pp] defaults to printing the raw value. *)
 
 val align : string -> Charamel_lipgloss.Position.t option
 (** [align text] maps [left] and [top] to {!Charamel_lipgloss.Position.left}, [center] and

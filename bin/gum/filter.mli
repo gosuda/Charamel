@@ -77,8 +77,8 @@ val selected : model -> string list
 val submitted : model -> bool
 (** [submitted model] is [true] after Enter or Ctrl-Q submitted the model. *)
 
-val run : Eio_unix.Stdenv.base -> options -> unit
+val run : Charamel_cli.Env.t -> options -> unit Lwt.t
 (** [run env options] reads candidates, runs filtering, and prints the result. *)
 
-val cmd : Eio_unix.Stdenv.base -> unit Cmdliner.Cmd.t
+val cmd : Charamel_cli.Env.t -> unit Lwt.t Cmdliner.Cmd.t
 (** [cmd env] is the [gum filter] command. *)

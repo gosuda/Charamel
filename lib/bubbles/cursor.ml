@@ -65,3 +65,14 @@ let show t =
   | Blink | Static -> { t with blinked = false; hold = true }
 
 let is_blinked t = t.blinked
+
+let sync_cursor ~color ~blink ~blink_speed ~focused:desired_focused ~virtual_cursor
+    ~text_style t =
+  let desired_mode =
+    if not virtual_cursor then Hide else if blink then Blink else Static
+  in
+  let c = set_style (Style.foreground color Style.empty) t in
+  let c = set_text_style text_style c in
+  let c = match blink_speed with Some speed -> set_blink_speed speed c | None -> c in
+  let c = if mode c = desired_mode then c else set_mode desired_mode c in
+  if focused c = desired_focused then c else if desired_focused then focus c else blur c

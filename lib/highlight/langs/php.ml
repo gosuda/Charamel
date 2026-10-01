@@ -128,11 +128,11 @@ let spec =
     ~block_comment:[ ("/*", "*/") ]
     ~strings:[ ("\"", "\"", true); ("'", "'", true) ]
     ~number:
-      (alt
+      (Re.alt
          [
-           seq [ str "0x"; rep1 (set "0123456789abcdefABCDEF") ];
-           seq [ str "0b"; rep1 (set "01") ];
-           seq [ str "0o"; rep1 (set "01234567") ];
+           hex_literal ();
+           Re.seq [ Re.str "0b"; Re.rep1 (Re.set "01") ];
+           Re.seq [ Re.str "0o"; Re.rep1 (Re.set "01234567") ];
            decimal;
          ])
     ~ident:identifier
@@ -177,9 +177,9 @@ let spec =
       ]
     ~attribute:
       (Some
-         (alt
+         (Re.alt
             [
-              seq [ str "#["; rep (not_chars "]\n"); str "]" ];
-              seq [ str "$"; ident_tail; rep ident_tail ];
+              Re.seq [ Re.str "#["; Re.rep (not_chars "]\n"); Re.str "]" ];
+              Re.seq [ Re.str "$"; ident_tail; Re.rep ident_tail ];
             ]))
     ~case_sensitive:false ()

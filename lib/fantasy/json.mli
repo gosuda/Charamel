@@ -39,6 +39,9 @@ val strings_of_json : Jsont.json -> string list option
 (** [strings_of_json j] is the elements of [j] when [j] is an array of strings, or [None].
 *)
 
+val valid_json : string -> bool
+(** [valid_json s] is [true] when [s] parses as a JSON value. *)
+
 val json_of_string : string -> (Jsont.json, string) result
 (** [json_of_string s] is the JSON value encoded in [s]. *)
 

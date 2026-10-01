@@ -1,5 +1,3 @@
-open Result.Syntax
-
 type border = { radius : float; width : float; color : string }
 type shadow = { blur : float; x : float; y : float }
 type font = { family : string; file : string; size : float; ligatures : bool }
@@ -379,31 +377,49 @@ let full_json =
   "{\"window\":true,\"theme\":\"charm\",\"border\":{\"radius\":8,\"width\":1,\"color\":\"#515151\"},\"shadow\":{\"blur\":24,\"x\":0,\"y\":12},\"padding\":[20,40,20,20],\"margin\":[50,60,70,60],\"background\":\"#171717\",\"font\":{\"family\":\"JetBrains \
    Mono\",\"size\":14,\"ligatures\":true},\"line_height\":1.2}"
 
-let read_path fs path =
-  try Ok Eio.Path.(load (fs / path)) with
-  | Eio.Io _ -> Error (Fmt.str "cannot read configuration %s" path)
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (Fmt.str "cannot read configuration %s: %s (%s %s)" path
-           (Unix.error_message error) function_name argument)
+let resolve ~fs_root path =
+  if Filename.is_relative path then Filename.concat fs_root path else path
 
-let load ~fs ~name =
+let read_path ~fs_root path =
+  let resolved = resolve ~fs_root path in
+  Lwt.catch
+    (fun () ->
+      Lwt.bind (Lwt_io.with_file ~mode:Lwt_io.Input resolved Lwt_io.read) (fun text ->
+          Lwt.return (Ok text)))
+    (function
+      | Unix.Unix_error (error, function_name, argument) ->
+          Lwt.return
+            (Error
+               (Fmt.str "cannot read configuration %s: %s (%s %s)" path
+                  (Unix.error_message error) function_name argument))
+      | End_of_file | Sys_error _ ->
+          Lwt.return (Error (Fmt.str "cannot read configuration %s" path))
+      | exn -> Lwt.fail exn)
+
+let load ~fs_root ~name =
   let source =
     match String.lowercase_ascii name with
-    | "default" | "base" -> Ok base_json
-    | "full" -> Ok full_json
-    | "user" -> (
+    | "default" | "base" -> Lwt.return (Ok base_json)
+    | "full" -> Lwt.return (Ok full_json)
+    | "user" ->
         let path =
           Filename.concat (Charamel_cli.Xdg.config_dir ~app:"freeze") "user.json"
         in
-        match read_path fs path with Ok source -> Ok source | Error _ -> Ok base_json)
-    | _ -> (
-        match read_path fs name with Ok _ as value -> value | Error _ -> Ok base_json)
+        Lwt.bind (read_path ~fs_root path) (function
+          | Ok source -> Lwt.return (Ok source)
+          | Error _ -> Lwt.return (Ok base_json))
+    | _ ->
+        Lwt.bind (read_path ~fs_root name) (function
+          | Ok _ as value -> Lwt.return value
+          | Error _ -> Lwt.return (Ok base_json))
   in
-  let* source = source in
-  match decode_json source with
-  | Error message -> Error (Fmt.str "invalid configuration JSON: %s" message)
-  | Ok value -> Ok (with_root value { default with config = name })
+  Lwt.bind source (function
+    | Error message -> Lwt.return (Error message)
+    | Ok source -> (
+        match decode_json source with
+        | Error message ->
+            Lwt.return (Error (Fmt.str "invalid configuration JSON: %s" message))
+        | Ok value -> Lwt.return (Ok (with_root value { default with config = name }))))
 
 let apply_cli (config : t) (cli : cli) =
   let border : border =
@@ -503,7 +519,7 @@ let encode_json (config : t) =
       member "show_line_numbers" (json_bool config.show_line_numbers);
     ]
 
-let save_user ~fs config =
+let save_user config =
   let path = Filename.concat (Charamel_cli.Xdg.config_dir ~app:"freeze") "user.json" in
   let directory = Filename.dirname path in
   let encoded =
@@ -513,14 +529,20 @@ let save_user ~fs config =
     | Ok value -> value
     | Error message -> Fmt.failwith "cannot encode user configuration: %s" message
   in
-  try
-    Eio.Path.(
-      mkdirs ~exists_ok:true ~perm:0o700 (fs / directory);
-      save ~create:(`Or_truncate 0o600) (fs / path) encoded);
-    Ok ()
-  with
-  | Eio.Io _ -> Error "cannot write freeze user configuration"
-  | Unix.Unix_error (error, function_name, argument) ->
-      Error
-        (Fmt.str "cannot write freeze user configuration: %s (%s %s)"
-           (Unix.error_message error) function_name argument)
+  Lwt.catch
+    (fun () ->
+      Lwt.bind (Charamel_os.Fs.mkdir_p directory) (function
+        | Error _ -> Lwt.return (Error "cannot write freeze user configuration")
+        | Ok () ->
+            Lwt.bind
+              (Charamel_os.Fs.with_open_out ~perm:0o600 path (fun channel ->
+                   Lwt_io.write channel encoded))
+              (fun () -> Lwt.return (Ok ()))))
+    (function
+      | Charamel_os.Fs.E _ -> Lwt.return (Error "cannot write freeze user configuration")
+      | Unix.Unix_error (error, function_name, argument) ->
+          Lwt.return
+            (Error
+               (Fmt.str "cannot write freeze user configuration: %s (%s %s)"
+                  (Unix.error_message error) function_name argument))
+      | exn -> Lwt.fail exn)

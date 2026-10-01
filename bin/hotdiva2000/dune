@@ -1,15 +1,7 @@
 (library
  (name hotdiva_core)
  (modules name words)
- (libraries fmt)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+ (libraries fmt))
 
 (executable
  (name main)
@@ -20,18 +12,9 @@
   hotdiva_core
   charamel.cli
   cmdliner
-  eio
-  eio.unix
-  eio_main
+  lwt
+  lwt.unix
   fmt
   mirage-crypto-rng
   mirage-crypto-rng.unix
-  unix)
- (flags
-  (:standard
-   -strict-sequence
-   -strict-formats
-   -short-paths
-   -principal
-   -w
-   +a-4-9-29-30-40..42-44..46-48-58-66-67)))
+  unix))

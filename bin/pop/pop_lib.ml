@@ -13,8 +13,6 @@ type options = {
   unsafe_html : bool;
 }
 
-type prepared = { message : Mime.message; wire : string }
-
 type error =
   [ `Missing of string
   | `Input of string
@@ -28,20 +26,6 @@ let pp_error ppf = function
   | `Address error -> Fmt.pf ppf "invalid address: %a" Mime.pp_error error
   | `Message error -> Fmt.pf ppf "could not compose message: %a" Mime.pp_error error
   | `Markdown message -> Fmt.pf ppf "could not render Markdown: %s" message
-
-let empty_options =
-  {
-    to_ = [];
-    cc = [];
-    bcc = [];
-    from = None;
-    subject = None;
-    body = None;
-    body_file = None;
-    attachments = [];
-    signature = None;
-    unsafe_html = false;
-  }
 
 let split_addresses values =
   let split value =
@@ -73,63 +57,59 @@ let split_addresses values =
   in
   List.concat_map split values
 
-let stdin_is_tty source =
-  match Eio_unix.Resource.fd_opt source with
-  | None -> false
-  | Some fd -> (
-      try Eio_unix.Fd.use_exn "isatty" fd Unix.isatty
-      with Unix.Unix_error _ | Invalid_argument _ -> false)
-
 let input_limit = (10 * 1024 * 1024) + 1
 
-let contains text needle =
-  let text_length = String.length text and needle_length = String.length needle in
-  let rec loop index =
-    if index + needle_length > text_length then false
-    else if String.sub text index needle_length = needle then true
-    else loop (index + 1)
+let read_flow ~label channel =
+  let buffer = Buffer.create 4096 in
+  let rec loop () =
+    Lwt.bind (Lwt_io.read ~count:65536 channel) (fun chunk ->
+        if chunk = "" then Lwt.return (Ok (Buffer.contents buffer))
+        else begin
+          Buffer.add_string buffer chunk;
+          if Buffer.length buffer > input_limit then
+            Lwt.return
+              (Error (`Input (Fmt.str "%s exceeds the 10 MiB input limit" label)))
+          else loop ()
+        end)
   in
-  needle_length = 0 || loop 0
+  loop ()
 
-let read_flow ~label flow =
-  match Eio.Buf_read.parse ~max_size:input_limit Eio.Buf_read.take_all flow with
-  | Ok value -> Ok value
-  | Error (`Msg message) ->
-      let message =
-        if contains (String.lowercase_ascii message) "limit" then
-          Fmt.str "%s exceeds the 10 MiB input limit" label
-        else Fmt.str "%s: %s" label message
-      in
-      Error (`Input message)
+let resolve ~cwd path =
+  if Filename.is_relative path then Filename.concat cwd path else path
 
 let read_file ~cwd path =
-  if String.trim path = "" then Error (`Input "file path is empty")
+  if String.trim path = "" then Lwt.return (Error (`Input "file path is empty"))
   else
-    try
-      Eio.Path.with_open_in Eio.Path.(cwd / path) (fun flow -> read_flow ~label:path flow)
-    with
-    | Eio.Io (Eio.Fs.E _, _) as exn ->
-        Error (`Input (Fmt.str "could not read %s: %a" path Eio.Exn.pp exn))
-    | Unix.Unix_error (error, function_name, argument) ->
-        Error
-          (`Input
-             (Fmt.str "could not read %s: %s (%s %s)" path (Unix.error_message error)
-                function_name argument))
-    | End_of_file ->
-        Error (`Input (Fmt.str "could not read %s: unexpected end of file" path))
+    let resolved = resolve ~cwd path in
+    Lwt.catch
+      (fun () ->
+        Lwt_io.with_file ~mode:Lwt_io.Input resolved (fun channel ->
+            read_flow ~label:path channel))
+      (function
+        | Unix.Unix_error (error, function_name, argument) ->
+            Lwt.return
+              (Error
+                 (`Input
+                    (Fmt.str "could not read %s: %s (%s %s)" path
+                       (Unix.error_message error) function_name argument)))
+        | End_of_file ->
+            Lwt.return
+              (Error (`Input (Fmt.str "could not read %s: unexpected end of file" path)))
+        | exn -> Lwt.fail exn)
 
 let read_body ~cwd ~stdin options =
   match (options.body, options.body_file) with
-  | Some _, Some _ -> Error (`Input "--body and --body-file cannot be used together")
-  | Some body, None -> Ok body
+  | Some _, Some _ ->
+      Lwt.return (Error (`Input "--body and --body-file cannot be used together"))
+  | Some body, None -> Lwt.return (Ok body)
   | None, Some path -> read_file ~cwd path
-  | None, None -> (
-      if stdin_is_tty stdin then Error (`Missing "body")
+  | None, None ->
+      if Charamel_cli.is_tty Unix.stdin then Lwt.return (Error (`Missing "body"))
       else
-        match read_flow ~label:"stdin" stdin with
-        | Error error -> Error error
-        | Ok "" -> Error (`Missing "body")
-        | Ok body -> Ok body)
+        Lwt.bind (read_flow ~label:"stdin" stdin) (function
+          | Error error -> Lwt.return (Error error)
+          | Ok "" -> Lwt.return (Error (`Missing "body"))
+          | Ok body -> Lwt.return (Ok body))
 
 let parse_address value =
   match Mime.Address.v (String.trim value) with
@@ -171,47 +151,73 @@ let render_body ~unsafe_html body =
 
 let read_attachments ~cwd paths =
   let rec loop acc = function
-    | [] -> Ok (List.rev acc)
-    | path :: rest -> (
-        let* data = read_file ~cwd path in
-        let name = Filename.basename path in
-        match Mime.attachment ~name ~data () with
-        | Ok attachment -> loop (attachment :: acc) rest
-        | Error error -> Error (`Message error))
+    | [] -> Lwt.return (Ok (List.rev acc))
+    | path :: rest ->
+        Lwt.bind (read_file ~cwd path) (function
+          | Error error -> Lwt.return (Error error)
+          | Ok data -> (
+              let name = Filename.basename path in
+              match Mime.attachment ~name ~data () with
+              | Ok attachment -> loop (attachment :: acc) rest
+              | Error error -> Lwt.return (Error (`Message error))))
   in
   loop [] paths
 
-let now clock =
-  match Ptime.of_float_s (Eio.Time.now clock) with
+let now () =
+  match Ptime.of_float_s (Unix.gettimeofday ()) with
   | Some value -> value
   | None -> Fmt.failwith "clock returned an invalid POSIX timestamp"
 
-let prepare ~sw:_ ~clock ~cwd ~stdin ?date options =
+let prepare ~cwd ~stdin ?date options =
   if Option.is_some options.body && Option.is_some options.body_file then
-    Error (`Input "--body and --body-file cannot be used together")
+    Lwt.return (Error (`Input "--body and --body-file cannot be used together"))
   else
-    let* from = parse_from options.from in
-    let* subject = parse_subject options.subject in
-    let* to_ = parse_addresses options.to_ in
-    let* cc = parse_addresses options.cc in
-    let* bcc = parse_addresses options.bcc in
-    if to_ = [] && cc = [] && bcc = [] then Error (`Missing "to")
-    else
-      let* body = read_body ~cwd ~stdin options in
-      let body =
-        match options.signature with
-        | Some signature when String.trim signature <> "" -> body ^ "\n\n" ^ signature
-        | _ -> body
-      in
-      let* body_text, body_html = render_body ~unsafe_html:options.unsafe_html body in
-      let* attachments = read_attachments ~cwd options.attachments in
-      let date = Option.value date ~default:(now clock) in
-      match
-        Mime.message ~from ~subject ~date ~body_text ~body_html ~attachments ~to_ ~cc ~bcc
-          ()
-      with
-      | Error error -> Error (`Message error)
-      | Ok message -> Ok { message; wire = Mime.serialise message }
+    match parse_from options.from with
+    | Error error -> Lwt.return (Error error)
+    | Ok from -> (
+        match parse_subject options.subject with
+        | Error error -> Lwt.return (Error error)
+        | Ok subject -> (
+            match parse_addresses options.to_ with
+            | Error error -> Lwt.return (Error error)
+            | Ok to_ -> (
+                match parse_addresses options.cc with
+                | Error error -> Lwt.return (Error error)
+                | Ok cc -> (
+                    match parse_addresses options.bcc with
+                    | Error error -> Lwt.return (Error error)
+                    | Ok bcc ->
+                        if to_ = [] && cc = [] && bcc = [] then
+                          Lwt.return (Error (`Missing "to"))
+                        else
+                          Lwt.bind (read_body ~cwd ~stdin options) (function
+                            | Error error -> Lwt.return (Error error)
+                            | Ok body -> (
+                                let body =
+                                  match options.signature with
+                                  | Some signature when String.trim signature <> "" ->
+                                      body ^ "\n\n" ^ signature
+                                  | _ -> body
+                                in
+                                match
+                                  render_body ~unsafe_html:options.unsafe_html body
+                                with
+                                | Error error -> Lwt.return (Error error)
+                                | Ok (body_text, body_html) ->
+                                    Lwt.bind (read_attachments ~cwd options.attachments)
+                                      (function
+                                      | Error error -> Lwt.return (Error error)
+                                      | Ok attachments ->
+                                          let date =
+                                            Option.value date ~default:(now ())
+                                          in
+                                          (match
+                                             Mime.message ~from ~subject ~date ~body_text
+                                               ~body_html ~attachments ~to_ ~cc ~bcc ()
+                                           with
+                                            | Error error -> Error (`Message error)
+                                            | Ok message -> Ok message)
+                                          |> Lwt.return)))))))
 
 let env_raw env name =
   match env name with Some value when value <> "" -> Some value | _ -> None
@@ -222,9 +228,15 @@ let int_env env name ~default =
   match env_value env name with
   | None -> Ok default
   | Some value -> (
-      match int_of_string_opt value with
-      | Some port when port > 0 && port <= 65535 -> Ok port
-      | _ -> Error (`Input (Fmt.str "%s must be an integer between 1 and 65535" name)))
+      let decimal =
+        value <> ""
+        && String.for_all (fun character -> character >= '0' && character <= '9') value
+      in
+      match (decimal, int_of_string_opt value) with
+      | true, Some port when port > 0 && port <= 65535 -> Ok port
+      | _ ->
+          Error (`Input (Fmt.str "%s must be a decimal integer between 1 and 65535" name))
+      )
 
 let security_env env =
   match env_value env "POP_SMTP_ENCRYPTION" with

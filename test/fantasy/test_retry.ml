@@ -28,8 +28,8 @@ let test_backoff_bounds () =
 
 let cases =
   [
-    ("retryable status", `Quick, test_retryable_status);
-    ("retry-after seconds", `Quick, test_retry_after_seconds);
-    ("retry-after ms", `Quick, test_retry_after_ms);
-    ("backoff bounds", `Quick, test_backoff_bounds);
+    Alcotest_lwt.test_case_sync "retryable status" `Quick test_retryable_status;
+    Alcotest_lwt.test_case_sync "retry-after seconds" `Quick test_retry_after_seconds;
+    Alcotest_lwt.test_case_sync "retry-after ms" `Quick test_retry_after_ms;
+    Alcotest_lwt.test_case_sync "backoff bounds" `Quick test_backoff_bounds;
   ]

@@ -1,10 +1,13 @@
-type error = [ `Aborted | `Timeout ]
+open Lwt.Syntax
+
+type error = [ `Aborted | `Timeout | `Timeout_unsupported ]
 type model = { form : Form.t; timed_out : bool }
 type msg = Form_msg of Form.msg | Timed_out
 
 let pp_error ppf = function
   | `Aborted -> Fmt.string ppf "aborted"
   | `Timeout -> Fmt.string ppf "timed out"
+  | `Timeout_unsupported -> Fmt.string ppf "timeout unsupported in accessible mode"
 
 let positive_timeout = function
   | Some seconds when seconds > 0. && not (Float.is_nan seconds) -> Some seconds
@@ -15,6 +18,25 @@ let timeout_command timeout =
   | None -> Charamel_tea.Cmd.none
   | Some seconds -> Charamel_tea.Cmd.after seconds (fun () -> Timed_out)
 
+let finish form command =
+  let extra =
+    match Form.state form with
+    | `Completed _ ->
+        Option.map
+          (Charamel_tea.Cmd.map (fun value -> Form_msg value))
+          (Form.submit_cmd form)
+    | `Aborted ->
+        Option.map
+          (Charamel_tea.Cmd.map (fun value -> Form_msg value))
+          (Form.cancel_cmd form)
+    | `Normal -> None
+  in
+  match extra with
+  | Some extra ->
+      Charamel_tea.Cmd.batch
+        [ command; Charamel_tea.Cmd.seq [ extra; Charamel_tea.Cmd.quit ] ]
+  | None -> Charamel_tea.Cmd.batch [ command; Charamel_tea.Cmd.quit ]
+
 let app env ?timeout form =
   let init () =
     let form, command = Form.init env form in
@@ -22,8 +44,7 @@ let app env ?timeout form =
     let command =
       match Form.state form with
       | `Normal -> Charamel_tea.Cmd.batch [ command; timeout_command timeout ]
-      | `Completed _ | `Aborted ->
-          Charamel_tea.Cmd.batch [ command; Charamel_tea.Cmd.quit ]
+      | `Completed _ | `Aborted -> finish form command
     in
     ({ form; timed_out = false }, command)
   in
@@ -39,12 +60,17 @@ let app env ?timeout form =
         let command =
           match Form.state form with
           | `Normal -> command
-          | `Completed _ | `Aborted ->
-              Charamel_tea.Cmd.batch [ command; Charamel_tea.Cmd.quit ]
+          | `Completed _ | `Aborted -> finish form command
         in
         ({ model with form }, command)
   in
-  let view model = Charamel_tea.View.v ~alt_screen:false (Form.view model.form) in
+  let view model =
+    let frame =
+      Charamel_tea.View.v ?cursor:(Form.cursor model.form) ~alt_screen:false
+        ~report_focus:true (Form.view model.form)
+    in
+    match Form.view_hook model.form with Some hook -> hook frame | None -> frame
+  in
   let subscriptions model =
     if model.timed_out then Charamel_tea.Sub.none
     else
@@ -54,56 +80,57 @@ let app env ?timeout form =
   in
   { Charamel_tea.init; update; view; subscriptions }
 
-let is_tty base =
-  let stdin_fd = Eio_unix.Resource.fd base#stdin in
-  Eio_unix.Fd.use_exn "isatty" stdin_fd Unix.isatty
-
+let is_tty = Charamel_os.Tty.is_tty_stdin
 let term_is_dumb () = match Sys.getenv_opt "TERM" with Some "dumb" -> true | _ -> false
 
-let default_env base =
+let default_env ~clock =
   let editor = Form.Env.editor_of_string (Sys.getenv_opt "EDITOR") in
-  let temp_dir_name =
+  let temp_dir =
     Option.value (Sys.getenv_opt "TMPDIR") ~default:(Filename.get_temp_dir_name ())
   in
-  let temp_dir = Eio.Path.(base#fs / temp_dir_name) in
-  Form.Env.v ~fs:base#cwd ~temp_dir ~editor
+  Form.Env.v ~fs_root:(Sys.getcwd ()) ~temp_dir ~editor:(Some editor) ~clock
 
-let echo_off_for base ~is_tty =
-  if not is_tty then None
-  else
-    let fd = Eio_unix.Resource.fd base#stdin in
-    Some
-      (fun () ->
-        let original = Eio_unix.Pty.Tc.getattr fd in
-        let muted = { original with Unix.c_echo = false } in
-        Eio_unix.Pty.Tc.setattr fd Unix.TCSAFLUSH muted;
-        fun () -> Eio_unix.Pty.Tc.setattr fd Unix.TCSAFLUSH original)
+let echo_off ~is_tty = if is_tty then Some (Charamel_os.Tty.echo_off ()) else None
 
-let run_accessible ~clock ?timeout ~env ~is_tty ~base form =
-  let output text = Eio.Flow.copy_string text base#stdout in
+let run_accessible ?timeout ~env ~is_tty form =
+  let output text = Lwt_io.write Lwt_io.stdout text in
+  if Sys.win32 then
+    (* [Lwt] polls readiness with [select], which Windows only supports on
+       sockets — a blocking [stdin] reads straight through instead. *)
+    Lwt_unix.set_blocking Lwt_unix.stdin true;
   let reader =
-    Accessible.reader_of_flow ~stdin:base#stdin ~echo_off:(echo_off_for base ~is_tty)
+    Accessible.reader_of_channel ~stdin:Lwt_io.stdin ~echo_off:(echo_off ~is_tty)
   in
-  let action () = Ok (Form.run_accessible env ~out:output reader form) in
+  let action () =
+    let* results = Form.run_accessible env ~out:output reader form in
+    Lwt.return (Ok results)
+  in
   match positive_timeout timeout with
   | None -> action ()
-  | Some seconds -> Eio.Time.with_timeout clock seconds action
+  | Some seconds -> Lwt_unix.with_timeout seconds action
 
-let run ?timeout ?(accessible = false) ?env ~clock form base =
-  let tty = is_tty base in
-  let accessible = accessible || (not tty) || term_is_dumb () in
-  let env = match env with Some value -> value | None -> default_env base in
-  if accessible then run_accessible ~clock ?timeout ~env ~is_tty:tty ~base form
-  else
-    let terminal = Charamel_tea.Terminal.local ~output:`Stderr base in
-    let application = app env ?timeout form in
-    match Charamel_tea.run ~terminal ~clock application base with
-    | Error `Interrupted | Error `Killed -> Error `Aborted
-    | Error (`Exn (exception_, backtrace)) ->
-        Printexc.raise_with_backtrace exception_ backtrace
-    | Ok model -> (
-        if model.timed_out then Error `Timeout
-        else
-          match Form.state model.form with
-          | `Completed results -> Ok results
-          | `Aborted | `Normal -> Error `Aborted)
+let run ?timeout ?(accessible = false) ?env ~clock form =
+  let accessible = accessible || (not is_tty) || term_is_dumb () in
+  match positive_timeout timeout with
+  | Some _ when accessible -> Lwt.return_error `Timeout_unsupported
+  | _ ->
+      let env = match env with Some value -> value | None -> default_env ~clock in
+      if accessible then run_accessible ~env ~is_tty form
+      else
+        let terminal = Charamel_tea.Terminal.local ~output:`Stderr () in
+        let application = app env ?timeout form in
+        let* result = Charamel_tea.run ~terminal ~clock application in
+        Lwt.return
+          (match result with
+          | Error `Interrupted -> Error `Aborted
+          | Error (`Exn (exception_, backtrace)) ->
+              Printexc.raise_with_backtrace exception_ backtrace
+          | Ok model -> (
+              if model.timed_out then Error `Timeout
+              else
+                match Form.state model.form with
+                | `Completed results -> Ok results
+                | `Aborted | `Normal -> Error `Aborted))
+
+let run_field ?timeout ?accessible ?env ~clock field =
+  run ?timeout ?accessible ?env ~clock (Form.v ~show_help:false [ Group.v [ field ] ])

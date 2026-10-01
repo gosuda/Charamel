@@ -23,17 +23,6 @@ type overrides = {
 type error =
   [ `Io of string * string | `Json of string * string | `Env of string * string ]
 
-type partial = {
-  style : string option;
-  width : int option;
-  pager : bool option;
-  tui : bool option;
-  all : bool option;
-  line_numbers : bool option;
-  preserve_new_lines : bool option;
-  mouse : bool option;
-}
-
 let default : t =
   {
     style = "auto";
@@ -71,11 +60,11 @@ let apply (config : t) (overrides : overrides) : t =
     mouse = Option.value overrides.mouse ~default:config.mouse;
   }
 
-let partial_jsont =
+let overrides_jsont =
   let open Jsont in
   Object.map (fun style width pager all line_numbers preserve_new_lines mouse ->
       ({ style; width; pager; tui = None; all; line_numbers; preserve_new_lines; mouse }
-        : partial))
+        : overrides))
   |> Object.opt_mem "style" string |> Object.opt_mem "width" int
   |> Object.opt_mem "pager" bool |> Object.opt_mem "all" bool
   |> Object.opt_mem "line_numbers" bool
@@ -156,23 +145,10 @@ let config_path ~explicit ~cwd ~env =
       | Some path -> Some path
       | None -> xdg_config_path ~env)
 
-let parse_partial path text : (partial, error) result =
-  match Jsont_bytesrw.decode_string partial_jsont text with
+let parse_overrides path text : (overrides, error) result =
+  match Jsont_bytesrw.decode_string overrides_jsont text with
   | Ok value -> Ok value
   | Error message -> Error (`Json (path, message))
-
-let merge_partial (base : t) (partial : partial) : t =
-  {
-    style = Option.value partial.style ~default:base.style;
-    width = Option.value partial.width ~default:base.width;
-    pager = Option.value partial.pager ~default:base.pager;
-    tui = Option.value partial.tui ~default:base.tui;
-    all = Option.value partial.all ~default:base.all;
-    line_numbers = Option.value partial.line_numbers ~default:base.line_numbers;
-    preserve_new_lines =
-      Option.value partial.preserve_new_lines ~default:base.preserve_new_lines;
-    mouse = Option.value partial.mouse ~default:base.mouse;
-  }
 
 let env_string env name =
   match env name with Some value when String.trim value <> "" -> Some value | _ -> None
@@ -195,7 +171,7 @@ let env_int source env name =
 
 let merge_env source env (config : t) : (t, error) result =
   let open Result.Syntax in
-  let style = Option.value (env_string env "GLOW_STYLE") ~default:config.style in
+  let style = env_string env "GLOW_STYLE" in
   let* width = env_int source env "GLOW_WIDTH" in
   let* pager = env_bool source env "GLOW_PAGER" in
   let* tui = env_bool source env "GLOW_TUI" in
@@ -204,18 +180,8 @@ let merge_env source env (config : t) : (t, error) result =
   let* preserve_new_lines = env_bool source env "GLOW_PRESERVE_NEW_LINES" in
   let* mouse = env_bool source env "GLOW_MOUSE" in
   Ok
-    ({
-       style;
-       width = Option.value width ~default:config.width;
-       pager = Option.value pager ~default:config.pager;
-       tui = Option.value tui ~default:config.tui;
-       all = Option.value all ~default:config.all;
-       line_numbers = Option.value line_numbers ~default:config.line_numbers;
-       preserve_new_lines =
-         Option.value preserve_new_lines ~default:config.preserve_new_lines;
-       mouse = Option.value mouse ~default:config.mouse;
-     }
-      : t)
+    (apply config
+       { style; width; pager; tui; all; line_numbers; preserve_new_lines; mouse })
 
 let load ~explicit ~cwd ~env ~read =
   let open Result.Syntax in
@@ -238,8 +204,8 @@ let load ~explicit ~cwd ~env ~read =
         | None -> find rest
         | Some (Error message) -> Error (`Io (path, message))
         | Some (Ok text) ->
-            let* partial = parse_partial path text in
-            let merged = merge_partial default partial in
+            let* overrides = parse_overrides path text in
+            let merged = apply default overrides in
             let* merged = merge_env path env merged in
             Ok (merged, Some path))
   in

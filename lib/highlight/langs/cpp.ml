@@ -107,53 +107,10 @@ let spec =
         "make_pair";
       ]
     ~constants:[ "NULL"; "true"; "false"; "nullptr"; "EOF" ]
-    ~line_comment:[ "//" ]
-    ~block_comment:[ ("/*", "*/") ]
-    ~strings:[ ("\"", "\"", true); ("'", "'", true) ]
+    ~line_comment:C.spec.line_comment ~block_comment:C.spec.block_comment
+    ~strings:C.spec.strings
     ~raw_strings:[ ("R\"(", ")\"") ]
-    ~number:c_number ~ident:identifier
-    ~operators:
-      [
-        "->*";
-        ".*";
-        "::";
-        "->";
-        "++";
-        "--";
-        "<<=";
-        ">>=";
-        "<=";
-        ">=";
-        "==";
-        "!=";
-        "&&";
-        "||";
-        "+=";
-        "-=";
-        "*=";
-        "/=";
-        "%=";
-        "&=";
-        "^=";
-        "|=";
-        "<<";
-        ">>";
-        "+";
-        "-";
-        "*";
-        "/";
-        "%";
-        "<";
-        ">";
-        "=";
-        "!";
-        "&";
-        "|";
-        "^";
-        "~";
-        "?";
-        ":";
-        ".";
-      ]
-    ~attribute:(Some (seq [ str "[["; rep (not_chars "]\n"); str "]]" ]))
+    ~number:C.spec.number ~ident:C.spec.ident
+    ~operators:([ "->*"; ".*"; "::" ] @ C.spec.operators)
+    ~attribute:(Some (Re.seq [ Re.str "[["; Re.rep (not_chars "]\n"); Re.str "]]" ]))
     ()

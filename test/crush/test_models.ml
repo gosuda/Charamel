@@ -1,5 +1,6 @@
 module Models = Crush_core.Models
 module Config = Crush_core.Config
+open Lwt_direct
 
 let model =
   {
@@ -67,58 +68,31 @@ let priced_model =
     cost_cache_write = 2.5;
   }
 
-type fixture = { port : int; body : string }
-
-let start_fixture ~sw ~net body =
-  let socket = Eio.Net.listen net ~backlog:8 ~sw (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)) in
-  let port = match Eio.Net.listening_addr socket with `Tcp (_, port) -> port | _ -> 0 in
-  let fixture = { port; body } in
-  let handle flow _addr =
-    let reader = Eio.Buf_read.of_flow ~max_size:65_536 flow in
-    let rec read_headers () =
-      match Eio.Buf_read.line reader with "" -> () | _ -> read_headers ()
-    in
-    read_headers ();
-    Eio.Flow.copy_string
-      (Fmt.str
-         "HTTP/1.1 200 OK\r\n\
-          content-type: text/event-stream\r\n\
-          content-length: %d\r\n\
-          \r\n"
-         (String.length fixture.body))
-      flow;
-    Eio.Flow.copy_string fixture.body flow;
-    Eio.Flow.close flow
+let drain_stream stream =
+  let rec drain acc stream =
+    match await (Lwt_stream.get stream) with
+    | None -> List.rev acc
+    | Some (Charamel_fantasy.Stream_part.Finish _ as part) -> List.rev (part :: acc)
+    | Some part -> drain (part :: acc) stream
   in
-  Eio.Fiber.fork_daemon ~sw (fun () ->
-      while true do
-        Eio.Net.accept_fork ~sw socket ~on_error:raise handle
-      done;
-      `Stop_daemon);
-  fixture
-
-let rec drain acc stream =
-  match Eio.Stream.take stream with
-  | Charamel_fantasy.Stream_part.Finish _ as part -> List.rev (part :: acc)
-  | part -> drain (part :: acc) stream
+  drain [] stream
 
 let usage_from ~make_provider body =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let fixture = start_fixture ~sw ~net:env#net body in
-  let provider = make_provider (Fmt.str "http://127.0.0.1:%d" fixture.port) in
-  let stream =
-    Charamel_fantasy.Provider.stream provider ~sw ~clock:env#clock ~net:env#net
-      ~model:priced_model
-      [ Charamel_fantasy.Message.text Charamel_fantasy.Message.User "hi" ]
-  in
-  match
-    List.find_map
-      (function Charamel_fantasy.Stream_part.Usage u -> Some u | _ -> None)
-      (drain [] stream)
-  with
-  | Some usage -> usage
-  | None -> Alcotest.fail "fixture stream produced no usage part"
+  Test_tools_test_support.with_http_fixture ~content_type:"text/event-stream" body
+    (fun port ->
+      let provider = make_provider (Fmt.str "http://127.0.0.1:%d" port) in
+      let stream =
+        Charamel_fantasy.Provider.stream provider ~clock:Charamel_os.Time.lwt
+          ~model:priced_model
+          [ Charamel_fantasy.Message.text Charamel_fantasy.Message.User "hi" ]
+      in
+      match
+        List.find_map
+          (function Charamel_fantasy.Stream_part.Usage u -> Some u | _ -> None)
+          (drain_stream stream)
+      with
+      | Some usage -> usage
+      | None -> Alcotest.fail "fixture stream produced no usage part")
 
 (* Responses input_tokens (1000) already includes the 800 cached tokens;
    responses_codec's usage_of subtracts them once to report a disjoint input
@@ -185,13 +159,8 @@ let test_error_printer () =
     rendered
 
 let test_with_auth_preserves_selection () =
-  Eio_main.run @@ fun env ->
-  let root_name = Fmt.str "/tmp/crush-models-%d-%d" (Unix.getpid ()) (Random.bits ()) in
-  let root = Eio.Path.(env#fs / root_name) in
-  Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 root;
-  Fun.protect
-    ~finally:(fun () -> Eio.Path.rmtree ~missing_ok:true root)
-    (fun () ->
+  Test_tools_test_support.with_scratch (fun root ->
+      let clock = Charamel_os.Time.lwt in
       let selection : Config.selected_model =
         {
           provider = "test";
@@ -216,28 +185,33 @@ let test_with_auth_preserves_selection () =
           models = { Config.default.Config.models with large = Some selection };
         }
       in
-      let path = Eio.Path.(root / "auth.json") in
-      match Crush_core.Auth.create ~path ~clock:env#clock () with
+      let path = Filename.concat root "auth.json" in
+      match await (Crush_core.Auth.create ~path ~clock ()) with
       | Error error ->
           Alcotest.failf "auth resource creation failed: %a" Crush_core.Auth.pp_error
             error
       | Ok auth -> (
           match
-            Crush_core.Auth.set auth ~provider:"test" (Crush_core.Auth.Api_key "old")
+            await
+            @@ Crush_core.Auth.set auth ~provider:"test" (Crush_core.Auth.Api_key "old")
           with
           | Error error ->
               Alcotest.failf "auth setup failed: %a" Crush_core.Auth.pp_error error
           | Ok () -> (
               match
-                Models.resolve ~fs:env#fs config ~auth ~env:(fun _ -> None) ~role:`Large
+                await
+                @@ Models.resolve ~fs_root:root config ~auth
+                     ~env:(fun _ -> None)
+                     ~role:`Large
               with
               | Error error ->
                   Alcotest.failf "model resolution failed: %a" Models.pp_error error
               | Ok resolved -> (
                   match
-                    Models.with_auth ~fs:env#fs config
-                      ~env:(fun _ -> None)
-                      resolved (Charamel_fantasy.Provider.Api_key "new")
+                    await
+                    @@ Models.with_auth ~fs_root:root config
+                         ~env:(fun _ -> None)
+                         resolved (Charamel_fantasy.Provider.Api_key "new")
                   with
                   | Error error ->
                       Alcotest.failf "provider rebind failed: %a" Models.pp_error error
@@ -259,12 +233,12 @@ let test_with_auth_preserves_selection () =
 
 let cases =
   [
-    Alcotest.test_case "usage cost" `Quick test_cost;
-    Alcotest.test_case "responses decoder cost and total" `Quick
+    Test_tools_test_support.case "usage cost" `Quick test_cost;
+    Test_tools_test_support.case "responses decoder cost and total" `Quick
       test_cost_from_responses_decoder;
-    Alcotest.test_case "anthropic decoder cost and total" `Quick
+    Test_tools_test_support.case "anthropic decoder cost and total" `Quick
       test_cost_from_anthropic_decoder;
-    Alcotest.test_case "selection error" `Quick test_error_printer;
-    Alcotest.test_case "rebind preserves selection" `Quick
+    Test_tools_test_support.case "selection error" `Quick test_error_printer;
+    Test_tools_test_support.case "rebind preserves selection" `Quick
       test_with_auth_preserves_selection;
   ]

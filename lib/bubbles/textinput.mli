@@ -45,7 +45,9 @@ type keymap = {
   next_suggestion : Key_binding.t;
   prev_suggestion : Key_binding.t;
 }
-(** Key bindings for editing and completion. *)
+(** Key bindings for editing and completion. A word is a maximal run of non-whitespace
+    grapheme clusters that does not cross between the CJK scripts (Han, Hangul, Hiragana,
+    Katakana) and other text, so word motions and word deletions stop at that boundary. *)
 
 val default_keymap : keymap
 (** [default_keymap] contains the standard text-input bindings. *)
@@ -94,7 +96,8 @@ val v :
      ?show_suggestions ?suggestions ?keymap ?is_dark ?styles ?virtual_cursor ?value ()]
     constructs an unfocused input. Defaults are prompt ["> "], normal echo, ["*"] as the
     password character, no character limit, unlimited width, no validator or suggestions,
-    dark styles, and a virtual cursor. *)
+    dark styles, and a virtual cursor. [echo_character] is clamped to its first grapheme
+    cluster. *)
 
 val update : msg -> t -> t * msg Charamel_tea.Cmd.t
 (** [update message t] applies one editing transition. A blurred input ignores all
@@ -174,7 +177,8 @@ val set_echo : echo -> t -> t
 (** [set_echo echo t] changes the display mode. *)
 
 val set_echo_character : string -> t -> t
-(** [set_echo_character char t] changes the password mask. *)
+(** [set_echo_character char t] changes the password mask to the first grapheme cluster of
+    [char]. *)
 
 val char_limit : t -> int
 (** [char_limit t] is the maximum number of grapheme clusters, or [0]. *)
@@ -199,14 +203,15 @@ val set_styles : styles -> t -> t
 (** [set_styles styles t] replaces styles and updates cursor behavior. *)
 
 val set_virtual_cursor : bool -> t -> t
-(** [set_virtual_cursor enabled t] selects embedded or real-terminal cursor output. *)
+(** [set_virtual_cursor enabled t] selects whether the embedded cursor is drawn in
+    [view t]. *)
 
 val virtual_cursor : t -> bool
-(** [virtual_cursor t] reports whether the embedded cursor is enabled. *)
+(** [virtual_cursor t] reports whether the embedded cursor is drawn. *)
 
 val cursor : t -> Charamel_tea.Cursor.t option
-(** [cursor t] returns a real cursor request when the input is focused and virtual cursor
-    output is disabled. *)
+(** [cursor t] returns the real terminal cursor request whenever [t] is focused and [None]
+    otherwise. *)
 
 val show_suggestions : t -> bool
 (** [show_suggestions t] reports whether completions are rendered. *)

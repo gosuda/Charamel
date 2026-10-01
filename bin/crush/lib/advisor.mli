@@ -17,16 +17,16 @@ val create : Config.advisor -> t
 
 val review :
   t ->
-  sw:Eio.Switch.t ->
-  clock:_ Eio.Time.clock ->
-  net:Eio_unix.Net.t ->
+  sw:Lwt_switch.t ->
+  clock:Charamel_os.Time.clock ->
   Models.resolved ->
   context:string ->
   last_turn:Charamel_fantasy.Message.t list ->
-  (verdict option, [ `Provider of string ]) result
-(** [review t ~sw ~clock ~net model ~context ~last_turn] asks [model] to review
-    [last_turn] with [context]. An unparsable answer is ignored. Two consecutive identical
-    verdict fingerprints quarantine the advisor. *)
+  (verdict option, [ `Provider of string ]) result Lwt.t
+(** [review t ~sw ~clock model ~context ~last_turn] asks [model] to review [last_turn]
+    with [context]. An unparsable answer is ignored. Two consecutive identical verdict
+    fingerprints quarantine the advisor. Turning [sw] off ends the stream early and is
+    reported as a provider failure. *)
 
 val steering_message : verdict -> Charamel_fantasy.Message.t
 (** [steering_message verdict] is a user message carrying a blocker steering instruction

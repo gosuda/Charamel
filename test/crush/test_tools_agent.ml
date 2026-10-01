@@ -30,13 +30,4 @@ let schema_contract () =
   Alcotest.(check bool) "task array property" true (has_property "tasks" schema);
   Alcotest.(check bool) "bounded default" true (has_default "max_active" 8 schema)
 
-let metadata () =
-  Alcotest.(check string) "agent tool name" "agent" Tools_agent.agent.Crush_core.Tool.name;
-  Alcotest.(check bool)
-    "delegation is mutable" false Tools_agent.agent.Crush_core.Tool.read_only
-
-let cases =
-  [
-    Alcotest.test_case "agent schema" `Quick schema_contract;
-    Alcotest.test_case "agent metadata" `Quick metadata;
-  ]
+let cases = [ Test_tools_test_support.case "agent schema" `Quick schema_contract ]

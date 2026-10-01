@@ -21,7 +21,7 @@ val reporter :
   ?time_format:(Ptime.t -> string) ->
   ?report_timestamp:bool ->
   ?report_caller:bool ->
-  clock:_ Eio.Time.clock ->
+  clock:Charamel_os.Time.clock ->
   profile:Charamel_colorprofile.t ->
   Format.formatter ->
   Logs.reporter
@@ -43,10 +43,12 @@ val reporter :
     [time_format] renders a message's timestamp and defaults to a fixed
     ["%Y/%m/%d %H:%M:%S"]-shaped layout in UTC. [report_timestamp] and [report_caller]
     both default to [false]. When [report_timestamp] is [true], [clock] is read once per
-    message to produce its timestamp. When [report_caller] is [true], a message's
-    [?header] argument, if given, renders as its caller; {!Logs} never computes a caller
-    location itself, so a call site that wants one must pass its own, for example
-    [~header:(Fmt.str "%s:%d" __FILE__ __LINE__)].
+    message to produce its timestamp through {!Charamel_os.Time.wall}: the real clock
+    stamps calendar time, and a virtual clock stamps deterministic simulated calendar time
+    (a clock started at [0.] stamps [1970-01-01 00:00:00]). When [report_caller] is
+    [true], a message's [?header] argument, if given, renders as its caller; {!Logs} never
+    computes a caller location itself, so a call site that wants one must pass its own,
+    for example [~header:(Fmt.str "%s:%d" __FILE__ __LINE__)].
 
     A message's [?tags] become one structured field per tag, ordered by tag name (a
     {!Logs.Tag.set} does not itself have an order). In [Text] and [Logfmt] output, a

@@ -53,6 +53,20 @@ val set_style : Charamel_lipgloss.Style.t -> t -> t
 val set_text_style : Charamel_lipgloss.Style.t -> t -> t
 (** [set_text_style style t] sets the style used while the cursor is hidden. *)
 
+val sync_cursor :
+  color:Charamel_ansi.Color.t ->
+  blink:bool ->
+  blink_speed:float option ->
+  focused:bool ->
+  virtual_cursor:bool ->
+  text_style:Charamel_lipgloss.Style.t ->
+  t ->
+  t
+(** [sync_cursor ~color ~blink ~blink_speed ~focused ~virtual_cursor ~text_style t] is [t]
+    with its cursor mode, styles, focus, and visibility synchronized to the supplied
+    values. [blink_speed] updates the tick interval when it is [Some speed] and leaves the
+    interval unchanged when it is [None]. *)
+
 val blink_speed : t -> float
 (** [blink_speed t] is the tick interval in seconds. *)
 

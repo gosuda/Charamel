@@ -99,8 +99,7 @@ let spec =
     ~line_comment:[ "#" ]
     ~strings:[ ("\"", "\"", true); ("'", "'", false) ]
     ~raw_strings:[ ("`", "`") ]
-    ~number:
-      (alt [ seq [ str "0x"; rep1 (set "0123456789abcdefABCDEF") ]; integer_number ])
+    ~number:(Re.alt [ hex_literal (); integer_number ])
     ~ident:identifier
     ~operators:
       [
@@ -131,16 +130,17 @@ let spec =
       ]
     ~attribute:
       (Some
-         (alt
+         (Re.alt
             [
-              seq [ str "${"; rep (not_chars "}\n"); str "}" ];
-              seq
+              Re.seq [ Re.str "${"; Re.rep (not_chars "}\n"); Re.str "}" ];
+              Re.seq
                 [
-                  str "$";
-                  set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
-                  rep
-                    (set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_");
+                  Re.str "$";
+                  Re.set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+                  Re.rep
+                    (Re.set
+                       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_");
                 ];
-              seq [ str "$"; set "0123456789@*#?$!-" ];
+              Re.seq [ Re.str "$"; Re.set "0123456789@*#?$!-" ];
             ]))
     ()

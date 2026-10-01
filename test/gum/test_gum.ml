@@ -74,16 +74,16 @@ let test_style_defaults () =
 
 let cases =
   [
-    Alcotest.test_case "environment names" `Quick test_env_names;
-    Alcotest.test_case "padding shapes" `Quick test_padding_shapes;
-    Alcotest.test_case "malformed padding" `Quick test_padding_rejects_malformed;
-    Alcotest.test_case "color alignment border" `Quick test_color_align_border;
-    Alcotest.test_case "invalid color" `Quick test_invalid_color;
-    Alcotest.test_case "style defaults" `Quick test_style_defaults;
+    Alcotest_lwt.test_case_sync "environment names" `Quick test_env_names;
+    Alcotest_lwt.test_case_sync "padding shapes" `Quick test_padding_shapes;
+    Alcotest_lwt.test_case_sync "malformed padding" `Quick test_padding_rejects_malformed;
+    Alcotest_lwt.test_case_sync "color alignment border" `Quick test_color_align_border;
+    Alcotest_lwt.test_case_sync "invalid color" `Quick test_invalid_color;
+    Alcotest_lwt.test_case_sync "style defaults" `Quick test_style_defaults;
   ]
 
 let () =
-  Alcotest.run "gum"
+  Test_support.run_lwt "gum"
     [
       ("shared", cases);
       ("format", Test_format.cases);

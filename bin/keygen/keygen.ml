@@ -1,77 +1,68 @@
 module Key = Charamel_ssh_keygen
 open Result.Syntax
+open Lwt.Infix
 
 type error =
-  [ `No_home
-  | `Invalid_path of string
-  | `Already_exists of string
-  | `Target_is_directory of string
-  | `Io of string ]
+  [ `No_home | `Invalid_path of string | `Already_exists of string | `Io of string ]
 
 let pp_error ppf = function
   | `No_home -> Format.pp_print_string ppf "keygen: HOME is not set to an absolute path"
   | `Invalid_path path -> Fmt.pf ppf "keygen: invalid path %S" path
   | `Already_exists path -> Fmt.pf ppf "keygen: %s already exists" path
-  | `Target_is_directory path -> Fmt.pf ppf "keygen: %s is a directory" path
   | `Io message -> Fmt.pf ppf "keygen: %s" message
 
-let home_dir () =
-  match Sys.getenv_opt "HOME" with
-  | Some home when home <> "" && not (Filename.is_relative home) -> Ok home
-  | _ -> Error `No_home
-
+(* A leading [~] names the user's home and a bare relative name is the current
+   directory's: the two spellings a shell hands to [-f]. An empty name is refused,
+   because it would otherwise resolve to the working directory itself. *)
 let resolve_path path =
-  let length = String.length path in
   if String.equal path "" then Error (`Invalid_path path)
-  else if String.equal path "~" then home_dir ()
-  else if length >= 2 && Char.equal path.[0] '~' && Char.equal path.[1] '/' then
-    let* home = home_dir () in
-    Ok (Filename.concat home (String.sub path 2 (length - 2)))
-  else if Filename.is_relative path then Ok (Filename.concat (Sys.getcwd ()) path)
-  else Ok path
+  else
+    Result.map
+      (fun expanded ->
+        if Filename.is_relative expanded then Filename.concat (Sys.getcwd ()) expanded
+        else expanded)
+      (Charamel_os.Dirs.expand_tilde path)
 
 let default_path algorithm =
-  let* home = home_dir () in
+  let* home = Charamel_os.Dirs.home () in
   Ok
     (Filename.concat home (Filename.concat ".ssh" ("id_" ^ Key.algorithm_name algorithm)))
 
-let io_result fn =
-  try Ok (fn ())
-  with Eio.Io (Eio.Fs.E _, _) as exn ->
-    Eio.Fiber.check ();
-    Error (`Io (Fmt.str "%a" Eio.Exn.pp exn))
+let mkdir_exists perm path =
+  Lwt.catch
+    (fun () -> Lwt_unix.mkdir path perm >|= fun () -> Ok ())
+    (function
+      | Unix.Unix_error (Unix.EEXIST, _, _) ->
+          Lwt.catch
+            (fun () ->
+              Lwt_unix.stat path >|= fun stats ->
+              if stats.Unix.st_kind = Unix.S_DIR then Ok () else Error Unix.ENOTDIR)
+            (fun _ -> Lwt.return (Error Unix.ENOTDIR))
+      | Unix.Unix_error (code, _, _) -> Lwt.return (Error code)
+      | Lwt.Canceled as exn -> Lwt.fail exn
+      | exn -> Lwt.fail exn)
 
-let path_of fs path = Eio.Path.(Eio.Path.of_dir fs / path)
+let ensure_dir ~perm path =
+  let rec up path =
+    if path = Filename.dir_sep || path = "." then Lwt.return (Ok ())
+    else
+      mkdir_exists perm path >>= function
+      | Ok () -> Lwt.return (Ok ())
+      | Error Unix.ENOENT when not (String.equal (Filename.dirname path) path) -> (
+          up (Filename.dirname path) >>= function
+          | Ok () -> mkdir_exists perm path
+          | Error _ as e -> Lwt.return e)
+      | Error code -> Lwt.return (Error code)
+  in
+  up path
 
-type target_state = Missing | Existing | Directory
-
-let target_state path =
-  match io_result (fun () -> Eio.Path.kind ~follow:false path) with
-  | Error error -> Error error
-  | Ok `Not_found -> Ok Missing
-  | Ok `Directory -> Ok Directory
-  | Ok _ -> Ok Existing
-
-let check_target ~force ~name path =
-  let* state = target_state path in
-  match state with
-  | Missing -> Ok ()
-  | Existing -> if force then Ok () else Error (`Already_exists name)
-  | Directory ->
-      if force then Error (`Target_is_directory name) else Error (`Already_exists name)
-
-let check_targets ~fs ~path ~force =
-  let private_path = path_of fs path in
-  let public_name = path ^ ".pub" in
-  let public_path = path_of fs public_name in
-  let* () = check_target ~force ~name:path private_path in
-  check_target ~force ~name:public_name public_path
-
-let ensure_parent ~fs path =
-  match Eio.Path.split (path_of fs path) with
-  | None -> Ok ()
-  | Some (parent, _) ->
-      io_result (fun () -> Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 parent)
+let ensure_parent path =
+  match Filename.dirname path with
+  | parent when String.equal parent path -> Lwt.return (Ok ())
+  | parent -> (
+      ensure_dir ~perm:0o700 parent >|= function
+      | Ok () -> Ok ()
+      | Error code -> Error (`Io (Unix.error_message code)))
 
 let generated_error = function
   | `Already_exists path -> Error (`Already_exists path)
@@ -80,65 +71,15 @@ let generated_error = function
   | `Unsupported_type -> Error (`Io "generated key type is unsupported")
   | `Encrypted_key -> Error (`Io "generated key is encrypted")
 
-let write_nonforce ~fs ~path ~comment key =
-  match Key.write ~fs ~path ~comment key with
+let write_key ~fs_root ~path ~comment ~force key =
+  Key.write ~fs_root ~path ~comment ~overwrite:force key >|= function
   | Ok () -> Ok (Key.fingerprint_sha256 key)
   | Error error -> generated_error error
 
-let is_ascii_alphanumeric = function
-  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' -> true
-  | _ -> false
-
-let temporary_suffix fingerprint =
-  String.map
-    (fun character -> if is_ascii_alphanumeric character then character else '_')
-    fingerprint
-
-let force_write ~fs ~path ~comment key =
-  let private_name = path in
-  let public_name = path ^ ".pub" in
-  let private_path = path_of fs private_name in
-  let public_path = path_of fs public_name in
-  let fingerprint = Key.fingerprint_sha256 key in
-  let suffix = temporary_suffix fingerprint in
-  let private_tmp = path_of fs (private_name ^ ".charamel-keygen-" ^ suffix) in
-  let public_tmp = path_of fs (public_name ^ ".charamel-keygen-" ^ suffix) in
-  let private_body = Key.to_openssh_private ~comment key in
-  let public_body = Key.authorized_key ~comment key in
-  let created = ref [] in
-  let cleanup () =
-    List.iter
-      (fun path ->
-        try Eio.Path.unlink ~missing_ok:true path with Eio.Io (Eio.Fs.E _, _) -> ())
-      !created
-  in
-  let save path perm body =
-    Eio.Path.with_open_out ~create:(`Exclusive perm) path (fun flow ->
-        created := path :: !created;
-        Eio.Flow.copy_string body flow);
-    Eio.Path.chmod ~follow:false ~perm path
-  in
-  let result =
-    Eio.Cancel.protect (fun () ->
-        try
-          save private_tmp 0o600 private_body;
-          save public_tmp 0o644 public_body;
-          Eio.Path.rename private_tmp private_path;
-          Eio.Path.rename public_tmp public_path;
-          created := [];
-          Ok ()
-        with Eio.Io (Eio.Fs.E _, _) as exn -> Error (`Io (Fmt.str "%a" Eio.Exn.pp exn)))
-  in
-  match result with
-  | Ok () -> Ok fingerprint
-  | Error error ->
-      Eio.Cancel.protect (fun () -> cleanup ());
-      Error error
-
-let generate ~fs ~path ~algorithm ?(comment = "") ~force () =
-  let* path = resolve_path path in
-  let* () = check_targets ~fs ~path ~force in
-  let* () = ensure_parent ~fs path in
-  let key = Key.generate algorithm in
-  if force then force_write ~fs ~path ~comment key
-  else write_nonforce ~fs ~path ~comment key
+let generate ~fs_root ~path ~algorithm ?(comment = "") ~force () =
+  match resolve_path path with
+  | Error _ as e -> Lwt.return e
+  | Ok path -> (
+      ensure_parent path >>= function
+      | Error _ as e -> Lwt.return e
+      | Ok () -> write_key ~fs_root ~path ~comment ~force (Key.generate algorithm))

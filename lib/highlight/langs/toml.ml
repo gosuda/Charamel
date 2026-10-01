@@ -10,42 +10,42 @@ let spec =
         ("'", "'", false);
       ]
     ~number:
-      (alt
+      (Re.alt
          [
-           seq
+           Re.seq
              [
-               Re.repn (set "0123456789") 4 (Some 4);
-               str "-";
-               Re.repn (set "0123456789") 2 (Some 2);
-               str "-";
-               Re.repn (set "0123456789") 2 (Some 2);
+               Re.repn (Re.set "0123456789") 4 (Some 4);
+               Re.str "-";
+               Re.repn (Re.set "0123456789") 2 (Some 2);
+               Re.str "-";
+               Re.repn (Re.set "0123456789") 2 (Some 2);
              ];
            float_number;
-           seq [ str "0x"; rep1 (set "0123456789abcdefABCDEF") ];
-           seq [ str "0o"; rep1 (set "01234567") ];
-           seq [ str "0b"; rep1 (set "01") ];
+           hex_literal ();
+           Re.seq [ Re.str "0o"; Re.rep1 (Re.set "01234567") ];
+           Re.seq [ Re.str "0b"; Re.rep1 (Re.set "01") ];
            integer_number;
          ])
     ~ident:identifier_dash ~operators:[ "="; "." ]
     ~attribute:
       (Some
-         (alt
+         (Re.alt
             [
-              seq
+              Re.seq
                 [
-                  str "[[";
-                  rep
-                    (set
+                  Re.str "[[";
+                  Re.rep
+                    (Re.set
                        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.- ");
-                  str "]]";
+                  Re.str "]]";
                 ];
-              seq
+              Re.seq
                 [
-                  str "[";
-                  rep
-                    (set
+                  Re.str "[";
+                  Re.rep
+                    (Re.set
                        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.- ");
-                  str "]";
+                  Re.str "]";
                 ];
             ]))
     ()

@@ -4,5 +4,5 @@
     roundtrip on a fixture body, and the conditional response boundary of [Catalog.fetch]
     against the shared HTTP fixture server. *)
 
-val cases : unit Alcotest.test_case list
+val cases : unit Alcotest_lwt.test_case list
 (** [cases] are the test cases for the catalog. *)

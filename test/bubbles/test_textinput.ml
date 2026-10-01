@@ -52,9 +52,64 @@ let scrolling_and_paste () =
   Alcotest.(check bool) "left edge remains visible" true (String.contains view 'a');
   let input = Input.paste "x\ny" input in
   Alcotest.(check string)
-    "single line paste sanitizes newline" "x yabcdef" (Input.value input);
+    "single line paste sanitizes newline" "x yabcdef" (Input.value input)
+
+let real_cursor_while_focused () =
+  let input = Input.v () |> focused in
+  Alcotest.(check bool)
+    "cursor with the embedded cursor drawn" true
+    (Option.is_some (Input.cursor input));
   let input = Input.set_virtual_cursor false input in
-  Alcotest.(check bool) "real cursor request" true (Option.is_some (Input.cursor input))
+  Alcotest.(check bool)
+    "cursor with the embedded cursor off" true
+    (Option.is_some (Input.cursor input));
+  Alcotest.(check bool)
+    "blurred reports no cursor" true
+    (Option.is_none (Input.cursor (Input.blur input)))
+
+let folded_suggestion_prefix () =
+  let input = Input.v ~show_suggestions:true ~suggestions:[ "ab"; "abc" ] ~value:"İ" () in
+  Alcotest.(check (list string))
+    "a fold expansion does not slice past the candidate" []
+    (Input.matched_suggestions input);
+  let input =
+    Input.v ~show_suggestions:true ~suggestions:[ "İ"; "xy" ] ~value:"i\xCC\x87" ()
+  in
+  Alcotest.(check (list string))
+    "a fold shrink still matches the prefix" [ "İ" ]
+    (Input.matched_suggestions input);
+  let input = Input.set_value "ǅ" input in
+  Alcotest.(check (list string))
+    "the update path compares folded lengths too" []
+    (Input.matched_suggestions input)
+
+let echo_mask_covers_each_cell () =
+  let input =
+    Input.v ~prompt:"" ~echo:Input.Password ~echo_character:"漢字" ~width:8
+      ~virtual_cursor:false ()
+    |> focused |> Input.set_value "abcd"
+  in
+  let rendered = Charamel_ansi.Text.strip (Input.view input) in
+  Alcotest.(check string) "one mask cluster per cell" "漢漢漢漢" rendered;
+  Alcotest.(check int)
+    "the window holds the displayed width" 8
+    (Charamel_ansi.Text.width rendered);
+  let input = Input.set_echo_character "ab" input in
+  Alcotest.(check string)
+    "the setter clamps to one cluster" "aaaa"
+    (String.sub (Charamel_ansi.Text.strip (Input.view input)) 0 4)
+
+let cjk_word_motion () =
+  let input = Input.v () |> focused |> Input.set_value "日本語abc" in
+  let input = update Input.Word_backward input in
+  Alcotest.(check int) "alt+left stops at the script boundary" 3 (Input.position input);
+  let input = update Input.Delete_word_backward input in
+  Alcotest.(check string) "alt+backspace stops at the boundary" "abc" (Input.value input);
+  let input = Input.v () |> focused |> Input.set_value "日本語 abc" |> Input.cursor_start in
+  let input = update Input.Word_forward input in
+  Alcotest.(check int) "alt+right stops after the CJK run" 3 (Input.position input);
+  let input = update Input.Word_forward input in
+  Alcotest.(check int) "the next stop is the end" 7 (Input.position input)
 
 let keymap () =
   let input = Input.v () |> focused in
@@ -65,9 +120,16 @@ let keymap () =
 
 let cases =
   [
-    Alcotest.test_case "editing unicode and limits" `Quick editing_unicode_and_limits;
-    Alcotest.test_case "validation" `Quick validation;
-    Alcotest.test_case "suggestions" `Quick suggestions;
-    Alcotest.test_case "scrolling and paste" `Quick scrolling_and_paste;
-    Alcotest.test_case "keymap" `Quick keymap;
+    Alcotest_lwt.test_case_sync "editing unicode and limits" `Quick
+      editing_unicode_and_limits;
+    Alcotest_lwt.test_case_sync "validation" `Quick validation;
+    Alcotest_lwt.test_case_sync "suggestions" `Quick suggestions;
+    Alcotest_lwt.test_case_sync "scrolling and paste" `Quick scrolling_and_paste;
+    Alcotest_lwt.test_case_sync "real cursor while focused" `Quick
+      real_cursor_while_focused;
+    Alcotest_lwt.test_case_sync "folded suggestion prefix" `Quick folded_suggestion_prefix;
+    Alcotest_lwt.test_case_sync "echo mask covers each cell" `Quick
+      echo_mask_covers_each_cell;
+    Alcotest_lwt.test_case_sync "CJK word motion" `Quick cjk_word_motion;
+    Alcotest_lwt.test_case_sync "keymap" `Quick keymap;
   ]

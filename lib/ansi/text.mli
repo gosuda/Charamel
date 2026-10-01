@@ -49,7 +49,8 @@ val cut : left:int -> right:int -> string -> string
 val hardwrap : ?preserve_space:bool -> width:int -> string -> string
 (** [hardwrap ~width s] breaks [s] into lines of at most [width] cells, breaking at
     whatever cell the limit falls on. A cluster that does not fit on the current line
-    starts a new line. Spaces at the start of a wrapped line are dropped unless
+    starts a new line, and a cluster wider than [width] occupies its own line without
+    leaving an empty line behind. Spaces at the start of a wrapped line are dropped unless
     [preserve_space] holds. [width] below [1] is the identity. Defaults: [preserve_space]
     is [false]. *)
 

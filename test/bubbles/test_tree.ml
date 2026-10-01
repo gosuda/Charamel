@@ -54,12 +54,41 @@ let keymap_and_help () =
   | _ -> Alcotest.fail "down key not bound");
   let extra = Key_binding.v ~help:("v", "select") [ "v" ] in
   let model = Tree.set_additional_short_help_keys [ extra ] model in
-  let text = plain model in
-  Alcotest.(check bool) "short help includes additional key" true (String.length text > 0);
+  Alcotest.(check (list string))
+    "short help carries the additional binding"
+    [
+      "→ ▼ root                                                    ";
+      "  └──child                                                  ";
+      "                                                            ";
+      "                                                            ";
+      "                                                            ";
+      "                                                            ";
+      "                                                            ";
+      "                                                            ";
+      "                                                            ";
+      "↓/j down • ↑/k up • ⏎ toggle • v select • ? more            ";
+    ]
+    (String.split_on_char '\n' (plain model));
   let model, _ = Tree.update Tree.Toggle_full_help model in
-  Alcotest.(check bool)
-    "full help toggles" true
-    (String.length (plain model) >= String.length text)
+  Alcotest.(check (list string))
+    "full help replaces the short line"
+    [
+      "→ ▼ root                                                    ";
+      "  └──child                                                  ";
+      "                                                            ";
+      "                                                            ";
+      "                                                            ";
+      "                                                            ";
+      "                                                            ";
+      "                                                            ";
+      "                                                            ";
+      "↓/j down      f/pgdn page down      g top       ? close help";
+      "↑/k up        b/pgup page up        G bottom                ";
+      "→/l open      d      ½ page down                            ";
+      "←/h close     u      ½ page up                              ";
+      "⏎   toggle                                                  ";
+    ]
+    (String.split_on_char '\n' (plain model))
 
 let multiline_cursor_and_viewport () =
   let root =
@@ -75,8 +104,8 @@ let multiline_cursor_and_viewport () =
 
 let cases =
   [
-    Alcotest.test_case "node shape and size" `Quick node_shape_and_size;
-    Alcotest.test_case "navigation boundaries" `Quick navigation_boundaries;
-    Alcotest.test_case "keymap and help" `Quick keymap_and_help;
-    Alcotest.test_case "multiline viewport" `Quick multiline_cursor_and_viewport;
+    Alcotest_lwt.test_case_sync "node shape and size" `Quick node_shape_and_size;
+    Alcotest_lwt.test_case_sync "navigation boundaries" `Quick navigation_boundaries;
+    Alcotest_lwt.test_case_sync "keymap and help" `Quick keymap_and_help;
+    Alcotest_lwt.test_case_sync "multiline viewport" `Quick multiline_cursor_and_viewport;
   ]

@@ -50,4 +50,14 @@ val of_call :
     builds a request.
 
     [system] defaults to [[]], [tools] to [[]], [max_tokens] to the model's
-    [default_max_tokens], [temperature] to [None], and [reasoning] to [Off]. *)
+    [default_max_tokens] when absent or non-positive, [temperature] to [None], and
+    [reasoning] to [Off]. *)
+
+val system_blocks : t -> string list
+(** [system_blocks r] is the request's system text in wire order: the [system] blocks
+    first, then the text parts of every [Message.System] message. *)
+
+val effective_max_tokens : t -> int
+(** [effective_max_tokens r] is [r.max_tokens] when it is positive and the model's
+    [default_max_tokens] otherwise. [of_call] already normalizes a missing or non-positive
+    cap to the default; the fallback covers requests built as records. *)
