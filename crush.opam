@@ -18,8 +18,10 @@ depends: [
   "logs"
   "digestif"
   "base64"
-  "cohttp"
-  "http"
+  "cohttp" {>= "6.0.0"}
+  "http" {>= "6.0.0"}
+  "cohttp-lwt" {>= "6.0.0"}
+  "cohttp-lwt-unix" {>= "6.0.0"}
   "uri"
   "mtime"
   "mirage-crypto-rng"
@@ -29,6 +31,7 @@ depends: [
   "cmdliner"
   "optint"
   "ipaddr"
+  "lwt_direct"
   "alcotest" {with-test}
   "alcotest-lwt" {>= "1.9.1" & with-test}
   "qcheck-core" {with-test}

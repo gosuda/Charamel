@@ -31,20 +31,23 @@
   uri
   dune-build-info
   bytesrw
-  cohttp
-  http
+  (cohttp (>= 6.0.0))
+  (http (>= 6.0.0))
   tls
   domain-name
   cstruct
   optint
   (lwt (>= 6.1.2))
   lwt_direct
-  cohttp-lwt
-  cohttp-lwt-unix
+  (cohttp-lwt (>= 6.0.0))
+  (cohttp-lwt-unix (>= 6.0.0))
+  conduit-lwt-unix
   (tls-lwt (>= 2.1.3))
   (awa-mirage (>= 0.6.1))
+  mirage-flow
   (ctypes (>= 0.24.0))
   (ctypes-foreign (>= 0.24.0))
+  integers
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)
@@ -64,8 +67,10 @@
   (awa (>= 0.6.1))
   (mirage-crypto (>= 2.4.1))
   mirage-crypto-ec
+  mirage-crypto-pk
   mirage-crypto-rng
   x509
+  zarith
   base64
   digestif
   cstruct
@@ -106,6 +111,12 @@
   uri
   domain-name
   re
+  lwt
+  cohttp-lwt
+  cohttp-lwt-unix
+  conduit-lwt-unix
+  tls
+  tls-lwt
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
@@ -160,6 +171,8 @@
   uri
   cmdliner
   mirage-crypto-rng
+  lwt
+  tls-lwt
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
@@ -191,6 +204,7 @@
   cmdliner
   mirage-crypto-rng
   fmt
+  lwt
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
@@ -206,6 +220,7 @@
   fmt
   cmdliner
   mirage-crypto-rng
+  lwt
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
@@ -220,6 +235,7 @@
   fmt
   cmdliner
   mirage-crypto-rng
+  lwt
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
@@ -239,8 +255,10 @@
   logs
   digestif
   base64
-  cohttp
-  http
+  (cohttp (>= 6.0.0))
+  (http (>= 6.0.0))
+  (cohttp-lwt (>= 6.0.0))
+  (cohttp-lwt-unix (>= 6.0.0))
   uri
   mtime
   mirage-crypto-rng
@@ -250,6 +268,7 @@
   cmdliner
   optint
   ipaddr
+  lwt_direct
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
