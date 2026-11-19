@@ -44,7 +44,7 @@
   (cohttp-lwt-unix (>= 6.0.0))
   conduit-lwt-unix
   (tls-lwt (>= 2.1.3))
-  (awa-mirage (>= 0.6.1))
+  (awa-mirage (>= 0.7.0))
   awa
   mirage-flow
   (ctypes (>= 0.24.0))
@@ -66,7 +66,7 @@
   logs
   (jsont (>= 0.4))
   charamel
-  (awa (>= 0.6.1))
+  (awa (>= 0.7.0))
   (mirage-crypto (>= 2.4.1))
   mirage-crypto-ec
   mirage-crypto-pk
