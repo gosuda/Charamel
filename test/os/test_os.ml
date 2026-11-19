@@ -409,6 +409,7 @@ let posix_console_queues_nothing () =
 (* {1 Dirs} *)
 
 let home_and_tilde () =
+  posix_only ();
   with_environment
     [ ("HOME", "/tmp/fake-home"); ("USERPROFILE", "") ]
     (fun () ->
@@ -428,7 +429,6 @@ let home_and_tilde () =
       Alcotest.(check string)
         "a user-home form is not guessed at" "Ok ~rcfile"
         (text_result (Charamel_os.Dirs.expand_tilde "~rcfile")));
-  posix_only ();
   without_environment [ "HOME" ] (fun () ->
       Alcotest.(check string)
         "no HOME is a typed failure, not an exception" "Error No_home"
