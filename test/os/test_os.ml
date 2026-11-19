@@ -487,6 +487,28 @@ let temp_directory_follows_the_environment () =
         "POSIX falls back to /tmp" "/tmp"
         (Charamel_os.Dirs.temp_dir ()))
 
+let spawn_strips_trailing_separators () =
+  let cases =
+    [
+      ("C:\\Temp\\", "C:\\Temp");
+      ("C:/Temp/", "C:/Temp");
+      ("/tmp/", "/tmp");
+      ("C:\\Temp", "C:\\Temp");
+      ("/tmp", "/tmp");
+      ("C:\\", "C:\\");
+      ("C:/", "C:/");
+      ("/", "/");
+      ("", "");
+    ]
+  in
+  List.iter
+    (fun (cwd, expected) ->
+      Alcotest.(check string)
+        ("a trailing separator is stripped from " ^ cwd)
+        expected
+        (Charamel_os.Dirs.strip_trailing_separators cwd))
+    cases
+
 let app_dir_without_any_base () =
   posix_only ();
   without_environment [ "HOME"; "XDG_CONFIG_HOME" ] (fun () ->
@@ -1078,6 +1100,8 @@ let suites =
         Alcotest.test_case "XDG precedence" `Quick xdg_precedence;
         Alcotest.test_case "Windows layout" `Quick windows_layout;
         Alcotest.test_case "temp directory" `Quick temp_directory_follows_the_environment;
+        Alcotest.test_case "spawn strips trailing separators" `Quick
+          spawn_strips_trailing_separators;
         Alcotest.test_case "no base directory" `Quick app_dir_without_any_base;
       ] );
     ( "exe",
