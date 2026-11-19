@@ -34,6 +34,7 @@
   (cohttp (>= 6.0.0))
   (http (>= 6.0.0))
   tls
+  x509
   domain-name
   cstruct
   optint
@@ -44,6 +45,7 @@
   conduit-lwt-unix
   (tls-lwt (>= 2.1.3))
   (awa-mirage (>= 0.6.1))
+  awa
   mirage-flow
   (ctypes (>= 0.24.0))
   (ctypes-foreign (>= 0.24.0))
@@ -75,6 +77,7 @@
   digestif
   cstruct
   mtime
+  lwt
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
@@ -92,6 +95,7 @@
   re
   ptime
   cstruct
+  lwt
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
@@ -133,6 +137,7 @@
   cstruct
   base64
   fmt
+  lwt
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
@@ -146,6 +151,7 @@
   charamel
   fmt
   cmdliner
+  lwt
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
@@ -188,6 +194,7 @@
   jsont
   base64
   cmdliner
+  lwt
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
@@ -269,6 +276,8 @@
   optint
   ipaddr
   lwt_direct
+  lwt
+  tls-lwt
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
