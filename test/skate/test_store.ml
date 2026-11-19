@@ -301,7 +301,7 @@ let show_binary_flag =
           let* status, _, error =
             Test_support.run_cli ~exe ~env ~stdin:raw [ "set"; "payload"; "-" ]
           in
-          Alcotest.(check int) "set status" 0 status;
+          Alcotest.(check int) ("set status; stderr was: " ^ error) 0 status;
           Alcotest.(check string) "set stderr" "" error;
           let* status, hidden, error =
             Test_support.run_cli ~exe ~env [ "get"; "payload" ]
@@ -325,7 +325,7 @@ let cli_roundtrip =
           let* status, output, error =
             Test_support.run_cli ~exe ~env [ "set"; "alpha"; "plain" ]
           in
-          Alcotest.(check int) "set status" 0 status;
+          Alcotest.(check int) ("set status; stderr was: " ^ error) 0 status;
           Alcotest.(check string) "set output" "" output;
           Alcotest.(check string) "set error" "" error;
           let* status, output, error =
@@ -424,7 +424,7 @@ let cli_absent_paths =
           let* status, output, error =
             Test_support.run_cli ~exe ~env [ "get"; "missing" ]
           in
-          Alcotest.(check int) "get status" 1 status;
+          Alcotest.(check int) ("get status; stderr was: " ^ error) 1 status;
           Alcotest.(check string) "get output" "" output;
           Alcotest.(check bool)
             "get error" true
@@ -483,7 +483,7 @@ let cli_error_details =
           let* status, _, error =
             Test_support.run_cli ~exe ~env [ "get"; "missing@notes" ]
           in
-          Alcotest.(check int) "absent database status" 1 status;
+          Alcotest.(check int) ("absent database status; stderr was: " ^ error) 1 status;
           Alcotest.(check bool)
             "absent database names it" true
             (Test_support.contains ~needle:"no such database: notes" ~haystack:error);
