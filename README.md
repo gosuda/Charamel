@@ -7,7 +7,7 @@ The Charm terminal ecosystem, re-derived in pure OCaml: sixteen libraries and te
 command-line tools for building terminal software, for OCaml developers writing TUIs
 without a Go runtime.
 
-`sequin` reads terminal bytes and explains them:
+`sequin` (installed below) reads terminal bytes and explains them:
 
 ```sh
 printf '\033[3A' | sequin
@@ -34,7 +34,7 @@ printf '\033[3A' | sequin
 From a checkout of this repository, on any opam switch with OCaml 5.4 or newer:
 
 ```sh
-opam install . --deps-only --with-test
+opam install . --deps-only --with-test --with-doc
 dune build --profile release
 printf '\033[3A' | dune exec sequin
 # CSI 3 A  Cursor up 3
@@ -46,7 +46,7 @@ The packages are not yet on the main opam repository, so they install from sourc
 Pinning the repository URL registers every `*.opam` package in it:
 
 ```sh
-opam pin add https://github.com/gosuda/Charamel.git
+opam pin add --no-action https://github.com/gosuda/Charamel.git
 opam install sequin        # or any package name: charamel, glow, gum, ...
 ```
 
@@ -152,7 +152,7 @@ dune runtest --profile release
 - Hook: `.githooks/pre-commit` runs those gates; enable it with
   `git config core.hooksPath .githooks`. It resolves `dune` through `opam exec`, which
   reads `OPAMSWITCH` rather than `PATH`, so commit from a shell bootstrapped with
-  `eval $(opam env --set-switch)`.
+  `eval $(opam env --switch=rd --set-switch)`.
 - Formatter: `.ocamlformat` pins `ocamlformat` to 0.29.0 with `margin = 90`;
   `dune build @fmt` fails on any other version.
 - Warnings: every stanza compiles with `-strict-sequence -strict-formats -short-paths
