@@ -1,72 +1,65 @@
 # Charamel
 
-**The Charm terminal ecosystem, re-derived in OCaml.** Sixteen libraries and ten command-line
-tools for building terminal software: typed messages instead of Go interfaces, `result` instead of
-`error`, and Lwt fibers instead of goroutines.
+[![build](https://github.com/gosuda/Charamel/actions/workflows/build.yml/badge.svg)](https://github.com/gosuda/Charamel/actions/workflows/build.yml)
+[![license](https://img.shields.io/badge/License-Apache_2.0-blue)](LICENSE)
 
-Charamel is a re-derivation, not a binding. There is no Go runtime, no CGo, and no C in the
-repository. Nothing is kept for Go compatibility either: flags, environment variables, and file
-formats are re-derived for OCaml, so a Charamel tool is not a drop-in replacement for its upstream
-namesake.
+The Charm terminal ecosystem, re-derived in pure OCaml: sixteen libraries and ten
+command-line tools for building terminal software, for OCaml developers writing TUIs
+without a Go runtime.
 
-- **Pure OCaml** — no `.c` or `.h` files and no `foreign_stubs` stanza anywhere in the tracked
-  tree; only dependencies such as `lwt`, `ctypes`, and `mirage-crypto` carry C.
-- **Sixteen libraries** — fourteen under `charamel.*`, two under `charamel-ssh.*`. Each library's
-  `.mli` is its documentation.
-- **Ten tools** — `gum`, `glow`, `freeze`, `sequin`, `pop`, `skate`, `melt`, `keygen`,
-  `hotdiva2000`, `crush`.
-- **Tested per unit** — one suite directory for each of the 26 libraries and tools, plus the
-  examples and the shared helpers: 30 alcotest executables, 1,696 cases run by
-  `dune runtest --profile release` (1,698 registered; the 2 Windows-only cases skip on Linux).
-- **One width model** — grapheme-based measurement shared by every renderer, so East Asian and
-  combining text align in tables, borders, and layout.
-- **OCaml >= 5.4** with Lwt for concurrency, `jsont` for JSON, `cmarkit` for Markdown, and `re`
-  for data-driven lexers.
+`sequin` (installed below) reads terminal bytes and explains them:
 
-## Contents
+```sh
+printf '\033[3A' | sequin
+# CSI 3 A  Cursor up 3
+```
 
-- [Quick start](#quick-start)
-- [Libraries](#libraries)
-- [Tools](#tools)
-- [Examples](#examples)
-- [Development](#development)
-- [License](#license)
+## Why Charamel
+
+- Pure OCaml: no `.c` or `.h` files and no `foreign_stubs` stanza in the tracked tree.
+  Only dependencies such as `lwt`, `ctypes` and `mirage-crypto` carry C.
+- A re-derivation, not a binding. Typed messages replace Go interfaces, `result`
+  replaces `error`, and Lwt fibers replace goroutines. Flags, environment variables and
+  file formats are re-derived for OCaml, so a Charamel tool is not a drop-in replacement
+  for its upstream namesake.
+- One width model: grapheme-based measurement shared by every renderer, so East Asian
+  and combining text align in tables, borders and layout.
+- Documented interfaces: each library's `.mli` is its documentation, and
+  `dune build @doc` renders it as HTML.
+- Tested per unit: every library and tool has its own suite — 30 `dune` test targets
+  under `test/`, run by `dune runtest --profile release`.
 
 ## Quick start
 
-Build the workspace:
+From a checkout of this repository, on any opam switch with OCaml 5.4 or newer:
 
 ```sh
-eval $(opam env --switch=rd --set-switch)   # any switch with OCaml >= 5.4
-opam install . --deps-only --with-test
+opam install . --deps-only --with-test --with-doc
 dune build --profile release
-```
-
-Run a tool. `sequin` reads terminal bytes on standard input and explains them:
-
-```sh
 printf '\033[3A' | dune exec sequin
 # CSI 3 A  Cursor up 3
 ```
 
-Use a library. `charamel.lipgloss` styles and lays out text:
+## Install
 
-```ocaml
-open Charamel_lipgloss
+The packages are not yet on the main opam repository, so they install from source.
+Pinning the repository URL registers every `*.opam` package in it:
 
-let () =
-  Table.v ~headers:[ "Name"; "Value" ] ~rows:[ [ "a"; "1" ]; [ "b"; "2" ] ] ()
-  |> Table.render |> print_endline
-
-(* ┌────┬─────┐
-   │Name│Value│
-   ├────┼─────┤
-   │a   │1    │
-   │b   │2    │
-   └────┴─────┘ *)
+```sh
+opam pin add --no-action https://github.com/gosuda/Charamel.git
+opam install sequin        # or any package name: charamel, glow, gum, ...
 ```
 
-Compile it by adding `(libraries charamel.lipgloss)` to your `dune` stanza.
+For the whole workspace, clone and install the local packages:
+
+```sh
+git clone https://github.com/gosuda/Charamel.git
+cd Charamel
+opam install .
+```
+
+To depend on a library in your own project, pin the repository as above and add the
+library name to your `dune` stanza, for example `(libraries charamel.lipgloss)`.
 
 ## Libraries
 
@@ -89,6 +82,8 @@ Compile it by adding `(libraries charamel.lipgloss)` to your `dune` stanza.
 | `charamel-ssh.keygen` | OpenSSH key pairs and parsing for Ed25519 and NIST P-256, P-384, P-521 |
 | `charamel-ssh.wish` | TUI apps served over SSH through the pure `awa` state machine |
 
+Each library's `.mli` is its documentation; `dune build @doc` renders the set locally.
+
 ## Tools
 
 | Tool | What it does |
@@ -107,7 +102,26 @@ Compile it by adding `(libraries charamel.lipgloss)` to your `dune` stanza.
 Run any of them through dune, for example `dune exec gum -- --help`, or from
 `_build/install/default/bin` after `dune build --profile release`.
 
-## Examples
+## Library use
+
+`charamel.lipgloss` styles and lays out text:
+
+```ocaml
+open Charamel_lipgloss
+
+let () =
+  Table.v ~headers:[ "Name"; "Value" ] ~rows:[ [ "a"; "1" ]; [ "b"; "2" ] ] ()
+  |> Table.render |> print_endline
+
+(* ┌────┬─────┐
+   │Name│Value│
+   ├────┼─────┤
+   │a   │1    │
+   │b   │2    │
+   └────┴─────┘ *)
+```
+
+## Interactive examples
 
 | Program | Shows |
 |---|---|
@@ -116,8 +130,8 @@ Run any of them through dune, for example `dune exec gum -- --help`, or from
 | `wish_counter` | A small counter served over SSH |
 | `confetti` | A tiny confetti animation served over SSH |
 
-Each Bubble Tea example has an interactive entry and a scripted smoke. Run one by name, or list
-all sixty-three names:
+Each Bubble Tea example has an interactive entry and a scripted smoke. Run one by name,
+or list all sixty-three:
 
 ```sh
 dune exec examples/bubbletea_examples.exe -- simple
@@ -126,30 +140,32 @@ dune exec examples/bubbletea_examples.exe -- --list
 
 ## Development
 
-Three gates, the same three the pre-commit hook runs:
+Three gates, the same three the pre-commit hook runs, from a switch with OCaml 5.4 or
+newer:
 
 ```sh
-eval $(opam env --switch=rd --set-switch)
 dune build @fmt
 dune build --profile release
 dune runtest --profile release
 ```
 
-- **Hook.** `.githooks/pre-commit` runs those gates; enable it with
-  `git config core.hooksPath .githooks`. It resolves `dune` through `opam exec`, which reads
-  `OPAMSWITCH` rather than `PATH`, so commit from a shell bootstrapped with `--set-switch` as above.
-  When it reports `Command not found 'dune'`, fix the switch and retry rather than passing
-  `--no-verify`. The hook names the switch `rd`.
-- **Formatter.** `.ocamlformat` pins `ocamlformat` to 0.29.0 with `margin = 90`; `dune build @fmt`
-  fails on any other version.
-- **Warnings.** Every stanza compiles with `-strict-sequence -strict-formats -short-paths
-  -principal -w +a` minus warnings 4, 9, 29, 30, 40-42, 44-46, 48, 58, 66, and 67; the release
-  profile adds `-warn-error +a`.
-- **Layout.** `lib/` libraries, `ssh/` the SSH tier, `bin/` tools, `test/` one directory per unit,
-  `examples/` runnable programs. `.references/` holds the upstream sources, mostly Go, as local,
-  git-ignored `data_only_dirs` material that provenance comments cite.
+- Hook: `.githooks/pre-commit` runs those gates; enable it with
+  `git config core.hooksPath .githooks`. It resolves `dune` through `opam exec`, which
+  reads `OPAMSWITCH` rather than `PATH`, so commit from a shell bootstrapped with
+  `eval $(opam env --switch=rd --set-switch)`.
+- Formatter: `.ocamlformat` pins `ocamlformat` to 0.29.0 with `margin = 90`;
+  `dune build @fmt` fails on any other version.
+- Warnings: every stanza compiles with `-strict-sequence -strict-formats -short-paths
+  -principal -w +a` minus warnings 4, 9, 29, 30, 40-42, 44-46, 48, 58, 66, and 67; the
+  release profile adds `-warn-error +a`.
+- Layout: `lib/` libraries, `ssh/` the SSH tier, `bin/` tools, `test/` one directory per
+  unit, `examples/` runnable programs. The upstream Go sources live in a git-ignored
+  `.references/` tree that provenance comments cite.
+
+[AGENTS.md](AGENTS.md) holds the working rules for changes.
 
 ## License
 
-Apache-2.0. [LICENSE](LICENSE) carries the license body; [NOTICE](NOTICE) carries the copyright and
-the MIT attributions for upstream material transcribed from charmbracelet and others.
+Apache-2.0. [LICENSE](LICENSE) carries the license body; [NOTICE](NOTICE) carries the
+copyright and the MIT attributions for upstream material transcribed from
+charmbracelet and others.

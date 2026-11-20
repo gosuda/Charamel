@@ -14,6 +14,7 @@ depends: [
   "jsont"
   "base64"
   "cmdliner"
+  "lwt"
   "alcotest" {with-test}
   "alcotest-lwt" {>= "1.9.1" & with-test}
   "qcheck-core" {with-test}
