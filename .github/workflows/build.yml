@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [depot-ubuntu-24.04, macos-latest, windows-latest]
         ocaml-compiler: [5.4.0, 5.5.1]
     runs-on: ${{ matrix.os }}
     steps:
