@@ -3,10 +3,14 @@ open Lwt_direct
 
 (* The job commands run under the platform shell ([sh -c] / [cmd /c]): [set /p]
    echoes without a newline, [ping -n N] idles ~(N-1)s because [timeout] refuses
-   redirected stdin, and [cd .] is the trivial success. *)
-let both_streams =
-  if Sys.win32 then "(<nul set /p x=hello)&(<nul set /p x=oops 1>&2)"
+   redirected stdin, and [cd .] is the trivial success. [set /p] under [<nul]
+   reads EOF and reports status 1 despite printing, so the Windows stream
+   fixture pins the zero exit explicitly. *)
+let both_streams_for ~win32 =
+  if win32 then "(<nul set /p x=hello)&(<nul set /p x=oops 1>&2)&exit 0"
   else "printf 'hello'; printf 'oops' >&2"
+
+let both_streams = both_streams_for ~win32:Sys.win32
 
 let long_sleep seconds =
   if Sys.win32 then "ping -n " ^ string_of_int (seconds + 1) ^ " 127.0.0.1 >nul"
@@ -125,6 +129,13 @@ let retention_case () =
         "latest job retained" true
         (List.exists (fun (id, _) -> id = List.hd (List.rev ids)) retained))
 
+(* Linux cannot execute the [cmd /c] fixture, so this pins its shape: the
+   Windows stream fixture must end with an explicit zero exit. *)
+let windows_both_streams_pins_zero_exit () =
+  Alcotest.(check bool)
+    "windows both_streams ends with an explicit zero exit" true
+    (String.ends_with ~suffix:"&exit 0" (both_streams_for ~win32:true))
+
 let cases =
   [
     Test_tools_test_support.case "captures stdout and stderr" `Quick output_case;
@@ -133,4 +144,6 @@ let cases =
     Test_tools_test_support.case "deadline kills a SIGTERM-immune child" `Quick
       timeout_kills_a_term_immune_child_case;
     Test_tools_test_support.case "bounds completed retention" `Quick retention_case;
+    Test_tools_test_support.case "windows both_streams pins zero exit" `Quick
+      windows_both_streams_pins_zero_exit;
   ]

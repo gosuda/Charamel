@@ -280,6 +280,10 @@ module Process = struct
       f
 
   let spawn ?cwd ?env ?(stdin = `Inherit) ?(stdout = `Inherit) ?(stderr = `Inherit) argv =
+    (* The temporary directory Windows reports ends in a separator, and [CreateProcess]
+       fails such a working directory, so the one spawn strips it here, keeping a bare
+       drive root intact, instead of at each caller. *)
+    let cwd = Option.map Dirs.strip_trailing_separators cwd in
     match argv with
     | [] -> invalid_arg "Charamel_os.Process.spawn: argv is empty"
     | _ ->

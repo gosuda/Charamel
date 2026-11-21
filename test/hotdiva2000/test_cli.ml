@@ -63,7 +63,7 @@ let expect_success name args check =
             Test_support.run_cli ~exe:(executable ()) ~env:(minimal_environment ~root)
               ~timeout:5. args
           in
-          Alcotest.(check int) "exit status" 0 status;
+          Alcotest.(check int) ("exit status; stderr was: " ^ error) 0 status;
           Alcotest.(check string) "stderr" "" error;
           check output;
           Lwt.return_unit))
@@ -99,7 +99,7 @@ let invalid_tokens =
             Test_support.run_cli ~exe:(executable ()) ~env:(minimal_environment ~root)
               ~timeout:5. [ "--tokens"; "0" ]
           in
-          Alcotest.(check int) "exit status" 1 status;
+          Alcotest.(check int) ("exit status; stderr was: " ^ error) 1 status;
           Alcotest.(check string) "output" "" output;
           Alcotest.(check bool)
             "diagnostic" true
@@ -114,7 +114,7 @@ let invalid_count =
             Test_support.run_cli ~exe:(executable ()) ~env:(minimal_environment ~root)
               ~timeout:5. [ "-n-1" ]
           in
-          Alcotest.(check int) "exit status" 1 status;
+          Alcotest.(check int) ("exit status; stderr was: " ^ error) 1 status;
           Alcotest.(check string) "output" "" output;
           Alcotest.(check bool)
             "diagnostic" true
@@ -125,12 +125,12 @@ let invalid_syntax =
   Alcotest_lwt.test_case "invalid integer is a usage error" `Quick (fun _switch () ->
       Test_support.with_temp_dir (fun root ->
           let open Lwt.Syntax in
-          let* status, output, _ =
+          let* status, output, error =
             Test_support.run_cli ~exe:(executable ()) ~env:(minimal_environment ~root)
               ~timeout:5.
               [ "--tokens"; "not-an-integer" ]
           in
-          Alcotest.(check int) "exit status" 2 status;
+          Alcotest.(check int) ("exit status; stderr was: " ^ error) 2 status;
           Alcotest.(check string) "output" "" output;
           Lwt.return_unit))
 

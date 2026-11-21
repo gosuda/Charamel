@@ -45,12 +45,12 @@ let run_child root args =
   match binary_path () with
   | None -> Alcotest.skip ()
   | Some executable ->
-      let _, output, _ =
+      let _, output, error =
         await
         @@ Test_support.run_cli ~exe:executable ~env:(child_environment root) ~cwd:root
              ~timeout:15. args
       in
-      output
+      (output, error)
 
 let run_child_status root args =
   match binary_path () with
@@ -62,9 +62,10 @@ let run_child_status root args =
 
 let dirs_command () =
   Test_tools_test_support.with_scratch (fun root ->
-      let output = run_child root [ "dirs" ] in
+      let output, error = run_child root [ "dirs" ] in
       Alcotest.(check bool)
-        "config directory" true
+        ("config directory; stderr was: " ^ error)
+        true
         (Test_support.contains ~needle:"config:" ~haystack:output);
       Alcotest.(check bool)
         "project key" true
@@ -72,9 +73,10 @@ let dirs_command () =
 
 let schema_command () =
   Test_tools_test_support.with_scratch (fun root ->
-      let output = run_child root [ "schema" ] in
+      let output, error = run_child root [ "schema" ] in
       Alcotest.(check bool)
-        "schema object" true
+        ("schema object; stderr was: " ^ error)
+        true
         (String.length output > 2 && output.[0] = '{');
       Alcotest.(check bool)
         "provider schema" true
@@ -109,7 +111,7 @@ let run_fixture () =
           let status, output, error =
             run_child_status root [ "run"; "-y"; "--cwd"; root; "say"; "hi" ]
           in
-          Alcotest.(check int) "run exits successfully" 0 status;
+          Alcotest.(check int) ("run exits successfully; stderr was: " ^ error) 0 status;
           Alcotest.(check bool)
             "assistant text is streamed" true
             (Test_support.contains ~needle:"pong" ~haystack:output);
@@ -121,7 +123,9 @@ let providers_catalog_body =
 let logout_missing_credential_without_force () =
   Test_tools_test_support.with_scratch (fun root ->
       let status, _output, error = run_child_status root [ "logout"; "anthropic" ] in
-      Alcotest.(check int) "logout without a stored credential fails" 1 status;
+      Alcotest.(check int)
+        ("logout without a stored credential fails; stderr was: " ^ error)
+        1 status;
       Alcotest.(check bool)
         "missing credential is reported" true
         (Test_support.contains ~needle:"no credentials for provider anthropic"
@@ -132,7 +136,9 @@ let logout_missing_credential_with_force () =
       let status, output, error =
         run_child_status root [ "logout"; "--force"; "anthropic" ]
       in
-      Alcotest.(check int) "--force treats a missing credential as success" 0 status;
+      Alcotest.(check int)
+        ("--force treats a missing credential as success; stderr was: " ^ error)
+        0 status;
       Alcotest.(check string) "no diagnostics on stderr" "" error;
       Alcotest.(check bool)
         "logout confirmation" true
@@ -146,7 +152,7 @@ let login_existing_oauth_without_force () =
       in
       write_private auth_path auth_contents;
       let status, output, error = run_child_status root [ "login"; "anthropic" ] in
-      Alcotest.(check int) "login without force succeeds" 0 status;
+      Alcotest.(check int) ("login without force succeeds; stderr was: " ^ error) 0 status;
       Alcotest.(check string) "no diagnostics on stderr" "" error;
       Alcotest.(check bool)
         "already logged in notice" true
@@ -167,12 +173,16 @@ let sessions_lists_a_persisted_session () =
           let run_status, _run_output, run_error =
             run_child_status root [ "run"; "-y"; "--cwd"; root; "say"; "hi" ]
           in
-          Alcotest.(check int) "seeding run exits successfully" 0 run_status;
+          Alcotest.(check int)
+            ("seeding run exits successfully; stderr was: " ^ run_error)
+            0 run_status;
           Alcotest.(check string) "seeding run has no diagnostics" "" run_error;
           let status, output, error =
             run_child_status root [ "sessions"; "--cwd"; root ]
           in
-          Alcotest.(check int) "sessions exits successfully" 0 status;
+          Alcotest.(check int)
+            ("sessions exits successfully; stderr was: " ^ error)
+            0 status;
           Alcotest.(check string) "no diagnostics" "" error;
           (* Session.index_entry stores id/title only; the model is not persisted in the index. *)
           let listed =
@@ -189,7 +199,7 @@ let sessions_lists_a_persisted_session () =
 let logs_are_empty_before_any_run () =
   Test_tools_test_support.with_scratch (fun root ->
       let status, output, error = run_child_status root [ "logs"; "--cwd"; root ] in
-      Alcotest.(check int) "logs exits successfully" 0 status;
+      Alcotest.(check int) ("logs exits successfully; stderr was: " ^ error) 0 status;
       Alcotest.(check string) "no diagnostics" "" error;
       Alcotest.(check string) "no log lines before anything ran" "" output)
 
@@ -198,7 +208,7 @@ let logs_rejects_a_zero_tail () =
       let status, _output, error =
         run_child_status root [ "logs"; "--tail"; "0"; "--cwd"; root ]
       in
-      Alcotest.(check int) "a zero tail is a usage error" 2 status;
+      Alcotest.(check int) ("a zero tail is a usage error; stderr was: " ^ error) 2 status;
       Alcotest.(check bool)
         "the tail bound is reported" true
         (Test_support.contains ~needle:"--tail must be at least 1" ~haystack:error))
@@ -208,7 +218,9 @@ let update_providers_rejects_the_embedded_source () =
       let status, _output, error =
         run_child_status root [ "update-providers"; "--source"; "embedded" ]
       in
-      Alcotest.(check int) "the embedded source is rejected" 2 status;
+      Alcotest.(check int)
+        ("the embedded source is rejected; stderr was: " ^ error)
+        2 status;
       Alcotest.(check bool)
         "the usage message names --source" true
         (Test_support.contains ~needle:"--source expects a catalog URL" ~haystack:error))
@@ -221,7 +233,9 @@ let update_providers_refreshes_from_a_fixture () =
             run_child_status root
               [ "update-providers"; "--source"; Fmt.str "http://127.0.0.1:%d" port ]
           in
-          Alcotest.(check int) "update-providers exits successfully" 0 status;
+          Alcotest.(check int)
+            ("update-providers exits successfully; stderr was: " ^ error)
+            0 status;
           Alcotest.(check string) "no diagnostics" "" error;
           Alcotest.(check bool)
             "the refresh is confirmed" true

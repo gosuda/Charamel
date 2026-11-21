@@ -10,6 +10,15 @@ val contains : needle:string -> haystack:string -> bool
 (** [contains ~needle ~haystack] is [true] when [needle] occurs in [haystack]. An empty
     [needle] is contained in every string. Both arguments are labeled in one order. *)
 
+val child_environment :
+  win32:bool -> getenv:(string -> string option) -> string array -> string array
+(** [child_environment ~win32 ~getenv env] completes a child environment for the platform
+    under test. On POSIX [env] is returned as it stands. On Windows the loader resolves
+    the runtime DLLs through [PATH], and [CreateProcess] needs [SystemRoot], [SystemDrive]
+    and [PATHEXT], so those four variables are taken from [getenv] and any caller entry
+    for them is dropped; every other entry is kept, so HOME and XDG isolation is
+    unaffected. A name [getenv] does not answer keeps the caller entry. *)
+
 val run_cli :
   exe:string ->
   ?env:string array ->
