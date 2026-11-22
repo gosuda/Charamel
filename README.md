@@ -141,10 +141,11 @@ dune exec examples/bubbletea_examples.exe -- --list
 
 ## Development
 
-Three gates, the same three the pre-commit hook runs, from a switch with OCaml 5.4 or
-newer:
+Three gates, the same three the pre-commit hook runs. Bootstrap the `rd` switch
+(OCaml 5.4 or newer) first, as [AGENTS.md](AGENTS.md) requires:
 
 ```sh
+eval $(opam env --switch=rd --set-switch)
 dune build @fmt
 dune build --profile release
 dune runtest --profile release
