@@ -7,7 +7,7 @@ open Lwt_direct
    reads EOF and reports status 1 despite printing, so the Windows stream
    fixture pins the zero exit explicitly. *)
 let both_streams_for ~win32 =
-  if win32 then "(<nul set /p x=hello)&(<nul set /p x=oops 1>&2)&exit 0"
+  if win32 then "((<nul set /p x=hello)&(<nul set /p x=oops 1>&2)&exit 0)"
   else "printf 'hello'; printf 'oops' >&2"
 
 let both_streams = both_streams_for ~win32:Sys.win32
@@ -130,11 +130,24 @@ let retention_case () =
         (List.exists (fun (id, _) -> id = List.hd (List.rev ids)) retained))
 
 (* Linux cannot execute the [cmd /c] fixture, so this pins its shape: the
-   Windows stream fixture must end with an explicit zero exit. *)
+   Windows stream fixture must still end with an explicit zero exit, now inside
+   the parenthesized group that merges both streams onto one pipe. *)
 let windows_both_streams_pins_zero_exit () =
   Alcotest.(check bool)
     "windows both_streams ends with an explicit zero exit" true
-    (String.ends_with ~suffix:"&exit 0" (both_streams_for ~win32:true))
+    (String.ends_with ~suffix:"exit 0)" (both_streams_for ~win32:true))
+
+(* The Windows fixture must be one parenthesized group: [Jobs.spawn] appends
+   [2>&1] after the command, and only a trailing group makes that redirect cover
+   both stream writers. Unwrapped, it lands on [exit 0] alone and the stdout and
+   stderr pipes race, so [output_case] can observe [oopshello] on Windows. *)
+let windows_both_streams_self_wraps () =
+  let fixture = both_streams_for ~win32:true in
+  Alcotest.(check bool)
+    "windows both_streams is one parenthesized group" true
+    (String.length fixture > 1
+    && String.get fixture 0 = '('
+    && String.get fixture (String.length fixture - 1) = ')')
 
 let cases =
   [
@@ -146,4 +159,6 @@ let cases =
     Test_tools_test_support.case "bounds completed retention" `Quick retention_case;
     Test_tools_test_support.case "windows both_streams pins zero exit" `Quick
       windows_both_streams_pins_zero_exit;
+    Test_tools_test_support.case "windows both_streams self-wraps" `Quick
+      windows_both_streams_self_wraps;
   ]
