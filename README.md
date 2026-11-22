@@ -169,3 +169,7 @@ dune runtest --profile release
 Apache-2.0. [LICENSE](LICENSE) carries the license body; [NOTICE](NOTICE) carries the
 copyright and the MIT attributions for upstream material transcribed from
 charmbracelet and others.
+
+---
+
+[![Built with Depot](https://depot.dev/badges/built-with-depot.svg)](https://depot.dev?utm_source=gosuda)
