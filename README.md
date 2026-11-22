@@ -58,8 +58,9 @@ cd Charamel
 opam install .
 ```
 
-To depend on a library in your own project, pin the repository as above and add the
-library name to your `dune` stanza, for example `(libraries charamel.lipgloss)`.
+To depend on a library in your own project, pin the repository as above, install the
+package that provides it (`opam install charamel` provides `charamel.lipgloss`), and
+add the library name to your `dune` stanza, for example `(libraries charamel.lipgloss)`.
 
 ## Libraries
 
