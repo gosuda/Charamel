@@ -15,11 +15,18 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3
+        id: ocaml
         with:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
           windows-compiler: mingw
       - run: opam install . --deps-only --with-test
+        id: deps
       - run: opam install ocamlformat.0.29.0
+        id: ocamlformat
+        if: ${{ !cancelled() && steps.ocaml.outcome == 'success' }}
       - run: opam exec -- dune build --profile release
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
       - run: opam exec -- dune runtest --profile release
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
       - run: opam exec -- dune build @fmt
+        if: ${{ !cancelled() && steps.ocamlformat.outcome == 'success' }}
