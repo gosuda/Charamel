@@ -42,7 +42,7 @@
   cohttp-lwt
   cohttp-lwt-unix
   (tls-lwt (>= 2.1.3))
-  (awa-mirage (>= 0.6.1))
+  (awa-mirage (>= 0.7.0))
   (ctypes (>= 0.24.0))
   (ctypes-foreign (>= 0.24.0))
   (alcotest :with-test)
@@ -61,7 +61,7 @@
   logs
   (jsont (>= 0.4))
   charamel
-  (awa (>= 0.6.1))
+  (awa (>= 0.7.0))
   (mirage-crypto (>= 2.4.1))
   mirage-crypto-ec
   mirage-crypto-rng

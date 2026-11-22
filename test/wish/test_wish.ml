@@ -103,7 +103,7 @@ let send_q client flow =
   let client, wires = fail_result "client data" (Awa.Client.outgoing_data client "q") in
   write_all flow wires >>= fun () -> Lwt.return client
 
-let pty_request = Awa.Ssh.Pty_req ("xterm", 80l, 24l, 0l, 0l, "")
+let pty_request = Awa.Ssh.Pty_req ("xterm", 80, 24, 0, 0, "")
 
 let request_only request client flow =
   send_request client flow request >>= fun client -> send_q client flow
@@ -146,7 +146,7 @@ let rec step ~setup client flow output established status =
               Buffer.add_string output data;
               Lwt.return (client, established, status, disconnected)
           | `Channel_exit_status (_, code) ->
-              Lwt.return (client, established, Some (Int32.to_int code), disconnected)
+              Lwt.return (client, established, Some code, disconnected)
           | `Channel_stderr (_, data) ->
               Buffer.add_string output data;
               Lwt.return (client, established, status, disconnected)
@@ -226,8 +226,7 @@ let run_connection_case ~name ?(chain = Fun.id) ?(endpoint = counter_handler)
       Lwt_unix.with_timeout 2. (fun () -> connect_when_ready ()) >>= fun fd ->
       let flow = Flow.create fd in
       let client, initial =
-        Awa.Client.make ~authenticator:(`Key server_public) ~user:"tester"
-          (`Pubkey client_awa)
+        Awa.Client.make (`Key server_public) ~user:"tester" (`Pubkey client_awa)
       in
       write_all flow initial >>= fun () ->
       let output = Buffer.create 256 in

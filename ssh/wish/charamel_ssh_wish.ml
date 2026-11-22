@@ -27,7 +27,7 @@ type connection = {
   mutable worker_sw : Lwt_switch.t option;
   mutable handler : unit Lwt.t option;
   mutable closed : bool;
-  mutable channel_id : int32 option;
+  mutable channel_id : int option;
   mutable handler_started : bool;
   mutable session : session option;
   endpoint : session -> unit Lwt.t;
@@ -158,7 +158,7 @@ let send_stderr connection data =
         | Some id ->
             emit_message_locked connection
               (Awa.Ssh.Msg_channel_extended_data
-                 (recipient_id connection.state id, 1l, data));
+                 (recipient_id connection.state id, 1, data));
             Lwt.return_unit)
 
 let mark_closed connection =
@@ -179,9 +179,7 @@ let send_exit_locked session code =
     | Some id ->
         let status =
           Awa.Ssh.Msg_channel_request
-            ( recipient_id connection.state id,
-              false,
-              Awa.Ssh.Exit_status (Int32.of_int code) )
+            (recipient_id connection.state id, false, Awa.Ssh.Exit_status code)
         in
         let state, status_wire =
           unwrap "encoding channel exit status"
@@ -287,7 +285,7 @@ let update_environment session key value =
   in
   session.environment <- replace [] session.environment
 
-let int32_dimension value = max 0 (Int32.to_int value)
+let int_dimension value = max 0 value
 
 let size_allocated session rows cols =
   match session.allocated_pty with
@@ -296,7 +294,7 @@ let size_allocated session rows cols =
       match Charamel_os.Pty.resize pty ~rows ~cols with Ok () | Error _ -> ())
 
 let set_pty session term cols rows =
-  let next = { term; rows = int32_dimension rows; cols = int32_dimension cols } in
+  let next = { term; rows = int_dimension rows; cols = int_dimension cols } in
   session.terminal <- Some next;
   size_allocated session next.rows next.cols
 
@@ -304,8 +302,8 @@ let resize_pty session cols rows =
   match session.terminal with
   | None -> ()
   | Some current ->
-      let rows = int32_dimension rows in
-      let cols = int32_dimension cols in
+      let rows = int_dimension rows in
+      let cols = int_dimension cols in
       session.terminal <- Some { current with rows; cols };
       session.resize_to (Some (rows, cols));
       size_allocated session rows cols
@@ -348,11 +346,10 @@ let authenticate connection username auth =
     match auth with
     | Awa.Server.Pubkey details ->
         let public_key = Awa.Server.pubkey_of_pubkeyauth details in
-        let signature_ok = Awa.Server.verify_pubkeyauth ~user:username details in
         let callback_ok =
           match connection.public_key_auth with
           | None -> false
-          | Some callback -> signature_ok && callback ~user:username public_key
+          | Some callback -> callback ~user:username public_key
         in
         (callback_ok, Some public_key)
     | Awa.Server.Password password ->
