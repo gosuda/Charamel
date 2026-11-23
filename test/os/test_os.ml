@@ -1136,6 +1136,34 @@ let checkout_cannot_replace_the_command_interpreter () =
               Alcotest.(check (pair string int))
                 "so does the shell module's cmd.exe" ("shell", 0) shell)))
 
+(* With [~env], the program is looked up on the child's [PATH], which here names only a
+   directory the parent's [PATH] lacks and leaves out the system directory: the script
+   there runs, through the system's [cmd.exe]. *)
+let spawn_resolves_on_the_child_path () =
+  windows_only ();
+  let tools = scratch "exe-childpath" in
+  Unix.mkdir tools 0o700;
+  let script = Filename.concat tools "probe03.cmd" in
+  write_file script "@echo child path %1\r\n";
+  let inherited =
+    List.filter_map
+      (fun name -> Option.map (fun value -> name ^ "=" ^ value) (Sys.getenv_opt name))
+      [ "SystemRoot"; "SystemDrive" ]
+  in
+  with_scratch_tree [ script ] [ tools ] (fun () ->
+      run (fun () ->
+          let process =
+            Charamel_os.Process.spawn ~stdout:`Pipe
+              ~env:(Array.of_list (("PATH=" ^ tools) :: inherited))
+              [ "probe03"; "a&b" ]
+          in
+          Lwt_io.read_line (Charamel_os.Process.stdout_r process) >>= fun output ->
+          Charamel_os.Process.await process >|= fun code ->
+          Alcotest.(check string)
+            "the script on the child's PATH runs" "child path \"a&b\""
+            (String.trim output);
+          Alcotest.(check int) "and exits cleanly" 0 code))
+
 let searches_path_by_spawn () =
   posix_only ();
   run (fun () ->
@@ -1949,6 +1977,8 @@ let suites =
           spawn_takes_system_programs_from_the_system_directory;
         Alcotest.test_case "a checkout cannot replace the interpreter" `Quick
           checkout_cannot_replace_the_command_interpreter;
+        Alcotest.test_case "spawn looks programs up on the child's PATH" `Quick
+          spawn_resolves_on_the_child_path;
         Alcotest.test_case "command line for cmd.exe" `Quick
           command_line_for_the_interpreter;
         Alcotest.test_case "command line C runtime quoting" `Quick

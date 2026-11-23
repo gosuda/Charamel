@@ -291,7 +291,7 @@ module Process = struct
     let cwd = Option.map Dirs.strip_trailing_separators cwd in
     match argv with
     | [] -> invalid_arg "Charamel_os.Process.spawn: argv is empty"
-    | _ :: _ ->
+    | _ :: _ -> (
         (* [Lwt_process] hands the program to [CreateProcess] as its application name,
            and a bare name misses there: [cmd] arrives as ["No such file or directory"]
            even with the system directory on the search path. The absolute path always
@@ -301,35 +301,36 @@ module Process = struct
            directory instead, so a checkout cannot supply them. A resolved batch file
            runs through that [cmd.exe] with its absolute path in the command text,
            because [CreateProcess] would otherwise look it up again from the child's
-           directory. *)
-        let application, line =
-          Exe.spawn_command ~system_directory:(system_directory ()) argv
+           directory. The lookup runs while [env] is applied, so it reads the child's
+           [PATH] and [PATHEXT], not the parent's. *)
+        let system_directory = system_directory () in
+        let launch () =
+          let application, line = Exe.spawn_command ~system_directory argv in
+          let stdin', stdin_w = input_redir stdin in
+          let stdout', stdout_r = output_redir stdout in
+          let stderr', stderr_r = output_redir stderr in
+          (* [Lwt_process] writes each argument through [Filename.quote], which always
+             quotes and escapes by the C runtime rules; [cmd.exe] reads neither, so a
+             quoted ["/c"] and its escaped command text reach it as one quoted command
+             name and it answers that the file name syntax is incorrect.
+             [Exe.spawn_command] builds the line each program reads, and
+             [Lwt_process]'s ["\000"] inline prefix hands it to [CreateProcess]
+             unchanged. *)
+          let process =
+            new Lwt_process.process_none
+              (application, [| "\000" ^ line |])
+              ?cwd ~stdin:stdin' ~stdout:stdout' ~stderr:stderr'
+          in
+          {
+            process;
+            stdin_w;
+            stdout_r;
+            stderr_r;
+            code = Lwt.map exit_code process#status;
+            signal = Lwt.map signal_of process#status;
+          }
         in
-        let stdin', stdin_w = input_redir stdin in
-        let stdout', stdout_r = output_redir stdout in
-        let stderr', stderr_r = output_redir stderr in
-        (* [Lwt_process] writes each argument through [Filename.quote], which always
-           quotes and escapes by the C runtime rules; [cmd.exe] reads neither, so a
-           quoted ["/c"] and its escaped command text reach it as one quoted command name
-           and it answers that the file name syntax is incorrect. [Exe.spawn_command]
-           builds the line each program reads, and [Lwt_process]'s ["\000"] inline prefix
-           hands it to [CreateProcess] unchanged. *)
-        let create () =
-          new Lwt_process.process_none
-            (application, [| "\000" ^ line |])
-            ?cwd ~stdin:stdin' ~stdout:stdout' ~stderr:stderr'
-        in
-        let process =
-          match env with Some env -> with_env env create | None -> create ()
-        in
-        {
-          process;
-          stdin_w;
-          stdout_r;
-          stderr_r;
-          code = Lwt.map exit_code process#status;
-          signal = Lwt.map signal_of process#status;
-        }
+        match env with Some env -> with_env env launch | None -> launch ())
 
   let pid { process; _ } = process#pid
   let stdin_w { stdin_w; _ } = get stdin_w "stdin_w"
