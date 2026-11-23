@@ -127,12 +127,14 @@ let join_root_absolute_targets () =
     (Path.join_root ~windows:false ~root:"/" "/home/u/.config/x");
   check_string "posix absolute path passes a sandbox root through" "/t/config/x"
     (Path.join_root ~windows:false ~root:"/t" "/t/config/x");
-  check_string "relative path joins the root"
-    (Filename.concat {|C:\t|} "config/x")
+  check_string "relative path joins the root" {|C:\t\config/x|}
     (Path.join_root ~windows:true ~root:{|C:\t|} "config/x");
-  check_string "posix relative path joins the root"
-    (Filename.concat "/t" "config/x")
-    (Path.join_root ~windows:false ~root:"/t" "config/x")
+  check_string "posix relative path joins the root" "/t/config/x"
+    (Path.join_root ~windows:false ~root:"/t" "config/x");
+  check_string "trailing separators do not double" "/t/config/x"
+    (Path.join_root ~windows:false ~root:"/t/" "config/x");
+  check_string "an empty root passes the path through" "config/x"
+    (Path.join_root ~windows:false ~root:"" "config/x")
 
 let cases =
   [

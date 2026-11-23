@@ -61,10 +61,11 @@ val under : ?windows:bool -> root:string -> string -> string
     ("/" or a drive root) names the real filesystem and absolute paths pass through. *)
 
 val join_root : ?windows:bool -> root:string -> string -> string
-(** [join_root ~root path] is [path] itself when [path] is absolute and
-    [Filename.concat root path] otherwise. It differs from {!val:under}, which mirrors an
-    absolute path's components under a sandbox [root]: here an absolute path is trusted
-    and passes through unchanged, which is what a caller wants for paths the application
-    derived from its own configured directories (an XDG file, a log file). Joining such a
-    path onto a root with [Filename.concat] spells [\C:\...] on Windows, which no API
-    accepts. *)
+(** [join_root ~root path] is [path] itself when [path] is absolute and otherwise [path]
+    joined onto [root] with the pinned platform separator: trailing separators come off
+    [root] first so the join never doubles one, and an empty [root] passes [path] through.
+    It differs from {!val:under}, which mirrors an absolute path's components under a
+    sandbox [root]: here an absolute path is trusted and passes through unchanged, which
+    is what a caller wants for paths the application derived from its own configured
+    directories (an XDG file, a log file). Joining such a path onto a root with
+    [Filename.concat] spells [\C:\...] on Windows, which no API accepts. *)

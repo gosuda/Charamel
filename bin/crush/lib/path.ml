@@ -197,6 +197,20 @@ let under ?(windows = Sys.win32) ~root path =
       let index = past_separators rest in
       Filename.concat root (String.sub rest index (String.length rest - index))
 
+(* [Filename.concat] spells the host separator, so a test on one system cannot pin
+   the rules of the other through it: the join below uses the pinned separator instead,
+   with the same shape the host join has (no doubled separator, an empty root passing
+   the path through). *)
+let is_separator windows character = character = '/' || (windows && character = '\\')
+
+let trim_trailing_separators windows root =
+  let length = String.length root in
+  let rec edge index =
+    if index > 0 && is_separator windows root.[index - 1] then edge (index - 1) else index
+  in
+  let stripped = edge length in
+  if stripped = length then root else String.sub root 0 stripped
+
 (* An absolute [path] is already placed: it names the file, so it passes through
    unchanged however [root] is spelled. Only a relative [path] joins [root]. This
    differs from [under], which mirrors an absolute path's components under a
@@ -204,4 +218,6 @@ let under ?(windows = Sys.win32) ~root path =
    [\C:\...] on Windows, which no API accepts, and [//...] on POSIX, which only
    works by accident. *)
 let join_root ?(windows = Sys.win32) ~root path =
-  if is_absolute ~windows path then path else Filename.concat root path
+  if is_absolute ~windows path then path
+  else if root = "" then path
+  else trim_trailing_separators windows root ^ (if windows then "\\" else "/") ^ path
