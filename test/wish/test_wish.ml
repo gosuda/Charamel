@@ -103,7 +103,7 @@ let send_q client flow =
   let client, wires = fail_result "client data" (Awa.Client.outgoing_data client "q") in
   write_all flow wires >>= fun () -> Lwt.return client
 
-let pty_request = Awa.Ssh.Pty_req ("xterm", 80l, 24l, 0l, 0l, "")
+let pty_request = Awa.Ssh.Pty_req ("xterm", 80, 24, 0, 0, "")
 
 let request_only request client flow =
   send_request client flow request >>= fun client -> send_q client flow
@@ -146,7 +146,7 @@ let rec step ~setup client flow output established status =
               Buffer.add_string output data;
               Lwt.return (client, established, status, disconnected)
           | `Channel_exit_status (_, code) ->
-              Lwt.return (client, established, Some (Int32.to_int code), disconnected)
+              Lwt.return (client, established, Some code, disconnected)
           | `Channel_stderr (_, data) ->
               Buffer.add_string output data;
               Lwt.return (client, established, status, disconnected)
@@ -174,7 +174,7 @@ and client_loop ~setup client flow output established status =
 
 let run_connection_case ~name ?(chain = Fun.id) ?(endpoint = counter_handler)
     ?(client_awa = awa_of (K.generate K.Ed25519)) ?(setup = shell_setup) ?banner_handler
-    ~expect_code ~expect_text ?expect_absent () =
+    ?banner ~expect_code ~expect_text ?expect_absent () =
   let server_key = K.generate K.Ed25519 in
   let server_public = Awa.Hostkey.pub_of_priv (awa_of server_key) in
   let path = Fmt.str "/tmp/charamel-wish-%d-%s.sock" (Unix.getpid ()) name in
@@ -207,7 +207,7 @@ let run_connection_case ~name ?(chain = Fun.id) ?(endpoint = counter_handler)
     (fun () ->
       let switch = Lwt_switch.create () in
       let (_ : unit Lwt.t) =
-        W.serve ~stop:switch ~host_key:server_key ~addr ?banner_handler
+        W.serve ~stop:switch ~host_key:server_key ~addr ?banner_handler ?banner
           ~public_key_auth:(fun ~user:_ public_key ->
             Awa.Hostkey.pub_eq public_key (Awa.Hostkey.pub_of_priv client_awa))
           (chain endpoint) ()
@@ -226,8 +226,7 @@ let run_connection_case ~name ?(chain = Fun.id) ?(endpoint = counter_handler)
       Lwt_unix.with_timeout 2. (fun () -> connect_when_ready ()) >>= fun fd ->
       let flow = Flow.create fd in
       let client, initial =
-        Awa.Client.make ~authenticator:(`Key server_public) ~user:"tester"
-          (`Pubkey client_awa)
+        Awa.Client.make (`Key server_public) ~user:"tester" (`Pubkey client_awa)
       in
       write_all flow initial >>= fun () ->
       let output = Buffer.create 256 in
@@ -438,6 +437,106 @@ let banner_handler_case () =
       if W.emulated_pty session then Some "welcome" else None)
     ~expect_code:0 ~expect_text:[ "count: 0" ] ()
 
+(* A handler that declines the public-key probe runs once: the signed request
+   that follows must not ask again. *)
+let banner_decided_on_first_attempt_case () =
+  let calls = ref 0 in
+  run_connection_case ~name:"banner-decided"
+    ~banner_handler:(fun _session ->
+      incr calls;
+      None)
+    ~expect_code:0 ~expect_text:[ "count: 0" ] ()
+  >|= fun () -> Alcotest.(check int) "handler runs once" 1 !calls
+
+(* A rejected attempt still hears the banner first: the failure reply follows
+   the banner sent on the first method-specific request. *)
+let banner_precedes_rejection_case () =
+  let saved_level = Logs.level () in
+  let saved_reporter = Logs.reporter () in
+  let buffer = Buffer.create 4096 in
+  let ppf = Format.formatter_of_buffer buffer in
+  let other = key_from_seed (Option.get (K.ed25519_seed (K.generate K.Ed25519))) in
+  Logs.set_level ~all:true (Some Logs.Debug);
+  Logs.set_reporter (Logs.format_reporter ~dst:ppf ());
+  Lwt.finalize
+    (fun () ->
+      run_connection_case ~name:"banner-rejected" ~banner:"welcome"
+        ~chain:(W.password_or_key_auth ~authorized:[ Awa.Hostkey.pub_of_priv other ])
+        ~expect_code:1 ~expect_text:[ "Access denied" ] ())
+    (fun () ->
+      Format.pp_print_flush ppf ();
+      Logs.set_reporter saved_reporter;
+      Logs.set_level ~all:true saved_level;
+      Lwt.return_unit)
+  >|= fun () ->
+  let text = Buffer.contents buffer in
+  let index_of needle =
+    let width = String.length needle in
+    let limit = String.length text - width in
+    let rec loop i =
+      if i > limit then None
+      else if String.sub text i width = needle then Some i
+      else loop (i + 1)
+    in
+    loop 0
+  in
+  (* The probe reply is logged as `userauth 1`: awa wraps method-specific
+     replies in Msg_userauth_1 on the wire. *)
+  match (index_of "<<< userauth banner", index_of "<<< userauth 1") with
+  | Some banner_at, Some pk_ok_at ->
+      Alcotest.(check bool)
+        "banner precedes the rejection reply" true (banner_at < pk_ok_at)
+  | _ ->
+      let lines = String.split_on_char '\n' text in
+      let relevant =
+        List.filter (fun l -> Test_support.contains ~needle:"userauth" ~haystack:l) lines
+      in
+      Alcotest.failf "no banner/pk-ok in %d bytes; userauth lines: %s"
+        (String.length text)
+        (String.concat " || " relevant)
+
+let banner_first_attempt_case () =
+  let saved_level = Logs.level () in
+  let saved_reporter = Logs.reporter () in
+  let buffer = Buffer.create 4096 in
+  let ppf = Format.formatter_of_buffer buffer in
+  Logs.set_level ~all:true (Some Logs.Debug);
+  Logs.set_reporter (Logs.format_reporter ~dst:ppf ());
+  Lwt.finalize
+    (fun () ->
+      run_connection_case ~name:"banner-first" ~banner:"welcome" ~expect_code:0
+        ~expect_text:[ "count: 0" ] ())
+    (fun () ->
+      Format.pp_print_flush ppf ();
+      Logs.set_reporter saved_reporter;
+      Logs.set_level ~all:true saved_level;
+      Lwt.return_unit)
+  >|= fun () ->
+  let text = Buffer.contents buffer in
+  let index_of needle =
+    let width = String.length needle in
+    let limit = String.length text - width in
+    let rec loop i =
+      if i > limit then None
+      else if String.sub text i width = needle then Some i
+      else loop (i + 1)
+    in
+    loop 0
+  in
+  (* The pk_ok reply is logged as `userauth 1`: awa wraps method-specific
+     replies in Msg_userauth_1 on the wire. *)
+  match (index_of "<<< userauth banner", index_of "<<< userauth 1") with
+  | Some banner_at, Some pk_ok_at ->
+      Alcotest.(check bool) "banner precedes pk ok" true (banner_at < pk_ok_at)
+  | _ ->
+      let lines = String.split_on_char '\n' text in
+      let relevant =
+        List.filter (fun l -> Test_support.contains ~needle:"userauth" ~haystack:l) lines
+      in
+      Alcotest.failf "no banner/pk-ok in %d bytes; userauth lines: %s"
+        (String.length text)
+        (String.concat " || " relevant)
+
 let tea_with_stream_case () =
   run_connection_case ~name:"stream" ~endpoint:stream_handler ~expect_code:0
     ~expect_text:[ "count: 1" ] ()
@@ -526,6 +625,9 @@ let suites () =
         lwt_case "authenticated counter" authenticated_case;
         lwt_case "session output family" session_output_case;
         lwt_case "banner handler" banner_handler_case;
+        lwt_case "banner precedes pk ok" banner_first_attempt_case;
+        lwt_case "banner decided on first attempt" banner_decided_on_first_attempt_case;
+        lwt_case "banner precedes rejection" banner_precedes_rejection_case;
         lwt_case "tea with stream" tea_with_stream_case;
       ] );
     ( "password-or-key-auth",
