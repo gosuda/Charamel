@@ -9,6 +9,7 @@ module Skills = Crush_core.Skills
 module Todos = Crush_core.Todos
 module Tool = Crush_core.Tool
 module Tools_shell = Crush_core.Tools_shell
+module Shell_screen = Crush_core.Shell_screen
 
 let json_field name value = Jsont.Json.mem (Jsont.Json.name name) value
 
@@ -45,13 +46,13 @@ let long_sleep seconds =
   if Sys.win32 then "ping -n " ^ string_of_int (seconds + 1) ^ " 127.0.0.1 >nul"
   else "sleep " ^ string_of_int seconds
 
-let make_ctx sw =
+let make_ctx ?asker sw =
   let open Lwt.Syntax in
   let clock = Charamel_os.Time.lwt in
   let cwd = Filename.get_temp_dir_name () in
   let config = Config.default in
   let permission =
-    Permission.create ~config:config.Config.permissions ~yolo:true ~cwd
+    Permission.create ~config:config.Config.permissions ~yolo:true ?asker ~cwd
       ~plans_dir:(Filename.concat cwd ".crush/plans")
       ()
   in
@@ -85,10 +86,10 @@ let make_ctx sw =
     read_tracker = Hashtbl.create 8;
   }
 
-let with_ctx f =
+let with_ctx ?asker f =
   let open Lwt.Syntax in
   Lwt_switch.with_switch (fun sw ->
-      let* ctx = make_ctx sw in
+      let* ctx = make_ctx ?asker sw in
       Lwt_direct.spawn (fun () -> f ctx))
 
 let output_or_fail = function
@@ -111,6 +112,157 @@ let test_classifier () =
   Alcotest.(check bool)
     "environment assignment is mutable" false
     (Tools_shell.is_read_only "FLAG=value ls")
+
+let run_command ctx command =
+  Tools_shell.bash.Tool.run ctx (bash_value ~command ~description:"screen" ())
+
+(* Each form makes /bin/sh start curl. Yolo approves every ordinary request, so the
+   screen alone decides whether the command runs. *)
+let refused_forms =
+  [
+    "c''url --version";
+    "cu\"\"rl --version";
+    "c\\url --version";
+    "$'\\x63url' --version";
+    "'cu'\"rl\" --version";
+    "/usr/bin/c''url --version";
+    "sh -c \"c''url --version\"";
+    "echo $(c''url --version)";
+  ]
+
+let test_screen_reads_quoting () =
+  if not Sys.win32 then
+    await @@ with_ctx
+    @@ fun ctx ->
+    let unrefused =
+      List.filter
+        (fun command ->
+          match run_command ctx command with
+          | Error (`Unavailable _) -> false
+          | Ok _ | Error _ -> true)
+        refused_forms
+    in
+    Alcotest.(check (list string)) "every quoted form is refused" [] unrefused
+
+(* The shell computes the program each form runs, so no blanket approval may run it. *)
+let computed_forms =
+  [
+    "$(printf ech)o reviewed";
+    "X=ech; ${X}o reviewed";
+    "`printf ech`o reviewed";
+    "printf 'echo reviewed' | sh";
+    "env $(printf ech)o reviewed";
+    ". /dev/null";
+    "printf $'\\'\n$(printf ech)o reviewed\n'";
+  ]
+
+let test_screen_requires_review () =
+  if not Sys.win32 then (
+    await @@ with_ctx
+    @@ fun ctx ->
+    let unreviewed =
+      List.filter
+        (fun command ->
+          match run_command ctx command with
+          | Error (`Denied _) -> false
+          | Ok _ | Error _ -> true)
+        computed_forms
+    in
+    Alcotest.(check (list string)) "yolo does not run a computed program" [] unreviewed;
+    await
+    @@ with_ctx ~asker:(fun _ -> Permission.Allow_once)
+    @@ fun ctx ->
+    let output = output_or_fail (run_command ctx "$(printf ech)o reviewed") in
+    Alcotest.(check bool)
+      "an explicit approval runs it" true
+      (Test_support.contains ~needle:"reviewed" ~haystack:output.Tool.content))
+
+let ordinary_forms =
+  [
+    ("cd \"$(dirname /tmp/x)\" && printf ok", "ok");
+    ("for word in a b; do printf \"$word\"; done", "ab");
+    ("printf '%s' \"$(printf nested)\"", "nested");
+    ("sh -c 'printf inner'", "inner");
+    ("cat <<'EOF'\nheredoc $(not run)\nEOF", "heredoc $(not run)");
+  ]
+
+let test_screen_clears_ordinary () =
+  if not Sys.win32 then
+    await @@ with_ctx
+    @@ fun ctx ->
+    List.iter
+      (fun (command, expected) ->
+        let output = output_or_fail (run_command ctx command) in
+        Alcotest.(check bool)
+          command true
+          (Test_support.contains ~needle:expected ~haystack:output.Tool.content))
+      ordinary_forms
+
+let screen_table =
+  let posix command expected = (Shell_screen.Posix, command, expected) in
+  let cmd command expected = (Shell_screen.Cmd, command, expected) in
+  [
+    posix "git status --short | head -20" `Clear;
+    posix "cd \"$(git rev-parse --show-toplevel)\" && dune build" `Clear;
+    posix "for f in *.ml; do ocamlformat \"$f\"; done" `Clear;
+    posix "case \"$1\" in a) echo a;; *) echo b;; esac" `Clear;
+    posix "FOO=$(date) make test" `Clear;
+    posix "sh script.sh" `Clear;
+    posix "xargs -I {} cp {} /tmp" `Clear;
+    posix "find . -name '*.ml' -exec grep -l x {} +" `Clear;
+    posix "curl https://example.com" `Blocked;
+    posix "cu\\\nrl x" `Blocked;
+    posix "$'\\143url' x" `Blocked;
+    posix "$'\\u0063url' x" `Blocked;
+    posix "bash -c 'c\"\"url x'" `Blocked;
+    posix "timeout 5s sh -c \"c''url x\"" `Blocked;
+    posix "watch \"c''url x\"" `Blocked;
+    posix "x=$(c''url x)" `Blocked;
+    posix "cat <<EOF\n$(c''url x)\nEOF" `Blocked;
+    posix "/usr/local/bin/brew install x" `Blocked;
+    posix "$CMD x" `Review;
+    posix "\"$CMD\" x" `Review;
+    posix "c*l x" `Review;
+    posix "c{u,}rl x" `Review;
+    posix "{fd}>/dev/null $CMD" `Review;
+    posix "true &>/dev/null $CMD" `Review;
+    posix "(( $CMD ))" `Review;
+    posix "[[ -n x || $CMD ]]" `Review;
+    posix "printf $'\\'\n$CMD\n'" `Review;
+    posix "xargs -I{} {} x" `Review;
+    posix "find /usr/bin -name x -exec {} \\;" `Review;
+    posix "env -S \"$CMD x\"" `Review;
+    posix "fish -c 'echo hi'" `Review;
+    posix "echo 'unterminated" `Review;
+    posix
+      (String.concat "" (List.init 5000 (fun _ -> "$(")) ^ "x" ^ String.make 5000 ')')
+      `Review;
+    posix "script -qc \"c''url\" /dev/null" `Blocked;
+    posix "echo hi | xargs -I % % x" `Review;
+    posix "cat <<EOF | sh\necho hi\nEOF" `Review;
+    cmd "(<nul set /p x=out)&(<nul set /p x=err 1>&2)" `Clear;
+    cmd "ping -n 2 127.0.0.1 >nul" `Clear;
+    cmd "c^url x" `Blocked;
+    cmd "cu\"\"rl x" `Blocked;
+    cmd "C:\\Windows\\System32\\curl.exe x" `Blocked;
+    cmd "cmd /c \"c^url x\"" `Blocked;
+    cmd "%CMD% x" `Review;
+  ]
+
+let test_screen_table () =
+  let kind = function
+    | Shell_screen.Clear -> `Clear
+    | Shell_screen.Blocked _ -> `Blocked
+    | Shell_screen.Review _ -> `Review
+  in
+  let mismatched =
+    List.filter_map
+      (fun (dialect, command, expected) ->
+        if kind (Shell_screen.screen dialect command) = expected then None
+        else Some command)
+      screen_table
+  in
+  Alcotest.(check (list string)) "every command gets its expected verdict" [] mismatched
 
 let test_foreground_capture () =
   await @@ with_ctx
@@ -178,6 +330,13 @@ let test_background_lifecycle () =
 let cases =
   [
     Test_tools_test_support.case "conservative shell classifier" `Quick test_classifier;
+    Test_tools_test_support.case "screen reads shell quoting" `Quick
+      test_screen_reads_quoting;
+    Test_tools_test_support.case "screen requires review" `Quick
+      test_screen_requires_review;
+    Test_tools_test_support.case "screen clears ordinary commands" `Quick
+      test_screen_clears_ordinary;
+    Test_tools_test_support.case "screen verdict table" `Quick test_screen_table;
     Test_tools_test_support.case "foreground capture" `Quick test_foreground_capture;
     Test_tools_test_support.case "foreground deadline" `Quick test_timeout;
     Test_tools_test_support.case "background lifecycle" `Quick test_background_lifecycle;

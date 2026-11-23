@@ -40,146 +40,6 @@ let shell_word_char c =
   is_ascii_letter c || is_ascii_digit c
   || match c with '_' | '-' | '.' | '/' | ':' | '=' -> true | _ -> false
 
-let shell_words command =
-  let words = ref [] in
-  let current = Buffer.create 16 in
-  let flush () =
-    if Buffer.length current > 0 then (
-      words := Buffer.contents current :: !words;
-      Buffer.clear current)
-  in
-  String.iter
-    (fun c ->
-      if shell_word_char c then Buffer.add_char current (Char.lowercase_ascii c)
-      else flush ())
-    command;
-  flush ();
-  List.rev !words
-
-let rec has_sequence wanted words =
-  match wanted with
-  | [] -> true
-  | first :: rest -> (
-      match words with
-      | [] -> false
-      | word :: tail ->
-          if word = first then has_sequence rest tail else has_sequence wanted tail)
-
-let blocked_commands =
-  [
-    "alias";
-    "aria2c";
-    "axel";
-    "chrome";
-    "curl";
-    "curlie";
-    "firefox";
-    "httpie";
-    "http-prompt";
-    "links";
-    "lynx";
-    "nc";
-    "safari";
-    "scp";
-    "ssh";
-    "telnet";
-    "w3m";
-    "wget";
-    "xh";
-    "doas";
-    "su";
-    "sudo";
-    "apk";
-    "apt";
-    "apt-cache";
-    "apt-get";
-    "dnf";
-    "dpkg";
-    "emerge";
-    "home-manager";
-    "makepkg";
-    "opkg";
-    "pacman";
-    "paru";
-    "pkg";
-    "pkg_add";
-    "pkg_delete";
-    "portage";
-    "rpm";
-    "yay";
-    "yum";
-    "zypper";
-    "at";
-    "batch";
-    "chkconfig";
-    "crontab";
-    "fdisk";
-    "mkfs";
-    "mount";
-    "parted";
-    "service";
-    "systemctl";
-    "umount";
-    "firewall-cmd";
-    "ifconfig";
-    "ip";
-    "iptables";
-    "netstat";
-    "pfctl";
-    "route";
-    "ufw";
-    "kill";
-    "pkill";
-    "killall";
-    "shutdown";
-    "reboot";
-    "poweroff";
-    "halt";
-    "eval";
-    "exec";
-    "source";
-  ]
-
-let basename word =
-  match String.rindex_opt word '/' with
-  | None -> word
-  | Some index -> String.sub word (index + 1) (String.length word - index - 1)
-
-let blocked_command command =
-  let words = shell_words command in
-  let command_name word = basename word in
-  let has_banned_name =
-    List.exists (fun word -> List.mem (command_name word) blocked_commands) words
-  in
-  let package_install =
-    [
-      [ "apk"; "add" ];
-      [ "apt"; "install" ];
-      [ "apt-get"; "install" ];
-      [ "dnf"; "install" ];
-      [ "pacman"; "-s" ];
-      [ "pkg"; "install" ];
-      [ "yum"; "install" ];
-      [ "zypper"; "install" ];
-      [ "brew"; "install" ];
-      [ "cargo"; "install" ];
-      [ "gem"; "install" ];
-      [ "go"; "install" ];
-      [ "npm"; "install"; "--global" ];
-      [ "npm"; "install"; "-g" ];
-      [ "pip"; "install"; "--user" ];
-      [ "pip3"; "install"; "--user" ];
-      [ "pnpm"; "add"; "--global" ];
-      [ "pnpm"; "add"; "-g" ];
-      [ "yarn"; "global"; "add" ];
-      [ "go"; "test"; "-exec" ];
-    ]
-    |> List.exists (fun pattern ->
-        let normalized = List.map command_name pattern in
-        has_sequence normalized words)
-  in
-  has_banned_name || package_install
-
 let contains_unsafe_char command =
   let rec loop index =
     if index = String.length command then false
@@ -269,16 +129,15 @@ let safe_tokens = function
       else if command = "dune" then args = [ "describe" ]
       else safe_simple_command command args
 
+let read_only_pipeline command =
+  String.split_on_char '|' command
+  |> List.for_all (fun segment ->
+      match plain_tokens segment with Some tokens -> safe_tokens tokens | None -> false)
+
 let is_read_only command =
-  if blocked_command command then false
-  else
-    let segments = String.split_on_char '|' command in
-    List.for_all
-      (fun segment ->
-        match plain_tokens segment with
-        | Some tokens -> safe_tokens tokens
-        | None -> false)
-      segments
+  match Shell_screen.screen Shell_screen.platform command with
+  | Shell_screen.Clear -> read_only_pipeline command
+  | Shell_screen.Blocked _ | Shell_screen.Review _ -> false
 
 let output_with_status ctx ~status text =
   let output = Tool.truncate ctx text in
@@ -379,15 +238,20 @@ let bash =
         else if timeout_s < 1 || timeout_s > 600 then
           Error (`Invalid_input "timeout_s must be between 1 and 600")
         else
-          let read_only = is_read_only command && not run_in_background in
           let permission_path = "" in
           let* () =
-            Tool.request ctx ~read_only ~tool:"bash" ~action:command ~path:permission_path
-              ~description:params.description
+            match Shell_screen.screen Shell_screen.platform command with
+            | Shell_screen.Blocked _ ->
+                Error (`Unavailable "command is blocked by the shell safety policy")
+            | Shell_screen.Review review ->
+                Tool.request ctx ~review ~read_only:false ~tool:"bash" ~action:command
+                  ~path:permission_path ~description:params.description
+            | Shell_screen.Clear ->
+                let read_only = read_only_pipeline command && not run_in_background in
+                Tool.request ctx ~read_only ~tool:"bash" ~action:command
+                  ~path:permission_path ~description:params.description
           in
-          if blocked_command command then
-            Error (`Unavailable "command is blocked by the shell safety policy")
-          else if run_in_background then
+          if run_in_background then
             let job_id = Jobs.start ctx.Tool.jobs ~cwd ~command ~env:[] ~timeout_s in
             Ok (Tool.truncate ctx (Fmt.str "started %s" job_id))
           else

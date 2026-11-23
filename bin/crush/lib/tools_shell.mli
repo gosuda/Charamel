@@ -9,7 +9,10 @@ val is_read_only : string -> bool
     mutable. *)
 
 val bash : Tool.t
-(** [bash] executes a shell command in the requested working directory. *)
+(** [bash] executes a shell command in the requested working directory. The command first
+    passes {!Shell_screen.screen} for this platform: a {!Shell_screen.Blocked} command is
+    refused before any permission question, and a {!Shell_screen.Review} command runs only
+    on an explicit approval of its exact text (see {!Permission.request}). *)
 
 val job_output : Tool.t
 (** [job_output] returns captured output and status for a background job. *)
