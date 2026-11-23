@@ -51,12 +51,13 @@ let text_result : (string, [< failure ]) result -> string = function
   | Error failure -> "Error " ^ show_failure failure
 
 (* [Unix.unsetenv] only exists from OCaml 5.5, so the removal is bound like the
-   library's own foreign calls: POSIX [unsetenv] deletes the variable, and on Windows a
-   bare [_putenv "NAME"] does the same. *)
+   library's own foreign calls: POSIX [unsetenv] deletes the variable, and on Windows
+   [_putenv "NAME="], with nothing after the equals sign, does the same. A bare
+   [_putenv "NAME"] is rejected and leaves the variable set. *)
 let unsetenv =
   if Sys.win32 then
     let putenv = Foreign.foreign "_putenv" Ctypes.(string @-> returning int) in
-    fun name -> ignore (putenv name : int)
+    fun name -> ignore (putenv (name ^ "=") : int)
   else
     let unsetenv = Foreign.foreign "unsetenv" Ctypes.(string @-> returning int) in
     fun name -> ignore (unsetenv name : int)
