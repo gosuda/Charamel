@@ -130,7 +130,8 @@ let join_root_absolute_targets () =
   check_string "relative path joins the root"
     (Filename.concat {|C:\t|} "config/x")
     (Path.join_root ~windows:true ~root:{|C:\t|} "config/x");
-  check_string "posix relative path joins the root" "/t/config/x"
+  check_string "posix relative path joins the root"
+    (Filename.concat "/t" "config/x")
     (Path.join_root ~windows:false ~root:"/t" "config/x")
 
 let cases =
