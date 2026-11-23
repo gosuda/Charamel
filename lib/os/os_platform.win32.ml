@@ -279,6 +279,11 @@ module Process = struct
         Mutex.unlock env_lock)
       f
 
+  let system_directory () =
+    match Charamel_os_win32.system_directory () with
+    | Some directory -> directory
+    | None -> raise (Unix.Unix_error (Unix.ENOENT, "GetSystemDirectoryW", ""))
+
   let spawn ?cwd ?env ?(stdin = `Inherit) ?(stdout = `Inherit) ?(stderr = `Inherit) argv =
     (* The temporary directory Windows reports ends in a separator, and [CreateProcess]
        fails such a working directory, so the one spawn strips it here, keeping a bare
@@ -292,10 +297,14 @@ module Process = struct
            even with the system directory on the search path. The absolute path always
            resolves, so a bare name is resolved first — from the current directory, then
            [PATH] — and a miss goes through unchanged so the system reports it exactly
-           as before. A resolved batch file runs through [cmd.exe] with its absolute
-           path in the command text, because [CreateProcess] would otherwise look it up
-           again from the child's directory. *)
-        let application, line = Exe.spawn_command argv in
+           as before. The command interpreter and the URL handler come from the system
+           directory instead, so a checkout cannot supply them. A resolved batch file
+           runs through that [cmd.exe] with its absolute path in the command text,
+           because [CreateProcess] would otherwise look it up again from the child's
+           directory. *)
+        let application, line =
+          Exe.spawn_command ~system_directory:(system_directory ()) argv
+        in
         let stdin', stdin_w = input_redir stdin in
         let stdout', stdout_r = output_redir stdout in
         let stderr', stderr_r = output_redir stderr in

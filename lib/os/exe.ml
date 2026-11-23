@@ -306,15 +306,27 @@ let batch_command_line script arguments =
       "\"";
     ]
 
-let spawn_command ?(win32 = Sys.win32) = function
+let system_programs = [ "cmd"; "rundll32" ]
+
+let system_program ~win32 ~system_directory program =
+  let name = String.lowercase_ascii program in
+  let stem = Option.value (Filename.chop_suffix_opt ~suffix:".exe" name) ~default:name in
+  if win32 && List.mem stem system_programs then
+    Some (Filename.concat system_directory (stem ^ ".exe"))
+  else None
+
+let spawn_command ?(win32 = Sys.win32) ~system_directory = function
   | [] -> ("", "")
   | program :: arguments as argv -> (
-      let application = for_spawn ~win32 program in
+      let application =
+        match system_program ~win32 ~system_directory program with
+        | Some application -> application
+        | None -> for_spawn ~win32 program
+      in
       let script =
         if win32 && is_batch_file application then find ~win32 application else None
       in
       match script with
       | Some script ->
-          ( Option.value (find ~win32 "cmd.exe") ~default:"cmd.exe",
-            batch_command_line script arguments )
+          (Filename.concat system_directory "cmd.exe", batch_command_line script arguments)
       | None -> (application, command_line argv))

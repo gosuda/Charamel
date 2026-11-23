@@ -1,4 +1,4 @@
-(** Raw Win32 console bindings through ctypes-foreign.
+(** Raw Win32 console and system-directory bindings through ctypes-foreign.
 
     Every value here is a thin, non-blocking-by-construction wrapper over one kernel32
     entry point; no Charamel policy lives at this level. The library is enabled only when
@@ -82,3 +82,8 @@ val read_console_input : handle -> max_events:int -> event list
 
 val flush_console_input : handle -> unit
 (** [flush_console_input h] discards queued input records. *)
+
+val system_directory : unit -> string option
+(** [system_directory ()] is the Windows system directory that [GetSystemDirectoryW]
+    reports, such as [C:\Windows\system32], in UTF-8, or [None] when the call fails. It
+    reads no environment variable. *)

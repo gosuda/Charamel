@@ -983,29 +983,34 @@ let in_directory directory f =
    [cmd.exe], which drops the application name and looks the line's first word up again
    from the child's working directory. The funnel runs the interpreter instead, with
    command text that names the script resolved here and arguments [cmd.exe] passes on
-   as data. *)
+   as data. The interpreter is the system directory's own, so a [PATH] without that
+   directory still runs the script. *)
 let spawn_runs_batch_files_through_the_interpreter () =
   let local = scratch "exe-batchrun" in
   Unix.mkdir local 0o700;
+  let tools = scratch "exe-batchrun-tools" in
+  Unix.mkdir tools 0o700;
   let system = scratch "exe-batchrun-system" in
-  Unix.mkdir system 0o700;
   let script = Filename.concat local "probe01.cmd" in
-  let interpreter = Filename.concat system "cmd.exe" in
-  let image = Filename.concat system "tool01.EXE" in
+  let image = Filename.concat tools "tool01.EXE" in
   write_file script "@echo %1";
-  write_file interpreter "MZ";
   write_file image "MZ";
-  with_scratch_tree [ script; interpreter; image ] [ local; system ] (fun () ->
+  let spawn_command =
+    Charamel_os.Exe.spawn_command ~win32:true ~system_directory:system
+  in
+  with_scratch_tree [ script; image ] [ local; tools ] (fun () ->
       in_directory local (fun () ->
           with_environment
-            [ ("PATH", system ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE;.BAT;.CMD") ]
+            [ ("PATH", tools ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE;.BAT;.CMD") ]
             (fun () ->
               let application, line =
-                Charamel_os.Exe.spawn_command ~win32:true
+                spawn_command
                   [ "probe01.cmd"; "a&b"; "50%"; "plain"; "say \"hi\""; ""; "C:\\dir\\" ]
               in
               Alcotest.(check string)
-                "the command interpreter is the application" interpreter application;
+                "the system directory's command interpreter is the application"
+                (Filename.concat system "cmd.exe")
+                application;
               Alcotest.(check string)
                 "the command text names the resolved script and quotes for cmd.exe"
                 (String.concat ""
@@ -1019,17 +1024,62 @@ let spawn_runs_batch_files_through_the_interpreter () =
               Alcotest.(check (pair string string))
                 "an image keeps its own name and the C runtime line"
                 (image, "tool01 \"a&b c\"")
-                (Charamel_os.Exe.spawn_command ~win32:true [ "tool01"; "a&b c" ]);
+                (spawn_command [ "tool01"; "a&b c" ]);
               Alcotest.(check (pair string string))
                 "a batch file that does not resolve goes through for the system to report"
                 ("missing01.cmd", "missing01.cmd a&b")
-                (Charamel_os.Exe.spawn_command ~win32:true [ "missing01.cmd"; "a&b" ]);
+                (spawn_command [ "missing01.cmd"; "a&b" ]);
               Alcotest.check_raises "a line break would cut the command text"
                 (Invalid_argument
                    "Charamel_os.Exe.spawn_command: a batch file argument holds a line \
-                    break") (fun () ->
-                  ignore
-                    (Charamel_os.Exe.spawn_command ~win32:true [ "probe01.cmd"; "a\nb" ])))))
+                    break") (fun () -> ignore (spawn_command [ "probe01.cmd"; "a\nb" ])))))
+
+(* The command interpreter and the URL handler are the programs the library runs on its
+   own account, so a checkout that holds files named like them, and a [PATH] that lists
+   other copies first, change nothing: both come from the system directory. A path the
+   caller spells out is still the caller's choice. *)
+let spawn_takes_system_programs_from_the_system_directory () =
+  let checkout = scratch "exe-sysprog" in
+  Unix.mkdir checkout 0o700;
+  let elsewhere = scratch "exe-sysprog-path" in
+  Unix.mkdir elsewhere 0o700;
+  let system = scratch "exe-sysprog-system" in
+  let planted =
+    List.map (Filename.concat checkout) [ "cmd.BAT"; "cmd.exe"; "rundll32.EXE" ]
+    @ List.map (Filename.concat elsewhere) [ "cmd.EXE"; "rundll32.EXE" ]
+  in
+  List.iter (fun path -> write_file path "MZ") planted;
+  let spawn_command =
+    Charamel_os.Exe.spawn_command ~win32:true ~system_directory:system
+  in
+  let url = "https://example.test/?a=1&b=2" in
+  with_scratch_tree planted [ checkout; elsewhere ] (fun () ->
+      in_directory checkout (fun () ->
+          with_environment
+            [
+              ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE;.BAT;.CMD");
+            ]
+            (fun () ->
+              Alcotest.(check (pair string string))
+                "a bare cmd is the system's, not the checkout's cmd.BAT"
+                (Filename.concat system "cmd.exe", "cmd /c \"echo hi\"")
+                (spawn_command [ "cmd"; "/c"; "echo hi" ]);
+              Alcotest.(check (pair string string))
+                "cmd.exe as the shell names it is the system's, not the checkout's"
+                (Filename.concat system "cmd.exe", "cmd.exe /d /s /c \"echo hi\"")
+                (spawn_command [ "cmd.exe"; "/d"; "/s"; "/c"; "echo hi" ]);
+              Alcotest.(check string)
+                "in any case"
+                (Filename.concat system "cmd.exe")
+                (fst (spawn_command [ "Cmd.Exe"; "/c"; "ver" ]));
+              Alcotest.(check (pair string string))
+                "the URL handler is the system's, not the checkout's or a PATH copy"
+                ( Filename.concat system "rundll32.exe",
+                  "rundll32 url.dll,FileProtocolHandler " ^ url )
+                (spawn_command [ "rundll32"; "url.dll,FileProtocolHandler"; url ]);
+              Alcotest.(check string)
+                "a spelled-out path is the caller's choice" "C:\\tools\\cmd.exe"
+                (fst (spawn_command [ "C:\\tools\\cmd.exe"; "/c"; "ver" ])))))
 
 (* The child's working directory holds a script with the same name as the one the
    parent resolves: the resolved one runs, and its arguments reach it whole. [PATH] is
@@ -1058,6 +1108,33 @@ let batch_files_run_the_resolved_script () =
                 "the script resolved in the parent runs with its arguments unexpanded"
                 "parent \"a&b\" \"%PATH%\"" (String.trim output);
               Alcotest.(check int) "and exits cleanly" 0 code)))
+
+(* A checkout that holds a [cmd.bat] and a [cmd.exe] of its own cannot stand in for the
+   command interpreter: the bare name and the name the shell module uses both run the
+   system's [cmd.exe]. The planted [cmd.exe] is not an image, so starting it would fail
+   outright. *)
+let checkout_cannot_replace_the_command_interpreter () =
+  windows_only ();
+  let checkout = scratch "exe-plant" in
+  Unix.mkdir checkout 0o700;
+  let script = Filename.concat checkout "cmd.bat" in
+  let image = Filename.concat checkout "cmd.exe" in
+  write_file script "@echo planted\r\n";
+  write_file image "planted";
+  let first_line argv =
+    let process = Charamel_os.Process.spawn ~stdout:`Pipe argv in
+    Lwt_io.read_line (Charamel_os.Process.stdout_r process) >>= fun output ->
+    Charamel_os.Process.await process >|= fun code -> (String.trim output, code)
+  in
+  with_scratch_tree [ script; image ] [ checkout ] (fun () ->
+      in_directory checkout (fun () ->
+          run (fun () ->
+              first_line [ "cmd"; "/c"; "echo system" ] >>= fun bare ->
+              Alcotest.(check (pair string int))
+                "a bare cmd runs the system interpreter" ("system", 0) bare;
+              first_line (Charamel_os.Shell.command "echo shell") >|= fun shell ->
+              Alcotest.(check (pair string int))
+                "so does the shell module's cmd.exe" ("shell", 0) shell)))
 
 let searches_path_by_spawn () =
   posix_only ();
@@ -1868,6 +1945,10 @@ let suites =
           spawn_runs_batch_files_through_the_interpreter;
         Alcotest.test_case "batch files run the resolved script" `Quick
           batch_files_run_the_resolved_script;
+        Alcotest.test_case "system programs come from the system directory" `Quick
+          spawn_takes_system_programs_from_the_system_directory;
+        Alcotest.test_case "a checkout cannot replace the interpreter" `Quick
+          checkout_cannot_replace_the_command_interpreter;
         Alcotest.test_case "command line for cmd.exe" `Quick
           command_line_for_the_interpreter;
         Alcotest.test_case "command line C runtime quoting" `Quick

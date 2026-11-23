@@ -33,14 +33,15 @@ val find : ?win32:bool -> string -> string option
     the host, so a test on one system can pin the rules of the other. *)
 
 val for_spawn : ?win32:bool -> string -> string
-(** [for_spawn ?win32 prog] is the program name the spawn funnel hands to the system: a
-    bare name that names a runnable file in the current directory resolves there first,
-    because that is where the system reads it from, and otherwise through {!val:find} to
-    the absolute path it answers, because the funnel passes that name as the application
-    name and a bare name misses there. A name that already carries a directory separator,
-    a Windows drive-letter prefix such as [C:tool.exe], and the empty program go through
-    unchanged, as does a miss, so the system reports an unknown program exactly as before.
-*)
+(** [for_spawn ?win32 prog] is the program name the spawn funnel hands to the system for a
+    program the caller names: a bare name that names a runnable file in the current
+    directory resolves there first, because that is where the system reads it from, and
+    otherwise through {!val:find} to the absolute path it answers, because the funnel
+    passes that name as the application name and a bare name misses there. A name that
+    already carries a directory separator, a Windows drive-letter prefix such as
+    [C:tool.exe], and the empty program go through unchanged, as does a miss, so the
+    system reports an unknown program exactly as before. {!val:spawn_command} takes the
+    Windows programs the library itself runs from the system directory instead. *)
 
 val quote_word : string -> string
 (** [quote_word word] is [word] as one quoted word of a [CreateProcess] command line,
@@ -61,15 +62,22 @@ val command_line : string list -> string
     that pair when its text is exactly the name of an executable file with a space in it,
     which still runs that file. The empty [argv] is the empty line. *)
 
-val spawn_command : ?win32:bool -> string list -> string * string
-(** [spawn_command ?win32 argv] is the application name and the command line the spawn
-    funnel hands to [CreateProcess]: {!val:for_spawn} of the program and
-    {!val:command_line} of [argv]. A program that resolves to an existing batch file
-    ([.BAT] or [.CMD]) is the exception, because [CreateProcess] would run it through
-    [cmd /c] over the command line, which looks the first word up again from the child's
-    working directory and reads [&] in an argument as the end of the command. The
-    application is then [cmd.exe] from [PATH], and the line is
-    [cmd.exe /e:ON /v:OFF /d /c ""script" args"] with the absolute script path: an
+val spawn_command :
+  ?win32:bool -> system_directory:string -> string list -> string * string
+(** [spawn_command ?win32 ~system_directory argv] is the application name and the command
+    line the spawn funnel hands to [CreateProcess]: {!val:for_spawn} of the program and
+    {!val:command_line} of [argv]. On Windows, [system_directory] is the directory
+    [GetSystemDirectoryW] reports, and the programs the library itself runs come from it
+    and are never searched: a bare [cmd] or [rundll32], with or without [.exe] and in any
+    case, is [cmd.exe] or [rundll32.exe] in [system_directory], so neither a file in the
+    current directory, such as an untrusted checkout, nor a [PATH] entry can stand in for
+    the command interpreter or the URL handler. A path to one of them is the caller's
+    choice and goes through unchanged. A program that resolves to an existing batch file
+    ([.BAT] or [.CMD]) is the other exception, because [CreateProcess] would run it
+    through [cmd /c] over the command line, which looks the first word up again from the
+    child's working directory and reads [&] in an argument as the end of the command. The
+    application is then [cmd.exe] in [system_directory], whatever [PATH] holds, and the
+    line is [cmd.exe /e:ON /v:OFF /d /c ""script" args"] with the absolute script path: an
     argument that holds more than letters, digits and [#$*+-./:?@\_] is quoted, an inner
     quote doubles, the backslashes before a quote or the closing quote double, and each
     [%] is written [%%cd:~,%], which [cmd.exe] reads back as one [%] instead of expanding
