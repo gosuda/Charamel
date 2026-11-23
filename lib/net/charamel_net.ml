@@ -170,24 +170,37 @@ let uri_error uri =
         | Some _ -> Ok ()
       else transport (Fmt.str "unsupported URI scheme: %s" scheme)
 
-let context =
-  lazy
-    (Lwt.catch
-       (fun () ->
-         match Ca_certs.authenticator () with
-         | Error (`Msg message) ->
-             return (transport (Fmt.str "unable to load CA certificates: %s" message))
-         | Ok authenticator ->
-             Conduit_lwt_unix.init ~tls_authenticator:authenticator () >>= fun conduit ->
-             return (Ok (Endpoint.init ~ctx:conduit ())))
-       (fun exn -> return (transport (transport_message exn))))
+(* Plain HTTP verifies no certificate, so its context never reads the trust store:
+   a store that fails to load would fail every plain request, and on Windows the
+   store logs a warning for each anchor it cannot decode. The plain context's
+   authenticator refuses every chain, so no TLS endpoint passes through it. *)
+let refuse_every_chain ?ip:_ ~host:_ _chain = Error `EmptyCertificateChain
+
+let endpoint_context authenticator =
+  Lwt.catch
+    (fun () ->
+      match authenticator () with
+      | Error (`Msg message) ->
+          return (transport (Fmt.str "unable to load CA certificates: %s" message))
+      | Ok tls_authenticator ->
+          Conduit_lwt_unix.init ~tls_authenticator () >>= fun conduit ->
+          return (Ok (Endpoint.init ~ctx:conduit ())))
+    (fun exn -> return (transport (transport_message exn)))
+
+let tls_context = lazy (endpoint_context (fun () -> Ca_certs.authenticator ()))
+let plain_context = lazy (endpoint_context (fun () -> Ok refuse_every_chain))
+
+let context uri =
+  match Uri.scheme uri with
+  | Some scheme when String.equal (lower scheme) "https" -> tls_context
+  | _ -> plain_context
 
 let attempt ~timeout ~headers ?body meth uri =
   check_timeout timeout;
   match uri_error uri with
   | Error _ as failure -> return failure
   | Ok () -> (
-      Lazy.force context >>= function
+      Lazy.force (context uri) >>= function
       | Error _ as failure -> return failure
       | Ok ctx ->
           let connection = ref None in
