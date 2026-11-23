@@ -23,11 +23,12 @@ val find : ?win32:bool -> string -> string option
     on Windows is a drive-letter prefix such as [C:tool.exe]: it is checked as given (plus
     the extension list on Windows) and never joined onto a [PATH] entry, which is the rule
     the shells use and the one that makes [./build/tool] findable. An empty [name] is
-    [None]. A hit is always an absolute path: a [PATH] entry spelled relative to the
-    current directory is read from there. [PATH] and [PATHEXT] are read on every call, so
-    a caller that changes the environment sees the change. [~win32] selects the platform
-    rules and defaults to the host, so a test on one system can pin the rules of the
-    other. *)
+    [None]. A hit is always an absolute path, except a Windows drive-relative one such as
+    [C:tool.exe], which is returned as given: only the system can resolve it against that
+    drive's working directory. A [PATH] entry spelled relative to the current directory is
+    read from there. [PATH] and [PATHEXT] are read on every call, so a caller that changes
+    the environment sees the change. [~win32] selects the platform rules and defaults to
+    the host, so a test on one system can pin the rules of the other. *)
 
 val for_spawn : ?win32:bool -> string -> string
 (** [for_spawn ?win32 prog] is the program name the spawn funnel hands to the system: a
