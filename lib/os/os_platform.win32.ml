@@ -286,13 +286,19 @@ module Process = struct
     let cwd = Option.map Dirs.strip_trailing_separators cwd in
     match argv with
     | [] -> invalid_arg "Charamel_os.Process.spawn: argv is empty"
-    | _ ->
+    | prog :: _ ->
+        (* [Lwt_process] hands the program to [CreateProcess] as its application name,
+           and a bare name misses there: [cmd] arrives as ["No such file or directory"]
+           even with the system directory on the search path. The absolute path always
+           resolves, so a bare name is resolved first; a miss goes through unchanged so
+           the system reports it exactly as before. *)
+        let prog = Exe.for_spawn prog in
         let stdin', stdin_w = input_redir stdin in
         let stdout', stdout_r = output_redir stdout in
         let stderr', stderr_r = output_redir stderr in
         let create () =
           new Lwt_process.process_none
-            (List.hd argv, Array.of_list argv)
+            (prog, Array.of_list argv)
             ?cwd ~stdin:stdin' ~stdout:stdout' ~stderr:stderr'
         in
         let process =

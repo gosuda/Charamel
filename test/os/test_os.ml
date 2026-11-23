@@ -520,6 +520,66 @@ let app_dir_without_any_base () =
 
 (* {1 Exe} *)
 
+(* The Windows leg failed every child spawn with [CreateProcess: No such file or
+   directory]: the funnel hands the program to [CreateProcess] as its application
+   name, and a bare name such as [cmd] misses there. The funnel resolves bare names
+   through [Exe.for_spawn] first, and the [~win32] argument pins the Windows rules on
+   any host. *)
+let windows_program_search () =
+  let dir = scratch "exe-win" in
+  Unix.mkdir dir 0o700;
+  let program = Filename.concat dir "wincmd.EXE" in
+  let channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove program with Sys_error _ -> ());
+      try Unix.rmdir dir with Unix.Unix_error _ -> ())
+    (fun () ->
+      with_environment
+        [ ("PATH", dir ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+        (fun () ->
+          Alcotest.(check (option string))
+            "a bare name resolves through the Windows rules" (Some program)
+            (Charamel_os.Exe.find ~win32:true "wincmd");
+          Alcotest.(check (option string))
+            "a suffixed name is checked as given" (Some program)
+            (Charamel_os.Exe.find ~win32:true "wincmd.EXE");
+          Alcotest.(check (option string))
+            "a miss stays a miss" None
+            (Charamel_os.Exe.find ~win32:true "wincmd-missing")))
+
+let spawn_funnel_prefers_absolute_paths () =
+  let dir = scratch "exe-spawn" in
+  Unix.mkdir dir 0o700;
+  let program = Filename.concat dir "wintool.EXE" in
+  let channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove program with Sys_error _ -> ());
+      try Unix.rmdir dir with Unix.Unix_error _ -> ())
+    (fun () ->
+      with_environment
+        [ ("PATH", dir ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+        (fun () ->
+          Alcotest.(check string)
+            "a bare name resolves for the spawn funnel" program
+            (Charamel_os.Exe.for_spawn ~win32:true "wintool");
+          Alcotest.(check string)
+            "a path goes through unchanged" program
+            (Charamel_os.Exe.for_spawn ~win32:true program);
+          Alcotest.(check string)
+            "a miss goes through for the system to report" "wintool-missing"
+            (Charamel_os.Exe.for_spawn ~win32:true "wintool-missing");
+          Alcotest.(check string)
+            "the empty program goes through" ""
+            (Charamel_os.Exe.for_spawn ~win32:true "")))
+
 let searches_path_by_spawn () =
   posix_only ();
   run (fun () ->
@@ -1108,6 +1168,9 @@ let suites =
       [
         Alcotest.test_case "PATH search" `Quick searches_path;
         Alcotest.test_case "explicit paths" `Quick checks_explicit_paths;
+        Alcotest.test_case "Windows search rules" `Quick windows_program_search;
+        Alcotest.test_case "spawn resolves bare names" `Quick
+          spawn_funnel_prefers_absolute_paths;
       ] );
     ( "shell",
       [
