@@ -42,6 +42,12 @@ val for_spawn : ?win32:bool -> string -> string
     unchanged, as does a miss, so the system reports an unknown program exactly as before.
 *)
 
+val quote_word : string -> string
+(** [quote_word word] is [word] as one quoted word of a [CreateProcess] command line,
+    which the C runtime splits back to exactly [word]: always quoted, with an inner quote
+    escaped by a backslash and the backslashes before an escaped or closing quote doubled.
+*)
+
 val command_line : string list -> string
 (** [command_line argv] is the Windows command line the spawn funnel hands to
     [CreateProcess] for [argv], the program first. Each word is written the way the C

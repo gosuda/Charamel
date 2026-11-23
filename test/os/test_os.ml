@@ -1224,6 +1224,61 @@ let quoting_protects_word_boundaries () =
     (Charamel_os.Shell.quote "a; b | c && d $(e)");
   Alcotest.(check string) "a newline survives" "'a\nb'" (Charamel_os.Shell.quote "a\nb")
 
+(* An independent reading of what [cmd.exe] hands on for one word of its command text,
+   or [None] when it would act on the word. A [%] that a caret does not break apart can
+   name a variable and expand, even inside quotes. Outside quotes a caret takes the next
+   character literally and [& | < > ( )] act; a quote toggles quoting, and inside quotes
+   every character, a caret included, is copied as it stands. *)
+let cmd_hands_on text =
+  let length = String.length text in
+  let output = Buffer.create length in
+  let rec read index quoted =
+    if index = length then Some (Buffer.contents output)
+    else
+      match (text.[index], quoted) with
+      | '%', _ when index = 0 || text.[index - 1] <> '^' -> None
+      | '"', _ ->
+          Buffer.add_char output '"';
+          read (index + 1) (not quoted)
+      | character, true ->
+          Buffer.add_char output character;
+          read (index + 1) true
+      | '^', false when index + 1 < length ->
+          Buffer.add_char output text.[index + 1];
+          read (index + 2) false
+      | ('^' | '&' | '|' | '<' | '>' | '(' | ')'), false -> None
+      | character, false ->
+          Buffer.add_char output character;
+          read (index + 1) false
+  in
+  read 0 false
+
+let windows_quoting_survives_cmd_and_the_c_runtime () =
+  Alcotest.(check string)
+    "a program path with a space stays one quoted run" "\"C:\\Program Files\\x y\\s.exe\""
+    (Charamel_os.Shell.quote ~win32:true "C:\\Program Files\\x y\\s.exe");
+  Alcotest.(check string)
+    "a trailing backslash doubles before the closing quote" "\"C:\\my dir\\\\\""
+    (Charamel_os.Shell.quote ~win32:true "C:\\my dir\\");
+  let state = Random.State.make [| 1124 |] in
+  let alphabet =
+    [| 'a'; ' '; '\t'; '"'; '\\'; '&'; '^'; '%'; '|'; '<'; '>'; '('; ')'; '!' |]
+  in
+  for _ = 1 to 2000 do
+    let word =
+      String.init (Random.State.int state 9) (fun _ ->
+          alphabet.(Random.State.int state (Array.length alphabet)))
+    in
+    let quoted = Charamel_os.Shell.quote ~win32:true word in
+    match cmd_hands_on quoted with
+    | None -> Alcotest.failf "cmd.exe acts on %s" (String.escaped quoted)
+    | Some passed ->
+        Alcotest.(check (list string))
+          ("the program reads back " ^ String.escaped word)
+          [ word ]
+          (split_c_runtime_words passed)
+  done
+
 let splitting_words () =
   let check name expected text =
     Alcotest.(check (list string)) name expected (Charamel_os.Shell.split_words text)
@@ -1806,6 +1861,8 @@ let suites =
       [
         Alcotest.test_case "command" `Quick command_uses_the_platform_shell;
         Alcotest.test_case "quoting" `Quick quoting_protects_word_boundaries;
+        Alcotest.test_case "Windows quoting survives cmd.exe" `Quick
+          windows_quoting_survives_cmd_and_the_c_runtime;
         Alcotest.test_case "splitting" `Quick splitting_words;
       ] );
     ( "editor",

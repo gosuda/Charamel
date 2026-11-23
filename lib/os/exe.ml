@@ -179,30 +179,31 @@ let needs_quotes argument =
        (function ' ' | '\t' | '\n' | '\011' | '"' -> true | _ -> false)
        argument
 
+let quote_word argument =
+  let buffer = Buffer.create (String.length argument + 2) in
+  Buffer.add_char buffer '"';
+  let backslashes =
+    String.fold_left
+      (fun backslashes character ->
+        match character with
+        | '\\' ->
+            Buffer.add_char buffer '\\';
+            backslashes + 1
+        | '"' ->
+            Buffer.add_string buffer (String.make (backslashes + 1) '\\');
+            Buffer.add_char buffer '"';
+            0
+        | character ->
+            Buffer.add_char buffer character;
+            0)
+      0 argument
+  in
+  Buffer.add_string buffer (String.make backslashes '\\');
+  Buffer.add_char buffer '"';
+  Buffer.contents buffer
+
 let quote_argument argument =
-  if not (needs_quotes argument) then argument
-  else
-    let buffer = Buffer.create (String.length argument + 2) in
-    Buffer.add_char buffer '"';
-    let backslashes =
-      String.fold_left
-        (fun backslashes character ->
-          match character with
-          | '\\' ->
-              Buffer.add_char buffer '\\';
-              backslashes + 1
-          | '"' ->
-              Buffer.add_string buffer (String.make (backslashes + 1) '\\');
-              Buffer.add_char buffer '"';
-              0
-          | character ->
-              Buffer.add_char buffer character;
-              0)
-        0 argument
-    in
-    Buffer.add_string buffer (String.make backslashes '\\');
-    Buffer.add_char buffer '"';
-    Buffer.contents buffer
+  if needs_quotes argument then quote_word argument else argument
 
 let program_name program =
   let start =
