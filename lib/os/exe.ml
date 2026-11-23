@@ -249,11 +249,14 @@ let command_line = function
    the child's working directory and reads every argument as command text, where [&]
    ends the command. The funnel runs the interpreter itself instead: [/d] skips the
    [AutoRun] keys, [/v:OFF] keeps [!] literal and [/e:ON] keeps the substring syntax
-   that defuses [%], and the command text names the script resolved here. An argument
-   is quoted unless it holds only letters, digits and [#$*+-./:?@\_]; inside the quotes
-   a quote doubles, backslashes before a quote or the closing quote double, and each
-   [%] becomes [%%cd:~,%], whose empty substring of [%cd%] leaves one [%] behind. A
-   line break would end the command text, so it is refused. *)
+   that defuses [%], and the command text names the script resolved here. [cmd.exe]
+   expands [%name%] across the whole command text, quotes or not, so each [%] in the
+   script path and in every argument becomes [%%cd:~,%], whose empty substring of
+   [%cd%] leaves one [%] behind. An argument is quoted unless it holds only letters,
+   digits and [#$*+-./:?@\_]; inside the quotes a quote doubles and backslashes before a
+   quote or the closing quote double. A line break would end the command text, so it is
+   refused. *)
+let literal_percent = "%%cd:~,%"
 let batch_unquoted = "#$*+-./:?@\\_"
 
 let batch_needs_quotes argument =
@@ -283,7 +286,7 @@ let batch_argument argument =
             Buffer.add_string buffer "\"\"";
             0
         | '%' ->
-            Buffer.add_string buffer "%%cd:~,%";
+            Buffer.add_string buffer literal_percent;
             0
         | character ->
             Buffer.add_char buffer character;
@@ -299,7 +302,7 @@ let batch_command_line script arguments =
   String.concat ""
     [
       "cmd.exe /e:ON /v:OFF /d /c \"\"";
-      script;
+      String.concat literal_percent (String.split_on_char '%' script);
       "\"";
       String.concat ""
         (List.map (fun argument -> " " ^ batch_argument argument) arguments);

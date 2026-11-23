@@ -1081,6 +1081,33 @@ let spawn_takes_system_programs_from_the_system_directory () =
                 "a spelled-out path is the caller's choice" "C:\\tools\\cmd.exe"
                 (fst (spawn_command [ "C:\\tools\\cmd.exe"; "/c"; "ver" ])))))
 
+(* [cmd.exe] expands [%name%] anywhere in its command text, quotes or not, so a script
+   resolved in a directory whose name holds such a pair would be looked for elsewhere:
+   each percent sign of the path is written so [cmd.exe] reads it back as itself. *)
+let spawn_keeps_percent_signs_in_the_script_path () =
+  let stem = scratch "exe-pct" in
+  let local = stem ^ "%USERNAME%" in
+  Unix.mkdir local 0o700;
+  let system = scratch "exe-pct-system" in
+  let script = Filename.concat local "probe05.cmd" in
+  write_file script "@echo %1";
+  with_scratch_tree [ script ] [ local ] (fun () ->
+      in_directory local (fun () ->
+          with_environment
+            [ ("PATH", "C:\\nonexistent"); ("PATHEXT", ".COM;.EXE;.BAT;.CMD") ]
+            (fun () ->
+              Alcotest.(check (pair string string))
+                "the script path keeps its percent signs literal"
+                ( Filename.concat system "cmd.exe",
+                  String.concat ""
+                    [
+                      "cmd.exe /e:ON /v:OFF /d /c \"\"";
+                      Filename.concat (stem ^ "%%cd:~,%USERNAME%%cd:~,%") "probe05.cmd";
+                      "\" \"50%%cd:~,%\"\"";
+                    ] )
+                (Charamel_os.Exe.spawn_command ~win32:true ~system_directory:system
+                   [ "probe05.cmd"; "50%" ]))))
+
 (* The child's working directory holds a script with the same name as the one the
    parent resolves: the resolved one runs, and its arguments reach it whole. [PATH] is
    always defined, so a [%PATH%] argument that [cmd.exe] expanded would print the search
@@ -1163,6 +1190,36 @@ let spawn_resolves_on_the_child_path () =
             "the script on the child's PATH runs" "child path \"a&b\""
             (String.trim output);
           Alcotest.(check int) "and exits cleanly" 0 code))
+
+(* A script in a directory named with [%CHARAMEL_PCT%] runs from there, while a decoy
+   waits where [cmd.exe] would look if it expanded the name. *)
+let batch_files_run_from_a_percent_directory () =
+  windows_only ();
+  let stem = scratch "exe-pctrun" in
+  let literal = stem ^ "%CHARAMEL_PCT%" in
+  let expanded = stem ^ "expanded" in
+  Unix.mkdir literal 0o700;
+  Unix.mkdir expanded 0o700;
+  let script = Filename.concat literal "probe04.cmd" in
+  let decoy = Filename.concat expanded "probe04.cmd" in
+  write_file script "@echo literal %1\r\n";
+  write_file decoy "@echo decoy %1\r\n";
+  with_scratch_tree [ script; decoy ] [ literal; expanded ] (fun () ->
+      with_environment
+        [ ("CHARAMEL_PCT", "expanded") ]
+        (fun () ->
+          in_directory literal (fun () ->
+              run (fun () ->
+                  let process =
+                    Charamel_os.Process.spawn ~stdout:`Pipe [ "probe04.cmd"; "%PATH%" ]
+                  in
+                  Lwt_io.read_line (Charamel_os.Process.stdout_r process)
+                  >>= fun output ->
+                  Charamel_os.Process.await process >|= fun code ->
+                  Alcotest.(check string)
+                    "the resolved script runs, not the one the expanded name points at"
+                    "literal \"%PATH%\"" (String.trim output);
+                  Alcotest.(check int) "and exits cleanly" 0 code))))
 
 let searches_path_by_spawn () =
   posix_only ();
@@ -1979,6 +2036,10 @@ let suites =
           checkout_cannot_replace_the_command_interpreter;
         Alcotest.test_case "spawn looks programs up on the child's PATH" `Quick
           spawn_resolves_on_the_child_path;
+        Alcotest.test_case "batch paths keep percent signs" `Quick
+          spawn_keeps_percent_signs_in_the_script_path;
+        Alcotest.test_case "batch files run from a percent directory" `Quick
+          batch_files_run_from_a_percent_directory;
         Alcotest.test_case "command line for cmd.exe" `Quick
           command_line_for_the_interpreter;
         Alcotest.test_case "command line C runtime quoting" `Quick

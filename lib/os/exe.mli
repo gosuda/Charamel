@@ -79,9 +79,11 @@ val spawn_command :
     application is then [cmd.exe] in [system_directory], whatever [PATH] holds, and the
     line is [cmd.exe /e:ON /v:OFF /d /c ""script" args"] with the absolute script path: an
     argument that holds more than letters, digits and [#$*+-./:?@\_] is quoted, an inner
-    quote doubles, the backslashes before a quote or the closing quote double, and each
-    [%] is written [%%cd:~,%], which [cmd.exe] reads back as one [%] instead of expanding
-    a variable. A batch file that does not resolve goes through unchanged, so the system
-    reports it exactly as before. The empty [argv] is [("", "")].
+    quote doubles, and the backslashes before a quote or the closing quote double. Each
+    [%], in the script path as in the arguments, is written [%%cd:~,%], which [cmd.exe]
+    reads back as one [%] instead of expanding a variable, so a directory named like
+    [%USERNAME%] still names the script that was resolved. A batch file that does not
+    resolve goes through unchanged, so the system reports it exactly as before. The empty
+    [argv] is [("", "")].
     @raise Invalid_argument
       when a batch file argument holds a line break, which would end the command text. *)
