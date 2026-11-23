@@ -37,7 +37,7 @@ let candidates ~win32 root name =
 
 (* A name whose final component carries a dot already names its extension, even
    when [PATHEXT] does not list it: the local probe keeps the exact file first
-   so a [PATH] copy cannot shadow it. *)
+   when it is startable, so a [PATH] copy cannot shadow a runnable match. *)
 let has_extension name =
   match String.rindex_opt name '.' with None -> false | Some dot -> dot > 0
 
@@ -66,6 +66,19 @@ let executable ~win32 candidate =
            Unix.access candidate [ Unix.X_OK ];
            true
          with Unix.Unix_error _ -> false)
+  with Unix.Unix_error _ -> false
+
+(* [CreateProcess] starts an explicitly named file with an unlisted extension
+   only as a PE image, so a same-named data file is never a runnable match: the
+   exact local name keeps precedence only when it carries the image mark. *)
+let starts_with_mz candidate =
+  try
+    let fd = Unix.openfile candidate [ Unix.O_RDONLY ] 0 in
+    Fun.protect
+      ~finally:(fun () -> Unix.close fd)
+      (fun () ->
+        let magic = Bytes.create 2 in
+        Unix.read fd magic 0 2 = 2 && Bytes.get magic 0 = 'M' && Bytes.get magic 1 = 'Z')
   with Unix.Unix_error _ -> false
 
 (* A [PATH] entry spelled relative to the current directory would resolve to a
@@ -125,11 +138,15 @@ let find ?(win32 = Sys.win32) name =
    file here keeps that resolution instead of being shadowed by a [PATH] copy. A path
    and the empty program go through unchanged, and a miss also goes through unchanged
    so the system reports it exactly as before. *)
+let spawnable ~win32 prog candidate =
+  executable ~win32 candidate
+  && (candidate <> prog || extensions ~win32 prog = [ "" ] || starts_with_mz candidate)
+
 let for_spawn ?(win32 = Sys.win32) prog =
   if prog = "" || is_explicit ~win32 prog then prog
   else
     let local =
-      if win32 then List.find_opt (executable ~win32) (local_candidates ~win32 prog)
+      if win32 then List.find_opt (spawnable ~win32 prog) (local_candidates ~win32 prog)
       else None
     in
     match local with

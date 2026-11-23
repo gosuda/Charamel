@@ -684,8 +684,9 @@ let spawn_ignores_local_extensionless_scripts () =
                 "an extensionless script does not shadow a PATH executable" program
                 (Charamel_os.Exe.for_spawn ~win32:true "dup01"))))
 
-(* A local executable whose extension [PATHEXT] does not list keeps its exact
-   name in the spawn probe, so a [PATH] copy does not shadow it. *)
+(* A local file whose extension [PATHEXT] does not list keeps its exact name in
+   the spawn probe only when the system could start it: the probe reads the
+   image mark, so a PE file shadows a [PATH] copy with the same name. *)
 let spawn_prefers_local_executable_with_unknown_extension () =
   let local = scratch "exe-exact" in
   Unix.mkdir local 0o700;
@@ -696,7 +697,7 @@ let spawn_prefers_local_executable_with_unknown_extension () =
   let here_channel = open_out_bin here in
   Fun.protect
     ~finally:(fun () -> close_out_noerr here_channel)
-    (fun () -> output_string here_channel "echo here");
+    (fun () -> output_string here_channel ("MZ" ^ String.make 62 '\000'));
   let there_channel = open_out_bin there in
   Fun.protect
     ~finally:(fun () -> close_out_noerr there_channel)
@@ -719,6 +720,51 @@ let spawn_prefers_local_executable_with_unknown_extension () =
               Alcotest.(check string)
                 "a local executable with an unlisted extension shadows a PATH copy" here
                 (Charamel_os.Exe.for_spawn ~win32:true "tool01.xyz"))))
+
+(* A same-named data file is not a runnable match: the probe skips it and keeps
+   searching the suffixed candidates, then [PATH]. *)
+let spawn_skips_local_data_file_with_unknown_extension () =
+  let local = scratch "exe-data" in
+  Unix.mkdir local 0o700;
+  let elsewhere = scratch "exe-data-path" in
+  Unix.mkdir elsewhere 0o700;
+  let data = Filename.concat local "server.v2" in
+  let build = Filename.concat local "server.v2.EXE" in
+  let shipped = Filename.concat elsewhere "tool02.xyz.EXE" in
+  let write_image path =
+    let channel = open_out_bin path in
+    Fun.protect
+      ~finally:(fun () -> close_out_noerr channel)
+      (fun () -> output_string channel ("MZ" ^ String.make 62 '\000'))
+  in
+  let data_channel = open_out_bin data in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr data_channel)
+    (fun () -> output_string data_channel "#!/bin/sh\necho data");
+  write_image build;
+  write_image shipped;
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove data with Sys_error _ -> ());
+      (try Sys.remove build with Sys_error _ -> ());
+      (try Sys.remove shipped with Sys_error _ -> ());
+      (try Unix.rmdir local with Unix.Unix_error _ -> ());
+      try Unix.rmdir elsewhere with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "a Windows build wins over a same-named data file" build
+                (Charamel_os.Exe.for_spawn ~win32:true "server.v2");
+              Alcotest.(check string)
+                "a runnable PATH copy wins when no local candidate loads" shipped
+                (Charamel_os.Exe.for_spawn ~win32:true "tool02.xyz"))))
 
 (* A drive-letter prefix such as [C:] names a path on that drive even with no slash:
    the lookup checks it as given and the funnel hands it through unchanged, instead
@@ -755,6 +801,37 @@ let spawn_keeps_drive_relative_commands () =
                     Alcotest.(check (option string))
                       "and lookup checks it as given" (Some "C:tool.exe")
                       (Charamel_os.Exe.find ~win32:true "C:tool.exe"))))))
+
+(* A drive-relative lookup consults the drive's working directory: from a
+   directory on that drive, [find] checks [C:tool.exe] as given instead of
+   joining the working directory in front of it. *)
+let find_checks_drive_relative_lookup () =
+  windows_only ();
+  let local = scratch "exe-driverel" in
+  Unix.mkdir local 0o700;
+  let program = Filename.concat local "tool.exe" in
+  let channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove program with Sys_error _ -> ());
+      try Unix.rmdir local with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          let drive = String.sub (Sys.getcwd ()) 0 2 in
+          with_environment
+            [ ("PATH", "C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check (option string))
+                "a drive-relative lookup checks the drive's directory"
+                (Some (drive ^ "tool.exe"))
+                (Charamel_os.Exe.find ~win32:true (drive ^ "tool.exe")))))
 
 (* An explicit relative path is checked as given, but the hit is absolute like every
    other hit: the spawn funnel cannot hand a relative application name to
@@ -1420,8 +1497,12 @@ let suites =
           spawn_ignores_local_extensionless_scripts;
         Alcotest.test_case "spawn prefers local unknown extensions" `Quick
           spawn_prefers_local_executable_with_unknown_extension;
+        Alcotest.test_case "spawn skips local data files" `Quick
+          spawn_skips_local_data_file_with_unknown_extension;
         Alcotest.test_case "spawn keeps drive-relative commands" `Quick
           spawn_keeps_drive_relative_commands;
+        Alcotest.test_case "drive-relative lookup reads the drive directory" `Quick
+          find_checks_drive_relative_lookup;
         Alcotest.test_case "explicit relative hits are absolute" `Quick
           explicit_relative_hits_are_absolute;
         Alcotest.test_case "relative PATH entries resolve" `Quick
