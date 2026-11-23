@@ -35,6 +35,12 @@ let candidates ~win32 root name =
     List.map (fun extension -> root ^ name ^ extension) (extensions ~win32 name)
   else [ Filename.concat root name ]
 
+(* A name whose final component carries a dot already names its extension, even
+   when [PATHEXT] does not list it: the local probe keeps the exact file first
+   so a [PATH] copy cannot shadow it. *)
+let has_extension name =
+  match String.rindex_opt name '.' with None -> false | Some dot -> dot > 0
+
 (* [CreateProcess] appends [.exe] when the name carries no extension, so an
    extensionless file in the current directory is the POSIX shell script beside a
    package shim, which the launcher cannot start: the local probe tries the
@@ -44,9 +50,12 @@ let local_candidates ~win32 prog =
   match extensions ~win32 prog with
   | [ "" ] -> [ prog ]
   | exts ->
-      List.filter_map
-        (fun extension -> if extension = "" then None else Some (prog ^ extension))
-        exts
+      let suffixed =
+        List.filter_map
+          (fun extension -> if extension = "" then None else Some (prog ^ extension))
+          exts
+      in
+      if has_extension prog then prog :: suffixed else suffixed
 
 let executable ~win32 candidate =
   try

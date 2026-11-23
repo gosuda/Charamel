@@ -684,6 +684,42 @@ let spawn_ignores_local_extensionless_scripts () =
                 "an extensionless script does not shadow a PATH executable" program
                 (Charamel_os.Exe.for_spawn ~win32:true "dup01"))))
 
+(* A local executable whose extension [PATHEXT] does not list keeps its exact
+   name in the spawn probe, so a [PATH] copy does not shadow it. *)
+let spawn_prefers_local_executable_with_unknown_extension () =
+  let local = scratch "exe-exact" in
+  Unix.mkdir local 0o700;
+  let elsewhere = scratch "exe-pathexe" in
+  Unix.mkdir elsewhere 0o700;
+  let here = Filename.concat local "tool01.xyz" in
+  let there = Filename.concat elsewhere "tool01.xyz" in
+  let here_channel = open_out_bin here in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr here_channel)
+    (fun () -> output_string here_channel "echo here");
+  let there_channel = open_out_bin there in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr there_channel)
+    (fun () -> output_string there_channel "echo there");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove here with Sys_error _ -> ());
+      (try Sys.remove there with Sys_error _ -> ());
+      (try Unix.rmdir local with Unix.Unix_error _ -> ());
+      try Unix.rmdir elsewhere with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "a local executable with an unlisted extension shadows a PATH copy" here
+                (Charamel_os.Exe.for_spawn ~win32:true "tool01.xyz"))))
+
 (* A drive-letter prefix such as [C:] names a path on that drive even with no slash:
    the lookup checks it as given and the funnel hands it through unchanged, instead
    of joining the working directory in front of it. *)
@@ -1377,6 +1413,8 @@ let suites =
           spawn_funnel_prefers_local_executables;
         Alcotest.test_case "spawn ignores local scripts" `Quick
           spawn_ignores_local_extensionless_scripts;
+        Alcotest.test_case "spawn prefers local unknown extensions" `Quick
+          spawn_prefers_local_executable_with_unknown_extension;
         Alcotest.test_case "spawn keeps drive-relative commands" `Quick
           spawn_keeps_drive_relative_commands;
         Alcotest.test_case "explicit relative hits are absolute" `Quick
