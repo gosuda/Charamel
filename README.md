@@ -17,8 +17,8 @@ namesake.
   `hotdiva2000`, `crush`.
 - **Tested per unit** — one suite directory for each tool and for each library except
   `charamel.lipgloss.terminal` (covered by the `charamel.lipgloss` suite) and `charamel.os.win32`,
-  plus the examples and the shared helpers: 30 alcotest executables, 1,696 cases run by
-  `dune runtest --profile release` (1,698 registered; the 2 Windows-only cases skip on Linux).
+  plus the examples and the shared helpers: 30 alcotest executables, 1,699 cases run by
+  `dune runtest --profile release` (1,701 registered; the 2 Windows-only cases skip on Linux).
 - **One width model** — grapheme-based measurement shared by every renderer, so East Asian and
   combining text align in tables, borders, and layout.
 - **OCaml >= 5.4** with Lwt for concurrency, `jsont` for JSON, `cmarkit` for Markdown, and `re`
