@@ -179,25 +179,39 @@ let payload_session_start ~session ~cwd =
   |> Jsonx.string_of_json
 
 let parse_pre_output output =
-  if String.equal (String.trim output) "" then Continue
+  if String.equal (String.trim output) "" then Ok Continue
   else
     match Jsont_bytesrw.decode_string Jsont.json output with
-    | Error _ -> Continue
+    | Error _ -> Error "printed output that is not JSON"
     | Ok json -> (
         match Jsonx.string_member "decision" json with
         | Some "deny" ->
-            Refuse
-              (Option.value (Jsonx.string_member "reason" json) ~default:"denied by hook")
+            Ok
+              (Refuse
+                 (Option.value
+                    (Jsonx.string_member "reason" json)
+                    ~default:"denied by hook"))
         | Some "allow" -> (
             match Jsonx.member "input" json with
-            | Some input -> Replace input
-            | None -> Continue)
-        | _ -> Continue)
+            | Some input -> Ok (Replace input)
+            | None -> Ok Continue)
+        | Some _ | None -> Error "printed JSON with no allow or deny decision")
 
 let timeout_for hook = Float.of_int hook.config.Config.timeout_s
 
 let log_failure hook detail =
   Log.warn (fun log -> log "hook %s failed: %s" hook.config.Config.command detail)
+
+let exit_detail code stderr =
+  let suffix = String.trim stderr.text in
+  Fmt.str "exited with status %d%s" code
+    (if String.equal suffix "" then "" else ": " ^ suffix)
+
+let failure_reason = "pre-tool hook failed"
+
+let unevaluable hook detail =
+  log_failure hook detail;
+  Refuse failure_reason
 
 let run_one t hook payload =
   run_command t ~timeout:(timeout_for hook) ~command:hook.config.Config.command ~payload
@@ -209,26 +223,23 @@ let report_truncation hook stream output =
           stream max_output_size)
 
 let apply_pre_hook t hook ~payload =
-  run_one t hook payload >>= function
-  | Timeout ->
-      Lwt.return (Refuse (Fmt.str "hook %s timed out" hook.config.Config.command))
-  | Failed detail ->
-      log_failure hook detail;
-      Lwt.return Continue
-  | Done (0, stdout, _) ->
-      report_truncation hook "stdout" stdout;
-      Lwt.return (parse_pre_output stdout.text)
+  run_one t hook payload >|= function
+  | Timeout -> Refuse (Fmt.str "hook %s timed out" hook.config.Config.command)
+  | Failed detail -> unevaluable hook detail
+  | Done (0, { truncated = true; _ }, _) ->
+      unevaluable hook
+        (Fmt.str "stdout exceeded the %d-byte output limit" max_output_size)
+  | Done (0, stdout, _) -> (
+      match parse_pre_output stdout.text with
+      | Ok decision -> decision
+      | Error detail -> unevaluable hook detail)
   | Done (2, _, stderr) ->
       report_truncation hook "stderr" stderr;
       let reason = String.trim stderr.text in
-      Lwt.return (Refuse (if String.equal reason "" then "denied by hook" else reason))
+      Refuse (if String.equal reason "" then "denied by hook" else reason)
   | Done (code, _, stderr) ->
       report_truncation hook "stderr" stderr;
-      log_failure hook
-        (Fmt.str "exited with status %d%s" code
-           (if String.equal (String.trim stderr.text) "" then ""
-            else ": " ^ String.trim stderr.text));
-      Lwt.return Continue
+      unevaluable hook (exit_detail code stderr)
 
 let pre_tool t ~session ~tool ~input =
   let rec loop current = function
@@ -253,10 +264,7 @@ let run_observational t hook payload =
       Lwt.return_unit
   | Done (code, _, stderr) ->
       report_truncation hook "stderr" stderr;
-      let suffix = String.trim stderr.text in
-      log_failure hook
-        (Fmt.str "exited with status %d%s" code
-           (if String.equal suffix "" then "" else ": " ^ suffix));
+      log_failure hook (exit_detail code stderr);
       Lwt.return_unit
   | Timeout ->
       log_failure hook (Fmt.str "timed out after %ds" hook.config.Config.timeout_s);
