@@ -242,3 +242,78 @@ let command_line = function
         else List.map quote_argument arguments
       in
       String.concat " " (quote_argument program :: words)
+
+(* [CreateProcess] does not start a batch file itself: it drops the application name and
+   runs [cmd /c] over the command line, so [cmd.exe] looks the first word up again from
+   the child's working directory and reads every argument as command text, where [&]
+   ends the command. The funnel runs the interpreter itself instead: [/d] skips the
+   [AutoRun] keys, [/v:OFF] keeps [!] literal and [/e:ON] keeps the substring syntax
+   that defuses [%], and the command text names the script resolved here. An argument
+   is quoted unless it holds only letters, digits and [#$*+-./:?@\_]; inside the quotes
+   a quote doubles, backslashes before a quote or the closing quote double, and each
+   [%] becomes [%%cd:~,%], whose empty substring of [%cd%] leaves one [%] behind. A
+   line break would end the command text, so it is refused. *)
+let batch_unquoted = "#$*+-./:?@\\_"
+
+let batch_needs_quotes argument =
+  argument = ""
+  || String.ends_with ~suffix:"\\" argument
+  || String.exists
+       (function
+         | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '\128' .. '\255' -> false
+         | character -> not (String.contains batch_unquoted character))
+       argument
+
+let batch_argument argument =
+  if String.exists (function '\r' | '\n' -> true | _ -> false) argument then
+    invalid_arg "Charamel_os.Exe.spawn_command: a batch file argument holds a line break";
+  let quoted = batch_needs_quotes argument in
+  let buffer = Buffer.create (String.length argument + 8) in
+  if quoted then Buffer.add_char buffer '"';
+  let backslashes =
+    String.fold_left
+      (fun backslashes character ->
+        match character with
+        | '\\' ->
+            Buffer.add_char buffer '\\';
+            backslashes + 1
+        | '"' ->
+            Buffer.add_string buffer (String.make backslashes '\\');
+            Buffer.add_string buffer "\"\"";
+            0
+        | '%' ->
+            Buffer.add_string buffer "%%cd:~,%";
+            0
+        | character ->
+            Buffer.add_char buffer character;
+            0)
+      0 argument
+  in
+  if quoted then (
+    Buffer.add_string buffer (String.make backslashes '\\');
+    Buffer.add_char buffer '"');
+  Buffer.contents buffer
+
+let batch_command_line script arguments =
+  String.concat ""
+    [
+      "cmd.exe /e:ON /v:OFF /d /c \"\"";
+      script;
+      "\"";
+      String.concat ""
+        (List.map (fun argument -> " " ^ batch_argument argument) arguments);
+      "\"";
+    ]
+
+let spawn_command ?(win32 = Sys.win32) = function
+  | [] -> ("", "")
+  | program :: arguments as argv -> (
+      let application = for_spawn ~win32 program in
+      let script =
+        if win32 && is_batch_file application then find ~win32 application else None
+      in
+      match script with
+      | Some script ->
+          ( Option.value (find ~win32 "cmd.exe") ~default:"cmd.exe",
+            batch_command_line script arguments )
+      | None -> (application, command_line argv))

@@ -54,3 +54,20 @@ val command_line : string list -> string
     [["cmd"; "/c"; "echo a & echo b"]] runs both commands. Without [/s], [cmd.exe] keeps
     that pair when its text is exactly the name of an executable file with a space in it,
     which still runs that file. The empty [argv] is the empty line. *)
+
+val spawn_command : ?win32:bool -> string list -> string * string
+(** [spawn_command ?win32 argv] is the application name and the command line the spawn
+    funnel hands to [CreateProcess]: {!val:for_spawn} of the program and
+    {!val:command_line} of [argv]. A program that resolves to an existing batch file
+    ([.BAT] or [.CMD]) is the exception, because [CreateProcess] would run it through
+    [cmd /c] over the command line, which looks the first word up again from the child's
+    working directory and reads [&] in an argument as the end of the command. The
+    application is then [cmd.exe] from [PATH], and the line is
+    [cmd.exe /e:ON /v:OFF /d /c ""script" args"] with the absolute script path: an
+    argument that holds more than letters, digits and [#$*+-./:?@\_] is quoted, an inner
+    quote doubles, the backslashes before a quote or the closing quote double, and each
+    [%] is written [%%cd:~,%], which [cmd.exe] reads back as one [%] instead of expanding
+    a variable. A batch file that does not resolve goes through unchanged, so the system
+    reports it exactly as before. The empty [argv] is [("", "")].
+    @raise Invalid_argument
+      when a batch file argument holds a line break, which would end the command text. *)

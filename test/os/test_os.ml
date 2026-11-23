@@ -974,6 +974,89 @@ let windows_relative_path_entries_resolve () =
                 "and the spawn funnel hands it an absolute path" program
                 (Charamel_os.Exe.for_spawn ~win32:true "reltool"))))
 
+let in_directory directory f =
+  let previous = Sys.getcwd () in
+  Unix.chdir directory;
+  Fun.protect ~finally:(fun () -> Unix.chdir previous) f
+
+(* [CreateProcess] does not start a batch file itself: it hands the command line to
+   [cmd.exe], which drops the application name and looks the line's first word up again
+   from the child's working directory. The funnel runs the interpreter instead, with
+   command text that names the script resolved here and arguments [cmd.exe] passes on
+   as data. *)
+let spawn_runs_batch_files_through_the_interpreter () =
+  let local = scratch "exe-batchrun" in
+  Unix.mkdir local 0o700;
+  let system = scratch "exe-batchrun-system" in
+  Unix.mkdir system 0o700;
+  let script = Filename.concat local "probe01.cmd" in
+  let interpreter = Filename.concat system "cmd.exe" in
+  let image = Filename.concat system "tool01.EXE" in
+  write_file script "@echo %1";
+  write_file interpreter "MZ";
+  write_file image "MZ";
+  with_scratch_tree [ script; interpreter; image ] [ local; system ] (fun () ->
+      in_directory local (fun () ->
+          with_environment
+            [ ("PATH", system ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE;.BAT;.CMD") ]
+            (fun () ->
+              let application, line =
+                Charamel_os.Exe.spawn_command ~win32:true
+                  [ "probe01.cmd"; "a&b"; "50%"; "plain"; "say \"hi\""; ""; "C:\\dir\\" ]
+              in
+              Alcotest.(check string)
+                "the command interpreter is the application" interpreter application;
+              Alcotest.(check string)
+                "the command text names the resolved script and quotes for cmd.exe"
+                (String.concat ""
+                   [
+                     "cmd.exe /e:ON /v:OFF /d /c \"\"";
+                     script;
+                     "\" \"a&b\" \"50%%cd:~,%\" plain \"say \"\"hi\"\"\" \"\" \
+                      \"C:\\dir\\\\\"\"";
+                   ])
+                line;
+              Alcotest.(check (pair string string))
+                "an image keeps its own name and the C runtime line"
+                (image, "tool01 \"a&b c\"")
+                (Charamel_os.Exe.spawn_command ~win32:true [ "tool01"; "a&b c" ]);
+              Alcotest.(check (pair string string))
+                "a batch file that does not resolve goes through for the system to report"
+                ("missing01.cmd", "missing01.cmd a&b")
+                (Charamel_os.Exe.spawn_command ~win32:true [ "missing01.cmd"; "a&b" ]);
+              Alcotest.check_raises "a line break would cut the command text"
+                (Invalid_argument
+                   "Charamel_os.Exe.spawn_command: a batch file argument holds a line \
+                    break") (fun () ->
+                  ignore
+                    (Charamel_os.Exe.spawn_command ~win32:true [ "probe01.cmd"; "a\nb" ])))))
+
+(* The child's working directory holds a script with the same name as the one the
+   parent resolves: the resolved one runs, and its argument reaches it whole. *)
+let batch_files_run_the_resolved_script () =
+  windows_only ();
+  let parent = scratch "exe-batchparent" in
+  Unix.mkdir parent 0o700;
+  let child = scratch "exe-batchchild" in
+  Unix.mkdir child 0o700;
+  let here = Filename.concat parent "probe02.cmd" in
+  let there = Filename.concat child "probe02.cmd" in
+  write_file here "@echo parent %1\r\n";
+  write_file there "@echo child %1\r\n";
+  with_scratch_tree [ here; there ] [ parent; child ] (fun () ->
+      in_directory parent (fun () ->
+          run (fun () ->
+              let process =
+                Charamel_os.Process.spawn ~cwd:child ~stdout:`Pipe
+                  [ "probe02.cmd"; "a&b" ]
+              in
+              Lwt_io.read_line (Charamel_os.Process.stdout_r process) >>= fun output ->
+              Charamel_os.Process.await process >|= fun code ->
+              Alcotest.(check string)
+                "the script resolved in the parent runs" "parent \"a&b\""
+                (String.trim output);
+              Alcotest.(check int) "and exits cleanly" 0 code)))
+
 let searches_path_by_spawn () =
   posix_only ();
   run (fun () ->
@@ -1693,6 +1776,10 @@ let suites =
           explicit_relative_hits_are_absolute;
         Alcotest.test_case "relative PATH entries resolve" `Quick
           windows_relative_path_entries_resolve;
+        Alcotest.test_case "batch files run through the interpreter" `Quick
+          spawn_runs_batch_files_through_the_interpreter;
+        Alcotest.test_case "batch files run the resolved script" `Quick
+          batch_files_run_the_resolved_script;
         Alcotest.test_case "command line for cmd.exe" `Quick
           command_line_for_the_interpreter;
         Alcotest.test_case "command line C runtime quoting" `Quick
