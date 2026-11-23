@@ -344,9 +344,12 @@ let channel_start connection id words =
    awa's reply: awa 0.7.0 rejects bad signatures itself without a Userauth
    event, so sending it from authenticate would skip the attempts that fail
    there. A method-less [none] probe, which clients send first, is skipped:
-   it has no banner arm and must not trigger the send. *)
+   it has no banner arm and must not trigger the send. The decision is made
+   once: a handler that declines the probe is not asked again on the signed
+   request. *)
 let send_banner_once connection =
   if not connection.banner_sent then begin
+    connection.banner_sent <- true;
     let banner =
       match connection.banner_handler with
       | Some handler -> handler (session_of_connection connection)
@@ -354,8 +357,7 @@ let send_banner_once connection =
     in
     match banner with
     | Some text when String.length text > 0 ->
-        emit_message_locked connection (Awa.Ssh.Msg_userauth_banner (text, ""));
-        connection.banner_sent <- true
+        emit_message_locked connection (Awa.Ssh.Msg_userauth_banner (text, ""))
     | _ -> ()
   end
 
