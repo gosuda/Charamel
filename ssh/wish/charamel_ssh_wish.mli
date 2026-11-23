@@ -160,10 +160,11 @@ val authorized_keys_file : path:string -> middleware
 (** [authorized_keys_file ~path] admits only sessions whose authentication key is listed
     in the [authorized_keys] document at [path], which is read afresh for every session.
     The file is parsed by {!val:Charamel_ssh_keygen.parse_authorized_keys} and matched on
-    the public key blob, so both [ssh-ed25519] and [ssh-rsa] entries work. A session that
-    is not listed, and any session seen while the file cannot be read, receives
-    [Access denied] and exits with status 1. Certificates are not matched: [awa 0.6.1]
-    exposes no certificate API. *)
+    the public key blob, so both [ssh-ed25519] and [ssh-rsa] entries match. An [ssh-rsa]
+    key authenticates only with an RSA SHA-2 signature ([rsa-sha2-256] or [rsa-sha2-512]);
+    [awa 0.7.0] rejects SHA-1 RSA signatures. A session that is not listed, and any
+    session seen while the file cannot be read, receives [Access denied] and exits with
+    status 1. Certificates are not matched: [awa 0.7.0] exposes no certificate API. *)
 
 val allow_commands : string list -> middleware
 (** [allow_commands allowed] runs the wrapped handler for an interactive session and for a
@@ -240,7 +241,7 @@ val serve :
     produced are what a client verifies. The server identification string is fixed by
     [awa] and cannot be configured.
 
-    The banner is sent once, during the first authentication attempt. [banner_handler]
-    computes it per session and is consulted at that attempt, before the session is
-    authenticated, so {!val:Session.user} is still empty; [None] sends no banner. Without
-    a handler, [banner] is the text sent. *)
+    The banner is sent once, during the first method-specific authentication attempt,
+    after any [none] probe. [banner_handler] computes it per session and is consulted at
+    that attempt, before the session is authenticated, so {!val:Session.user} is still
+    empty; [None] sends no banner. Without a handler, [banner] is the text sent. *)
