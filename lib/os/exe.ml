@@ -77,9 +77,22 @@ let absolute_directory ~win32 directory =
 let has_separator ~win32 name =
   String.contains name '/' || (win32 && String.contains name '\\')
 
+(* A drive-letter prefix such as [C:] names a path on that drive even with no slash,
+   so it is explicit like a name with a separator: joining a directory in front of
+   it would spell a path no API accepts. *)
+let is_drive_relative ~win32 name =
+  win32
+  && String.length name >= 2
+  && name.[1] = ':'
+  &&
+  let initial = name.[0] in
+  (initial >= 'A' && initial <= 'Z') || (initial >= 'a' && initial <= 'z')
+
+let is_explicit ~win32 name = has_separator ~win32 name || is_drive_relative ~win32 name
+
 let find ?(win32 = Sys.win32) name =
   if name = "" then None
-  else if has_separator ~win32 name then
+  else if is_explicit ~win32 name then
     List.find_opt (executable ~win32) (candidates ~win32 "" name)
   else
     let directories = split_path ~win32 "PATH" in
@@ -101,7 +114,7 @@ let find ?(win32 = Sys.win32) name =
    and the empty program go through unchanged, and a miss also goes through unchanged
    so the system reports it exactly as before. *)
 let for_spawn ?(win32 = Sys.win32) prog =
-  if prog = "" || has_separator ~win32 prog then prog
+  if prog = "" || is_explicit ~win32 prog then prog
   else
     let local =
       if win32 then List.find_opt (executable ~win32) (local_candidates ~win32 prog)

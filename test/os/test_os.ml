@@ -684,6 +684,37 @@ let spawn_ignores_local_extensionless_scripts () =
                 "an extensionless script does not shadow a PATH executable" program
                 (Charamel_os.Exe.for_spawn ~win32:true "dup01"))))
 
+(* A drive-letter prefix such as [C:] names a path on that drive even with no slash:
+   the lookup checks it as given and the funnel hands it through unchanged, instead
+   of joining the working directory in front of it. *)
+let spawn_keeps_drive_relative_commands () =
+  let local = scratch "exe-drive" in
+  Unix.mkdir local 0o700;
+  let target = Filename.concat local "C:tool.exe" in
+  let channel = open_out_bin target in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove target with Sys_error _ -> ());
+      try Unix.rmdir local with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", "C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "a drive-relative command goes through unchanged" "C:tool.exe"
+                (Charamel_os.Exe.for_spawn ~win32:true "C:tool.exe");
+              Alcotest.(check (option string))
+                "and lookup checks it as given" (Some "C:tool.exe")
+                (Charamel_os.Exe.find ~win32:true "C:tool.exe"))))
+
 (* A [PATH] entry spelled relative to the current directory resolves from there, and
    the hit is absolute, which is what the spawn funnel hands to [CreateProcess]. *)
 let windows_relative_path_entries_resolve () =
@@ -1314,6 +1345,8 @@ let suites =
           spawn_funnel_prefers_local_executables;
         Alcotest.test_case "spawn ignores local scripts" `Quick
           spawn_ignores_local_extensionless_scripts;
+        Alcotest.test_case "spawn keeps drive-relative commands" `Quick
+          spawn_keeps_drive_relative_commands;
         Alcotest.test_case "relative PATH entries resolve" `Quick
           windows_relative_path_entries_resolve;
       ] );
