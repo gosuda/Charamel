@@ -1255,7 +1255,8 @@ let defaults_come_from_the_platform () =
           "POSIX pages with less -r" [ "less"; "-r" ] (Charamel_os.Editor.pager ()));
       if Sys.win32 then
         Alcotest.(check (list string))
-          "Windows starts a URL through cmd" [ "cmd"; "/c"; "start" ]
+          "Windows opens a URL through the URL protocol handler"
+          [ "rundll32"; "url.dll,FileProtocolHandler" ]
           (Charamel_os.Editor.browser ())
       else
         let mac = Sys.file_exists "/System/Library/CoreServices/SystemVersion.plist" in
@@ -1263,6 +1264,20 @@ let defaults_come_from_the_platform () =
           "the browser default follows the system"
           (if mac then [ "open" ] else [ "xdg-open" ])
           (Charamel_os.Editor.browser ()))
+
+(* A sign-in URL carries several query parameters joined by [&]. Handed to [cmd /c start],
+   it would be command text, cut at the first [&]; the Windows default program takes it
+   as one plain word of its command line instead. *)
+let windows_browser_takes_the_url_as_data () =
+  without_environment [ "BROWSER" ] (fun () ->
+      let url =
+        "https://example.test/authorize?response_type=code&client_id=demo&redirect_uri=https%3A%2F%2Fx&state=abc"
+      in
+      Alcotest.(check string)
+        "the URL reaches the launcher whole"
+        ("rundll32 url.dll,FileProtocolHandler " ^ url)
+        (Charamel_os.Exe.command_line
+           (Charamel_os.Editor.browser ~win32:true () @ [ url ])))
 
 let environment_overrides_are_word_split () =
   with_environment
@@ -1798,6 +1813,8 @@ let suites =
         Alcotest.test_case "platform defaults" `Quick defaults_come_from_the_platform;
         Alcotest.test_case "environment overrides" `Quick
           environment_overrides_are_word_split;
+        Alcotest.test_case "Windows browser takes the URL as data" `Quick
+          windows_browser_takes_the_url_as_data;
       ] );
     ("signal", [ Alcotest.test_case "available signals" `Quick signals_available_here ]);
     ( "tty",
