@@ -715,6 +715,38 @@ let spawn_keeps_drive_relative_commands () =
                 "and lookup checks it as given" (Some "C:tool.exe")
                 (Charamel_os.Exe.find ~win32:true "C:tool.exe"))))
 
+(* An explicit relative path is checked as given, but the hit is absolute like every
+   other hit: the spawn funnel cannot hand a relative application name to
+   [CreateProcess]. *)
+let explicit_relative_hits_are_absolute () =
+  let parent = scratch "exe-expl" in
+  Unix.mkdir parent 0o700;
+  let tools = Filename.concat parent "tools" in
+  Unix.mkdir tools 0o700;
+  let program = Filename.concat tools "expltool.EXE" in
+  let channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove program with Sys_error _ -> ());
+      (try Unix.rmdir tools with Unix.Unix_error _ -> ());
+      try Unix.rmdir parent with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir parent;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", "C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check (option string))
+                "an explicit relative path resolves against the current directory"
+                (Some program)
+                (Charamel_os.Exe.find ~win32:true (Filename.concat "tools" "expltool")))))
+
 (* A [PATH] entry spelled relative to the current directory resolves from there, and
    the hit is absolute, which is what the spawn funnel hands to [CreateProcess]. *)
 let windows_relative_path_entries_resolve () =
@@ -1347,6 +1379,8 @@ let suites =
           spawn_ignores_local_extensionless_scripts;
         Alcotest.test_case "spawn keeps drive-relative commands" `Quick
           spawn_keeps_drive_relative_commands;
+        Alcotest.test_case "explicit relative hits are absolute" `Quick
+          explicit_relative_hits_are_absolute;
         Alcotest.test_case "relative PATH entries resolve" `Quick
           windows_relative_path_entries_resolve;
       ] );

@@ -93,7 +93,10 @@ let is_explicit ~win32 name = has_separator ~win32 name || is_drive_relative ~wi
 let find ?(win32 = Sys.win32) name =
   if name = "" then None
   else if is_explicit ~win32 name then
-    List.find_opt (executable ~win32) (candidates ~win32 "" name)
+    match List.find_opt (executable ~win32) (candidates ~win32 "" name) with
+    | Some found when is_absolute_entry ~win32 found -> Some found
+    | Some found -> Some (Filename.concat (Sys.getcwd ()) found)
+    | None -> None
   else
     let directories = split_path ~win32 "PATH" in
     let rec search = function
