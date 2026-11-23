@@ -10,6 +10,20 @@ let contains ~needle ~haystack =
   in
   needle_length = 0 || search 0
 
+let set_prompts script =
+  let marker = "set /p x=" in
+  let marker_length = String.length marker in
+  let length = String.length script in
+  let rec scan index prompts =
+    if index + marker_length > length then List.rev prompts
+    else if String.sub script index marker_length = marker then
+      let start = index + marker_length in
+      let stop = Option.value (String.index_from_opt script start ')') ~default:length in
+      scan stop (String.sub script start (stop - start) :: prompts)
+    else scan (index + 1) prompts
+  in
+  scan 0 []
+
 let feed_stdin channel text =
   let write () = Lwt_io.write channel text >>= fun () -> Lwt_io.close channel in
   if text = "" then Lwt_io.close channel
