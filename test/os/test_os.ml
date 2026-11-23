@@ -646,6 +646,44 @@ let spawn_funnel_prefers_local_executables () =
                 "a local executable shadows a PATH copy" here
                 (Charamel_os.Exe.for_spawn ~win32:true "here01"))))
 
+(* An extensionless file in the current directory is the POSIX shell script beside a
+   package shim, which [CreateProcess] cannot start: the spawn lookup probes the
+   current directory with [PATHEXT] only, so the script never shadows the runnable
+   [PATH] copy. *)
+let spawn_ignores_local_extensionless_scripts () =
+  let local = scratch "exe-script" in
+  Unix.mkdir local 0o700;
+  let elsewhere = scratch "exe-shimexe" in
+  Unix.mkdir elsewhere 0o700;
+  let script = Filename.concat local "dup01" in
+  let program = Filename.concat elsewhere "dup01.EXE" in
+  let script_channel = open_out_bin script in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr script_channel)
+    (fun () -> output_string script_channel "#!/bin/sh\necho hi");
+  let program_channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr program_channel)
+    (fun () -> output_string program_channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove script with Sys_error _ -> ());
+      (try Sys.remove program with Sys_error _ -> ());
+      (try Unix.rmdir local with Unix.Unix_error _ -> ());
+      try Unix.rmdir elsewhere with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "an extensionless script does not shadow a PATH executable" program
+                (Charamel_os.Exe.for_spawn ~win32:true "dup01"))))
+
 (* A [PATH] entry spelled relative to the current directory resolves from there, and
    the hit is absolute, which is what the spawn funnel hands to [CreateProcess]. *)
 let windows_relative_path_entries_resolve () =
@@ -1274,6 +1312,8 @@ let suites =
           spawn_funnel_prefers_absolute_paths;
         Alcotest.test_case "spawn prefers local executables" `Quick
           spawn_funnel_prefers_local_executables;
+        Alcotest.test_case "spawn ignores local scripts" `Quick
+          spawn_ignores_local_extensionless_scripts;
         Alcotest.test_case "relative PATH entries resolve" `Quick
           windows_relative_path_entries_resolve;
       ] );

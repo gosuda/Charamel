@@ -35,6 +35,19 @@ let candidates ~win32 root name =
     List.map (fun extension -> root ^ name ^ extension) (extensions ~win32 name)
   else [ Filename.concat root name ]
 
+(* [CreateProcess] appends [.exe] when the name carries no extension, so an
+   extensionless file in the current directory is the POSIX shell script beside a
+   package shim, which the launcher cannot start: the local probe tries the
+   [PATHEXT] suffixed candidates only, never the bare name, so a [PATH] hit is not
+   shadowed by a script the system would never select. *)
+let local_candidates ~win32 prog =
+  match extensions ~win32 prog with
+  | [ "" ] -> [ prog ]
+  | exts ->
+      List.filter_map
+        (fun extension -> if extension = "" then None else Some (prog ^ extension))
+        exts
+
 let executable ~win32 candidate =
   try
     (Unix.stat candidate).Unix.st_kind = Unix.S_REG
@@ -91,7 +104,7 @@ let for_spawn ?(win32 = Sys.win32) prog =
   if prog = "" || has_separator ~win32 prog then prog
   else
     let local =
-      if win32 then List.find_opt (executable ~win32) (candidates ~win32 "" prog)
+      if win32 then List.find_opt (executable ~win32) (local_candidates ~win32 prog)
       else None
     in
     match local with
