@@ -326,7 +326,14 @@ module Process = struct
   let stderr_r { stderr_r; _ } = get stderr_r "stderr_r"
   let await { code; _ } = code
   let signal { signal; _ } = signal
-  let terminate { process; _ } = process#terminate
-  let kill_tree { process; _ } = process#terminate
+
+  (* [TerminateProcess] fails with [ERROR_ACCESS_DENIED] on a child that has exited
+     before [Lwt_process] collected its status, and the handle is this process's own, so
+     that answer means the child is already gone, which is not an error. *)
+  let terminate { process; _ } =
+    try process#terminate
+    with Unix.Unix_error (Unix.EACCES, "TerminateProcess", _) -> ()
+
+  let kill_tree t = terminate t
   let alive { process; _ } = process#state = Lwt_process.Running
 end
