@@ -16,6 +16,16 @@ let split_path ~win32 variable =
 let path_extensions ~win32 () =
   match split_path ~win32 "PATHEXT" with [] -> default_extensions | xs -> xs
 
+(* An explicitly named batch file runs through the command interpreter, which starts
+   it by its own extension, so the name is exact whatever [PATHEXT] lists: [PATHEXT]
+   only orders the suffixes appended to a name that carries none of them, and
+   [build.cmd.EXE] is never the program [build.cmd] names. *)
+let is_batch_file name =
+  let upper = String.uppercase_ascii name in
+  List.exists
+    (fun extension -> String.ends_with ~suffix:extension upper)
+    [ ".BAT"; ".CMD" ]
+
 (* [PATHEXT] is the order the shell tries: a name with no known extension is tried
    with each entry in turn, and only then as written, because the extensionless file
    beside a package shim is the POSIX shell script, which [CreateProcess] cannot
@@ -26,7 +36,10 @@ let extensions ~win32 name =
     let upper = String.uppercase_ascii name in
     let extensions = path_extensions ~win32 () in
     let known =
-      List.exists (fun extension -> String.ends_with ~suffix:extension upper) extensions
+      is_batch_file name
+      || List.exists
+           (fun extension -> String.ends_with ~suffix:extension upper)
+           extensions
     in
     if known then [ "" ] else extensions @ [ "" ]
 
@@ -130,30 +143,19 @@ let find ?(win32 = Sys.win32) name =
     in
     search directories
 
-(* An explicitly named batch file runs through the command interpreter, so it keeps
-   the exact local name whatever [PATHEXT] lists: [PATHEXT] only orders the suffixes
-   the probe appends to an extensionless name. [CreateProcess] starts an explicitly
-   named file with any other unlisted extension only as a PE image, so a same-named
-   data file is never a runnable match: the exact local name keeps precedence only
-   when it carries the image mark. *)
-let is_batch_file name =
-  let upper = String.uppercase_ascii name in
-  List.exists
-    (fun extension -> String.ends_with ~suffix:extension upper)
-    [ ".BAT"; ".CMD" ]
-
 (* The spawn funnel hands the program to [CreateProcess] as its application name, and a
    bare name misses there on the runners where the shells are found by search: the
    absolute path always resolves, so a bare name is resolved first. A [CreateProcess]
    bare name still reads the parent's current directory before [PATH], so a runnable
    file here keeps that resolution instead of being shadowed by a [PATH] copy. A path
    and the empty program go through unchanged, and a miss also goes through unchanged
-   so the system reports it exactly as before. *)
+   so the system reports it exactly as before. A name with a listed extension or a batch
+   suffix is exact; [CreateProcess] starts an explicitly named file with any other
+   unlisted extension only as a PE image, so a same-named data file is never a runnable
+   match: the exact local name keeps precedence only when it carries the image mark. *)
 let spawnable ~win32 prog candidate =
   executable ~win32 candidate
-  && (candidate <> prog
-     || extensions ~win32 prog = [ "" ]
-     || is_batch_file prog || starts_with_mz candidate)
+  && (candidate <> prog || extensions ~win32 prog = [ "" ] || starts_with_mz candidate)
 
 let for_spawn ?(win32 = Sys.win32) prog =
   if prog = "" || is_explicit ~win32 prog then prog
@@ -177,30 +179,31 @@ let needs_quotes argument =
        (function ' ' | '\t' | '\n' | '\011' | '"' -> true | _ -> false)
        argument
 
+let quote_word argument =
+  let buffer = Buffer.create (String.length argument + 2) in
+  Buffer.add_char buffer '"';
+  let backslashes =
+    String.fold_left
+      (fun backslashes character ->
+        match character with
+        | '\\' ->
+            Buffer.add_char buffer '\\';
+            backslashes + 1
+        | '"' ->
+            Buffer.add_string buffer (String.make (backslashes + 1) '\\');
+            Buffer.add_char buffer '"';
+            0
+        | character ->
+            Buffer.add_char buffer character;
+            0)
+      0 argument
+  in
+  Buffer.add_string buffer (String.make backslashes '\\');
+  Buffer.add_char buffer '"';
+  Buffer.contents buffer
+
 let quote_argument argument =
-  if not (needs_quotes argument) then argument
-  else
-    let buffer = Buffer.create (String.length argument + 2) in
-    Buffer.add_char buffer '"';
-    let backslashes =
-      String.fold_left
-        (fun backslashes character ->
-          match character with
-          | '\\' ->
-              Buffer.add_char buffer '\\';
-              backslashes + 1
-          | '"' ->
-              Buffer.add_string buffer (String.make (backslashes + 1) '\\');
-              Buffer.add_char buffer '"';
-              0
-          | character ->
-              Buffer.add_char buffer character;
-              0)
-        0 argument
-    in
-    Buffer.add_string buffer (String.make backslashes '\\');
-    Buffer.add_char buffer '"';
-    Buffer.contents buffer
+  if needs_quotes argument then quote_word argument else argument
 
 let program_name program =
   let start =
@@ -240,3 +243,78 @@ let command_line = function
         else List.map quote_argument arguments
       in
       String.concat " " (quote_argument program :: words)
+
+(* [CreateProcess] does not start a batch file itself: it drops the application name and
+   runs [cmd /c] over the command line, so [cmd.exe] looks the first word up again from
+   the child's working directory and reads every argument as command text, where [&]
+   ends the command. The funnel runs the interpreter itself instead: [/d] skips the
+   [AutoRun] keys, [/v:OFF] keeps [!] literal and [/e:ON] keeps the substring syntax
+   that defuses [%], and the command text names the script resolved here. An argument
+   is quoted unless it holds only letters, digits and [#$*+-./:?@\_]; inside the quotes
+   a quote doubles, backslashes before a quote or the closing quote double, and each
+   [%] becomes [%%cd:~,%], whose empty substring of [%cd%] leaves one [%] behind. A
+   line break would end the command text, so it is refused. *)
+let batch_unquoted = "#$*+-./:?@\\_"
+
+let batch_needs_quotes argument =
+  argument = ""
+  || String.ends_with ~suffix:"\\" argument
+  || String.exists
+       (function
+         | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '\128' .. '\255' -> false
+         | character -> not (String.contains batch_unquoted character))
+       argument
+
+let batch_argument argument =
+  if String.exists (function '\r' | '\n' -> true | _ -> false) argument then
+    invalid_arg "Charamel_os.Exe.spawn_command: a batch file argument holds a line break";
+  let quoted = batch_needs_quotes argument in
+  let buffer = Buffer.create (String.length argument + 8) in
+  if quoted then Buffer.add_char buffer '"';
+  let backslashes =
+    String.fold_left
+      (fun backslashes character ->
+        match character with
+        | '\\' ->
+            Buffer.add_char buffer '\\';
+            backslashes + 1
+        | '"' ->
+            Buffer.add_string buffer (String.make backslashes '\\');
+            Buffer.add_string buffer "\"\"";
+            0
+        | '%' ->
+            Buffer.add_string buffer "%%cd:~,%";
+            0
+        | character ->
+            Buffer.add_char buffer character;
+            0)
+      0 argument
+  in
+  if quoted then (
+    Buffer.add_string buffer (String.make backslashes '\\');
+    Buffer.add_char buffer '"');
+  Buffer.contents buffer
+
+let batch_command_line script arguments =
+  String.concat ""
+    [
+      "cmd.exe /e:ON /v:OFF /d /c \"\"";
+      script;
+      "\"";
+      String.concat ""
+        (List.map (fun argument -> " " ^ batch_argument argument) arguments);
+      "\"";
+    ]
+
+let spawn_command ?(win32 = Sys.win32) = function
+  | [] -> ("", "")
+  | program :: arguments as argv -> (
+      let application = for_spawn ~win32 program in
+      let script =
+        if win32 && is_batch_file application then find ~win32 application else None
+      in
+      match script with
+      | Some script ->
+          ( Option.value (find ~win32 "cmd.exe") ~default:"cmd.exe",
+            batch_command_line script arguments )
+      | None -> (application, command_line argv))

@@ -1,4 +1,4 @@
-let win32_metacharacters = [ '<'; '>'; '|'; '('; ')'; '&'; '^'; '!'; '"'; ' '; '\t' ]
+let win32_metacharacters = [ '('; ')'; '%'; '!'; '^'; '"'; '<'; '>'; '&'; '|' ]
 
 let escape_win32 text =
   let buffer = Buffer.create (String.length text + 8) in
@@ -9,8 +9,20 @@ let escape_win32 text =
     text;
   Buffer.contents buffer
 
+(* [cmd.exe] copies a double-quoted run verbatim, carets included, so a caret never
+   escapes inside quotes. A word is first written the way the C runtime splits it back.
+   Without an inner quote or a [%], that quoted word is already one verbatim run for
+   [cmd.exe], which is also the only form a program path with a space survives as the
+   command name. An inner quote would end the run early and a [%] expands even inside
+   it, so such a word has every metacharacter caret-escaped instead, quotes included,
+   and [cmd.exe] hands the quoted word on unchanged. *)
+let quote_win32 text =
+  let quoted = Exe.quote_word text in
+  if String.exists (function '"' | '%' -> true | _ -> false) text then escape_win32 quoted
+  else quoted
+
 let quote_posix text = "'" ^ String.concat "'\\''" (String.split_on_char '\'' text) ^ "'"
-let quote text = if Sys.win32 then "\"" ^ escape_win32 text ^ "\"" else quote_posix text
+let quote ?(win32 = Sys.win32) text = if win32 then quote_win32 text else quote_posix text
 
 let with_directory cwd text =
   match cwd with

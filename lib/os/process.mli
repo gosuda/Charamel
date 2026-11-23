@@ -34,9 +34,12 @@
     before the spawn through [Charamel_os.Exe.for_spawn] — the current directory first,
     then [PATH] with [PATHEXT] — and handed over as the absolute path it answers, because
     [CreateProcess] misses a bare name passed as its application name; and [argv] reaches
-    the child as the one command line [Charamel_os.Exe.command_line] builds, which the
+    the child as the one command line [Charamel_os.Exe.spawn_command] builds, which the
     child splits again — by the C runtime rules for most programs, while the words after
-    [cmd.exe]'s [/c] are its command text, verbatim. *)
+    [cmd.exe]'s [/c] are its command text, verbatim. A program that resolves to a batch
+    file runs through [cmd.exe] with the script's absolute path and its arguments quoted
+    for the command interpreter, so the script the parent resolved is the one that runs
+    and an argument is never read as command text. *)
 
 type t = Os_platform.Process.t
 (** A running child together with the channels that reach it. *)
@@ -57,7 +60,8 @@ val spawn :
     environment rather than adding to it. Each redirection defaults to [`Inherit], which
     is what a program that should simply share the parent's terminal wants, and [`Null]
     sends output to [/dev/null] or [NUL].
-    @raise Invalid_argument when [argv] is empty.
+    @raise Invalid_argument
+      when [argv] is empty, or on Windows when a batch file argument holds a line break.
     @raise Unix_error
       when the program cannot be started, including a [PATH] miss ([ENOENT]). *)
 
