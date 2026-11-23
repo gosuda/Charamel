@@ -52,13 +52,14 @@ let run_child root args =
       in
       (output, error)
 
-let run_child_status root args =
+let run_child_status ?(env = []) root args =
   match binary_path () with
   | None -> Alcotest.skip ()
   | Some executable ->
       await
-      @@ Test_support.run_cli ~exe:executable ~env:(child_environment root) ~cwd:root
-           ~timeout:20. args
+      @@ Test_support.run_cli ~exe:executable
+           ~env:(Array.append (child_environment root) (Array.of_list env))
+           ~cwd:root ~timeout:20. args
 
 let dirs_command () =
   Test_tools_test_support.with_scratch (fun root ->
@@ -103,19 +104,29 @@ let fixture_config port =
     {|{"providers":{"anthropic":{"type":"anthropic","base_url":"http://127.0.0.1:%d","api_key":"fixture-key","models":[{"id":"fixture-model","name":"Fixture","cost_per_1m_in":0,"cost_per_1m_out":0,"cost_per_1m_in_cached":0,"cost_per_1m_out_cached":0,"context_window":200000,"default_max_tokens":1024,"can_reason":false,"supports_attachments":false}]}},"models":{"large":{"provider":"anthropic","model":"fixture-model"},"small":{"provider":"anthropic","model":"fixture-model"}}}|}
     port
 
-let run_fixture () =
+let run_fixture_in ~env () =
   Test_tools_test_support.with_scratch (fun root ->
       Test_tools_test_support.with_http_fixture ~content_type:"text/event-stream"
         fixture_body (fun port ->
           write_private (Filename.concat root "crush.json") (fixture_config port);
           let status, output, error =
-            run_child_status root [ "run"; "-y"; "--cwd"; root; "say"; "hi" ]
+            run_child_status ~env:(env root) root
+              [ "run"; "-y"; "--cwd"; root; "say"; "hi" ]
           in
           Alcotest.(check int) ("run exits successfully; stderr was: " ^ error) 0 status;
           Alcotest.(check bool)
             "assistant text is streamed" true
             (Test_support.contains ~needle:"pong" ~haystack:output);
           Alcotest.(check string) "fixture diagnostics are empty" "" error))
+
+let run_fixture = run_fixture_in ~env:(fun _root -> [])
+
+(* A plain-HTTP provider needs no trust store, so a run must not read one: here
+   SSL_CERT_FILE names a missing file, and on Windows the system store logs a
+   warning for every anchor it cannot decode. *)
+let run_fixture_without_trust_store =
+  run_fixture_in ~env:(fun root ->
+      [ "SSL_CERT_FILE=" ^ Filename.concat root "missing-trust-store.pem" ])
 
 let providers_catalog_body =
   {|[{"id":"acme","name":"Acme","api_endpoint":"","models":[{"id":"acme-model","name":"Acme Model","cost_per_1m_in":0,"cost_per_1m_out":0,"context_window":128000,"default_max_tokens":4096,"can_reason":false,"supports_attachments":false}]}]|}
@@ -246,6 +257,8 @@ let cases =
     Test_tools_test_support.case "dirs uses child environment" `Quick dirs_command;
     Test_tools_test_support.case "schema emits configuration schema" `Quick schema_command;
     Test_tools_test_support.case "run uses configured HTTP provider" `Quick run_fixture;
+    Test_tools_test_support.case "plain HTTP run reads no trust store" `Quick
+      run_fixture_without_trust_store;
     Test_tools_test_support.case "logout without a credential fails" `Quick
       logout_missing_credential_without_force;
     Test_tools_test_support.case "logout --force treats a missing credential as success"
