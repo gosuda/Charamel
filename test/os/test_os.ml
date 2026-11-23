@@ -1658,6 +1658,22 @@ let abandoned_race_keeps_the_shared_await_usable () =
       Charamel_os.Process.await child >|= fun code ->
       Alcotest.(check int) "the later await still answers" 137 code)
 
+(* [TerminateProcess] answers [ERROR_ACCESS_DENIED] for a child that has exited before
+   [Lwt_process] collected its status, which is how the crush language server and gum
+   spin stops failed on the Windows legs. Sleeping without yielding to Lwt lets the
+   child exit while its status stays uncollected, so [terminate] meets that answer. *)
+let terminating_an_exited_child_is_not_an_error () =
+  windows_only ();
+  run (fun () ->
+      let child = Charamel_os.Process.spawn [ "cmd"; "/c"; "exit 0" ] in
+      Unix.sleepf 3.0;
+      Alcotest.(check bool)
+        "the exit status is not collected yet" true
+        (Charamel_os.Process.alive child);
+      Charamel_os.Process.terminate child;
+      Charamel_os.Process.await child >|= fun code ->
+      Alcotest.(check int) "the child's own status stands" 0 code)
+
 (* {1 Pty} *)
 
 let pty_is_unsupported_on_windows () =
@@ -1905,6 +1921,8 @@ let suites =
         Alcotest.test_case "kill tree" `Quick kill_tree_reaches_the_whole_group;
         Alcotest.test_case "abandoned race keeps await usable" `Quick
           abandoned_race_keeps_the_shared_await_usable;
+        Alcotest.test_case "terminating an exited child" `Quick
+          terminating_an_exited_child_is_not_an_error;
       ] );
     ( "pty",
       [
