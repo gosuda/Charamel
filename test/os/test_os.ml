@@ -551,6 +551,35 @@ let windows_program_search () =
             "a miss stays a miss" None
             (Charamel_os.Exe.find ~win32:true "wincmd-missing")))
 
+(* npm leaves an extensionless POSIX shell shim beside the runnable [.CMD] shim of a
+   package command, and [CreateProcess] cannot start that script: the lookup tries
+   [PATHEXT] in order before the name as written, so the command shim wins. *)
+let windows_prefers_command_shims () =
+  let dir = scratch "exe-shim" in
+  Unix.mkdir dir 0o700;
+  let script = Filename.concat dir "npmt01" in
+  let shim = Filename.concat dir "npmt01.CMD" in
+  let script_channel = open_out_bin script in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr script_channel)
+    (fun () -> output_string script_channel "#!/bin/sh\necho hi");
+  let shim_channel = open_out_bin shim in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr shim_channel)
+    (fun () -> output_string shim_channel "@echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove script with Sys_error _ -> ());
+      (try Sys.remove shim with Sys_error _ -> ());
+      try Unix.rmdir dir with Unix.Unix_error _ -> ())
+    (fun () ->
+      with_environment
+        [ ("PATH", dir ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE;.BAT;.CMD") ]
+        (fun () ->
+          Alcotest.(check (option string))
+            "a command shim wins over the extensionless script" (Some shim)
+            (Charamel_os.Exe.find ~win32:true "npmt01")))
+
 let spawn_funnel_prefers_absolute_paths () =
   let dir = scratch "exe-spawn" in
   Unix.mkdir dir 0o700;
@@ -579,6 +608,76 @@ let spawn_funnel_prefers_absolute_paths () =
           Alcotest.(check string)
             "the empty program goes through" ""
             (Charamel_os.Exe.for_spawn ~win32:true "")))
+
+(* [CreateProcess] reads a bare name from the parent's current directory before [PATH]:
+   a runnable file here keeps that resolution instead of being shadowed by a [PATH]
+   copy with the same name. *)
+let spawn_funnel_prefers_local_executables () =
+  let local = scratch "exe-local" in
+  Unix.mkdir local 0o700;
+  let elsewhere = scratch "exe-elsewhere" in
+  Unix.mkdir elsewhere 0o700;
+  let here = Filename.concat local "here01.EXE" in
+  let there = Filename.concat elsewhere "here01.EXE" in
+  let here_channel = open_out_bin here in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr here_channel)
+    (fun () -> output_string here_channel "echo here");
+  let there_channel = open_out_bin there in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr there_channel)
+    (fun () -> output_string there_channel "echo there");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove here with Sys_error _ -> ());
+      (try Sys.remove there with Sys_error _ -> ());
+      (try Unix.rmdir local with Unix.Unix_error _ -> ());
+      try Unix.rmdir elsewhere with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "a local executable shadows a PATH copy" here
+                (Charamel_os.Exe.for_spawn ~win32:true "here01"))))
+
+(* A [PATH] entry spelled relative to the current directory resolves from there, and
+   the hit is absolute, which is what the spawn funnel hands to [CreateProcess]. *)
+let windows_relative_path_entries_resolve () =
+  let parent = scratch "exe-rel" in
+  Unix.mkdir parent 0o700;
+  let tools = Filename.concat parent "tools" in
+  Unix.mkdir tools 0o700;
+  let program = Filename.concat tools "reltool.EXE" in
+  let channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove program with Sys_error _ -> ());
+      (try Unix.rmdir tools with Unix.Unix_error _ -> ());
+      try Unix.rmdir parent with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir parent;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", "tools;C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check (option string))
+                "a relative PATH entry resolves from the current directory" (Some program)
+                (Charamel_os.Exe.find ~win32:true "reltool");
+              Alcotest.(check string)
+                "and the spawn funnel hands it an absolute path" program
+                (Charamel_os.Exe.for_spawn ~win32:true "reltool"))))
 
 let searches_path_by_spawn () =
   posix_only ();
@@ -1169,8 +1268,14 @@ let suites =
         Alcotest.test_case "PATH search" `Quick searches_path;
         Alcotest.test_case "explicit paths" `Quick checks_explicit_paths;
         Alcotest.test_case "Windows search rules" `Quick windows_program_search;
+        Alcotest.test_case "command shims win over scripts" `Quick
+          windows_prefers_command_shims;
         Alcotest.test_case "spawn resolves bare names" `Quick
           spawn_funnel_prefers_absolute_paths;
+        Alcotest.test_case "spawn prefers local executables" `Quick
+          spawn_funnel_prefers_local_executables;
+        Alcotest.test_case "relative PATH entries resolve" `Quick
+          windows_relative_path_entries_resolve;
       ] );
     ( "shell",
       [

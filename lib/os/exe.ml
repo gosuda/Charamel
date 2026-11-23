@@ -16,6 +16,10 @@ let split_path ~win32 variable =
 let path_extensions ~win32 () =
   match split_path ~win32 "PATHEXT" with [] -> default_extensions | xs -> xs
 
+(* [PATHEXT] is the order the shell tries: a name with no known extension is tried
+   with each entry in turn, and only then as written, because the extensionless file
+   beside a package shim is the POSIX shell script, which [CreateProcess] cannot
+   start, while the command shim it sits beside runs. *)
 let extensions ~win32 name =
   if not win32 then [ "" ]
   else
@@ -24,7 +28,7 @@ let extensions ~win32 name =
     let known =
       List.exists (fun extension -> String.ends_with ~suffix:extension upper) extensions
     in
-    if known then [ "" ] else "" :: extensions
+    if known then [ "" ] else extensions @ [ "" ]
 
 let candidates ~win32 root name =
   if win32 then
@@ -42,6 +46,21 @@ let executable ~win32 candidate =
          with Unix.Unix_error _ -> false)
   with Unix.Unix_error _ -> false
 
+(* A [PATH] entry spelled relative to the current directory would resolve to a
+   relative hit, which the spawn funnel cannot hand to [CreateProcess] as an
+   application name; it is read from the current directory instead, so every hit is
+   absolute. A drive-letter entry such as [C:\...] is already placed. *)
+let is_absolute_entry ~win32 directory =
+  String.length directory > 0
+  && (directory.[0] = '/'
+     || directory.[0] = '\\'
+     || (win32 && String.length directory >= 2 && directory.[1] = ':'))
+
+let absolute_directory ~win32 directory =
+  if directory = "" then Sys.getcwd ()
+  else if is_absolute_entry ~win32 directory then directory
+  else Filename.concat (Sys.getcwd ()) directory
+
 let has_separator ~win32 name =
   String.contains name '/' || (win32 && String.contains name '\\')
 
@@ -54,10 +73,7 @@ let find ?(win32 = Sys.win32) name =
     let rec search = function
       | [] -> None
       | directory :: rest -> (
-          let root =
-            if directory = "" then Filename.current_dir_name ^ Filename.dir_sep
-            else directory ^ Filename.dir_sep
-          in
+          let root = absolute_directory ~win32 directory ^ Filename.dir_sep in
           match List.find_opt (executable ~win32) (candidates ~win32 root name) with
           | Some found -> Some found
           | None -> search rest)
@@ -66,9 +82,18 @@ let find ?(win32 = Sys.win32) name =
 
 (* The spawn funnel hands the program to [CreateProcess] as its application name, and a
    bare name misses there on the runners where the shells are found by search: the
-   absolute path always resolves, so a bare name is resolved first. A path and the
-   empty program go through unchanged, and a miss also goes through unchanged so the
-   system reports it exactly as before. *)
+   absolute path always resolves, so a bare name is resolved first. A [CreateProcess]
+   bare name still reads the parent's current directory before [PATH], so a runnable
+   file here keeps that resolution instead of being shadowed by a [PATH] copy. A path
+   and the empty program go through unchanged, and a miss also goes through unchanged
+   so the system reports it exactly as before. *)
 let for_spawn ?(win32 = Sys.win32) prog =
   if prog = "" || has_separator ~win32 prog then prog
-  else Option.value (find ~win32 prog) ~default:prog
+  else
+    let local =
+      if win32 then List.find_opt (executable ~win32) (candidates ~win32 "" prog)
+      else None
+    in
+    match local with
+    | Some candidate -> Filename.concat (Sys.getcwd ()) candidate
+    | None -> Option.value (find ~win32 prog) ~default:prog
