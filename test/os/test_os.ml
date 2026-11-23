@@ -1032,7 +1032,9 @@ let spawn_runs_batch_files_through_the_interpreter () =
                     (Charamel_os.Exe.spawn_command ~win32:true [ "probe01.cmd"; "a\nb" ])))))
 
 (* The child's working directory holds a script with the same name as the one the
-   parent resolves: the resolved one runs, and its argument reaches it whole. *)
+   parent resolves: the resolved one runs, and its arguments reach it whole. [PATH] is
+   always defined, so a [%PATH%] argument that [cmd.exe] expanded would print the search
+   path instead of itself. *)
 let batch_files_run_the_resolved_script () =
   windows_only ();
   let parent = scratch "exe-batchparent" in
@@ -1041,20 +1043,20 @@ let batch_files_run_the_resolved_script () =
   Unix.mkdir child 0o700;
   let here = Filename.concat parent "probe02.cmd" in
   let there = Filename.concat child "probe02.cmd" in
-  write_file here "@echo parent %1\r\n";
-  write_file there "@echo child %1\r\n";
+  write_file here "@echo parent %1 %2\r\n";
+  write_file there "@echo child %1 %2\r\n";
   with_scratch_tree [ here; there ] [ parent; child ] (fun () ->
       in_directory parent (fun () ->
           run (fun () ->
               let process =
                 Charamel_os.Process.spawn ~cwd:child ~stdout:`Pipe
-                  [ "probe02.cmd"; "a&b" ]
+                  [ "probe02.cmd"; "a&b"; "%PATH%" ]
               in
               Lwt_io.read_line (Charamel_os.Process.stdout_r process) >>= fun output ->
               Charamel_os.Process.await process >|= fun code ->
               Alcotest.(check string)
-                "the script resolved in the parent runs" "parent \"a&b\""
-                (String.trim output);
+                "the script resolved in the parent runs with its arguments unexpanded"
+                "parent \"a&b\" \"%PATH%\"" (String.trim output);
               Alcotest.(check int) "and exits cleanly" 0 code)))
 
 let searches_path_by_spawn () =
