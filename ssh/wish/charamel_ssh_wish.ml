@@ -340,6 +340,25 @@ let channel_start connection id words =
     else start_handler connection session
   end
 
+(* The banner goes out on the first method-specific userauth request, before
+   awa's reply: awa 0.7.0 rejects bad signatures itself without a Userauth
+   event, so sending it from authenticate would skip the attempts that fail
+   there. A method-less [none] probe, which clients send first, is skipped:
+   it has no banner arm and must not trigger the send. *)
+let send_banner_once connection =
+  if not connection.banner_sent then begin
+    let banner =
+      match connection.banner_handler with
+      | Some handler -> handler (session_of_connection connection)
+      | None -> connection.banner
+    in
+    match banner with
+    | Some text when String.length text > 0 ->
+        emit_message_locked connection (Awa.Ssh.Msg_userauth_banner (text, ""));
+        connection.banner_sent <- true
+    | _ -> ()
+  end
+
 let authenticate connection username auth =
   let session = session_of_connection connection in
   let accepted, key =
@@ -360,16 +379,6 @@ let authenticate connection username auth =
         in
         (callback_ok, None)
   in
-  let banner =
-    match connection.banner_handler with
-    | Some handler -> handler session
-    | None -> connection.banner
-  in
-  (match (banner, connection.banner_sent) with
-  | Some text, false when String.length text > 0 ->
-      emit_message_locked connection (Awa.Ssh.Msg_userauth_banner (text, ""));
-      connection.banner_sent <- true
-  | _ -> ());
   if accepted then begin
     let state, reply =
       unwrap "accepting user authentication"
@@ -418,6 +427,10 @@ let handle_message connection message =
     unwrap "processing SSH message" (Awa.Server.input_msg connection.state message now)
   in
   connection.state <- state;
+  (match message with
+  | Awa.Ssh.Msg_userauth_request (_, _, Awa.Ssh.Authnone) -> ()
+  | Awa.Ssh.Msg_userauth_request _ -> send_banner_once connection
+  | _ -> ());
   emit_many_locked connection replies;
   match event with Some event -> dispatch_event connection event | None -> ()
 
