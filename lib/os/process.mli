@@ -30,9 +30,10 @@
     fork to avoid and whose redirection arguments provide [Keep], [Dev_null] and private
     pipes natively. Two Windows differences are visible here, and both are documented
     rather than papered over: {!val:kill_tree} stops the child only, because there are no
-    process groups (upstream crush makes the same choice), and a program name is looked up
-    in [PATH] only when the executable name passed to [Lwt_process] is empty, which is
-    what this module passes. *)
+    process groups (upstream crush makes the same choice), and a bare program name is
+    resolved before the spawn through [Charamel_os.Exe.for_spawn] — the current directory
+    first, then [PATH] with [PATHEXT] — and handed over as the absolute path it answers,
+    because [CreateProcess] misses a bare name passed as its application name. *)
 
 type t = Os_platform.Process.t
 (** A running child together with the channels that reach it. *)

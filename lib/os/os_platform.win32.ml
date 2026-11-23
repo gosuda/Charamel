@@ -290,8 +290,9 @@ module Process = struct
         (* [Lwt_process] hands the program to [CreateProcess] as its application name,
            and a bare name misses there: [cmd] arrives as ["No such file or directory"]
            even with the system directory on the search path. The absolute path always
-           resolves, so a bare name is resolved first; a miss goes through unchanged so
-           the system reports it exactly as before. *)
+           resolves, so a bare name is resolved first — from the current directory, then
+           [PATH] — and a miss goes through unchanged so the system reports it exactly
+           as before. *)
         let prog = Exe.for_spawn prog in
         let stdin', stdin_w = input_redir stdin in
         let stdout', stdout_r = output_redir stdout in
