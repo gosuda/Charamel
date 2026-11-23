@@ -28,12 +28,15 @@
 
     The same operations go through [Lwt_process], whose [CreateProcess]-based spawn has no
     fork to avoid and whose redirection arguments provide [Keep], [Dev_null] and private
-    pipes natively. Two Windows differences are visible here, and both are documented
+    pipes natively. Three Windows differences are visible here, and all are documented
     rather than papered over: {!val:kill_tree} stops the child only, because there are no
-    process groups (upstream crush makes the same choice), and a bare program name is
-    resolved before the spawn through [Charamel_os.Exe.for_spawn] — the current directory
-    first, then [PATH] with [PATHEXT] — and handed over as the absolute path it answers,
-    because [CreateProcess] misses a bare name passed as its application name. *)
+    process groups (upstream crush makes the same choice); a bare program name is resolved
+    before the spawn through [Charamel_os.Exe.for_spawn] — the current directory first,
+    then [PATH] with [PATHEXT] — and handed over as the absolute path it answers, because
+    [CreateProcess] misses a bare name passed as its application name; and [argv] reaches
+    the child as the one command line [Charamel_os.Exe.command_line] builds, which the
+    child splits again — by the C runtime rules for most programs, while the words after
+    [cmd.exe]'s [/c] are its command text, verbatim. *)
 
 type t = Os_platform.Process.t
 (** A running child together with the channels that reach it. *)

@@ -165,3 +165,78 @@ let for_spawn ?(win32 = Sys.win32) prog =
     match local with
     | Some candidate -> Filename.concat (Sys.getcwd ()) candidate
     | None -> Option.value (find ~win32 prog) ~default:prog
+
+(* [CreateProcess] receives one command line, and each program splits it itself. A
+   program built on the C runtime splits it by the [CommandLineToArgvW] rules: a word
+   is quoted only when it is empty or holds whitespace or a quote, a quote inside it is
+   escaped with a backslash, and the backslashes before an escaped or closing quote are
+   doubled. *)
+let needs_quotes argument =
+  argument = ""
+  || String.exists
+       (function ' ' | '\t' | '\n' | '\011' | '"' -> true | _ -> false)
+       argument
+
+let quote_argument argument =
+  if not (needs_quotes argument) then argument
+  else
+    let buffer = Buffer.create (String.length argument + 2) in
+    Buffer.add_char buffer '"';
+    let backslashes =
+      String.fold_left
+        (fun backslashes character ->
+          match character with
+          | '\\' ->
+              Buffer.add_char buffer '\\';
+              backslashes + 1
+          | '"' ->
+              Buffer.add_string buffer (String.make (backslashes + 1) '\\');
+              Buffer.add_char buffer '"';
+              0
+          | character ->
+              Buffer.add_char buffer character;
+              0)
+        0 argument
+    in
+    Buffer.add_string buffer (String.make backslashes '\\');
+    Buffer.add_char buffer '"';
+    Buffer.contents buffer
+
+let program_name program =
+  let start =
+    List.fold_left
+      (fun start separator ->
+        match String.rindex_opt program separator with
+        | Some index -> max start (index + 1)
+        | None -> start)
+      0 [ '/'; '\\'; ':' ]
+  in
+  String.lowercase_ascii (String.sub program start (String.length program - start))
+
+let is_command_interpreter program =
+  match program_name program with "cmd" | "cmd.exe" -> true | _ -> false
+
+let is_command_switch word =
+  match String.lowercase_ascii word with "/c" | "/k" -> true | _ -> false
+
+(* [cmd.exe] does not split its command line by those rules: it finds its [/c] or [/k]
+   switch in the raw text and runs everything after it as command text, first removing
+   one surrounding pair of quotes. A quoted ["/c"] followed by a backslash-escaped
+   command reaches it as one unterminated quoted command name, so the switches go
+   through as written and the words after [/c] or [/k] go through verbatim, joined by
+   spaces, inside the one pair of quotes [cmd.exe] removes. *)
+let rec interpreter_words = function
+  | [] -> []
+  | [ word ] -> [ word ]
+  | switch :: text when is_command_switch switch ->
+      [ switch; "\"" ^ String.concat " " text ^ "\"" ]
+  | word :: rest -> word :: interpreter_words rest
+
+let command_line = function
+  | [] -> ""
+  | program :: arguments ->
+      let words =
+        if is_command_interpreter program then interpreter_words arguments
+        else List.map quote_argument arguments
+      in
+      String.concat " " (quote_argument program :: words)

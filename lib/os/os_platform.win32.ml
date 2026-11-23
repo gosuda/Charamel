@@ -297,9 +297,15 @@ module Process = struct
         let stdin', stdin_w = input_redir stdin in
         let stdout', stdout_r = output_redir stdout in
         let stderr', stderr_r = output_redir stderr in
+        (* [Lwt_process] writes each argument through [Filename.quote], which always
+           quotes and escapes by the C runtime rules; [cmd.exe] reads neither, so a
+           quoted ["/c"] and its escaped command text reach it as one quoted command name
+           and it answers that the file name syntax is incorrect. [Exe.command_line]
+           builds the line each program reads, and [Lwt_process]'s ["\000"] inline prefix
+           hands it to [CreateProcess] unchanged. *)
         let create () =
           new Lwt_process.process_none
-            (prog, Array.of_list argv)
+            (prog, [| "\000" ^ Exe.command_line argv |])
             ?cwd ~stdin:stdin' ~stdout:stdout' ~stderr:stderr'
         in
         let process =

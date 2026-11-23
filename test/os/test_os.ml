@@ -974,6 +974,112 @@ let checks_explicit_paths () =
       Alcotest.(check (option string))
         "a directory is never an executable" None (Charamel_os.Exe.find "/bin"))
 
+(* The Windows leg's shell children printed [The filename, directory name, or volume label
+   syntax is incorrect.]: [Lwt_process] quoted every argument, so [cmd.exe] received
+   ["cmd" "/c" "..."] and ran the quoted text as one command name. These pin the command
+   line the funnel now builds, on any host, with the fixtures the crush and gum suites
+   run on Windows. *)
+let command_line_for_the_interpreter () =
+  let line = Charamel_os.Exe.command_line in
+  Alcotest.(check string)
+    "the words after /c are command text"
+    "cmd /c \"((<nul set /p x=hello)&(<nul set /p x=oops 1>&2)&exit 0) 2>&1\""
+    (line
+       [ "cmd"; "/c"; "((<nul set /p x=hello)&(<nul set /p x=oops 1>&2)&exit 0) 2>&1" ]);
+  Alcotest.(check string)
+    "inner quotes stay as written" "cmd /c \"echo {\"decision\":\"deny\"}\""
+    (line [ "cmd"; "/c"; "echo {\"decision\":\"deny\"}" ]);
+  Alcotest.(check string)
+    "the shell module's switches go through as written"
+    "cmd.exe /d /s /c \"cd /d \"C:\\x\" && \"C:\\y.exe\"\""
+    (line [ "cmd.exe"; "/d"; "/s"; "/c"; "cd /d \"C:\\x\" && \"C:\\y.exe\"" ]);
+  Alcotest.(check string)
+    "later words join the command text"
+    "C:\\Windows\\System32\\CMD.EXE /C \"rem C:\\a.yml\""
+    (line [ "C:\\Windows\\System32\\CMD.EXE"; "/C"; "rem"; "C:\\a.yml" ]);
+  Alcotest.(check string) "the interpreter alone" "cmd /c" (line [ "cmd"; "/c" ]);
+  Alcotest.(check string)
+    "another program keeps the C runtime rules" "cmdtool /c \"a b\""
+    (line [ "cmdtool"; "/c"; "a b" ]);
+  Alcotest.(check string) "the empty argv" "" (line [])
+
+let command_line_quotes_by_the_c_runtime_rules () =
+  let line = Charamel_os.Exe.command_line in
+  Alcotest.(check string) "plain words stay bare" "findstr ^" (line [ "findstr"; "^" ]);
+  Alcotest.(check string)
+    "spaces and the empty word are quoted"
+    "\"C:\\Program Files\\tool.exe\" \"a b\" \"\" C:\\dir\\file"
+    (line [ "C:\\Program Files\\tool.exe"; "a b"; ""; "C:\\dir\\file" ]);
+  Alcotest.(check string)
+    "a quote is escaped" "prog \"say \\\"hi\\\"\""
+    (line [ "prog"; "say \"hi\"" ]);
+  Alcotest.(check string)
+    "backslashes before a quote double" "prog \"a\\\\\\\"b\""
+    (line [ "prog"; "a\\\"b" ]);
+  Alcotest.(check string)
+    "trailing backslashes double before the closing quote" "prog \"C:\\my dir\\\\\""
+    (line [ "prog"; "C:\\my dir\\" ])
+
+(* An independent reading of [CommandLineToArgvW] for the words after the program: [2n]
+   backslashes before a quote are [n] and the quote toggles quoting, [2n + 1] are [n]
+   and a literal quote, any other backslash is itself, and a space or tab outside quotes
+   ends a word. *)
+let split_c_runtime_words text =
+  let length = String.length text in
+  let words = ref [] in
+  let current = Buffer.create 16 in
+  let started = ref false in
+  let quoted = ref false in
+  let index = ref 0 in
+  let finish () =
+    if !started then words := Buffer.contents current :: !words;
+    Buffer.clear current;
+    started := false
+  in
+  while !index < length do
+    match text.[!index] with
+    | '\\' ->
+        let first = !index in
+        while !index < length && text.[!index] = '\\' do
+          incr index
+        done;
+        let count = !index - first in
+        started := true;
+        if !index < length && text.[!index] = '"' then (
+          Buffer.add_string current (String.make (count / 2) '\\');
+          if count mod 2 = 1 then Buffer.add_char current '"' else quoted := not !quoted;
+          incr index)
+        else Buffer.add_string current (String.make count '\\')
+    | '"' ->
+        started := true;
+        quoted := not !quoted;
+        incr index
+    | (' ' | '\t') when not !quoted ->
+        finish ();
+        incr index
+    | character ->
+        started := true;
+        Buffer.add_char current character;
+        incr index
+  done;
+  finish ();
+  List.rev !words
+
+let command_line_round_trips_through_the_c_runtime () =
+  let state = Random.State.make [| 1969 |] in
+  let alphabet = [| 'a'; ' '; '\t'; '"'; '\\'; '&'; '^'; '%' |] in
+  let word () =
+    String.init (Random.State.int state 9) (fun _ ->
+        alphabet.(Random.State.int state (Array.length alphabet)))
+  in
+  for _ = 1 to 2000 do
+    let arguments = List.init (Random.State.int state 5) (fun _ -> word ()) in
+    let line = Charamel_os.Exe.command_line ("prog" :: arguments) in
+    Alcotest.(check (list string))
+      ("the arguments split back out of " ^ String.escaped line)
+      ("prog" :: arguments) (split_c_runtime_words line)
+  done
+
 (* {1 Shell} *)
 
 let command_uses_the_platform_shell () =
@@ -1552,6 +1658,12 @@ let suites =
           explicit_relative_hits_are_absolute;
         Alcotest.test_case "relative PATH entries resolve" `Quick
           windows_relative_path_entries_resolve;
+        Alcotest.test_case "command line for cmd.exe" `Quick
+          command_line_for_the_interpreter;
+        Alcotest.test_case "command line C runtime quoting" `Quick
+          command_line_quotes_by_the_c_runtime_rules;
+        Alcotest.test_case "command line round trip" `Quick
+          command_line_round_trips_through_the_c_runtime;
       ] );
     ( "shell",
       [

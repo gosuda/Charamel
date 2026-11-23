@@ -41,3 +41,16 @@ val for_spawn : ?win32:bool -> string -> string
     a Windows drive-letter prefix such as [C:tool.exe], and the empty program go through
     unchanged, as does a miss, so the system reports an unknown program exactly as before.
 *)
+
+val command_line : string list -> string
+(** [command_line argv] is the Windows command line the spawn funnel hands to
+    [CreateProcess] for [argv], the program first. Each word is written the way the C
+    runtime splits it back ([CommandLineToArgvW]): quoted only when it is empty or holds
+    whitespace or a quote, with an inner quote escaped by a backslash and the backslashes
+    before an escaped or closing quote doubled. A program named [cmd] or [cmd.exe] (in any
+    case, with or without a directory) reads its command line differently: its switches go
+    through as written, and the words after [/c] or [/k] are command text, joined by
+    spaces verbatim inside the one pair of quotes [cmd.exe] removes, so
+    [["cmd"; "/c"; "echo a & echo b"]] runs both commands. Without [/s], [cmd.exe] keeps
+    that pair when its text is exactly the name of an executable file with a space in it,
+    which still runs that file. The empty [argv] is the empty line. *)
