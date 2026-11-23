@@ -141,13 +141,30 @@ let windows_both_streams_pins_zero_exit () =
    [2>&1] after the command, and only a trailing group makes that redirect cover
    both stream writers. Unwrapped, it lands on [exit 0] alone and the stdout and
    stderr pipes race, so [output_case] can observe [oopshello] on Windows. *)
+let is_single_group text =
+  let length = String.length text in
+  length > 1
+  && String.get text 0 = '('
+  && String.get text (length - 1) = ')'
+  &&
+  let depth = ref 0 in
+  let closed_early = ref false in
+  String.iteri
+    (fun index character ->
+      (match character with '(' -> incr depth | ')' -> decr depth | _ -> ());
+      if index < length - 1 && !depth = 0 then closed_early := true)
+    text;
+  not !closed_early
+
 let windows_both_streams_self_wraps () =
   let fixture = both_streams_for ~win32:true in
   Alcotest.(check bool)
-    "windows both_streams is one parenthesized group" true
-    (String.length fixture > 1
-    && String.get fixture 0 = '('
-    && String.get fixture (String.length fixture - 1) = ')')
+    "windows both_streams is one parenthesized group" true (is_single_group fixture)
+
+let windows_split_groups_are_not_single () =
+  Alcotest.(check bool)
+    "split groups are not one parenthesized group" false
+    (is_single_group "(<nul set /p x=hello)&(<nul set /p x=oops 1>&2)")
 
 let cases =
   [
@@ -161,4 +178,6 @@ let cases =
       windows_both_streams_pins_zero_exit;
     Test_tools_test_support.case "windows both_streams self-wraps" `Quick
       windows_both_streams_self_wraps;
+    Test_tools_test_support.case "windows split groups are not single" `Quick
+      windows_split_groups_are_not_single;
   ]
