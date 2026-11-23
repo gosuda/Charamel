@@ -726,15 +726,8 @@ let spawn_prefers_local_executable_with_unknown_extension () =
 let spawn_keeps_drive_relative_commands () =
   let local = scratch "exe-drive" in
   Unix.mkdir local 0o700;
-  let target = Filename.concat local "C:tool.exe" in
-  let channel = open_out_bin target in
   Fun.protect
-    ~finally:(fun () -> close_out_noerr channel)
-    (fun () -> output_string channel "echo hi");
-  Fun.protect
-    ~finally:(fun () ->
-      (try Sys.remove target with Sys_error _ -> ());
-      try Unix.rmdir local with Unix.Unix_error _ -> ())
+    ~finally:(fun () -> try Unix.rmdir local with Unix.Unix_error _ -> ())
     (fun () ->
       let previous = Sys.getcwd () in
       Unix.chdir local;
@@ -747,9 +740,21 @@ let spawn_keeps_drive_relative_commands () =
               Alcotest.(check string)
                 "a drive-relative command goes through unchanged" "C:tool.exe"
                 (Charamel_os.Exe.for_spawn ~win32:true "C:tool.exe");
-              Alcotest.(check (option string))
-                "and lookup checks it as given" (Some "C:tool.exe")
-                (Charamel_os.Exe.find ~win32:true "C:tool.exe"))))
+              (* A colon names a drive-relative path on Windows, where it cannot
+                 appear in a filename: the lookup half needs the fixture file,
+                 so it runs only where the colon name is creatable. *)
+              if not Sys.win32 then (
+                let target = Filename.concat local "C:tool.exe" in
+                let channel = open_out_bin target in
+                Fun.protect
+                  ~finally:(fun () -> close_out_noerr channel)
+                  (fun () -> output_string channel "echo hi");
+                Fun.protect
+                  ~finally:(fun () -> try Sys.remove target with Sys_error _ -> ())
+                  (fun () ->
+                    Alcotest.(check (option string))
+                      "and lookup checks it as given" (Some "C:tool.exe")
+                      (Charamel_os.Exe.find ~win32:true "C:tool.exe"))))))
 
 (* An explicit relative path is checked as given, but the hit is absolute like every
    other hit: the spawn funnel cannot hand a relative application name to
