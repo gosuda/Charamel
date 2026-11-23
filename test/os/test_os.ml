@@ -730,6 +730,7 @@ let spawn_skips_local_data_file_with_unknown_extension () =
   Unix.mkdir elsewhere 0o700;
   let data = Filename.concat local "server.v2" in
   let build = Filename.concat local "server.v2.EXE" in
+  let shadowed = Filename.concat local "tool02.xyz" in
   let shipped = Filename.concat elsewhere "tool02.xyz.EXE" in
   let write_image path =
     let channel = open_out_bin path in
@@ -741,11 +742,16 @@ let spawn_skips_local_data_file_with_unknown_extension () =
   Fun.protect
     ~finally:(fun () -> close_out_noerr data_channel)
     (fun () -> output_string data_channel "#!/bin/sh\necho data");
+  let shadowed_channel = open_out_bin shadowed in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr shadowed_channel)
+    (fun () -> output_string shadowed_channel "#!/bin/sh\necho shadowed");
   write_image build;
   write_image shipped;
   Fun.protect
     ~finally:(fun () ->
       (try Sys.remove data with Sys_error _ -> ());
+      (try Sys.remove shadowed with Sys_error _ -> ());
       (try Sys.remove build with Sys_error _ -> ());
       (try Sys.remove shipped with Sys_error _ -> ());
       (try Unix.rmdir local with Unix.Unix_error _ -> ());
@@ -763,8 +769,45 @@ let spawn_skips_local_data_file_with_unknown_extension () =
                 "a Windows build wins over a same-named data file" build
                 (Charamel_os.Exe.for_spawn ~win32:true "server.v2");
               Alcotest.(check string)
-                "a runnable PATH copy wins when no local candidate loads" shipped
+                "a runnable PATH copy wins over a same-named local data file" shipped
                 (Charamel_os.Exe.for_spawn ~win32:true "tool02.xyz"))))
+
+(* An explicitly named batch file runs through the command interpreter, so the local
+   copy keeps precedence whatever [PATHEXT] lists: omitting [.BAT] must not hand the
+   name to a [PATH] copy. *)
+let spawn_prefers_local_batch_files () =
+  let local = scratch "exe-batch" in
+  Unix.mkdir local 0o700;
+  let elsewhere = scratch "exe-batch-path" in
+  Unix.mkdir elsewhere 0o700;
+  let here = Filename.concat local "build.bat" in
+  let there = Filename.concat elsewhere "build.bat" in
+  let here_channel = open_out_bin here in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr here_channel)
+    (fun () -> output_string here_channel "@echo off\r\necho here");
+  let there_channel = open_out_bin there in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr there_channel)
+    (fun () -> output_string there_channel "@echo off\r\necho there");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove here with Sys_error _ -> ());
+      (try Sys.remove there with Sys_error _ -> ());
+      (try Unix.rmdir local with Unix.Unix_error _ -> ());
+      try Unix.rmdir elsewhere with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "a local batch file shadows a PATH copy without PATHEXT listing it" here
+                (Charamel_os.Exe.for_spawn ~win32:true "build.bat"))))
 
 (* A drive-letter prefix such as [C:] names a path on that drive even with no slash:
    the lookup checks it as given and the funnel hands it through unchanged, instead
@@ -1499,6 +1542,8 @@ let suites =
           spawn_prefers_local_executable_with_unknown_extension;
         Alcotest.test_case "spawn skips local data files" `Quick
           spawn_skips_local_data_file_with_unknown_extension;
+        Alcotest.test_case "spawn prefers local batch files" `Quick
+          spawn_prefers_local_batch_files;
         Alcotest.test_case "spawn keeps drive-relative commands" `Quick
           spawn_keeps_drive_relative_commands;
         Alcotest.test_case "drive-relative lookup reads the drive directory" `Quick

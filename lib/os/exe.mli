@@ -11,11 +11,13 @@
     [PATH] entries are separated by [;], and the extension matters: typing [git] means
     [git.exe], and [npm] means [npm.cmd]. [PATHEXT] supplies the ordered extension list,
     defaulting to [.COM;.EXE;.BAT;.CMD], and a name that already carries one of those
-    extensions is tried as it stands. Otherwise each extension is tried in [PATHEXT] order
-    before the name as written, because the extensionless file beside a package shim is
-    its POSIX shell script, which the process launcher cannot start. A candidate must
-    exist; the executable-bit question [access(X_OK)] raises does not exist on this
-    platform. *)
+    extensions is tried as it stands. An explicitly named batch file ([.BAT] or [.CMD] in
+    any case) is likewise tried as it stands whatever [PATHEXT] lists, because the
+    launcher runs it through the command interpreter. Otherwise each extension is tried in
+    [PATHEXT] order before the name as written, because the extensionless file beside a
+    package shim is its POSIX shell script, which the process launcher cannot start. A
+    candidate must exist; the executable-bit question [access(X_OK)] raises does not exist
+    on this platform. *)
 
 val find : ?win32:bool -> string -> string option
 (** [find ?win32 name] is the executable [name] resolves to, or [None] when nothing on

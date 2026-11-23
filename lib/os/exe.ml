@@ -68,9 +68,8 @@ let executable ~win32 candidate =
          with Unix.Unix_error _ -> false)
   with Unix.Unix_error _ -> false
 
-(* [CreateProcess] starts an explicitly named file with an unlisted extension
-   only as a PE image, so a same-named data file is never a runnable match: the
-   exact local name keeps precedence only when it carries the image mark. *)
+(* The image mark is the first two bytes of a PE file; batch files are recognised
+   separately, so this probe only answers whether the exact local name is a PE image. *)
 let starts_with_mz candidate =
   try
     let fd = Unix.openfile candidate [ Unix.O_RDONLY ] 0 in
@@ -131,6 +130,18 @@ let find ?(win32 = Sys.win32) name =
     in
     search directories
 
+(* An explicitly named batch file runs through the command interpreter, so it keeps
+   the exact local name whatever [PATHEXT] lists: [PATHEXT] only orders the suffixes
+   the probe appends to an extensionless name. [CreateProcess] starts an explicitly
+   named file with any other unlisted extension only as a PE image, so a same-named
+   data file is never a runnable match: the exact local name keeps precedence only
+   when it carries the image mark. *)
+let is_batch_file name =
+  let upper = String.uppercase_ascii name in
+  List.exists
+    (fun extension -> String.ends_with ~suffix:extension upper)
+    [ ".BAT"; ".CMD" ]
+
 (* The spawn funnel hands the program to [CreateProcess] as its application name, and a
    bare name misses there on the runners where the shells are found by search: the
    absolute path always resolves, so a bare name is resolved first. A [CreateProcess]
@@ -140,7 +151,9 @@ let find ?(win32 = Sys.win32) name =
    so the system reports it exactly as before. *)
 let spawnable ~win32 prog candidate =
   executable ~win32 candidate
-  && (candidate <> prog || extensions ~win32 prog = [ "" ] || starts_with_mz candidate)
+  && (candidate <> prog
+     || extensions ~win32 prog = [ "" ]
+     || is_batch_file prog || starts_with_mz candidate)
 
 let for_spawn ?(win32 = Sys.win32) prog =
   if prog = "" || is_explicit ~win32 prog then prog
