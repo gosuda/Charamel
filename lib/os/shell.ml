@@ -1,4 +1,4 @@
-let win32_metacharacters = [ '('; ')'; '%'; '!'; '^'; '"'; '<'; '>'; '&'; '|' ]
+let win32_metacharacters = [ '('; ')'; '%'; '!'; '^'; '"'; '<'; '>'; '&'; '|'; ':' ]
 
 let escape_win32 text =
   let buffer = Buffer.create (String.length text + 8) in
@@ -15,7 +15,11 @@ let escape_win32 text =
    [cmd.exe], which is also the only form a program path with a space survives as the
    command name. An inner quote would end the run early and a [%] expands even inside
    it, so such a word has every metacharacter caret-escaped instead, quotes included,
-   and [cmd.exe] hands the quoted word on unchanged. *)
+   and [cmd.exe] hands the quoted word on unchanged. [cmd.exe] expands variables before
+   it reads carets, and it reads a name from a [%] up to the next [%] or [:], the colon
+   opening [%name:~1,2%] and [%name:a=b%]; with a caret before every [%] and [:], every
+   name it reads holds a caret, so only a variable whose own name holds a caret could
+   expand. *)
 let quote_win32 text =
   let quoted = Exe.quote_word text in
   if String.exists (function '"' | '%' -> true | _ -> false) text then escape_win32 quoted

@@ -1,5 +1,16 @@
 open Lwt.Infix
 
+(* The Windows shell probe starts this binary through [cmd.exe] to print the words it
+   received, one escaped word per line after whether its working directory holds the
+   probe's marker file, and exits before the test driver starts. *)
+let () =
+  match Array.to_list Sys.argv with
+  | _ :: "--charamel-echo-argv" :: words ->
+      print_endline (string_of_bool (Sys.file_exists "charamel-marker"));
+      List.iter (fun word -> print_endline (String.escaped word)) words;
+      exit 0
+  | _ -> ()
+
 (* Test helpers: environment injection, scratch paths, bounded Lwt runs. Every test that
    blocks goes through [run], so a broken spawn fails with a timeout instead of hanging the
    suite. *)
@@ -1388,11 +1399,38 @@ let quoting_protects_word_boundaries () =
     (Charamel_os.Shell.quote "a; b | c && d $(e)");
   Alcotest.(check string) "a newline survives" "'a\nb'" (Charamel_os.Shell.quote "a\nb")
 
-(* An independent reading of what [cmd.exe] hands on for one word of its command text,
-   or [None] when it would act on the word. A [%] that a caret does not break apart can
-   name a variable and expand, even inside quotes. Outside quotes a caret takes the next
-   character literally and [& | < > ( )] act; a quote toggles quoting, and inside quotes
-   every character, a caret included, is copied as it stands. *)
+(* [cmd.exe] expands variables before it reads carets or quotes, over its whole command
+   text and inside quotes too. After a [%] it reads a name up to the next [%] or [:],
+   and [%name%], [%name:~1,2%] and [%name:a=b%] expand when the name is defined. The
+   child's environment is not known, so every name without a caret counts as defined;
+   an empty name, or one holding a caret, leaves the [%] as it stands. *)
+let cmd_expands_a_variable text =
+  let length = String.length text in
+  let rec name_end position =
+    if position = length then None
+    else
+      match text.[position] with
+      | '%' | ':' -> Some position
+      | _ -> name_end (position + 1)
+  in
+  let rec scan index =
+    match String.index_from_opt text index '%' with
+    | None -> false
+    | Some opening -> (
+        match name_end (opening + 1) with
+        | None -> false
+        | Some closing ->
+            let name = String.sub text (opening + 1) (closing - opening - 1) in
+            let defined = name <> "" && not (String.contains name '^') in
+            (defined && String.contains_from text closing '%') || scan (opening + 1))
+  in
+  scan 0
+
+(* An independent reading of what [cmd.exe] hands on from its command text, or [None]
+   when it would act on the text. Once no variable expands, it reads carets and quotes:
+   outside quotes a caret takes the next character literally and [& | < > ( )] act; a
+   quote toggles quoting, and inside quotes every character, a caret included, is copied
+   as it stands. *)
 let cmd_hands_on text =
   let length = String.length text in
   let output = Buffer.create length in
@@ -1400,7 +1438,6 @@ let cmd_hands_on text =
     if index = length then Some (Buffer.contents output)
     else
       match (text.[index], quoted) with
-      | '%', _ when index = 0 || text.[index - 1] <> '^' -> None
       | '"', _ ->
           Buffer.add_char output '"';
           read (index + 1) (not quoted)
@@ -1415,33 +1452,88 @@ let cmd_hands_on text =
           Buffer.add_char output character;
           read (index + 1) false
   in
-  read 0 false
+  if cmd_expands_a_variable text then None else read 0 false
 
 let windows_quoting_survives_cmd_and_the_c_runtime () =
+  let quote = Charamel_os.Shell.quote ~win32:true in
   Alcotest.(check string)
     "a program path with a space stays one quoted run" "\"C:\\Program Files\\x y\\s.exe\""
-    (Charamel_os.Shell.quote ~win32:true "C:\\Program Files\\x y\\s.exe");
+    (quote "C:\\Program Files\\x y\\s.exe");
   Alcotest.(check string)
     "a trailing backslash doubles before the closing quote" "\"C:\\my dir\\\\\""
-    (Charamel_os.Shell.quote ~win32:true "C:\\my dir\\");
-  let state = Random.State.make [| 1124 |] in
-  let alphabet =
-    [| 'a'; ' '; '\t'; '"'; '\\'; '&'; '^'; '%'; '|'; '<'; '>'; '('; ')'; '!' |]
-  in
-  for _ = 1 to 2000 do
-    let word =
-      String.init (Random.State.int state 9) (fun _ ->
-          alphabet.(Random.State.int state (Array.length alphabet)))
-    in
-    let quoted = Charamel_os.Shell.quote ~win32:true word in
-    match cmd_hands_on quoted with
-    | None -> Alcotest.failf "cmd.exe acts on %s" (String.escaped quoted)
+    (quote "C:\\my dir\\");
+  let reads_back words =
+    let line = String.concat " " (List.map quote words) in
+    match cmd_hands_on line with
+    | None -> Alcotest.failf "cmd.exe acts on %s" (String.escaped line)
     | Some passed ->
         Alcotest.(check (list string))
-          ("the program reads back " ^ String.escaped word)
-          [ word ]
+          ("the program reads back " ^ String.escaped line)
+          words
           (split_c_runtime_words passed)
+  in
+  List.iter reads_back
+    [
+      [ "%PATH%" ];
+      [ "%PATH:a=b%" ];
+      [ "%OS:~0,3%" ];
+      [ "50%"; "C:\\x y\\%z%" ];
+      [ "a%"; "C:\\b" ];
+    ];
+  let state = Random.State.make [| 1124 |] in
+  let alphabet =
+    [| 'a'; ' '; '\t'; '"'; '\\'; '&'; '^'; '%'; '|'; '<'; '>'; '('; ')'; '!'; ':'; '=' |]
+  in
+  let word () =
+    String.init (Random.State.int state 9) (fun _ ->
+        alphabet.(Random.State.int state (Array.length alphabet)))
+  in
+  for _ = 1 to 2000 do
+    reads_back (List.init (1 + Random.State.int state 3) (fun _ -> word ()))
   done
+
+(* What an MCP server receives: its command and arguments go through [Shell.quote] and
+   [Shell.command ~cwd] into [cmd.exe], which starts the program. The program here is
+   this binary in its echo mode, the working directory's name holds a space and a
+   [%OS%] pair, and the words hold variable references, operators, quotes and carets. *)
+let shell_words_reach_the_program_whole () =
+  windows_only ();
+  let directory = scratch "shell words %OS%" in
+  Unix.mkdir directory 0o700;
+  let marker = Filename.concat directory "charamel-marker" in
+  write_file marker "";
+  let words =
+    [
+      "%PATH%";
+      "%PATH:a=b%";
+      "%OS:~0,3%";
+      "a&b";
+      "say \"hi\"";
+      "^caret";
+      "50%";
+      "C:\\dir\\";
+      "";
+    ]
+  in
+  let text =
+    String.concat " "
+      (List.map Charamel_os.Shell.quote
+         (Sys.executable_name :: "--charamel-echo-argv" :: words))
+  in
+  with_scratch_tree [ marker ] [ directory ] (fun () ->
+      run (fun () ->
+          let process =
+            Charamel_os.Process.spawn ~stdout:`Pipe
+              (Charamel_os.Shell.command ~cwd:directory text)
+          in
+          Lwt_stream.to_list (Lwt_io.read_lines (Charamel_os.Process.stdout_r process))
+          >>= fun lines ->
+          Charamel_os.Process.await process >|= fun code ->
+          Alcotest.(check (list string))
+            "the program runs in the directory and reads back every word"
+            ("true" :: List.map String.escaped words)
+            lines;
+          Alcotest.(check int) "and exits cleanly" 0 code))
 
 let splitting_words () =
   let check name expected text =
@@ -2053,6 +2145,8 @@ let suites =
         Alcotest.test_case "quoting" `Quick quoting_protects_word_boundaries;
         Alcotest.test_case "Windows quoting survives cmd.exe" `Quick
           windows_quoting_survives_cmd_and_the_c_runtime;
+        Alcotest.test_case "shell words reach the program whole" `Quick
+          shell_words_reach_the_program_whole;
         Alcotest.test_case "splitting" `Quick splitting_words;
       ] );
     ( "editor",

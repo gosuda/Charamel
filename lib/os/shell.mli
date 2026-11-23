@@ -41,8 +41,12 @@ val quote : ?win32:bool -> string -> string
     survives as the command name only in that form. A word holding a quote, which would
     end [cmd.exe]'s quoted run early, or a [%], which expands even inside quotes, instead
     has the double quote and every other [cmd.exe] metacharacter [( ) % ! ^ < > & |]
-    caret-escaped, so [cmd.exe] hands the quoted word on to the program unchanged.
-    [~win32] selects the rules and defaults to the host. *)
+    caret-escaped, and the colon too, so [cmd.exe] hands the quoted word on to the program
+    unchanged. [cmd.exe] expands variables before it reads carets and reads a variable
+    name from a [%] up to the next [%] or [:], so with a caret before each of them every
+    name it reads holds a caret: [%PATH%] and [%PATH:a=b%] stay text unless the
+    environment defines a variable whose name holds a caret. [~win32] selects the rules
+    and defaults to the host. *)
 
 val split_words : string -> string list
 (** [split_words text] divides [text] into words on spaces and tabs, honoring single and
