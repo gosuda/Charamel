@@ -101,11 +101,14 @@ let fixture_config port =
     {|{"providers":{"anthropic":{"type":"anthropic","base_url":"http://127.0.0.1:%d","api_key":"fixture-key","models":[{"id":"fixture-model","name":"Fixture","cost_per_1m_in":0,"cost_per_1m_out":0,"cost_per_1m_in_cached":0,"cost_per_1m_out_cached":0,"context_window":200000,"default_max_tokens":1024,"can_reason":false,"supports_attachments":false}]}},"models":{"large":{"provider":"anthropic","model":"fixture-model"},"small":{"provider":"anthropic","model":"fixture-model"}}}|}
     port
 
+let user_config root =
+  List.fold_left Filename.concat root [ "config"; "crush"; "crush.json" ]
+
 let run_fixture () =
   Test_tools_test_support.with_scratch (fun root ->
       Test_tools_test_support.with_http_fixture ~content_type:"text/event-stream"
         fixture_body (fun port ->
-          write_private (Filename.concat root "crush.json") (fixture_config port);
+          write_private (user_config root) (fixture_config port);
           let status, output, error =
             run_child_status root [ "run"; "-y"; "--cwd"; root; "say"; "hi" ]
           in
@@ -114,6 +117,65 @@ let run_fixture () =
             "assistant text is streamed" true
             (Test_support.contains ~needle:"pong" ~haystack:output);
           Alcotest.(check string) "fixture diagnostics are empty" "" error))
+
+let json_string value = Crush_core.Jsonx.string_of_json (Jsont.Json.string value)
+
+let touch_command path =
+  (if Sys.win32 then "type nul > " else "touch ") ^ Charamel_os.Shell.quote path
+
+let probe_markers root =
+  List.map (Filename.concat root)
+    (if Sys.win32 then [ "hook-ran" ] else [ "hook-ran"; "mcp-ran" ])
+
+let probe_project root =
+  let mcp =
+    if Sys.win32 then ""
+    else
+      Fmt.str {|"mcp":{"probe":{"command":"sh","args":["-c",%s]}},|}
+        (json_string (touch_command (Filename.concat root "mcp-ran")))
+  in
+  Fmt.str {|{%s"hooks":[{"event":"session_start","command":%s}]}|} mcp
+    (json_string (touch_command (Filename.concat root "hook-ran")))
+
+let project_commands_wait_for_trust () =
+  Test_tools_test_support.with_scratch (fun root ->
+      Test_tools_test_support.with_http_fixture ~content_type:"text/event-stream"
+        fixture_body (fun port ->
+          write_private (user_config root) (fixture_config port);
+          let project = Filename.concat root "crush.json" in
+          let markers = probe_markers root in
+          let ran () = List.filter Sys.file_exists markers in
+          let run label =
+            let status, _output, error =
+              run_child_status root [ "run"; "-y"; "--cwd"; root; "say"; "hi" ]
+            in
+            Alcotest.(check int) (label ^ " run exits successfully") 0 status;
+            error
+          in
+          let names_untrusted error =
+            Test_support.contains ~needle:"untrusted project configuration"
+              ~haystack:error
+          in
+          write_private project (probe_project root);
+          let error = run "untrusted" in
+          Alcotest.(check (list string))
+            "untrusted project commands do not run" [] (ran ());
+          Alcotest.(check bool)
+            "the run reports what it ignored" true (names_untrusted error);
+          let status, output, _error = run_child_status root [ "trust"; "--cwd"; root ] in
+          Alcotest.(check int) "trust exits successfully" 0 status;
+          Alcotest.(check bool)
+            "trust names the file" true
+            (Test_support.contains ~needle:"Trusted " ~haystack:output);
+          let error = run "trusted" in
+          Alcotest.(check (list string)) "trusted project commands run" markers (ran ());
+          Alcotest.(check bool)
+            "nothing is reported as untrusted" false (names_untrusted error);
+          List.iter Sys.remove markers;
+          Test_tools_test_support.write_file project (probe_project root ^ "\n");
+          let error = run "edited" in
+          Alcotest.(check (list string)) "an edit revokes trust" [] (ran ());
+          Alcotest.(check bool) "the edited file is reported" true (names_untrusted error)))
 
 let providers_catalog_body =
   {|[{"id":"acme","name":"Acme","api_endpoint":"","models":[{"id":"acme-model","name":"Acme Model","cost_per_1m_in":0,"cost_per_1m_out":0,"context_window":128000,"default_max_tokens":4096,"can_reason":false,"supports_attachments":false}]}]|}
@@ -163,7 +225,7 @@ let sessions_lists_a_persisted_session () =
   Test_tools_test_support.with_scratch (fun root ->
       Test_tools_test_support.with_http_fixture ~content_type:"text/event-stream"
         fixture_body (fun port ->
-          write_private (Filename.concat root "crush.json") (fixture_config port);
+          write_private (user_config root) (fixture_config port);
           let run_status, _run_output, run_error =
             run_child_status root [ "run"; "-y"; "--cwd"; root; "say"; "hi" ]
           in
@@ -232,6 +294,8 @@ let cases =
     Test_tools_test_support.case "dirs uses child environment" `Quick dirs_command;
     Test_tools_test_support.case "schema emits configuration schema" `Quick schema_command;
     Test_tools_test_support.case "run uses configured HTTP provider" `Quick run_fixture;
+    Test_tools_test_support.case "project commands wait for trust" `Quick
+      project_commands_wait_for_trust;
     Test_tools_test_support.case "logout without a credential fails" `Quick
       logout_missing_credential_without_force;
     Test_tools_test_support.case "logout --force treats a missing credential as success"
