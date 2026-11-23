@@ -16,6 +16,16 @@ let split_path ~win32 variable =
 let path_extensions ~win32 () =
   match split_path ~win32 "PATHEXT" with [] -> default_extensions | xs -> xs
 
+(* An explicitly named batch file runs through the command interpreter, which starts
+   it by its own extension, so the name is exact whatever [PATHEXT] lists: [PATHEXT]
+   only orders the suffixes appended to a name that carries none of them, and
+   [build.cmd.EXE] is never the program [build.cmd] names. *)
+let is_batch_file name =
+  let upper = String.uppercase_ascii name in
+  List.exists
+    (fun extension -> String.ends_with ~suffix:extension upper)
+    [ ".BAT"; ".CMD" ]
+
 (* [PATHEXT] is the order the shell tries: a name with no known extension is tried
    with each entry in turn, and only then as written, because the extensionless file
    beside a package shim is the POSIX shell script, which [CreateProcess] cannot
@@ -26,7 +36,10 @@ let extensions ~win32 name =
     let upper = String.uppercase_ascii name in
     let extensions = path_extensions ~win32 () in
     let known =
-      List.exists (fun extension -> String.ends_with ~suffix:extension upper) extensions
+      is_batch_file name
+      || List.exists
+           (fun extension -> String.ends_with ~suffix:extension upper)
+           extensions
     in
     if known then [ "" ] else extensions @ [ "" ]
 
@@ -130,30 +143,19 @@ let find ?(win32 = Sys.win32) name =
     in
     search directories
 
-(* An explicitly named batch file runs through the command interpreter, so it keeps
-   the exact local name whatever [PATHEXT] lists: [PATHEXT] only orders the suffixes
-   the probe appends to an extensionless name. [CreateProcess] starts an explicitly
-   named file with any other unlisted extension only as a PE image, so a same-named
-   data file is never a runnable match: the exact local name keeps precedence only
-   when it carries the image mark. *)
-let is_batch_file name =
-  let upper = String.uppercase_ascii name in
-  List.exists
-    (fun extension -> String.ends_with ~suffix:extension upper)
-    [ ".BAT"; ".CMD" ]
-
 (* The spawn funnel hands the program to [CreateProcess] as its application name, and a
    bare name misses there on the runners where the shells are found by search: the
    absolute path always resolves, so a bare name is resolved first. A [CreateProcess]
    bare name still reads the parent's current directory before [PATH], so a runnable
    file here keeps that resolution instead of being shadowed by a [PATH] copy. A path
    and the empty program go through unchanged, and a miss also goes through unchanged
-   so the system reports it exactly as before. *)
+   so the system reports it exactly as before. A name with a listed extension or a batch
+   suffix is exact; [CreateProcess] starts an explicitly named file with any other
+   unlisted extension only as a PE image, so a same-named data file is never a runnable
+   match: the exact local name keeps precedence only when it carries the image mark. *)
 let spawnable ~win32 prog candidate =
   executable ~win32 candidate
-  && (candidate <> prog
-     || extensions ~win32 prog = [ "" ]
-     || is_batch_file prog || starts_with_mz candidate)
+  && (candidate <> prog || extensions ~win32 prog = [ "" ] || starts_with_mz candidate)
 
 let for_spawn ?(win32 = Sys.win32) prog =
   if prog = "" || is_explicit ~win32 prog then prog

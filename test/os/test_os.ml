@@ -809,6 +809,39 @@ let spawn_prefers_local_batch_files () =
                 "a local batch file shadows a PATH copy without PATHEXT listing it" here
                 (Charamel_os.Exe.for_spawn ~win32:true "build.bat"))))
 
+let write_file path text =
+  let channel = open_out_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel text)
+
+let with_scratch_tree files directories f =
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter (fun path -> try Sys.remove path with Sys_error _ -> ()) files;
+      List.iter
+        (fun path -> try Unix.rmdir path with Unix.Unix_error _ -> ())
+        directories)
+    f
+
+(* [PATHEXT] orders the suffixes appended to a name that carries none of them; a batch
+   suffix is one the command interpreter starts by itself, so [build.cmd] names that
+   file and never a [build.cmd.EXE] that happens to sit earlier in the probe order. *)
+let find_takes_batch_names_as_written () =
+  let directory = scratch "exe-batchname" in
+  Unix.mkdir directory 0o700;
+  let script = Filename.concat directory "build.cmd" in
+  let image = Filename.concat directory "build.cmd.EXE" in
+  write_file script "@echo script";
+  write_file image "MZ";
+  with_scratch_tree [ script; image ] [ directory ] (fun () ->
+      with_environment
+        [ ("PATH", directory ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+        (fun () ->
+          Alcotest.(check (option string))
+            "an explicitly named batch file is looked up as written" (Some script)
+            (Charamel_os.Exe.find ~win32:true "build.cmd")))
+
 (* A drive-letter prefix such as [C:] names a path on that drive even with no slash:
    the lookup checks it as given and the funnel hands it through unchanged, instead
    of joining the working directory in front of it. *)
@@ -1650,6 +1683,8 @@ let suites =
           spawn_skips_local_data_file_with_unknown_extension;
         Alcotest.test_case "spawn prefers local batch files" `Quick
           spawn_prefers_local_batch_files;
+        Alcotest.test_case "batch names are looked up as written" `Quick
+          find_takes_batch_names_as_written;
         Alcotest.test_case "spawn keeps drive-relative commands" `Quick
           spawn_keeps_drive_relative_commands;
         Alcotest.test_case "drive-relative lookup reads the drive directory" `Quick
