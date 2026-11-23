@@ -6,14 +6,20 @@ let executable () =
   let build_dir = Filename.dirname (Filename.dirname test_dir) in
   Filename.concat build_dir "bin/glow/main.exe"
 
+(* [cat] and [true] do not exist on Windows: [findstr ^] prints every piped line the
+   way [cat] does, and [cmd /c rem] ignores its file argument and exits zero the way
+   [true] does. The spawn funnel resolves both to absolute paths. *)
+let pager = if Sys.win32 then "findstr ^" else "cat"
+let editor = if Sys.win32 then "cmd /c rem" else "true"
+
 let env_for root =
   let path name = Filename.concat root name in
   [|
     "PATH=/usr/bin:/bin";
     "LANG=C";
     "TERM=xterm-256color";
-    "EDITOR=true";
-    "PAGER=cat";
+    "EDITOR=" ^ editor;
+    "PAGER=" ^ pager;
     "HOME=" ^ path "home";
     "XDG_CONFIG_HOME=" ^ path "xdg-config";
     "XDG_DATA_HOME=" ^ path "xdg-data";

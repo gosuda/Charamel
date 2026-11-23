@@ -286,13 +286,26 @@ module Process = struct
     let cwd = Option.map Dirs.strip_trailing_separators cwd in
     match argv with
     | [] -> invalid_arg "Charamel_os.Process.spawn: argv is empty"
-    | _ ->
+    | prog :: _ ->
+        (* [Lwt_process] hands the program to [CreateProcess] as its application name,
+           and a bare name misses there: [cmd] arrives as ["No such file or directory"]
+           even with the system directory on the search path. The absolute path always
+           resolves, so a bare name is resolved first — from the current directory, then
+           [PATH] — and a miss goes through unchanged so the system reports it exactly
+           as before. *)
+        let prog = Exe.for_spawn prog in
         let stdin', stdin_w = input_redir stdin in
         let stdout', stdout_r = output_redir stdout in
         let stderr', stderr_r = output_redir stderr in
+        (* [Lwt_process] writes each argument through [Filename.quote], which always
+           quotes and escapes by the C runtime rules; [cmd.exe] reads neither, so a
+           quoted ["/c"] and its escaped command text reach it as one quoted command name
+           and it answers that the file name syntax is incorrect. [Exe.command_line]
+           builds the line each program reads, and [Lwt_process]'s ["\000"] inline prefix
+           hands it to [CreateProcess] unchanged. *)
         let create () =
           new Lwt_process.process_none
-            (List.hd argv, Array.of_list argv)
+            (prog, [| "\000" ^ Exe.command_line argv |])
             ?cwd ~stdin:stdin' ~stdout:stdout' ~stderr:stderr'
         in
         let process =
@@ -313,7 +326,14 @@ module Process = struct
   let stderr_r { stderr_r; _ } = get stderr_r "stderr_r"
   let await { code; _ } = code
   let signal { signal; _ } = signal
-  let terminate { process; _ } = process#terminate
-  let kill_tree { process; _ } = process#terminate
+
+  (* [TerminateProcess] fails with [ERROR_ACCESS_DENIED] on a child that has exited
+     before [Lwt_process] collected its status, and the handle is this process's own, so
+     that answer means the child is already gone, which is not an error. *)
+  let terminate { process; _ } =
+    try process#terminate
+    with Unix.Unix_error (Unix.EACCES, "TerminateProcess", _) -> ()
+
+  let kill_tree t = terminate t
   let alive { process; _ } = process#state = Lwt_process.Running
 end

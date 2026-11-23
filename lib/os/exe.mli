@@ -11,13 +11,46 @@
     [PATH] entries are separated by [;], and the extension matters: typing [git] means
     [git.exe], and [npm] means [npm.cmd]. [PATHEXT] supplies the ordered extension list,
     defaulting to [.COM;.EXE;.BAT;.CMD], and a name that already carries one of those
-    extensions is tried as it stands before the list is consulted. A candidate must exist;
-    the executable-bit question [access(X_OK)] raises does not exist on this platform. *)
+    extensions is tried as it stands. An explicitly named batch file ([.BAT] or [.CMD] in
+    any case) is likewise tried as it stands whatever [PATHEXT] lists, because the
+    launcher runs it through the command interpreter. Otherwise each extension is tried in
+    [PATHEXT] order before the name as written, because the extensionless file beside a
+    package shim is its POSIX shell script, which the process launcher cannot start. A
+    candidate must exist; the executable-bit question [access(X_OK)] raises does not exist
+    on this platform. *)
 
-val find : string -> string option
-(** [find name] is the executable [name] resolves to, or [None] when nothing on [PATH]
-    answers. A [name] containing a directory separator is a path, not a lookup: it is
-    checked as given (plus the extension list on Windows) and never joined onto a [PATH]
-    entry, which is the rule the shells use and the one that makes [./build/tool]
-    findable. An empty [name] is [None]. [PATH] and [PATHEXT] are read on every call, so a
-    caller that changes the environment sees the change. *)
+val find : ?win32:bool -> string -> string option
+(** [find ?win32 name] is the executable [name] resolves to, or [None] when nothing on
+    [PATH] answers. A [name] containing a directory separator is a path, not a lookup, as
+    on Windows is a drive-letter prefix such as [C:tool.exe]: it is checked as given (plus
+    the extension list on Windows) and never joined onto a [PATH] entry, which is the rule
+    the shells use and the one that makes [./build/tool] findable. An empty [name] is
+    [None]. A hit is always an absolute path, except a Windows drive-relative one such as
+    [C:tool.exe], which is returned as given: only the system can resolve it against that
+    drive's working directory. A [PATH] entry spelled relative to the current directory is
+    read from there. [PATH] and [PATHEXT] are read on every call, so a caller that changes
+    the environment sees the change. [~win32] selects the platform rules and defaults to
+    the host, so a test on one system can pin the rules of the other. *)
+
+val for_spawn : ?win32:bool -> string -> string
+(** [for_spawn ?win32 prog] is the program name the spawn funnel hands to the system: a
+    bare name that names a runnable file in the current directory resolves there first,
+    because that is where the system reads it from, and otherwise through {!val:find} to
+    the absolute path it answers, because the funnel passes that name as the application
+    name and a bare name misses there. A name that already carries a directory separator,
+    a Windows drive-letter prefix such as [C:tool.exe], and the empty program go through
+    unchanged, as does a miss, so the system reports an unknown program exactly as before.
+*)
+
+val command_line : string list -> string
+(** [command_line argv] is the Windows command line the spawn funnel hands to
+    [CreateProcess] for [argv], the program first. Each word is written the way the C
+    runtime splits it back ([CommandLineToArgvW]): quoted only when it is empty or holds
+    whitespace or a quote, with an inner quote escaped by a backslash and the backslashes
+    before an escaped or closing quote doubled. A program named [cmd] or [cmd.exe] (in any
+    case, with or without a directory) reads its command line differently: its switches go
+    through as written, and the words after [/c] or [/k] are command text, joined by
+    spaces verbatim inside the one pair of quotes [cmd.exe] removes, so
+    [["cmd"; "/c"; "echo a & echo b"]] runs both commands. Without [/s], [cmd.exe] keeps
+    that pair when its text is exactly the name of an executable file with a space in it,
+    which still runs that file. The empty [argv] is the empty line. *)
