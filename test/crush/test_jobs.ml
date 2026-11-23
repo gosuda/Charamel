@@ -154,7 +154,7 @@ let is_single_group text =
       (match character with '(' -> incr depth | ')' -> decr depth | _ -> ());
       if index < length - 1 && !depth = 0 then closed_early := true)
     text;
-  not !closed_early
+  (not !closed_early) && !depth = 0
 
 let windows_both_streams_self_wraps () =
   let fixture = both_streams_for ~win32:true in
@@ -165,6 +165,11 @@ let windows_split_groups_are_not_single () =
   Alcotest.(check bool)
     "split groups are not one parenthesized group" false
     (is_single_group "(<nul set /p x=hello)&(<nul set /p x=oops 1>&2)")
+
+let windows_unbalanced_groups_are_not_single () =
+  Alcotest.(check bool)
+    "unbalanced groups are not one parenthesized group" false
+    (is_single_group "((<nul set /p x=hello&(<nul set /p x=oops 1>&2)&exit 0)")
 
 let cases =
   [
@@ -180,4 +185,6 @@ let cases =
       windows_both_streams_self_wraps;
     Test_tools_test_support.case "windows split groups are not single" `Quick
       windows_split_groups_are_not_single;
+    Test_tools_test_support.case "windows unbalanced groups are not single" `Quick
+      windows_unbalanced_groups_are_not_single;
   ]
