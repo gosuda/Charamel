@@ -34,7 +34,11 @@ type common = {
 type agent_runtime = { common : common; agent : Agent.t; permission : Permission.t ref }
 
 let random_bytes length = Mirage_crypto_rng_unix.getrandom length
-let with_root (env : Env.t) target = Filename.concat env.Env.fs_root target
+
+(* [Filename.concat] is a blind join: on Windows [concat "\\" "C:\..."] spells
+   ["\C:\..."], which no API accepts. Absolute targets name the file, so they
+   pass through; only relative targets join the sandbox root. *)
+let with_root (env : Env.t) target = Path.join_root ~root:env.Env.fs_root target
 let print_stdout (env : Env.t) text = await (Lwt_io.write env.Env.stdout text)
 let print_stderr (env : Env.t) text = await (Lwt_io.write env.Env.stderr text)
 

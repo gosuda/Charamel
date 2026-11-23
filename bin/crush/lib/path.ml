@@ -196,3 +196,12 @@ let under ?(windows = Sys.win32) ~root path =
       let rest = strip_root windows path in
       let index = past_separators rest in
       Filename.concat root (String.sub rest index (String.length rest - index))
+
+(* An absolute [path] is already placed: it names the file, so it passes through
+   unchanged however [root] is spelled. Only a relative [path] joins [root]. This
+   differs from [under], which mirrors an absolute path's components under a
+   sandbox root; joining an absolute path with [Filename.concat] instead spells
+   [\C:\...] on Windows, which no API accepts, and [//...] on POSIX, which only
+   works by accident. *)
+let join_root ?(windows = Sys.win32) ~root path =
+  if is_absolute ~windows path then path else Filename.concat root path

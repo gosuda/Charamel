@@ -112,6 +112,27 @@ let posix_paths () =
   check_bool "a drive-named directory is within" true
     (Path.within ~windows:false ~root:"/C:" "/C:/a")
 
+(* The Windows leg failed with [mkdir \C:\Users] and an auth lock at
+   [\C:\...\auth.json.lock]: joining an absolute target onto a root with
+   [Filename.concat] spells that leading-backslash path, which no API accepts.
+   [join_root] passes absolute targets through, and the [~windows] argument pins
+   the Windows rules on any host. *)
+let join_root_absolute_targets () =
+  check_string "windows drive path passes through" {|C:\Users\a\auth.json|}
+    (Path.join_root ~windows:true ~root:"\\" {|C:\Users\a\auth.json|});
+  check_string "windows drive path passes a sandbox root through"
+    {|C:\t\config\crush\auth.json|}
+    (Path.join_root ~windows:true ~root:{|C:\t|} {|C:\t\config\crush\auth.json|});
+  check_string "posix absolute path passes a bare root through" "/home/u/.config/x"
+    (Path.join_root ~windows:false ~root:"/" "/home/u/.config/x");
+  check_string "posix absolute path passes a sandbox root through" "/t/config/x"
+    (Path.join_root ~windows:false ~root:"/t" "/t/config/x");
+  check_string "relative path joins the root"
+    (Filename.concat {|C:\t|} "config/x")
+    (Path.join_root ~windows:true ~root:{|C:\t|} "config/x");
+  check_string "posix relative path joins the root" "/t/config/x"
+    (Path.join_root ~windows:false ~root:"/t" "config/x")
+
 let cases =
   [
     Test_tools_test_support.case "absolute paths" `Quick absolute_paths;
@@ -123,4 +144,6 @@ let cases =
     Test_tools_test_support.case "windows paths" `Quick windows_paths;
     Test_tools_test_support.case "windows containment" `Quick windows_containment;
     Test_tools_test_support.case "posix paths" `Quick posix_paths;
+    Test_tools_test_support.case "join root passes absolute targets through" `Quick
+      join_root_absolute_targets;
   ]
