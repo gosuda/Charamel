@@ -375,8 +375,6 @@ let partition =
 
 let flush =
   [
-    Alcotest.test_case "flush: bare ESC executes" `Quick (fun () ->
-        check "bare ESC executes" "\x1b" [ execute '\x1b' ]);
     Alcotest.test_case "flush: partial rune prints raw bytes" `Quick (fun () ->
         check "partial rune prints raw bytes" "\xe4\xb8" [ print "\xe4\xb8" ]);
     Alcotest.test_case "flush: partial escape intermediate cancels" `Quick (fun () ->

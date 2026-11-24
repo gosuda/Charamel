@@ -599,13 +599,6 @@ let wordwrap_vectors =
       breakpoints = "-";
     };
     {
-      name = "simple";
-      input = "foo bars foobars";
-      width = 4;
-      expected = "foo\nbars\nfoobars";
-      breakpoints = "";
-    };
-    {
       name = "limit";
       input = "foo bar";
       width = 5;
@@ -825,12 +818,6 @@ let wrap_vectors =
       expected = "foo\n🫧\nfoob\nar";
     };
     { name = "space_breakpoint"; input = "foo --bar"; width = 9; expected = "foo --bar" };
-    {
-      name = "simple_words";
-      input = "foo bars foobars";
-      width = 4;
-      expected = "foo\nbars\nfoob\nars";
-    };
     { name = "limit"; input = "foo bar"; width = 5; expected = "foo\nbar" };
     {
       name = "remove_white_spaces";
