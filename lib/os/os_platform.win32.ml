@@ -232,52 +232,41 @@ module Process = struct
      after the call because [CreateProcess] snapshots the block at spawn. *)
   let env_lock = Mutex.create ()
 
-  let env_name entry =
-    match String.index_opt entry '=' with
-    | Some index -> String.sub entry 0 index
-    | None -> entry
-
-  let env_value entry =
-    match String.index_opt entry '=' with
-    | Some index -> String.sub entry (index + 1) (String.length entry - index - 1)
-    | None -> ""
-
-  let apply_env env =
-    let previous =
-      Array.to_list (Unix.environment ())
-      |> List.map (fun entry -> (env_name entry, env_value entry))
-    in
-    let provided = Hashtbl.create 16 in
-    Array.iter (fun entry -> Hashtbl.replace provided (env_name entry) ()) env;
-    let added =
-      Array.fold_left
-        (fun fresh entry ->
-          let name = env_name entry in
-          if
-            Hashtbl.mem provided name
-            && not (List.exists (fun (seen, _) -> String.equal seen name) previous)
-          then name :: fresh
-          else fresh)
-        [] env
-    in
-    List.iter
-      (fun (name, _) -> if not (Hashtbl.mem provided name) then Unix.putenv name "")
-      previous;
-    Array.iter (fun entry -> Unix.putenv (env_name entry) (env_value entry)) env;
-    (previous, added)
-
-  let restore_env (previous, added) =
-    List.iter (fun name -> Unix.putenv name "") added;
-    List.iter (fun (name, value) -> Unix.putenv name value) previous
+  let ordinary_environment_bindings entries =
+    Array.to_list entries
+    |> List.filter_map (fun entry ->
+        match String.index_opt entry '=' with
+        | Some 0 -> None
+        | Some index ->
+            let name = String.sub entry 0 index in
+            let value = String.sub entry (index + 1) (String.length entry - index - 1) in
+            Some (name, value)
+        | None when entry = "" -> None
+        | None -> Some (entry, ""))
 
   let with_env env f =
-    Mutex.lock env_lock;
-    let saved = apply_env env in
+    let requested = ordinary_environment_bindings env in
+    let provided = Hashtbl.create (List.length requested) in
+    List.iter
+      (fun (name, _) -> Hashtbl.replace provided (String.uppercase_ascii name) ())
+      requested;
+    let changes = ref [] in
+    let set name value =
+      let previous = Option.value (Sys.getenv_opt name) ~default:"" in
+      if not (String.equal value previous) then (
+        Unix.putenv name value;
+        changes := (name, previous) :: !changes)
+    in
     Fun.protect
       ~finally:(fun () ->
-        restore_env saved;
-        Mutex.unlock env_lock)
-      f
+        List.iter (fun (name, value) -> Unix.putenv name value) !changes)
+      (fun () ->
+        List.iter
+          (fun (name, _) ->
+            if not (Hashtbl.mem provided (String.uppercase_ascii name)) then set name "")
+          (ordinary_environment_bindings (Unix.environment ()));
+        List.iter (fun (name, value) -> set name value) requested;
+        f ())
 
   let system_directory () =
     match Charamel_os_win32.system_directory () with
@@ -291,7 +280,7 @@ module Process = struct
     let cwd = Option.map Dirs.strip_trailing_separators cwd in
     match argv with
     | [] -> invalid_arg "Charamel_os.Process.spawn: argv is empty"
-    | _ :: _ -> (
+    | _ :: _ ->
         (* [Lwt_process] hands the program to [CreateProcess] as its application name,
            and a bare name misses there: [cmd] arrives as ["No such file or directory"]
            even with the system directory on the search path. The absolute path always
@@ -330,7 +319,8 @@ module Process = struct
             signal = Lwt.map signal_of process#status;
           }
         in
-        match env with Some env -> with_env env launch | None -> launch ())
+        Mutex.protect env_lock (fun () ->
+            match env with Some env -> with_env env launch | None -> launch ())
 
   let pid { process; _ } = process#pid
   let stdin_w { stdin_w; _ } = get stdin_w "stdin_w"

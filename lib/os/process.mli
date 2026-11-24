@@ -38,12 +38,13 @@
     child splits again — by the C runtime rules for most programs, while the words after
     [cmd.exe]'s [/c] are its command text, verbatim. With [~env], the lookup reads the
     [PATH] and [PATHEXT] of [env], the environment the child receives, not the parent's.
-    The command interpreter ([cmd]) and the URL handler ([rundll32]) are never searched:
-    they come from the system directory [GetSystemDirectoryW] reports, so a file in an
-    untrusted working directory or on [PATH] cannot replace them. A program that resolves
-    to a batch file runs through that [cmd.exe] with the script's absolute path and its
-    arguments quoted for the command interpreter, so the script the parent resolved is the
-    one that runs and an argument is never read as command text. *)
+    The system's per-drive working directories are inherited even with [~env]. The command
+    interpreter ([cmd]) and the URL handler ([rundll32]) are never searched: they come
+    from the system directory [GetSystemDirectoryW] reports, so a file in an untrusted
+    working directory or on [PATH] cannot replace them. A program that resolves to a batch
+    file runs through that [cmd.exe] with the script's absolute path and its arguments
+    quoted for the command interpreter, so the script the parent resolved is the one that
+    runs and an argument is never read as command text. *)
 
 type t = Os_platform.Process.t
 (** A running child together with the channels that reach it. *)
