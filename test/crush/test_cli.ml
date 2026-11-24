@@ -110,6 +110,8 @@ let run_fixture_in ~env () =
       Test_tools_test_support.with_http_fixture ~content_type:"text/event-stream"
         fixture_body (fun port ->
           write_private (Filename.concat root "crush.json") (fixture_config port);
+          let trust_status, _, _ = run_child_status root [ "trust"; "--cwd"; root ] in
+          Alcotest.(check int) "fixture project is trusted" 0 trust_status;
           let status, output, error =
             run_child_status ~env:(env root) root
               [ "run"; "-y"; "--cwd"; root; "say"; "hi" ]
