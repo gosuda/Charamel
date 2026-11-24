@@ -122,6 +122,7 @@
   cstruct
   base64
   fmt
+  uri
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))
