@@ -224,12 +224,16 @@ let report_truncation hook stream output =
 
 let apply_pre_hook t hook ~payload =
   run_one t hook payload >|= function
-  | Timeout -> Refuse (Fmt.str "hook %s timed out" hook.config.Config.command)
+  | Timeout ->
+      let detail = Fmt.str "hook %s timed out" hook.config.Config.command in
+      log_failure hook detail;
+      Refuse detail
   | Failed detail -> unevaluable hook detail
   | Done (0, { truncated = true; _ }, _) ->
       unevaluable hook
         (Fmt.str "stdout exceeded the %d-byte output limit" max_output_size)
-  | Done (0, stdout, _) -> (
+  | Done (0, stdout, stderr) -> (
+      report_truncation hook "stderr" stderr;
       match parse_pre_output stdout.text with
       | Ok decision -> decision
       | Error detail -> unevaluable hook detail)
