@@ -161,35 +161,6 @@ let base ~is_dark:_ =
     help = base_help ~is_dark:true;
   }
 
-let set_fields focused ~group_title ~group_description =
-  ( {
-      base = focused.base;
-      title = focused.title;
-      description = focused.description;
-      error_indicator = focused.error_indicator;
-      error_message = focused.error_message;
-      select_selector = focused.select_selector;
-      option_ = focused.option_;
-      next_indicator = focused.next_indicator;
-      prev_indicator = focused.prev_indicator;
-      directory = focused.directory;
-      file = focused.file;
-      multi_select_selector = focused.multi_select_selector;
-      selected_option = focused.selected_option;
-      selected_prefix = focused.selected_prefix;
-      unselected_option = focused.unselected_option;
-      unselected_prefix = focused.unselected_prefix;
-      focused_button = focused.focused_button;
-      blurred_button = focused.blurred_button;
-      card = focused.card;
-      note_title = focused.note_title;
-      next = focused.next;
-      text_input = focused.text_input;
-      indicators = focused.indicators;
-    },
-    group_title,
-    group_description )
-
 let charm ~is_dark =
   let normal_fg = ld ~is_dark (Color.Indexed 252) (Color.Indexed 235) in
   let indigo = ld ~is_dark (hex "#5A56E0") (hex "#7571F9") in
@@ -273,9 +244,8 @@ let charm ~is_dark =
       indicators = { value.indicators with multi_select_selector = "> " };
     }
   in
-  let _, group_title, group_description =
-    set_fields focused ~group_title:focused.title ~group_description:focused.description
-  in
+  let group_title = focused.title in
+  let group_description = focused.description in
   {
     form_base = no_style;
     group_base = no_style;
