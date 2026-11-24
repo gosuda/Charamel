@@ -104,6 +104,12 @@ let hyperlink_cases =
       Some "https://example.com/?a=1&amp;b=2" );
     ("mixed case", "HtTpS://example.com", Some "HtTpS://example.com");
     ("mailto", "mailto:hello@example.com", Some "mailto:hello@example.com");
+    ( "numeric hostname",
+      "https://12345678901234567890.example.com/",
+      Some "https://12345678901234567890.example.com/" );
+    ( "semicolon in target",
+      "https://example.com/?a=1;b=2",
+      Some "https://example.com/?a=1;b=2" );
   ]
   |> List.map (fun (name, url, href) ->
       Alcotest_lwt.test_case_sync ("SVG hyperlink: " ^ name) `Quick (fun () ->
