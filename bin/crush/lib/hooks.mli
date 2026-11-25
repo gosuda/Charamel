@@ -1,7 +1,8 @@
 (** Hook process execution for tool and session lifecycle events.
 
-    Hooks receive one bounded JSON request on standard input. Pre-tool hooks may deny a
-    call or replace its decoded input; lifecycle hooks are observational. *)
+    Hooks receive one bounded JSON request on standard input. Pre-tool hooks authorize a
+    call, may replace its decoded input, and fail closed; lifecycle hooks are
+    observational. *)
 
 type t
 (** The configured hook runner. *)
@@ -16,9 +17,22 @@ type pre_tool_outcome =
 
 val pre_tool :
   t -> session:string -> tool:string -> input:Jsont.json -> pre_tool_outcome Lwt.t
-(** [pre_tool t ~session ~tool ~input] runs matching pre-tool hooks in order. An allow
-    response may replace the input for the next hook. A denial stops the chain. Process
-    failures are logged and treated as a pass; timeout and exit 2 are explicit denials. *)
+(** [pre_tool t ~session ~tool ~input] runs matching pre-tool hooks in order. A hook
+    answers through its exit status and standard output:
+
+    - exit 0 with blank output allows the call unchanged;
+    - exit 0 with a JSON object whose ["decision"] is ["allow"] allows the call, and its
+      ["input"] member, when present, replaces the input for the next hook;
+    - exit 0 with ["decision"] set to ["deny"] denies the call with the ["reason"] string,
+      or ["denied by hook"] without one;
+    - exit 2 denies the call with the trimmed standard error, or ["denied by hook"] when
+      it is blank.
+
+    Every other outcome denies the call: a hook that cannot be started, exits with any
+    other status, prints output that is not such a JSON object, prints more than 1 MiB, or
+    outlives its timeout. These denials carry no process output: the reason is
+    ["pre-tool hook failed"], or ["hook <command> timed out"] for a timeout, and the
+    detail goes to the [crush.hooks] log source. A denial stops the chain. *)
 
 val post_tool :
   t ->

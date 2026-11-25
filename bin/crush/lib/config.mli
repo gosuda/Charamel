@@ -71,7 +71,8 @@ type hook = {
   command : string;
   timeout_s : int;
 }
-(** One shell hook declaration. *)
+(** One shell hook declaration. {!Hooks.pre_tool} states the exit-status contract of a
+    [Pre_tool] hook, which fails closed. *)
 
 type trailer = Trailer_none | Co_authored | Assisted  (** Attribution trailer mode. *)
 
