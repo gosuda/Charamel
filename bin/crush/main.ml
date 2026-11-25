@@ -106,8 +106,12 @@ let gated_list (file : Config.project_file) = String.concat ", " file.Config.gat
 
 let display_path path =
   (* Repository-controlled paths reach the terminal: neutralize control
-     characters so a crafted directory name cannot rewrite the trust notice. *)
-  String.map (fun c -> if c < ' ' || c = '\x7f' then '?' else c) path
+     characters so a crafted directory name cannot rewrite the trust notice.
+     A horizontal tab only advances to the next tab stop, so it stays, and the
+     quoted hint still pastes as one shell argument. *)
+  String.map
+    (fun c -> if c = '\t' then c else if c < ' ' || c = '\x7f' then '?' else c)
+    path
 
 (* The working directory is repository-controlled like the project paths, so it
    is quoted for the shell and neutralized for the terminal: a directory name
