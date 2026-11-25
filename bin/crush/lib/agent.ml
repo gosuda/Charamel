@@ -111,6 +111,7 @@ type scheduled = {
   tool : Tool.t option;
   invalid : bool;
   mutable promise : execution Lwt.t option;
+  mutable body : execution option;
 }
 
 type turn_state = {
@@ -516,7 +517,8 @@ let consume_stream t turn_sw (model : Models.resolved) provider_auth messages st
 
 let result_output error = Tool.fail (Fmt.str "%a" Tool.pp_error error)
 
-let run_tool t (call : call) input (tool : Tool.t) : execution Lwt.t =
+let run_tool ?(note_body : execution -> unit = fun _ -> ()) t (call : call) input
+    (tool : Tool.t) : execution Lwt.t =
   let started = Charamel_os.Time.now t.deps.clock in
   let ctx = tool_context t ~call_id:call.id in
   ( Hooks.pre_tool t.deps.hooks ~session:(Session.id t.session) ~tool:tool.Tool.name ~input
@@ -531,14 +533,22 @@ let run_tool t (call : call) input (tool : Tool.t) : execution Lwt.t =
   let elapsed_ms =
     int_of_float ((Charamel_os.Time.now t.deps.clock -. started) *. 1000.)
   in
+  (* The body has finished; the observational post-tool hook below must not decide
+     whether this call ran. Record the outcome now so a turn stopped by an earlier
+     call reports this result instead of [skipped]. *)
+  note_body
+    { id = call.id; name = call.name; input = hook_input; output; elapsed_ms; stop_turn };
   Hooks.post_tool t.deps.hooks ~session:(Session.id t.session) ~tool:tool.Tool.name
     ~input:hook_input ~output:output.Tool.content ~is_error:output.Tool.is_error
   >|= fun () ->
+  let elapsed_ms =
+    int_of_float ((Charamel_os.Time.now t.deps.clock -. started) *. 1000.)
+  in
   { id = call.id; name = call.name; input = hook_input; output; elapsed_ms; stop_turn }
 
 let schedule_call ?(invalid = false) t (call : call) input =
   let tool = Toolset.find t.tools call.name in
-  { call; input; tool; invalid; promise = None }
+  { call; input; tool; invalid; promise = None; body = None }
 
 let read_only job = match job.tool with Some tool -> tool.Tool.read_only | None -> false
 
@@ -546,7 +556,11 @@ let start_job t pool job tool =
   job.promise <-
     Some
       (Lwt.catch
-         (fun () -> Lwt_pool.use pool (fun () -> run_tool t job.call job.input tool))
+         (fun () ->
+           Lwt_pool.use pool (fun () ->
+               run_tool
+                 ~note_body:(fun execution -> job.body <- Some execution)
+                 t job.call job.input tool))
          Lwt.fail)
 
 let execute_calls t turn_sw calls =
@@ -640,11 +654,15 @@ let execute_calls t turn_sw calls =
     match ready_execution job with
     | Some execution -> execution
     | None -> (
-        if job.invalid then invalid_execution job
-        else
-          match job.tool with
-          | None -> unknown_execution job
-          | Some _ -> skipped_execution job)
+        match job.body with
+        | Some execution -> execution
+        | None -> (
+            if job.invalid then invalid_execution job
+            else
+              match job.tool with
+              | None -> unknown_execution job
+              (* The body never ran: no pre-tool decision, no tool output. *)
+              | Some _ -> skipped_execution job))
   in
   let emit_finished execution =
     emit t

@@ -90,7 +90,7 @@ let config ~base_url (model : Charamel_fantasy.Model.t) =
     models = { large = Some selected; small = Some selected };
   }
 
-let with_agent ~queue ~fallback f =
+let with_agent ?(hooks_config : Config.hook list = []) ~queue ~fallback f =
   Test_tools_test_support.with_scratch (fun root ->
       let old_data = Sys.getenv_opt "XDG_DATA_HOME" in
       Unix.putenv "XDG_DATA_HOME" root;
@@ -143,7 +143,7 @@ let with_agent ~queue ~fallback f =
                   ~plans_dir:(Filename.concat root ".crush/plans")
                   ()
               in
-              let hooks = Hooks.create ~config:[] ~cwd:root in
+              let hooks = Hooks.create ~config:hooks_config ~cwd:root in
               let rules = await (Rules.load ~fs_root:root ~cwd:root ~config) in
               let skills = await (Skills.load ~fs_root:root ~config ~home:root) in
               let mcp = await (Mcp.create ~cwd:root ~config) in
@@ -200,7 +200,7 @@ let with_agent ~queue ~fallback f =
                 | Error error ->
                     Alcotest.failf "agent setup failed: %a" Agent.pp_error error
               in
-              f agent session events))
+              f agent session events root))
         ~finally:(fun () ->
           match old_data with
           | Some value -> Unix.putenv "XDG_DATA_HOME" value
@@ -226,7 +226,7 @@ let tool_call_and_stop () =
   with_agent
     ~queue:[ tool_response model_id "read" read_input; text_response model_id "done" ]
     ~fallback:(text_response model_id "done")
-    (fun agent session _events ->
+    (fun agent session _events _root ->
       let path = Filename.concat (Filename.get_temp_dir_name ()) "note.txt" in
       ignore path;
       match await (Agent.prompt agent "read note.txt") with
@@ -247,16 +247,110 @@ let loop_guard () =
   let repeated =
     tool_response model_id "bash" "{\"command\":\"echo same\",\"description\":\"same\"}"
   in
-  with_agent ~queue:[] ~fallback:repeated (fun agent _session _events ->
+  with_agent ~queue:[] ~fallback:repeated (fun agent _session _events _root ->
       match await (Agent.prompt agent "repeat") with
       | Error error -> Alcotest.failf "loop prompt failed: %a" Agent.pp_error error
       | Ok finish ->
           Alcotest.(check bool)
             "loop detected at fifth triple" true (finish = `Loop_detected))
 
+let two_tool_response model_id name1 input1 name2 input2 =
+  message_start model_id
+  ^ Fmt.str
+      "event: content_block_start\n\
+       data: \
+       {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call-1\",\"name\":%S,\"input\":{}}}\n\n"
+      name1
+  ^ Fmt.str
+      "event: content_block_delta\n\
+       data: \
+       {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":%S}}\n\n"
+      input1
+  ^ "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+  ^ Fmt.str
+      "event: content_block_start\n\
+       data: \
+       {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call-2\",\"name\":%S,\"input\":{}}}\n\n"
+      name2
+  ^ Fmt.str
+      "event: content_block_delta\n\
+       data: \
+       {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":%S}}\n\n"
+      input2
+  ^ "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n"
+  ^ "event: message_delta\n\
+     data: \
+     {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":1}}\n\n"
+  ^ "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+(* A call whose body finished before an earlier call stopped the turn keeps its own
+   result: the pre-tool hook denies [denied.txt] after a delay that lets the [allowed.txt]
+   body finish, while the post-tool hook holds the allowed call inside post_tool. Without
+   the recorded body outcome the allowed call is reported as skipped. *)
+let body_outcome_survives_stop_turn () =
+  if Sys.win32 then
+    (* The hook scripts below are POSIX shell; the output cap is the same code path on
+       Windows. *)
+    Alcotest.skip ()
+  else
+    let model_id = "fixture-model" in
+    let pre =
+      "if grep -q denied.txt; then sleep 1; echo denied-by-hook 1>&2; exit 2; else exit \
+       0; fi"
+    in
+    let post = "if grep -q allowed.txt; then sleep 5; fi; exit 0" in
+    let hooks_config : Config.hook list =
+      [
+        { event = Config.Pre_tool; matcher = None; command = pre; timeout_s = 30 };
+        { event = Config.Post_tool; matcher = None; command = post; timeout_s = 30 };
+      ]
+    in
+    with_agent ~hooks_config
+      ~queue:
+        [
+          two_tool_response model_id "read" "{\"path\":\"denied.txt\"}" "read"
+            "{\"path\":\"allowed.txt\"}";
+          text_response model_id "done";
+        ]
+      ~fallback:(text_response model_id "done")
+      (fun agent _session events root ->
+        Test_tools_test_support.write_file
+          (Filename.concat root "denied.txt")
+          "denied-body";
+        Test_tools_test_support.write_file
+          (Filename.concat root "allowed.txt")
+          "allowed-body";
+        (match await (Agent.prompt agent "read both files") with
+        | Error error -> Alcotest.failf "agent prompt failed: %a" Agent.pp_error error
+        | Ok finish -> Alcotest.(check bool) "finished" true (finish = `Stop));
+        let finished =
+          List.filter_map
+            (function
+              | Agent.Tool_finished { id; output; _ } -> Some (id, output) | _ -> None)
+            !events
+        in
+        let content id =
+          match List.assoc_opt id finished with
+          | Some output -> output.Crush_core.Tool.content
+          | None -> Alcotest.failf "no Tool_finished event for %s" id
+        in
+        let denied = content "call-1" in
+        let allowed = content "call-2" in
+        Alcotest.(check bool)
+          "denied call stops the turn" true
+          (Test_support.contains ~needle:"denied-by-hook" ~haystack:denied);
+        Alcotest.(check bool)
+          "recorded body is kept" true
+          (Test_support.contains ~needle:"allowed-body" ~haystack:allowed);
+        Alcotest.(check bool)
+          "kept body is not marked skipped" false
+          (Test_support.contains ~needle:"skipped" ~haystack:allowed))
+
 let cases =
   [
     Test_tools_test_support.case "tool call and stop use HTTP fixture" `Quick
       tool_call_and_stop;
     Test_tools_test_support.case "last ten triples stop repeated calls" `Quick loop_guard;
+    Test_tools_test_support.case "finished body survives an earlier stop" `Quick
+      body_outcome_survives_stop_turn;
   ]
