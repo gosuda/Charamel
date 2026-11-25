@@ -231,7 +231,7 @@ let words_option_is_rejected () =
       let* status, _, _ =
         Test_support.run_cli ~exe:(executable ())
           ~env:(minimal_environment ~root ~home:root)
-          ~timeout:5.
+          ~timeout:5. ~stdin:phrase
           [ "restore"; "--words"; phrase; "--output"; output ]
       in
       Alcotest.(check bool) "a --words argument is refused" true (status <> 0);
