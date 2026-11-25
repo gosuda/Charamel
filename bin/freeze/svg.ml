@@ -35,6 +35,15 @@ let run_of_style style text =
     link = style.link;
   }
 
+let svg_href url =
+  if url = "" then None
+  else
+    match Uri.scheme (Uri.of_string url) with
+    | Some (("http" | "https" | "mailto") as scheme)
+      when String.index_opt url ':' = Some (String.length scheme) ->
+        Some url
+    | _ -> None
+
 let parse_runs text =
   let parser = Charamel_ansi.Parser.create () in
   let actions =
@@ -74,8 +83,7 @@ let parse_runs text =
     | Charamel_ansi.Parser.Csi { params; final = 'm'; _ } -> update_sgr params
     | Charamel_ansi.Parser.Osc fields -> (
         match fields with
-        | "8" :: _params :: url :: _ ->
-            style := { !style with link = (if url = "" then None else Some url) }
+        | "8" :: _params :: url :: _ -> style := { !style with link = svg_href url }
         | _ -> ())
     | Charamel_ansi.Parser.Csi _ | Charamel_ansi.Parser.Execute _
     | Charamel_ansi.Parser.Esc _ | Charamel_ansi.Parser.Dcs _ | Charamel_ansi.Parser.Apc _
