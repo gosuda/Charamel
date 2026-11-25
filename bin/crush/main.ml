@@ -109,6 +109,12 @@ let display_path path =
      characters so a crafted directory name cannot rewrite the trust notice. *)
   String.map (fun c -> if c < ' ' || c = '\x7f' then '?' else c) path
 
+(* The working directory is repository-controlled like the project paths, so it
+   is quoted for the shell and neutralized for the terminal: a directory name
+   with a space must paste as one argument, and control characters must not
+   rewrite the notice. *)
+let display_cwd cwd = display_path (Filename.quote cwd)
+
 let report_untrusted (env : Env.t) ~cwd untrusted =
   List.iter
     (fun (file : Config.project_file) ->
@@ -118,7 +124,7 @@ let report_untrusted (env : Env.t) ~cwd untrusted =
             --cwd %s` to allow them\n"
            (gated_list file)
            (display_path file.Config.path)
-           cwd))
+           (display_cwd cwd)))
     untrusted
 
 let confirm_trust (env : Env.t) untrusted =
