@@ -431,6 +431,22 @@ let check_grant_checked_validates_layers () =
         "valid layered grant writes the store" true
         (Sys.file_exists (xdg ^ "/crush/trust.json")))
 
+let check_dangling_model_selection_falls_back () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let env = tree_env ~root ~xdg in
+      write (xdg ^ "/crush/crush.json")
+        {|{"providers":{"home":{"type":"anthropic"}},"models":{"large":{"provider":"home","model":"m"}}}|};
+      write (project ^ "/crush.json") {|{"providers":{"relay":{"type":"anthropic"}}}|};
+      (* The nested file holds no gated settings of its own, only a selection
+         that names the withheld parent provider. *)
+      write (nested ^ "/crush.json")
+        {|{"models":{"large":{"provider":"relay","model":"m"}}}|};
+      let loaded = load_or_fail ~env nested in
+      let models = loaded.Config.config.Config.models in
+      Alcotest.(check string)
+        "home large survives the dangling selection" "home"
+        (selected_provider models "large"))
+
 let cases =
   [
     Test_tools_test_support.case "environment expansion" `Quick check_expand;
@@ -456,4 +472,6 @@ let cases =
       check_grant_checked_validates;
     Test_tools_test_support.case "grant_checked validates layers" `Quick
       check_grant_checked_validates_layers;
+    Test_tools_test_support.case "dangling model selection falls back" `Quick
+      check_dangling_model_selection_falls_back;
   ]
