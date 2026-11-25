@@ -1,5 +1,6 @@
-(** Shared test helpers: substring search, a bounded CLI process harness, temporary
-    fixture directories, the Lwt test entry point, and the fixed CJK regression corpus.
+(** Shared test helpers: substring search, the [set /p] prompts of a [cmd] fixture, a
+    bounded CLI process harness, temporary fixture directories, the Lwt test entry point,
+    and the fixed CJK regression corpus.
 
     Every helper here returns a promise and runs on the caller's reactor. The one
     [Lwt_main.run] of a test binary is {!val:run_lwt}: a helper that entered it would nest
@@ -9,6 +10,12 @@
 val contains : needle:string -> haystack:string -> bool
 (** [contains ~needle ~haystack] is [true] when [needle] occurs in [haystack]. An empty
     [needle] is contained in every string. Both arguments are labeled in one order. *)
+
+val set_prompts : string -> string list
+(** [set_prompts script] is the prompt text of every [set /p x=] in the [cmd] [script], in
+    order, each read up to the [)] that closes its group. [cmd] drops a redirection from
+    that text but keeps the blank in front of it, so [x=err 1>&2] prints ["err "]: a
+    Windows fixture prints exactly its prompt only when the prompt here is bare. *)
 
 val child_environment :
   win32:bool -> getenv:(string -> string option) -> string array -> string array

@@ -5,9 +5,10 @@ open Lwt_direct
    echoes without a newline, [ping -n N] idles ~(N-1)s because [timeout] refuses
    redirected stdin, and [cd .] is the trivial success. [set /p] under [<nul]
    reads EOF and reports status 1 despite printing, so the Windows stream
-   fixture pins the zero exit explicitly. *)
+   fixture pins the zero exit explicitly. A redirection goes in front of [set]:
+   behind it, [cmd] keeps the blank before the redirection in the prompt. *)
 let both_streams_for ~win32 =
-  if win32 then "((<nul set /p x=hello)&(<nul set /p x=oops 1>&2)&exit 0)"
+  if win32 then "((<nul set /p x=hello)&(>&2 <nul set /p x=oops)&exit 0)"
   else "printf 'hello'; printf 'oops' >&2"
 
 let both_streams = both_streams_for ~win32:Sys.win32
@@ -171,6 +172,11 @@ let windows_unbalanced_groups_are_not_single () =
     "unbalanced groups are not one parenthesized group" false
     (is_single_group "((<nul set /p x=hello&(<nul set /p x=oops 1>&2)&exit 0)")
 
+let windows_both_streams_prompts_are_bare () =
+  Alcotest.(check (list string))
+    "windows set /p prompts are the bare text" [ "hello"; "oops" ]
+    (Test_support.set_prompts (both_streams_for ~win32:true))
+
 let cases =
   [
     Test_tools_test_support.case "captures stdout and stderr" `Quick output_case;
@@ -187,4 +193,6 @@ let cases =
       windows_split_groups_are_not_single;
     Test_tools_test_support.case "windows unbalanced groups are not single" `Quick
       windows_unbalanced_groups_are_not_single;
+    Test_tools_test_support.case "windows both_streams prompts are bare" `Quick
+      windows_both_streams_prompts_are_bare;
   ]

@@ -6,16 +6,20 @@ open Lwt.Syntax
    idles because [sleep] is absent. *)
 (* [set /p] under [<nul] reads EOF and reports status 1 despite printing its
    prompt, so the Windows capture pins the zero exit explicitly; without it
-   [test_child_capture] would see status 1 instead of 0. *)
+   [test_child_capture] would see status 1 instead of 0. A redirection goes in
+   front of [set]: behind it, [cmd] keeps the blank before the redirection in
+   the prompt. *)
 let capture_command_for ~win32 =
-  if win32 then [ "cmd"; "/c"; "(<nul set /p x=out)&(<nul set /p x=err 1>&2)&exit 0" ]
+  if win32 then [ "cmd"; "/c"; "(<nul set /p x=out)&(>&2 <nul set /p x=err)&exit 0" ]
   else [ "sh"; "-c"; "printf out; printf err >&2" ]
 
 let capture_command = capture_command_for ~win32:Sys.win32
 
-let failing_command =
-  if Sys.win32 then [ "cmd"; "/c"; "(<nul set /p x=out)&(<nul set /p x=err 1>&2)&exit 7" ]
+let failing_command_for ~win32 =
+  if win32 then [ "cmd"; "/c"; "(<nul set /p x=out)&(>&2 <nul set /p x=err)&exit 7" ]
   else [ "sh"; "-c"; "printf out; printf err >&2; exit 7" ]
+
+let failing_command = failing_command_for ~win32:Sys.win32
 
 let large_command, large_bytes =
   if Sys.win32 then
@@ -61,6 +65,16 @@ let test_windows_capture_pins_zero_exit () =
         "windows capture ends with an explicit zero exit" true
         (String.ends_with ~suffix:"&exit 0" script)
   | _ -> Alcotest.fail "windows capture command shape changed"
+
+let test_windows_prompts_are_bare () =
+  List.iter
+    (function
+      | [ "cmd"; "/c"; script ] ->
+          Alcotest.(check (list string))
+            "windows set /p prompts are the bare text" [ "out"; "err" ]
+            (Test_support.set_prompts script)
+      | _ -> Alcotest.fail "windows spin command shape changed")
+    [ capture_command_for ~win32:true; failing_command_for ~win32:true ]
 
 let test_child_capture_beyond_memory_buffer () =
   let* result = Spin.run_child (default_env ()) ~command:large_command ~timeout:None in
@@ -220,6 +234,8 @@ let cases =
         test_child_capture_beyond_memory_buffer ());
     Alcotest_lwt.test_case "windows capture pins zero exit" `Quick (fun _switch () ->
         Lwt.return (test_windows_capture_pins_zero_exit ()));
+    Alcotest_lwt.test_case "windows prompts are bare" `Quick (fun _switch () ->
+        Lwt.return (test_windows_prompts_are_bare ()));
     Alcotest_lwt.test_case "show output in pipe mode" `Quick (fun _switch () ->
         test_show_output_non_tty ());
     Alcotest_lwt.test_case "show error in pipe mode" `Quick (fun _switch () ->
