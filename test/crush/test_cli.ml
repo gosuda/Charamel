@@ -127,11 +127,19 @@ let run_fixture_in ~env () =
 let run_fixture = run_fixture_in ~env:(fun _root -> [])
 
 (* A plain-HTTP provider needs no trust store, so a run must not read one: here
-   SSL_CERT_FILE names a missing file, and on Windows the system store logs a
-   warning for every anchor it cannot decode. *)
+   SSL_CERT_FILE names a missing file, and OCAML_EXTRA_CA_CERTS names a file holding
+   a malformed PEM block. The latter is honoured on every platform, including the
+   Windows system store path, where ca-certs warns once per anchor it cannot decode:
+   a regression that loaded the store for plain HTTP would turn the empty-diagnostics
+   assertion red on both platforms, while the fixed path stays silent. *)
 let run_fixture_without_trust_store =
   run_fixture_in ~env:(fun root ->
-      [ "SSL_CERT_FILE=" ^ Filename.concat root "missing-trust-store.pem" ])
+      let poison = Filename.concat root "not-a-certificate.pem" in
+      Test_tools_test_support.write_file poison "not_a_certificate\n";
+      [
+        "SSL_CERT_FILE=" ^ Filename.concat root "missing-trust-store.pem";
+        "OCAML_EXTRA_CA_CERTS=" ^ poison;
+      ])
 
 let json_string value = Crush_core.Jsonx.string_of_json (Jsont.Json.string value)
 
