@@ -115,6 +115,17 @@ let test_malformed_hyperlink_target () =
     "visible label" true
     (Test_support.contains ~needle:">link label</" ~haystack:svg)
 
+let test_zero_channel_keeps_link () =
+  (* The zeroes in an extended color are channel values, not resets, so the
+     coloured run keeps the hyperlink. *)
+  let svg =
+    render_ansi
+      "\027]8;;http://example.com\027\\link label\027[38;2;255;0;0mred\027[0m plain"
+  in
+  Alcotest.(check int)
+    "zero colour channels keep the hyperlink" 2
+    (count_occurrences ~needle:"href=\"http://example.com\"" ~haystack:svg)
+
 let hyperlink_cases =
   [
     ("javascript", "javascript:", None);
@@ -185,6 +196,8 @@ let suites =
     Alcotest_lwt.test_case_sync "Unicode hyperlink target" `Quick test_unicode_hyperlink;
     Alcotest_lwt.test_case_sync "malformed hyperlink target" `Quick
       test_malformed_hyperlink_target;
+    Alcotest_lwt.test_case_sync "zero channels keep the hyperlink" `Quick
+      test_zero_channel_keeps_link;
   ]
   @ hyperlink_cases
 

@@ -65,11 +65,22 @@ let parse_runs text =
     lines := List.rev runs :: !lines;
     pending := []
   in
+  (* A reset closes the hyperlink. Extended color sequences consume their
+     operands the way [Style.of_sgr] does, so the zeroes in [38;2;255;0;0]
+     are channel values, not resets. *)
+  let rec sgr_resets = function
+    | [] -> false
+    | ([] | [ None ] | [ Some 0 ]) :: _ -> true
+    | ([ Some 38 ] | [ Some 48 ] | [ Some 58 ]) :: rest -> (
+        match rest with
+        | [ Some 5 ] :: _ :: more -> sgr_resets more
+        | [ Some 2 ] :: _ :: _ :: _ :: more -> sgr_resets more
+        | _ -> sgr_resets rest)
+    | _ :: rest -> sgr_resets rest
+  in
   let update_sgr params =
     let params = if params = [] then [ [ Some 0 ] ] else params in
-    let resets =
-      List.exists (function [] | None :: _ | Some 0 :: _ -> true | _ -> false) params
-    in
+    let resets = sgr_resets params in
     style :=
       {
         sgr = Charamel_ansi.Style.of_sgr ~params !style.sgr;
