@@ -48,6 +48,9 @@ let c_create_file_w =
     (ptr uint16_t @-> uint32_t @-> uint32_t @-> ptr void @-> uint32_t @-> uint32_t
    @-> nativeint @-> returning nativeint)
 
+let c_get_system_directory_w =
+  win32 "GetSystemDirectoryW" (ptr uint16_t @-> uint32_t @-> returning uint32_t)
+
 let u32 value = UInt32.of_int value
 let std_input_handle = u32 (-10)
 let std_output_handle = u32 (-11)
@@ -160,3 +163,28 @@ let read_console_input handle ~max_events =
     else events_of_buffer buffer (UInt32.to_int !@read)
 
 let flush_console_input handle = ignore (c_flush_console_input handle)
+
+let utf8_of_wide buffer length =
+  let units = Bytes.create (2 * length) in
+  for index = 0 to length - 1 do
+    Bytes.set_uint16_le units (2 * index) (UInt16.to_int !@(buffer +@ index))
+  done;
+  let text = Buffer.create length in
+  let rec decode offset =
+    if offset < Bytes.length units then (
+      let decoded = Bytes.get_utf_16le_uchar units offset in
+      Buffer.add_utf_8_uchar text (Uchar.utf_decode_uchar decoded);
+      decode (offset + Uchar.utf_decode_length decoded))
+  in
+  decode 0;
+  Buffer.contents text
+
+let system_directory () =
+  let rec attempt capacity =
+    let buffer = allocate_n uint16_t ~count:capacity in
+    match UInt32.to_int (c_get_system_directory_w buffer (u32 capacity)) with
+    | 0 -> None
+    | length when length < capacity -> Some (utf8_of_wide buffer length)
+    | required -> attempt required
+  in
+  attempt 260

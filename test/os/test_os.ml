@@ -1,5 +1,16 @@
 open Lwt.Infix
 
+(* The Windows shell probe starts this binary through [cmd.exe] to print the words it
+   received, one escaped word per line after whether its working directory holds the
+   probe's marker file, and exits before the test driver starts. *)
+let () =
+  match Array.to_list Sys.argv with
+  | _ :: "--charamel-echo-argv" :: words ->
+      print_endline (string_of_bool (Sys.file_exists "charamel-marker"));
+      List.iter (fun word -> print_endline (String.escaped word)) words;
+      exit 0
+  | _ -> ()
+
 (* Test helpers: environment injection, scratch paths, bounded Lwt runs. Every test that
    blocks goes through [run], so a broken spawn fails with a timeout instead of hanging the
    suite. *)
@@ -40,12 +51,13 @@ let text_result : (string, [< failure ]) result -> string = function
   | Error failure -> "Error " ^ show_failure failure
 
 (* [Unix.unsetenv] only exists from OCaml 5.5, so the removal is bound like the
-   library's own foreign calls: POSIX [unsetenv] deletes the variable, and on Windows a
-   bare [_putenv "NAME"] does the same. *)
+   library's own foreign calls: POSIX [unsetenv] deletes the variable, and on Windows
+   [_putenv "NAME="], with nothing after the equals sign, does the same. A bare
+   [_putenv "NAME"] is rejected and leaves the variable set. *)
 let unsetenv =
   if Sys.win32 then
     let putenv = Foreign.foreign "_putenv" Ctypes.(string @-> returning int) in
-    fun name -> ignore (putenv name : int)
+    fun name -> ignore (putenv (name ^ "=") : int)
   else
     let unsetenv = Foreign.foreign "unsetenv" Ctypes.(string @-> returning int) in
     fun name -> ignore (unsetenv name : int)
@@ -409,6 +421,7 @@ let posix_console_queues_nothing () =
 (* {1 Dirs} *)
 
 let home_and_tilde () =
+  posix_only ();
   with_environment
     [ ("HOME", "/tmp/fake-home"); ("USERPROFILE", "") ]
     (fun () ->
@@ -428,7 +441,6 @@ let home_and_tilde () =
       Alcotest.(check string)
         "a user-home form is not guessed at" "Ok ~rcfile"
         (text_result (Charamel_os.Dirs.expand_tilde "~rcfile")));
-  posix_only ();
   without_environment [ "HOME" ] (fun () ->
       Alcotest.(check string)
         "no HOME is a typed failure, not an exception" "Error No_home"
@@ -487,6 +499,28 @@ let temp_directory_follows_the_environment () =
         "POSIX falls back to /tmp" "/tmp"
         (Charamel_os.Dirs.temp_dir ()))
 
+let spawn_strips_trailing_separators () =
+  let cases =
+    [
+      ("C:\\Temp\\", "C:\\Temp");
+      ("C:/Temp/", "C:/Temp");
+      ("/tmp/", "/tmp");
+      ("C:\\Temp", "C:\\Temp");
+      ("/tmp", "/tmp");
+      ("C:\\", "C:\\");
+      ("C:/", "C:/");
+      ("/", "/");
+      ("", "");
+    ]
+  in
+  List.iter
+    (fun (cwd, expected) ->
+      Alcotest.(check string)
+        ("a trailing separator is stripped from " ^ cwd)
+        expected
+        (Charamel_os.Dirs.strip_trailing_separators cwd))
+    cases
+
 let app_dir_without_any_base () =
   posix_only ();
   without_environment [ "HOME"; "XDG_CONFIG_HOME" ] (fun () ->
@@ -497,6 +531,707 @@ let app_dir_without_any_base () =
           ignore (Charamel_os.Dirs.config_dir ~app:"charm")))
 
 (* {1 Exe} *)
+
+(* The Windows leg failed every child spawn with [CreateProcess: No such file or
+   directory]: the funnel hands the program to [CreateProcess] as its application
+   name, and a bare name such as [cmd] misses there. The funnel resolves bare names
+   through [Exe.for_spawn] first, and the [~win32] argument pins the Windows rules on
+   any host. *)
+let windows_program_search () =
+  let dir = scratch "exe-win" in
+  Unix.mkdir dir 0o700;
+  let program = Filename.concat dir "wincmd.EXE" in
+  let channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove program with Sys_error _ -> ());
+      try Unix.rmdir dir with Unix.Unix_error _ -> ())
+    (fun () ->
+      with_environment
+        [ ("PATH", dir ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+        (fun () ->
+          Alcotest.(check (option string))
+            "a bare name resolves through the Windows rules" (Some program)
+            (Charamel_os.Exe.find ~win32:true "wincmd");
+          Alcotest.(check (option string))
+            "a suffixed name is checked as given" (Some program)
+            (Charamel_os.Exe.find ~win32:true "wincmd.EXE");
+          Alcotest.(check (option string))
+            "a miss stays a miss" None
+            (Charamel_os.Exe.find ~win32:true "wincmd-missing")))
+
+(* npm leaves an extensionless POSIX shell shim beside the runnable [.CMD] shim of a
+   package command, and [CreateProcess] cannot start that script: the lookup tries
+   [PATHEXT] in order before the name as written, so the command shim wins. *)
+let windows_prefers_command_shims () =
+  let dir = scratch "exe-shim" in
+  Unix.mkdir dir 0o700;
+  let script = Filename.concat dir "npmt01" in
+  let shim = Filename.concat dir "npmt01.CMD" in
+  let script_channel = open_out_bin script in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr script_channel)
+    (fun () -> output_string script_channel "#!/bin/sh\necho hi");
+  let shim_channel = open_out_bin shim in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr shim_channel)
+    (fun () -> output_string shim_channel "@echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove script with Sys_error _ -> ());
+      (try Sys.remove shim with Sys_error _ -> ());
+      try Unix.rmdir dir with Unix.Unix_error _ -> ())
+    (fun () ->
+      with_environment
+        [ ("PATH", dir ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE;.BAT;.CMD") ]
+        (fun () ->
+          Alcotest.(check (option string))
+            "a command shim wins over the extensionless script" (Some shim)
+            (Charamel_os.Exe.find ~win32:true "npmt01")))
+
+let spawn_funnel_prefers_absolute_paths () =
+  let dir = scratch "exe-spawn" in
+  Unix.mkdir dir 0o700;
+  let program = Filename.concat dir "wintool.EXE" in
+  let channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove program with Sys_error _ -> ());
+      try Unix.rmdir dir with Unix.Unix_error _ -> ())
+    (fun () ->
+      with_environment
+        [ ("PATH", dir ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+        (fun () ->
+          Alcotest.(check string)
+            "a bare name resolves for the spawn funnel" program
+            (Charamel_os.Exe.for_spawn ~win32:true "wintool");
+          Alcotest.(check string)
+            "a path goes through unchanged" program
+            (Charamel_os.Exe.for_spawn ~win32:true program);
+          Alcotest.(check string)
+            "a miss goes through for the system to report" "wintool-missing"
+            (Charamel_os.Exe.for_spawn ~win32:true "wintool-missing");
+          Alcotest.(check string)
+            "the empty program goes through" ""
+            (Charamel_os.Exe.for_spawn ~win32:true "")))
+
+(* [CreateProcess] reads a bare name from the parent's current directory before [PATH]:
+   a runnable file here keeps that resolution instead of being shadowed by a [PATH]
+   copy with the same name. *)
+let spawn_funnel_prefers_local_executables () =
+  let local = scratch "exe-local" in
+  Unix.mkdir local 0o700;
+  let elsewhere = scratch "exe-elsewhere" in
+  Unix.mkdir elsewhere 0o700;
+  let here = Filename.concat local "here01.EXE" in
+  let there = Filename.concat elsewhere "here01.EXE" in
+  let here_channel = open_out_bin here in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr here_channel)
+    (fun () -> output_string here_channel "echo here");
+  let there_channel = open_out_bin there in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr there_channel)
+    (fun () -> output_string there_channel "echo there");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove here with Sys_error _ -> ());
+      (try Sys.remove there with Sys_error _ -> ());
+      (try Unix.rmdir local with Unix.Unix_error _ -> ());
+      try Unix.rmdir elsewhere with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "a local executable shadows a PATH copy" here
+                (Charamel_os.Exe.for_spawn ~win32:true "here01"))))
+
+(* An extensionless file in the current directory is the POSIX shell script beside a
+   package shim, which [CreateProcess] cannot start: the spawn lookup probes the
+   current directory with [PATHEXT] only, so the script never shadows the runnable
+   [PATH] copy. *)
+let spawn_ignores_local_extensionless_scripts () =
+  let local = scratch "exe-script" in
+  Unix.mkdir local 0o700;
+  let elsewhere = scratch "exe-shimexe" in
+  Unix.mkdir elsewhere 0o700;
+  let script = Filename.concat local "dup01" in
+  let program = Filename.concat elsewhere "dup01.EXE" in
+  let script_channel = open_out_bin script in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr script_channel)
+    (fun () -> output_string script_channel "#!/bin/sh\necho hi");
+  let program_channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr program_channel)
+    (fun () -> output_string program_channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove script with Sys_error _ -> ());
+      (try Sys.remove program with Sys_error _ -> ());
+      (try Unix.rmdir local with Unix.Unix_error _ -> ());
+      try Unix.rmdir elsewhere with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "an extensionless script does not shadow a PATH executable" program
+                (Charamel_os.Exe.for_spawn ~win32:true "dup01"))))
+
+(* A local file whose extension [PATHEXT] does not list keeps its exact name in
+   the spawn probe only when the system could start it: the probe reads the
+   image mark, so a PE file shadows a [PATH] copy with the same name. *)
+let spawn_prefers_local_executable_with_unknown_extension () =
+  let local = scratch "exe-exact" in
+  Unix.mkdir local 0o700;
+  let elsewhere = scratch "exe-pathexe" in
+  Unix.mkdir elsewhere 0o700;
+  let here = Filename.concat local "tool01.xyz" in
+  let there = Filename.concat elsewhere "tool01.xyz" in
+  let here_channel = open_out_bin here in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr here_channel)
+    (fun () -> output_string here_channel ("MZ" ^ String.make 62 '\000'));
+  let there_channel = open_out_bin there in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr there_channel)
+    (fun () -> output_string there_channel "echo there");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove here with Sys_error _ -> ());
+      (try Sys.remove there with Sys_error _ -> ());
+      (try Unix.rmdir local with Unix.Unix_error _ -> ());
+      try Unix.rmdir elsewhere with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "a local executable with an unlisted extension shadows a PATH copy" here
+                (Charamel_os.Exe.for_spawn ~win32:true "tool01.xyz"))))
+
+(* A same-named data file is not a runnable match: the probe skips it and keeps
+   searching the suffixed candidates, then [PATH]. *)
+let spawn_skips_local_data_file_with_unknown_extension () =
+  let local = scratch "exe-data" in
+  Unix.mkdir local 0o700;
+  let elsewhere = scratch "exe-data-path" in
+  Unix.mkdir elsewhere 0o700;
+  let data = Filename.concat local "server.v2" in
+  let build = Filename.concat local "server.v2.EXE" in
+  let shadowed = Filename.concat local "tool02.xyz" in
+  let shipped = Filename.concat elsewhere "tool02.xyz.EXE" in
+  let write_image path =
+    let channel = open_out_bin path in
+    Fun.protect
+      ~finally:(fun () -> close_out_noerr channel)
+      (fun () -> output_string channel ("MZ" ^ String.make 62 '\000'))
+  in
+  let data_channel = open_out_bin data in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr data_channel)
+    (fun () -> output_string data_channel "#!/bin/sh\necho data");
+  let shadowed_channel = open_out_bin shadowed in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr shadowed_channel)
+    (fun () -> output_string shadowed_channel "#!/bin/sh\necho shadowed");
+  write_image build;
+  write_image shipped;
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove data with Sys_error _ -> ());
+      (try Sys.remove shadowed with Sys_error _ -> ());
+      (try Sys.remove build with Sys_error _ -> ());
+      (try Sys.remove shipped with Sys_error _ -> ());
+      (try Unix.rmdir local with Unix.Unix_error _ -> ());
+      try Unix.rmdir elsewhere with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "a Windows build wins over a same-named data file" build
+                (Charamel_os.Exe.for_spawn ~win32:true "server.v2");
+              Alcotest.(check string)
+                "a runnable PATH copy wins over a same-named local data file" shipped
+                (Charamel_os.Exe.for_spawn ~win32:true "tool02.xyz"))))
+
+(* An explicitly named batch file runs through the command interpreter, so the local
+   copy keeps precedence whatever [PATHEXT] lists: omitting [.BAT] must not hand the
+   name to a [PATH] copy. *)
+let spawn_prefers_local_batch_files () =
+  let local = scratch "exe-batch" in
+  Unix.mkdir local 0o700;
+  let elsewhere = scratch "exe-batch-path" in
+  Unix.mkdir elsewhere 0o700;
+  let here = Filename.concat local "build.bat" in
+  let there = Filename.concat elsewhere "build.bat" in
+  let here_channel = open_out_bin here in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr here_channel)
+    (fun () -> output_string here_channel "@echo off\r\necho here");
+  let there_channel = open_out_bin there in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr there_channel)
+    (fun () -> output_string there_channel "@echo off\r\necho there");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove here with Sys_error _ -> ());
+      (try Sys.remove there with Sys_error _ -> ());
+      (try Unix.rmdir local with Unix.Unix_error _ -> ());
+      try Unix.rmdir elsewhere with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "a local batch file shadows a PATH copy without PATHEXT listing it" here
+                (Charamel_os.Exe.for_spawn ~win32:true "build.bat"))))
+
+let write_file path text =
+  let channel = open_out_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel text)
+
+let with_scratch_tree files directories f =
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter (fun path -> try Sys.remove path with Sys_error _ -> ()) files;
+      List.iter
+        (fun path -> try Unix.rmdir path with Unix.Unix_error _ -> ())
+        directories)
+    f
+
+(* [PATHEXT] orders the suffixes appended to a name that carries none of them; a batch
+   suffix is one the command interpreter starts by itself, so [build.cmd] names that
+   file and never a [build.cmd.EXE] that happens to sit earlier in the probe order. *)
+let find_takes_batch_names_as_written () =
+  let directory = scratch "exe-batchname" in
+  Unix.mkdir directory 0o700;
+  let script = Filename.concat directory "build.cmd" in
+  let image = Filename.concat directory "build.cmd.EXE" in
+  write_file script "@echo script";
+  write_file image "MZ";
+  with_scratch_tree [ script; image ] [ directory ] (fun () ->
+      with_environment
+        [ ("PATH", directory ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+        (fun () ->
+          Alcotest.(check (option string))
+            "an explicitly named batch file is looked up as written" (Some script)
+            (Charamel_os.Exe.find ~win32:true "build.cmd")))
+
+(* A drive-letter prefix such as [C:] names a path on that drive even with no slash:
+   the lookup checks it as given and the funnel hands it through unchanged, instead
+   of joining the working directory in front of it. *)
+let spawn_keeps_drive_relative_commands () =
+  let local = scratch "exe-drive" in
+  Unix.mkdir local 0o700;
+  Fun.protect
+    ~finally:(fun () -> try Unix.rmdir local with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", "C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check string)
+                "a drive-relative command goes through unchanged" "C:tool.exe"
+                (Charamel_os.Exe.for_spawn ~win32:true "C:tool.exe");
+              (* A colon names a drive-relative path on Windows, where it cannot
+                 appear in a filename: the lookup half needs the fixture file,
+                 so it runs only where the colon name is creatable. *)
+              if not Sys.win32 then (
+                let target = Filename.concat local "C:tool.exe" in
+                let channel = open_out_bin target in
+                Fun.protect
+                  ~finally:(fun () -> close_out_noerr channel)
+                  (fun () -> output_string channel "echo hi");
+                Fun.protect
+                  ~finally:(fun () -> try Sys.remove target with Sys_error _ -> ())
+                  (fun () ->
+                    Alcotest.(check (option string))
+                      "and lookup checks it as given" (Some "C:tool.exe")
+                      (Charamel_os.Exe.find ~win32:true "C:tool.exe"))))))
+
+(* A drive-relative lookup consults the drive's working directory: from a
+   directory on that drive, [find] checks [C:tool.exe] as given instead of
+   joining the working directory in front of it. *)
+let find_checks_drive_relative_lookup () =
+  windows_only ();
+  let local = scratch "exe-driverel" in
+  Unix.mkdir local 0o700;
+  let program = Filename.concat local "tool.exe" in
+  let channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove program with Sys_error _ -> ());
+      try Unix.rmdir local with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir local;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          let drive = String.sub (Sys.getcwd ()) 0 2 in
+          with_environment
+            [ ("PATH", "C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check (option string))
+                "a drive-relative lookup checks the drive's directory"
+                (Some (drive ^ "tool.exe"))
+                (Charamel_os.Exe.find ~win32:true (drive ^ "tool.exe")))))
+
+(* An explicit relative path is checked as given, but the hit is absolute like every
+   other hit: the spawn funnel cannot hand a relative application name to
+   [CreateProcess]. *)
+let explicit_relative_hits_are_absolute () =
+  let parent = scratch "exe-expl" in
+  Unix.mkdir parent 0o700;
+  let tools = Filename.concat parent "tools" in
+  Unix.mkdir tools 0o700;
+  let program = Filename.concat tools "expltool.EXE" in
+  let channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove program with Sys_error _ -> ());
+      (try Unix.rmdir tools with Unix.Unix_error _ -> ());
+      try Unix.rmdir parent with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir parent;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", "C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check (option string))
+                "an explicit relative path resolves against the current directory"
+                (Some program)
+                (Charamel_os.Exe.find ~win32:true (Filename.concat "tools" "expltool")))))
+
+(* A [PATH] entry spelled relative to the current directory resolves from there, and
+   the hit is absolute, which is what the spawn funnel hands to [CreateProcess]. *)
+let windows_relative_path_entries_resolve () =
+  let parent = scratch "exe-rel" in
+  Unix.mkdir parent 0o700;
+  let tools = Filename.concat parent "tools" in
+  Unix.mkdir tools 0o700;
+  let program = Filename.concat tools "reltool.EXE" in
+  let channel = open_out_bin program in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel "echo hi");
+  Fun.protect
+    ~finally:(fun () ->
+      (try Sys.remove program with Sys_error _ -> ());
+      (try Unix.rmdir tools with Unix.Unix_error _ -> ());
+      try Unix.rmdir parent with Unix.Unix_error _ -> ())
+    (fun () ->
+      let previous = Sys.getcwd () in
+      Unix.chdir parent;
+      Fun.protect
+        ~finally:(fun () -> Unix.chdir previous)
+        (fun () ->
+          with_environment
+            [ ("PATH", "tools;C:\\nonexistent"); ("PATHEXT", ".COM;.EXE") ]
+            (fun () ->
+              Alcotest.(check (option string))
+                "a relative PATH entry resolves from the current directory" (Some program)
+                (Charamel_os.Exe.find ~win32:true "reltool");
+              Alcotest.(check string)
+                "and the spawn funnel hands it an absolute path" program
+                (Charamel_os.Exe.for_spawn ~win32:true "reltool"))))
+
+let in_directory directory f =
+  let previous = Sys.getcwd () in
+  Unix.chdir directory;
+  Fun.protect ~finally:(fun () -> Unix.chdir previous) f
+
+(* [CreateProcess] does not start a batch file itself: it hands the command line to
+   [cmd.exe], which drops the application name and looks the line's first word up again
+   from the child's working directory. The funnel runs the interpreter instead, with
+   command text that names the script resolved here and arguments [cmd.exe] passes on
+   as data. The interpreter is the system directory's own, so a [PATH] without that
+   directory still runs the script. *)
+let spawn_runs_batch_files_through_the_interpreter () =
+  let local = scratch "exe-batchrun" in
+  Unix.mkdir local 0o700;
+  let tools = scratch "exe-batchrun-tools" in
+  Unix.mkdir tools 0o700;
+  let system = scratch "exe-batchrun-system" in
+  let script = Filename.concat local "probe01.cmd" in
+  let image = Filename.concat tools "tool01.EXE" in
+  write_file script "@echo %1";
+  write_file image "MZ";
+  let spawn_command =
+    Charamel_os.Exe.spawn_command ~win32:true ~system_directory:system
+  in
+  with_scratch_tree [ script; image ] [ local; tools ] (fun () ->
+      in_directory local (fun () ->
+          with_environment
+            [ ("PATH", tools ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE;.BAT;.CMD") ]
+            (fun () ->
+              let application, line =
+                spawn_command
+                  [ "probe01.cmd"; "a&b"; "50%"; "plain"; "say \"hi\""; ""; "C:\\dir\\" ]
+              in
+              Alcotest.(check string)
+                "the system directory's command interpreter is the application"
+                (Filename.concat system "cmd.exe")
+                application;
+              Alcotest.(check string)
+                "the command text names the resolved script and quotes for cmd.exe"
+                (String.concat ""
+                   [
+                     "cmd.exe /e:ON /v:OFF /d /c \"\"";
+                     script;
+                     "\" \"a&b\" \"50%%cd:~,%\" plain \"say \"\"hi\"\"\" \"\" \
+                      \"C:\\dir\\\\\"\"";
+                   ])
+                line;
+              Alcotest.(check (pair string string))
+                "an image keeps its own name and the C runtime line"
+                (image, "tool01 \"a&b c\"")
+                (spawn_command [ "tool01"; "a&b c" ]);
+              Alcotest.(check (pair string string))
+                "a batch file that does not resolve goes through for the system to report"
+                ("missing01.cmd", "missing01.cmd a&b")
+                (spawn_command [ "missing01.cmd"; "a&b" ]);
+              Alcotest.check_raises "a line break would cut the command text"
+                (Invalid_argument
+                   "Charamel_os.Exe.spawn_command: a batch file argument holds a line \
+                    break") (fun () -> ignore (spawn_command [ "probe01.cmd"; "a\nb" ])))))
+
+(* The command interpreter and the URL handler are the programs the library runs on its
+   own account, so a checkout that holds files named like them, and a [PATH] that lists
+   other copies first, change nothing: both come from the system directory. A path the
+   caller spells out is still the caller's choice. *)
+let spawn_takes_system_programs_from_the_system_directory () =
+  let checkout = scratch "exe-sysprog" in
+  Unix.mkdir checkout 0o700;
+  let elsewhere = scratch "exe-sysprog-path" in
+  Unix.mkdir elsewhere 0o700;
+  let system = scratch "exe-sysprog-system" in
+  let planted =
+    List.map (Filename.concat checkout) [ "cmd.BAT"; "cmd.exe"; "rundll32.EXE" ]
+    @ List.map (Filename.concat elsewhere) [ "cmd.EXE"; "rundll32.EXE" ]
+  in
+  List.iter (fun path -> write_file path "MZ") planted;
+  let spawn_command =
+    Charamel_os.Exe.spawn_command ~win32:true ~system_directory:system
+  in
+  let url = "https://example.test/?a=1&b=2" in
+  with_scratch_tree planted [ checkout; elsewhere ] (fun () ->
+      in_directory checkout (fun () ->
+          with_environment
+            [
+              ("PATH", elsewhere ^ ";C:\\nonexistent"); ("PATHEXT", ".COM;.EXE;.BAT;.CMD");
+            ]
+            (fun () ->
+              Alcotest.(check (pair string string))
+                "a bare cmd is the system's, not the checkout's cmd.BAT"
+                (Filename.concat system "cmd.exe", "cmd /c \"echo hi\"")
+                (spawn_command [ "cmd"; "/c"; "echo hi" ]);
+              Alcotest.(check (pair string string))
+                "cmd.exe as the shell names it is the system's, not the checkout's"
+                (Filename.concat system "cmd.exe", "cmd.exe /d /s /c \"echo hi\"")
+                (spawn_command [ "cmd.exe"; "/d"; "/s"; "/c"; "echo hi" ]);
+              Alcotest.(check string)
+                "in any case"
+                (Filename.concat system "cmd.exe")
+                (fst (spawn_command [ "Cmd.Exe"; "/c"; "ver" ]));
+              Alcotest.(check (pair string string))
+                "the URL handler is the system's, not the checkout's or a PATH copy"
+                ( Filename.concat system "rundll32.exe",
+                  "rundll32 url.dll,FileProtocolHandler " ^ url )
+                (spawn_command [ "rundll32"; "url.dll,FileProtocolHandler"; url ]);
+              Alcotest.(check string)
+                "a spelled-out path is the caller's choice" "C:\\tools\\cmd.exe"
+                (fst (spawn_command [ "C:\\tools\\cmd.exe"; "/c"; "ver" ])))))
+
+(* [cmd.exe] expands [%name%] anywhere in its command text, quotes or not, so a script
+   resolved in a directory whose name holds such a pair would be looked for elsewhere:
+   each percent sign of the path is written so [cmd.exe] reads it back as itself. *)
+let spawn_keeps_percent_signs_in_the_script_path () =
+  let stem = scratch "exe-pct" in
+  let local = stem ^ "%USERNAME%" in
+  Unix.mkdir local 0o700;
+  let system = scratch "exe-pct-system" in
+  let script = Filename.concat local "probe05.cmd" in
+  write_file script "@echo %1";
+  with_scratch_tree [ script ] [ local ] (fun () ->
+      in_directory local (fun () ->
+          with_environment
+            [ ("PATH", "C:\\nonexistent"); ("PATHEXT", ".COM;.EXE;.BAT;.CMD") ]
+            (fun () ->
+              Alcotest.(check (pair string string))
+                "the script path keeps its percent signs literal"
+                ( Filename.concat system "cmd.exe",
+                  String.concat ""
+                    [
+                      "cmd.exe /e:ON /v:OFF /d /c \"\"";
+                      Filename.concat (stem ^ "%%cd:~,%USERNAME%%cd:~,%") "probe05.cmd";
+                      "\" \"50%%cd:~,%\"\"";
+                    ] )
+                (Charamel_os.Exe.spawn_command ~win32:true ~system_directory:system
+                   [ "probe05.cmd"; "50%" ]))))
+
+(* The child's working directory holds a script with the same name as the one the
+   parent resolves: the resolved one runs, and its arguments reach it whole. [PATH] is
+   always defined, so a [%PATH%] argument that [cmd.exe] expanded would print the search
+   path instead of itself. *)
+let batch_files_run_the_resolved_script () =
+  windows_only ();
+  let parent = scratch "exe-batchparent" in
+  Unix.mkdir parent 0o700;
+  let child = scratch "exe-batchchild" in
+  Unix.mkdir child 0o700;
+  let here = Filename.concat parent "probe02.cmd" in
+  let there = Filename.concat child "probe02.cmd" in
+  write_file here "@echo parent %1 %2\r\n";
+  write_file there "@echo child %1 %2\r\n";
+  with_scratch_tree [ here; there ] [ parent; child ] (fun () ->
+      in_directory parent (fun () ->
+          run (fun () ->
+              let process =
+                Charamel_os.Process.spawn ~cwd:child ~stdout:`Pipe
+                  [ "probe02.cmd"; "a&b"; "%PATH%" ]
+              in
+              Lwt_io.read_line (Charamel_os.Process.stdout_r process) >>= fun output ->
+              Charamel_os.Process.await process >|= fun code ->
+              Alcotest.(check string)
+                "the script resolved in the parent runs with its arguments unexpanded"
+                "parent \"a&b\" \"%PATH%\"" (String.trim output);
+              Alcotest.(check int) "and exits cleanly" 0 code)))
+
+(* A checkout that holds a [cmd.bat] and a [cmd.exe] of its own cannot stand in for the
+   command interpreter: the bare name and the name the shell module uses both run the
+   system's [cmd.exe]. The planted [cmd.exe] is not an image, so starting it would fail
+   outright. *)
+let checkout_cannot_replace_the_command_interpreter () =
+  windows_only ();
+  let checkout = scratch "exe-plant" in
+  Unix.mkdir checkout 0o700;
+  let script = Filename.concat checkout "cmd.bat" in
+  let image = Filename.concat checkout "cmd.exe" in
+  write_file script "@echo planted\r\n";
+  write_file image "planted";
+  let first_line argv =
+    let process = Charamel_os.Process.spawn ~stdout:`Pipe argv in
+    Lwt_io.read_line (Charamel_os.Process.stdout_r process) >>= fun output ->
+    Charamel_os.Process.await process >|= fun code -> (String.trim output, code)
+  in
+  with_scratch_tree [ script; image ] [ checkout ] (fun () ->
+      in_directory checkout (fun () ->
+          run (fun () ->
+              first_line [ "cmd"; "/c"; "echo system" ] >>= fun bare ->
+              Alcotest.(check (pair string int))
+                "a bare cmd runs the system interpreter" ("system", 0) bare;
+              first_line (Charamel_os.Shell.command "echo shell") >|= fun shell ->
+              Alcotest.(check (pair string int))
+                "so does the shell module's cmd.exe" ("shell", 0) shell)))
+
+(* With [~env], the program is looked up on the child's [PATH], which here names only a
+   directory the parent's [PATH] lacks and leaves out the system directory: the script
+   there runs, through the system's [cmd.exe]. *)
+let spawn_resolves_on_the_child_path () =
+  windows_only ();
+  let tools = scratch "exe-childpath" in
+  Unix.mkdir tools 0o700;
+  let script = Filename.concat tools "probe03.cmd" in
+  write_file script "@echo child path %1\r\n";
+  let inherited =
+    List.filter_map
+      (fun name -> Option.map (fun value -> name ^ "=" ^ value) (Sys.getenv_opt name))
+      [ "SystemRoot"; "SystemDrive" ]
+  in
+  with_scratch_tree [ script ] [ tools ] (fun () ->
+      run (fun () ->
+          let process =
+            Charamel_os.Process.spawn ~stdout:`Pipe
+              ~env:(Array.of_list (("PATH=" ^ tools) :: inherited))
+              [ "probe03"; "a&b" ]
+          in
+          Lwt_io.read_line (Charamel_os.Process.stdout_r process) >>= fun output ->
+          Charamel_os.Process.await process >|= fun code ->
+          Alcotest.(check string)
+            "the script on the child's PATH runs" "child path \"a&b\""
+            (String.trim output);
+          Alcotest.(check int) "and exits cleanly" 0 code))
+
+(* A script in a directory named with [%CHARAMEL_PCT%] runs from there, while a decoy
+   waits where [cmd.exe] would look if it expanded the name. *)
+let batch_files_run_from_a_percent_directory () =
+  windows_only ();
+  let stem = scratch "exe-pctrun" in
+  let literal = stem ^ "%CHARAMEL_PCT%" in
+  let expanded = stem ^ "expanded" in
+  Unix.mkdir literal 0o700;
+  Unix.mkdir expanded 0o700;
+  let script = Filename.concat literal "probe04.cmd" in
+  let decoy = Filename.concat expanded "probe04.cmd" in
+  write_file script "@echo literal %1\r\n";
+  write_file decoy "@echo decoy %1\r\n";
+  with_scratch_tree [ script; decoy ] [ literal; expanded ] (fun () ->
+      with_environment
+        [ ("CHARAMEL_PCT", "expanded") ]
+        (fun () ->
+          in_directory literal (fun () ->
+              run (fun () ->
+                  let process =
+                    Charamel_os.Process.spawn ~stdout:`Pipe [ "probe04.cmd"; "%PATH%" ]
+                  in
+                  Lwt_io.read_line (Charamel_os.Process.stdout_r process)
+                  >>= fun output ->
+                  Charamel_os.Process.await process >|= fun code ->
+                  Alcotest.(check string)
+                    "the resolved script runs, not the one the expanded name points at"
+                    "literal \"%PATH%\"" (String.trim output);
+                  Alcotest.(check int) "and exits cleanly" 0 code))))
 
 let searches_path_by_spawn () =
   posix_only ();
@@ -531,6 +1266,112 @@ let checks_explicit_paths () =
       Alcotest.(check (option string))
         "a directory is never an executable" None (Charamel_os.Exe.find "/bin"))
 
+(* The Windows leg's shell children printed [The filename, directory name, or volume label
+   syntax is incorrect.]: [Lwt_process] quoted every argument, so [cmd.exe] received
+   ["cmd" "/c" "..."] and ran the quoted text as one command name. These pin the command
+   line the funnel now builds, on any host, with the fixtures the crush and gum suites
+   run on Windows. *)
+let command_line_for_the_interpreter () =
+  let line = Charamel_os.Exe.command_line in
+  Alcotest.(check string)
+    "the words after /c are command text"
+    "cmd /c \"((<nul set /p x=hello)&(<nul set /p x=oops 1>&2)&exit 0) 2>&1\""
+    (line
+       [ "cmd"; "/c"; "((<nul set /p x=hello)&(<nul set /p x=oops 1>&2)&exit 0) 2>&1" ]);
+  Alcotest.(check string)
+    "inner quotes stay as written" "cmd /c \"echo {\"decision\":\"deny\"}\""
+    (line [ "cmd"; "/c"; "echo {\"decision\":\"deny\"}" ]);
+  Alcotest.(check string)
+    "the shell module's switches go through as written"
+    "cmd.exe /d /s /c \"cd /d \"C:\\x\" && \"C:\\y.exe\"\""
+    (line [ "cmd.exe"; "/d"; "/s"; "/c"; "cd /d \"C:\\x\" && \"C:\\y.exe\"" ]);
+  Alcotest.(check string)
+    "later words join the command text"
+    "C:\\Windows\\System32\\CMD.EXE /C \"rem C:\\a.yml\""
+    (line [ "C:\\Windows\\System32\\CMD.EXE"; "/C"; "rem"; "C:\\a.yml" ]);
+  Alcotest.(check string) "the interpreter alone" "cmd /c" (line [ "cmd"; "/c" ]);
+  Alcotest.(check string)
+    "another program keeps the C runtime rules" "cmdtool /c \"a b\""
+    (line [ "cmdtool"; "/c"; "a b" ]);
+  Alcotest.(check string) "the empty argv" "" (line [])
+
+let command_line_quotes_by_the_c_runtime_rules () =
+  let line = Charamel_os.Exe.command_line in
+  Alcotest.(check string) "plain words stay bare" "findstr ^" (line [ "findstr"; "^" ]);
+  Alcotest.(check string)
+    "spaces and the empty word are quoted"
+    "\"C:\\Program Files\\tool.exe\" \"a b\" \"\" C:\\dir\\file"
+    (line [ "C:\\Program Files\\tool.exe"; "a b"; ""; "C:\\dir\\file" ]);
+  Alcotest.(check string)
+    "a quote is escaped" "prog \"say \\\"hi\\\"\""
+    (line [ "prog"; "say \"hi\"" ]);
+  Alcotest.(check string)
+    "backslashes before a quote double" "prog \"a\\\\\\\"b\""
+    (line [ "prog"; "a\\\"b" ]);
+  Alcotest.(check string)
+    "trailing backslashes double before the closing quote" "prog \"C:\\my dir\\\\\""
+    (line [ "prog"; "C:\\my dir\\" ])
+
+(* An independent reading of [CommandLineToArgvW] for the words after the program: [2n]
+   backslashes before a quote are [n] and the quote toggles quoting, [2n + 1] are [n]
+   and a literal quote, any other backslash is itself, and a space or tab outside quotes
+   ends a word. *)
+let split_c_runtime_words text =
+  let length = String.length text in
+  let words = ref [] in
+  let current = Buffer.create 16 in
+  let started = ref false in
+  let quoted = ref false in
+  let index = ref 0 in
+  let finish () =
+    if !started then words := Buffer.contents current :: !words;
+    Buffer.clear current;
+    started := false
+  in
+  while !index < length do
+    match text.[!index] with
+    | '\\' ->
+        let first = !index in
+        while !index < length && text.[!index] = '\\' do
+          incr index
+        done;
+        let count = !index - first in
+        started := true;
+        if !index < length && text.[!index] = '"' then (
+          Buffer.add_string current (String.make (count / 2) '\\');
+          if count mod 2 = 1 then Buffer.add_char current '"' else quoted := not !quoted;
+          incr index)
+        else Buffer.add_string current (String.make count '\\')
+    | '"' ->
+        started := true;
+        quoted := not !quoted;
+        incr index
+    | (' ' | '\t') when not !quoted ->
+        finish ();
+        incr index
+    | character ->
+        started := true;
+        Buffer.add_char current character;
+        incr index
+  done;
+  finish ();
+  List.rev !words
+
+let command_line_round_trips_through_the_c_runtime () =
+  let state = Random.State.make [| 1969 |] in
+  let alphabet = [| 'a'; ' '; '\t'; '"'; '\\'; '&'; '^'; '%' |] in
+  let word () =
+    String.init (Random.State.int state 9) (fun _ ->
+        alphabet.(Random.State.int state (Array.length alphabet)))
+  in
+  for _ = 1 to 2000 do
+    let arguments = List.init (Random.State.int state 5) (fun _ -> word ()) in
+    let line = Charamel_os.Exe.command_line ("prog" :: arguments) in
+    Alcotest.(check (list string))
+      ("the arguments split back out of " ^ String.escaped line)
+      ("prog" :: arguments) (split_c_runtime_words line)
+  done
+
 (* {1 Shell} *)
 
 let command_uses_the_platform_shell () =
@@ -558,6 +1399,142 @@ let quoting_protects_word_boundaries () =
     "metacharacters become inert" "'a; b | c && d $(e)'"
     (Charamel_os.Shell.quote "a; b | c && d $(e)");
   Alcotest.(check string) "a newline survives" "'a\nb'" (Charamel_os.Shell.quote "a\nb")
+
+(* [cmd.exe] expands variables before it reads carets or quotes, over its whole command
+   text and inside quotes too. After a [%] it reads a name up to the next [%] or [:],
+   and [%name%], [%name:~1,2%] and [%name:a=b%] expand when the name is defined. The
+   child's environment is not known, so every name without a caret counts as defined;
+   an empty name, or one holding a caret, leaves the [%] as it stands. *)
+let cmd_expands_a_variable text =
+  let length = String.length text in
+  let rec name_end position =
+    if position = length then None
+    else
+      match text.[position] with
+      | '%' | ':' -> Some position
+      | _ -> name_end (position + 1)
+  in
+  let rec scan index =
+    match String.index_from_opt text index '%' with
+    | None -> false
+    | Some opening -> (
+        match name_end (opening + 1) with
+        | None -> false
+        | Some closing ->
+            let name = String.sub text (opening + 1) (closing - opening - 1) in
+            let defined = name <> "" && not (String.contains name '^') in
+            (defined && String.contains_from text closing '%') || scan (opening + 1))
+  in
+  scan 0
+
+(* An independent reading of what [cmd.exe] hands on from its command text, or [None]
+   when it would act on the text. Once no variable expands, it reads carets and quotes:
+   outside quotes a caret takes the next character literally and [& | < > ( )] act; a
+   quote toggles quoting, and inside quotes every character, a caret included, is copied
+   as it stands. *)
+let cmd_hands_on text =
+  let length = String.length text in
+  let output = Buffer.create length in
+  let rec read index quoted =
+    if index = length then Some (Buffer.contents output)
+    else
+      match (text.[index], quoted) with
+      | '"', _ ->
+          Buffer.add_char output '"';
+          read (index + 1) (not quoted)
+      | character, true ->
+          Buffer.add_char output character;
+          read (index + 1) true
+      | '^', false when index + 1 < length ->
+          Buffer.add_char output text.[index + 1];
+          read (index + 2) false
+      | ('^' | '&' | '|' | '<' | '>' | '(' | ')'), false -> None
+      | character, false ->
+          Buffer.add_char output character;
+          read (index + 1) false
+  in
+  if cmd_expands_a_variable text then None else read 0 false
+
+let windows_quoting_survives_cmd_and_the_c_runtime () =
+  let quote = Charamel_os.Shell.quote ~win32:true in
+  Alcotest.(check string)
+    "a program path with a space stays one quoted run" "\"C:\\Program Files\\x y\\s.exe\""
+    (quote "C:\\Program Files\\x y\\s.exe");
+  Alcotest.(check string)
+    "a trailing backslash doubles before the closing quote" "\"C:\\my dir\\\\\""
+    (quote "C:\\my dir\\");
+  let reads_back words =
+    let line = String.concat " " (List.map quote words) in
+    match cmd_hands_on line with
+    | None -> Alcotest.failf "cmd.exe acts on %s" (String.escaped line)
+    | Some passed ->
+        Alcotest.(check (list string))
+          ("the program reads back " ^ String.escaped line)
+          words
+          (split_c_runtime_words passed)
+  in
+  List.iter reads_back
+    [
+      [ "%PATH%" ];
+      [ "%PATH:a=b%" ];
+      [ "%OS:~0,3%" ];
+      [ "50%"; "C:\\x y\\%z%" ];
+      [ "a%"; "C:\\b" ];
+    ];
+  let state = Random.State.make [| 1124 |] in
+  let alphabet =
+    [| 'a'; ' '; '\t'; '"'; '\\'; '&'; '^'; '%'; '|'; '<'; '>'; '('; ')'; '!'; ':'; '=' |]
+  in
+  let word () =
+    String.init (Random.State.int state 9) (fun _ ->
+        alphabet.(Random.State.int state (Array.length alphabet)))
+  in
+  for _ = 1 to 2000 do
+    reads_back (List.init (1 + Random.State.int state 3) (fun _ -> word ()))
+  done
+
+(* What an MCP server receives: its command and arguments go through [Shell.quote] and
+   [Shell.command ~cwd] into [cmd.exe], which starts the program. The program here is
+   this binary in its echo mode, the working directory's name holds a space and a
+   [%OS%] pair, and the words hold variable references, operators, quotes and carets. *)
+let shell_words_reach_the_program_whole () =
+  windows_only ();
+  let directory = scratch "shell words %OS%" in
+  Unix.mkdir directory 0o700;
+  let marker = Filename.concat directory "charamel-marker" in
+  write_file marker "";
+  let words =
+    [
+      "%PATH%";
+      "%PATH:a=b%";
+      "%OS:~0,3%";
+      "a&b";
+      "say \"hi\"";
+      "^caret";
+      "50%";
+      "C:\\dir\\";
+      "";
+    ]
+  in
+  let text =
+    String.concat " "
+      (List.map Charamel_os.Shell.quote
+         (Sys.executable_name :: "--charamel-echo-argv" :: words))
+  in
+  with_scratch_tree [ marker ] [ directory ] (fun () ->
+      run (fun () ->
+          let process =
+            Charamel_os.Process.spawn ~stdout:`Pipe
+              (Charamel_os.Shell.command ~cwd:directory text)
+          in
+          Lwt_stream.to_list (Lwt_io.read_lines (Charamel_os.Process.stdout_r process))
+          >>= fun lines ->
+          Charamel_os.Process.await process >|= fun code ->
+          Alcotest.(check (list string))
+            "the program runs in the directory and reads back every word"
+            ("true" :: List.map String.escaped words)
+            lines;
+          Alcotest.(check int) "and exits cleanly" 0 code))
 
 let splitting_words () =
   let check name expected text =
@@ -590,7 +1567,8 @@ let defaults_come_from_the_platform () =
           "POSIX pages with less -r" [ "less"; "-r" ] (Charamel_os.Editor.pager ()));
       if Sys.win32 then
         Alcotest.(check (list string))
-          "Windows starts a URL through cmd" [ "cmd"; "/c"; "start" ]
+          "Windows opens a URL through the URL protocol handler"
+          [ "rundll32"; "url.dll,FileProtocolHandler" ]
           (Charamel_os.Editor.browser ())
       else
         let mac = Sys.file_exists "/System/Library/CoreServices/SystemVersion.plist" in
@@ -598,6 +1576,20 @@ let defaults_come_from_the_platform () =
           "the browser default follows the system"
           (if mac then [ "open" ] else [ "xdg-open" ])
           (Charamel_os.Editor.browser ()))
+
+(* A sign-in URL carries several query parameters joined by [&]. Handed to [cmd /c start],
+   it would be command text, cut at the first [&]; the Windows default program takes it
+   as one plain word of its command line instead. *)
+let windows_browser_takes_the_url_as_data () =
+  without_environment [ "BROWSER" ] (fun () ->
+      let url =
+        "https://example.test/authorize?response_type=code&client_id=demo&redirect_uri=https%3A%2F%2Fx&state=abc"
+      in
+      Alcotest.(check string)
+        "the URL reaches the launcher whole"
+        ("rundll32 url.dll,FileProtocolHandler " ^ url)
+        (Charamel_os.Exe.command_line
+           (Charamel_os.Editor.browser ~win32:true () @ [ url ])))
 
 let environment_overrides_are_word_split () =
   with_environment
@@ -923,6 +1915,22 @@ let abandoned_race_keeps_the_shared_await_usable () =
       Charamel_os.Process.await child >|= fun code ->
       Alcotest.(check int) "the later await still answers" 137 code)
 
+(* [TerminateProcess] answers [ERROR_ACCESS_DENIED] for a child that has exited before
+   [Lwt_process] collected its status, which is how the crush language server and gum
+   spin stops failed on the Windows legs. Sleeping without yielding to Lwt lets the
+   child exit while its status stays uncollected, so [terminate] meets that answer. *)
+let terminating_an_exited_child_is_not_an_error () =
+  windows_only ();
+  run (fun () ->
+      let child = Charamel_os.Process.spawn [ "cmd"; "/c"; "exit 0" ] in
+      Unix.sleepf 3.0;
+      Alcotest.(check bool)
+        "the exit status is not collected yet" true
+        (Charamel_os.Process.alive child);
+      Charamel_os.Process.terminate child;
+      Charamel_os.Process.await child >|= fun code ->
+      Alcotest.(check int) "the child's own status stands" 0 code)
+
 (* {1 Pty} *)
 
 let pty_is_unsupported_on_windows () =
@@ -1078,17 +2086,68 @@ let suites =
         Alcotest.test_case "XDG precedence" `Quick xdg_precedence;
         Alcotest.test_case "Windows layout" `Quick windows_layout;
         Alcotest.test_case "temp directory" `Quick temp_directory_follows_the_environment;
+        Alcotest.test_case "spawn strips trailing separators" `Quick
+          spawn_strips_trailing_separators;
         Alcotest.test_case "no base directory" `Quick app_dir_without_any_base;
       ] );
     ( "exe",
       [
         Alcotest.test_case "PATH search" `Quick searches_path;
         Alcotest.test_case "explicit paths" `Quick checks_explicit_paths;
+        Alcotest.test_case "Windows search rules" `Quick windows_program_search;
+        Alcotest.test_case "command shims win over scripts" `Quick
+          windows_prefers_command_shims;
+        Alcotest.test_case "spawn resolves bare names" `Quick
+          spawn_funnel_prefers_absolute_paths;
+        Alcotest.test_case "spawn prefers local executables" `Quick
+          spawn_funnel_prefers_local_executables;
+        Alcotest.test_case "spawn ignores local scripts" `Quick
+          spawn_ignores_local_extensionless_scripts;
+        Alcotest.test_case "spawn prefers local unknown extensions" `Quick
+          spawn_prefers_local_executable_with_unknown_extension;
+        Alcotest.test_case "spawn skips local data files" `Quick
+          spawn_skips_local_data_file_with_unknown_extension;
+        Alcotest.test_case "spawn prefers local batch files" `Quick
+          spawn_prefers_local_batch_files;
+        Alcotest.test_case "batch names are looked up as written" `Quick
+          find_takes_batch_names_as_written;
+        Alcotest.test_case "spawn keeps drive-relative commands" `Quick
+          spawn_keeps_drive_relative_commands;
+        Alcotest.test_case "drive-relative lookup reads the drive directory" `Quick
+          find_checks_drive_relative_lookup;
+        Alcotest.test_case "explicit relative hits are absolute" `Quick
+          explicit_relative_hits_are_absolute;
+        Alcotest.test_case "relative PATH entries resolve" `Quick
+          windows_relative_path_entries_resolve;
+        Alcotest.test_case "batch files run through the interpreter" `Quick
+          spawn_runs_batch_files_through_the_interpreter;
+        Alcotest.test_case "batch files run the resolved script" `Quick
+          batch_files_run_the_resolved_script;
+        Alcotest.test_case "system programs come from the system directory" `Quick
+          spawn_takes_system_programs_from_the_system_directory;
+        Alcotest.test_case "a checkout cannot replace the interpreter" `Quick
+          checkout_cannot_replace_the_command_interpreter;
+        Alcotest.test_case "spawn looks programs up on the child's PATH" `Quick
+          spawn_resolves_on_the_child_path;
+        Alcotest.test_case "batch paths keep percent signs" `Quick
+          spawn_keeps_percent_signs_in_the_script_path;
+        Alcotest.test_case "batch files run from a percent directory" `Quick
+          batch_files_run_from_a_percent_directory;
+        Alcotest.test_case "command line for cmd.exe" `Quick
+          command_line_for_the_interpreter;
+        Alcotest.test_case "command line C runtime quoting" `Quick
+          command_line_quotes_by_the_c_runtime_rules;
+        Alcotest.test_case "command line round trip" `Quick
+          command_line_round_trips_through_the_c_runtime;
       ] );
     ( "shell",
       [
         Alcotest.test_case "command" `Quick command_uses_the_platform_shell;
         Alcotest.test_case "quoting" `Quick quoting_protects_word_boundaries;
+        Alcotest.test_case "Windows quoting survives cmd.exe" `Quick
+          windows_quoting_survives_cmd_and_the_c_runtime;
+        Alcotest.test_case "shell words reach the program whole" `Quick
+          shell_words_reach_the_program_whole;
         Alcotest.test_case "splitting" `Quick splitting_words;
       ] );
     ( "editor",
@@ -1096,6 +2155,8 @@ let suites =
         Alcotest.test_case "platform defaults" `Quick defaults_come_from_the_platform;
         Alcotest.test_case "environment overrides" `Quick
           environment_overrides_are_word_split;
+        Alcotest.test_case "Windows browser takes the URL as data" `Quick
+          windows_browser_takes_the_url_as_data;
       ] );
     ("signal", [ Alcotest.test_case "available signals" `Quick signals_available_here ]);
     ( "tty",
@@ -1129,6 +2190,8 @@ let suites =
         Alcotest.test_case "kill tree" `Quick kill_tree_reaches_the_whole_group;
         Alcotest.test_case "abandoned race keeps await usable" `Quick
           abandoned_race_keeps_the_shared_await_usable;
+        Alcotest.test_case "terminating an exited child" `Quick
+          terminating_an_exited_child_is_not_an_error;
       ] );
     ( "pty",
       [

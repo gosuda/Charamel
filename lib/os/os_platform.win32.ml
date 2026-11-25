@@ -232,76 +232,95 @@ module Process = struct
      after the call because [CreateProcess] snapshots the block at spawn. *)
   let env_lock = Mutex.create ()
 
-  let env_name entry =
-    match String.index_opt entry '=' with
-    | Some index -> String.sub entry 0 index
-    | None -> entry
-
-  let env_value entry =
-    match String.index_opt entry '=' with
-    | Some index -> String.sub entry (index + 1) (String.length entry - index - 1)
-    | None -> ""
-
-  let apply_env env =
-    let previous =
-      Array.to_list (Unix.environment ())
-      |> List.map (fun entry -> (env_name entry, env_value entry))
-    in
-    let provided = Hashtbl.create 16 in
-    Array.iter (fun entry -> Hashtbl.replace provided (env_name entry) ()) env;
-    let added =
-      Array.fold_left
-        (fun fresh entry ->
-          let name = env_name entry in
-          if
-            Hashtbl.mem provided name
-            && not (List.exists (fun (seen, _) -> String.equal seen name) previous)
-          then name :: fresh
-          else fresh)
-        [] env
-    in
-    List.iter
-      (fun (name, _) -> if not (Hashtbl.mem provided name) then Unix.putenv name "")
-      previous;
-    Array.iter (fun entry -> Unix.putenv (env_name entry) (env_value entry)) env;
-    (previous, added)
-
-  let restore_env (previous, added) =
-    List.iter (fun name -> Unix.putenv name "") added;
-    List.iter (fun (name, value) -> Unix.putenv name value) previous
+  let ordinary_environment_bindings entries =
+    Array.to_list entries
+    |> List.filter_map (fun entry ->
+        match String.index_opt entry '=' with
+        | Some 0 -> None
+        | Some index ->
+            let name = String.sub entry 0 index in
+            let value = String.sub entry (index + 1) (String.length entry - index - 1) in
+            Some (name, value)
+        | None when entry = "" -> None
+        | None -> Some (entry, ""))
 
   let with_env env f =
-    Mutex.lock env_lock;
-    let saved = apply_env env in
+    let requested = ordinary_environment_bindings env in
+    let provided = Hashtbl.create (List.length requested) in
+    List.iter
+      (fun (name, _) -> Hashtbl.replace provided (String.uppercase_ascii name) ())
+      requested;
+    let changes = ref [] in
+    let set name value =
+      let previous = Option.value (Sys.getenv_opt name) ~default:"" in
+      if not (String.equal value previous) then (
+        Unix.putenv name value;
+        changes := (name, previous) :: !changes)
+    in
     Fun.protect
       ~finally:(fun () ->
-        restore_env saved;
-        Mutex.unlock env_lock)
-      f
+        List.iter (fun (name, value) -> Unix.putenv name value) !changes)
+      (fun () ->
+        List.iter
+          (fun (name, _) ->
+            if not (Hashtbl.mem provided (String.uppercase_ascii name)) then set name "")
+          (ordinary_environment_bindings (Unix.environment ()));
+        List.iter (fun (name, value) -> set name value) requested;
+        f ())
+
+  let system_directory () =
+    match Charamel_os_win32.system_directory () with
+    | Some directory -> directory
+    | None -> raise (Unix.Unix_error (Unix.ENOENT, "GetSystemDirectoryW", ""))
 
   let spawn ?cwd ?env ?(stdin = `Inherit) ?(stdout = `Inherit) ?(stderr = `Inherit) argv =
+    (* The temporary directory Windows reports ends in a separator, and [CreateProcess]
+       fails such a working directory, so the one spawn strips it here, keeping a bare
+       drive root intact, instead of at each caller. *)
+    let cwd = Option.map Dirs.strip_trailing_separators cwd in
     match argv with
     | [] -> invalid_arg "Charamel_os.Process.spawn: argv is empty"
-    | _ ->
-        let stdin', stdin_w = input_redir stdin in
-        let stdout', stdout_r = output_redir stdout in
-        let stderr', stderr_r = output_redir stderr in
-        let create () =
-          new Lwt_process.process_none
-            (List.hd argv, Array.of_list argv)
-            ?cwd ~stdin:stdin' ~stdout:stdout' ~stderr:stderr'
+    | _ :: _ ->
+        (* [Lwt_process] hands the program to [CreateProcess] as its application name,
+           and a bare name misses there: [cmd] arrives as ["No such file or directory"]
+           even with the system directory on the search path. The absolute path always
+           resolves, so a bare name is resolved first — from the current directory, then
+           [PATH] — and a miss goes through unchanged so the system reports it exactly
+           as before. The command interpreter and the URL handler come from the system
+           directory instead, so a checkout cannot supply them. A resolved batch file
+           runs through that [cmd.exe] with its absolute path in the command text,
+           because [CreateProcess] would otherwise look it up again from the child's
+           directory. The lookup runs while [env] is applied, so it reads the child's
+           [PATH] and [PATHEXT], not the parent's. *)
+        let system_directory = system_directory () in
+        let launch () =
+          let application, line = Exe.spawn_command ~system_directory argv in
+          let stdin', stdin_w = input_redir stdin in
+          let stdout', stdout_r = output_redir stdout in
+          let stderr', stderr_r = output_redir stderr in
+          (* [Lwt_process] writes each argument through [Filename.quote], which always
+             quotes and escapes by the C runtime rules; [cmd.exe] reads neither, so a
+             quoted ["/c"] and its escaped command text reach it as one quoted command
+             name and it answers that the file name syntax is incorrect.
+             [Exe.spawn_command] builds the line each program reads, and
+             [Lwt_process]'s ["\000"] inline prefix hands it to [CreateProcess]
+             unchanged. *)
+          let process =
+            new Lwt_process.process_none
+              (application, [| "\000" ^ line |])
+              ?cwd ~stdin:stdin' ~stdout:stdout' ~stderr:stderr'
+          in
+          {
+            process;
+            stdin_w;
+            stdout_r;
+            stderr_r;
+            code = Lwt.map exit_code process#status;
+            signal = Lwt.map signal_of process#status;
+          }
         in
-        let process =
-          match env with Some env -> with_env env create | None -> create ()
-        in
-        {
-          process;
-          stdin_w;
-          stdout_r;
-          stderr_r;
-          code = Lwt.map exit_code process#status;
-          signal = Lwt.map signal_of process#status;
-        }
+        Mutex.protect env_lock (fun () ->
+            match env with Some env -> with_env env launch | None -> launch ())
 
   let pid { process; _ } = process#pid
   let stdin_w { stdin_w; _ } = get stdin_w "stdin_w"
@@ -309,7 +328,14 @@ module Process = struct
   let stderr_r { stderr_r; _ } = get stderr_r "stderr_r"
   let await { code; _ } = code
   let signal { signal; _ } = signal
-  let terminate { process; _ } = process#terminate
-  let kill_tree { process; _ } = process#terminate
+
+  (* [TerminateProcess] fails with [ERROR_ACCESS_DENIED] on a child that has exited
+     before [Lwt_process] collected its status, and the handle is this process's own, so
+     that answer means the child is already gone, which is not an error. *)
+  let terminate { process; _ } =
+    try process#terminate
+    with Unix.Unix_error (Unix.EACCES, "TerminateProcess", _) -> ()
+
+  let kill_tree t = terminate t
   let alive { process; _ } = process#state = Lwt_process.Running
 end

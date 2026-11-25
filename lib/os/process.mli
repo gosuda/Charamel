@@ -28,11 +28,23 @@
 
     The same operations go through [Lwt_process], whose [CreateProcess]-based spawn has no
     fork to avoid and whose redirection arguments provide [Keep], [Dev_null] and private
-    pipes natively. Two Windows differences are visible here, and both are documented
+    pipes natively. Three Windows differences are visible here, and all are documented
     rather than papered over: {!val:kill_tree} stops the child only, because there are no
-    process groups (upstream crush makes the same choice), and a program name is looked up
-    in [PATH] only when the executable name passed to [Lwt_process] is empty, which is
-    what this module passes. *)
+    process groups (upstream crush makes the same choice); a bare program name is resolved
+    before the spawn through [Charamel_os.Exe.for_spawn] — the current directory first,
+    then [PATH] with [PATHEXT] — and handed over as the absolute path it answers, because
+    [CreateProcess] misses a bare name passed as its application name; and [argv] reaches
+    the child as the one command line [Charamel_os.Exe.spawn_command] builds, which the
+    child splits again — by the C runtime rules for most programs, while the words after
+    [cmd.exe]'s [/c] are its command text, verbatim. With [~env], the lookup reads the
+    [PATH] and [PATHEXT] of [env], the environment the child receives, not the parent's.
+    The system's per-drive working directories are inherited even with [~env]. The command
+    interpreter ([cmd]) and the URL handler ([rundll32]) are never searched: they come
+    from the system directory [GetSystemDirectoryW] reports, so a file in an untrusted
+    working directory or on [PATH] cannot replace them. A program that resolves to a batch
+    file runs through that [cmd.exe] with the script's absolute path and its arguments
+    quoted for the command interpreter, so the script the parent resolved is the one that
+    runs and an argument is never read as command text. *)
 
 type t = Os_platform.Process.t
 (** A running child together with the channels that reach it. *)
@@ -53,7 +65,8 @@ val spawn :
     environment rather than adding to it. Each redirection defaults to [`Inherit], which
     is what a program that should simply share the parent's terminal wants, and [`Null]
     sends output to [/dev/null] or [NUL].
-    @raise Invalid_argument when [argv] is empty.
+    @raise Invalid_argument
+      when [argv] is empty, or on Windows when a batch file argument holds a line break.
     @raise Unix_error
       when the program cannot be started, including a [PATH] miss ([ENOENT]). *)
 

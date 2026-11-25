@@ -19,8 +19,9 @@
 
     No part of either shell's job-control or profile behavior is relied on, and nothing
     here pretends the other shell exists: [quote] on POSIX is single-quoting, on Windows
-    it is the caret-escaping [cmd.exe] needs, and passing text through the wrong one is a
-    broken command line, not a portable one. *)
+    it is the C runtime quoting the child reads, protected from [cmd.exe] by its quotes or
+    by carets, and passing text through the wrong one is a broken command line, not a
+    portable one. *)
 
 val command : ?cwd:string -> string -> string list
 (** [command ?cwd text] is the argv list that runs [text] through the platform shell —
@@ -30,12 +31,22 @@ val command : ?cwd:string -> string -> string list
     returned list is arguments, not a string to be re-parsed: pass it to
     {!Charamel_os.Process.spawn}. *)
 
-val quote : string -> string
-(** [quote text] wraps [text] so a shell treats it as one word. POSIX single-quotes it and
-    closes-and-reopens around an embedded quote, which is the only escaping that works
-    inside single quotes and holds for every byte including newline and [NUL]-adjacent
-    controls. Windows double-quotes it and caret-escapes the metacharacters [cmd.exe]
-    would otherwise act on. *)
+val quote : ?win32:bool -> string -> string
+(** [quote ?win32 text] wraps [text] so a shell treats it as one word. POSIX single-quotes
+    it and closes-and-reopens around an embedded quote, which is the only escaping that
+    works inside single quotes and holds for every byte including newline and
+    [NUL]-adjacent controls. Windows writes it as one quoted C runtime word
+    ({!Charamel_os.Exe.quote_word}), which [cmd.exe] copies verbatim because it reads
+    metacharacters inside quotes literally, carets included; a program path with a space
+    survives as the command name only in that form. A word holding a quote, which would
+    end [cmd.exe]'s quoted run early, or a [%], which expands even inside quotes, instead
+    has the double quote and every other [cmd.exe] metacharacter [( ) % ! ^ < > & |]
+    caret-escaped, and the colon too, so [cmd.exe] hands the quoted word on to the program
+    unchanged. [cmd.exe] expands variables before it reads carets and reads a variable
+    name from a [%] up to the next [%] or [:], so with a caret before each of them every
+    name it reads holds a caret: [%PATH%] and [%PATH:a=b%] stay text unless the
+    environment defines a variable whose name holds a caret. [~win32] selects the rules
+    and defaults to the host. *)
 
 val split_words : string -> string list
 (** [split_words text] divides [text] into words on spaces and tabs, honoring single and

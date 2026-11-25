@@ -1,7 +1,8 @@
 (** Context rules loaded from the explicitly configured context paths. *)
 
 type rule = { path : string; globs : string list; always : bool; body : string }
-(** A bounded Markdown rule. [path] is the source path used in context headings. *)
+(** A bounded Markdown rule. [path] is the normalized source path used in context
+    headings, so it compares equal with [Path.normalize]d expectations. *)
 
 type t
 (** The loaded rule index. *)
