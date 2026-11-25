@@ -262,13 +262,25 @@ let refused names =
       List.find_opt (fun sequence -> has_sequence Fun.id sequence names) refused_sequences
       |> Option.map (String.concat " ")
 
-type word = { value : string; fixed : bool; unquoted : bool; assignment : bool }
+type word = {
+  value : string;
+  fixed : bool;
+  unquoted : bool;
+  assignment : bool;
+  single : bool;
+}
+(* [single] holds when the word provably expands to exactly one argument: it has
+   no unquoted expansion, glob, or brace expansion that could split it into
+   several fields. A quoted expansion such as ["$pattern"] is single, while an
+   unquoted [$pattern] is not. Data positions for fixed-arity predicates (such
+   as [find -name]) accept single words; anything else still requires review. *)
 
 type builder = {
   buf : Buffer.t;
   mutable is_fixed : bool;
   mutable is_unquoted : bool;
   mutable is_assignment : bool;
+  mutable is_single : bool;
   mutable seen_equals : bool;
   mutable braces : int;
   mutable brace_list : bool;
@@ -281,6 +293,7 @@ let builder () =
     is_fixed = true;
     is_unquoted = true;
     is_assignment = false;
+    is_single = true;
     seen_equals = false;
     braces = 0;
     brace_list = false;
@@ -293,6 +306,7 @@ let word_of b =
     fixed = b.is_fixed;
     unquoted = b.is_unquoted;
     assignment = b.is_assignment;
+    single = b.is_single;
   }
 
 let is_name text =
@@ -316,16 +330,23 @@ let follows_dot b =
 
 let add_unquoted b c =
   (match c with
-  | '*' | '?' -> b.is_fixed <- false
+  | '*' | '?' ->
+      b.is_fixed <- false;
+      b.is_single <- false
   | '[' -> b.bracket <- true
-  | ']' -> if b.bracket then b.is_fixed <- false
+  | ']' ->
+      if b.bracket then (
+        b.is_fixed <- false;
+        b.is_single <- false)
   | '{' -> b.braces <- b.braces + 1
   | ',' -> if b.braces > 0 then b.brace_list <- true
   | '.' -> if b.braces > 0 && follows_dot b then b.brace_list <- true
   | '}' ->
       if b.braces > 0 then (
         b.braces <- b.braces - 1;
-        if b.brace_list then b.is_fixed <- false)
+        if b.brace_list then (
+          b.is_fixed <- false;
+          b.is_single <- false))
   | '=' ->
       if not b.seen_equals then (
         b.seen_equals <- true;
@@ -341,10 +362,11 @@ let add_quoted_string b text =
   Buffer.add_string b.buf text;
   b.is_unquoted <- false
 
-let mark_expansion b =
+let mark_expansion b ~single =
   Buffer.add_char b.buf '\000';
   b.is_fixed <- false;
-  b.is_unquoted <- false
+  b.is_unquoted <- false;
+  b.is_single <- b.is_single && single
 
 type sink = {
   mutable words : string list;
@@ -813,19 +835,23 @@ and dollar lx b ~in_double =
                 advance lx 2;
                 parse_list lx ~nested:true)
       in
-      Ok (mark_expansion b)
+      Ok (mark_expansion b ~single:in_double)
   | Some '{' ->
       advance lx 2;
       let literal_apostrophe = in_double && double_quoted_parameter_word lx in
-      let* () = nest lx (fun () -> parameter lx (builder ()) ~literal_apostrophe) in
-      Ok (mark_expansion b)
+      let scratch = builder () in
+      let* () = nest lx (fun () -> parameter lx scratch ~literal_apostrophe) in
+      Ok (mark_expansion b ~single:(in_double && scratch.is_single))
   | Some c when is_name_start c ->
       advance lx 2;
       skip_name lx;
-      Ok (mark_expansion b)
+      Ok (mark_expansion b ~single:in_double)
   | Some c when is_digit c || String.contains "@*#?-$!" c ->
+      (* A quoted ["$@"] still expands to one word per positional parameter, and
+         ["${words[@]}"] does the same for arrays; every other special
+         parameter holds a single value. *)
       advance lx 2;
-      Ok (mark_expansion b)
+      Ok (mark_expansion b ~single:(in_double && c <> '@'))
   | Some _ | None ->
       Buffer.add_char b.buf '$';
       advance lx 1;
@@ -884,7 +910,11 @@ and parameter lx scratch ~literal_apostrophe =
       advance lx 1;
       let* () = backquoted lx scratch ~in_double:literal_apostrophe in
       parameter lx scratch ~literal_apostrophe
-  | Some _ ->
+  | Some c ->
+      (* [${words[@]}] expands to one word per element even when quoted, so a
+         word holding it is never a proven single argument. *)
+      if c = '@' && lx.pos > 0 && lx.source.[lx.pos - 1] = '[' then
+        scratch.is_single <- false;
       advance lx 1;
       parameter lx scratch ~literal_apostrophe
 
@@ -915,7 +945,7 @@ and backquoted lx b ~in_double =
   in
   let* () = collect () in
   parse_source lx.sink ~depth:(lx.depth + 1) (Buffer.contents body);
-  Ok (mark_expansion b)
+  Ok (mark_expansion b ~single:in_double)
 
 and next_token lx =
   skip_blanks lx;
@@ -1267,7 +1297,8 @@ and analyze_program sink ~depth program args =
   else
     match List.assoc_opt program exec_flags with
     | Some flags ->
-        if List.exists (fun w -> not w.fixed) args then review sink computed_program;
+        if List.exists (fun w -> (not w.fixed) && not w.single) args then
+          review sink computed_program;
         exec_commands sink ~depth flags args
     | None -> ()
 
@@ -1299,14 +1330,22 @@ and xargs sink ~depth args =
   | Error reason -> review sink reason
   | Ok (_, []) -> ()
   | Ok (None, command) ->
-      let input = { value = ""; fixed = false; unquoted = false; assignment = false } in
+      let input =
+        {
+          value = "";
+          fixed = false;
+          unquoted = false;
+          assignment = false;
+          single = false;
+        }
+      in
       analyze sink ~depth (command @ [ input ])
   | Ok (Some token, command) ->
       let command =
         List.map
           (fun word ->
             if contains_substring ~needle:token word.value then
-              { word with fixed = false; assignment = false }
+              { word with fixed = false; assignment = false; single = false }
             else word)
           command
       in
@@ -1323,13 +1362,18 @@ and watch sink ~depth args =
         parse_source sink ~depth:(depth + 1)
           (String.concat " " (List.map (fun w -> w.value) words))
 
+(* [find] and [fd] predicates other than the code runners take data: paths,
+   names, and sizes. A word that provably expands to exactly one argument cannot
+   change the expression or reach an executable position, so only computed
+   words that may split still require review. *)
 and exec_commands sink ~depth flags = function
   | [] -> ()
   | w :: rest ->
-      (if List.mem w.value flags then
-         match rest with
-         | name :: _ when String.contains name.value '{' -> review sink computed_program
-         | _ -> analyze sink ~depth rest);
+      if List.mem w.value flags then
+        match rest with
+        | name :: _ when String.contains name.value '{' -> review sink computed_program
+        | _ -> analyze sink ~depth rest
+      else if (not w.fixed) && not w.single then review sink computed_program;
       exec_commands sink ~depth flags rest
 
 and shell_code sink ~depth program args =
@@ -1411,7 +1455,13 @@ let end_cmd_word sink st =
     if st.awaiting_target then st.awaiting_target <- false
     else
       st.segment <-
-        { value; fixed = not st.computed; unquoted = true; assignment = false }
+        {
+          value;
+          fixed = not st.computed;
+          unquoted = true;
+          assignment = false;
+          single = not st.computed;
+        }
         :: st.segment);
   Buffer.clear st.chars;
   st.computed <- false;

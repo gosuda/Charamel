@@ -366,6 +366,16 @@ let test_wrapper_operands () =
       ("env --unmodelled option sh", "review");
     ]
 
+let test_find_data_slots () =
+  check_posix_verdicts
+    [
+      ({|find . -name "$pattern" -print|}, "clear");
+      ({|find "$dir" -name '*.ml' -print|}, "clear");
+      ("find . -name $pattern -print", "review");
+      ("find $dir -print", "review");
+      ({|find . -name "$@" -print|}, "review");
+    ]
+
 let test_xargs_replacement () =
   check_posix_verdicts
     [
@@ -484,6 +494,7 @@ let cases =
       test_heredoc_boundaries;
     Test_tools_test_support.case "ANSI-C NUL screening" `Quick test_ansi_c_nul;
     Test_tools_test_support.case "parameter quote context" `Quick test_parameter_quotes;
+    Test_tools_test_support.case "find data positions" `Quick test_find_data_slots;
     Test_tools_test_support.case "screen requires review" `Quick
       test_screen_requires_review;
     Test_tools_test_support.case "screen clears ordinary commands" `Quick
