@@ -1,6 +1,7 @@
 module Key = Charamel_ssh_keygen
 module Mnemonic = Melt_core.Mnemonic
 module Env = Charamel_cli.Env
+module Phrase = Melt_phrase.Phrase
 open Lwt.Infix
 
 type error =
@@ -9,7 +10,8 @@ type error =
   | `Parse_key of Key.error
   | `Unsupported_key
   | `Mnemonic of Mnemonic.error
-  | `Write_key of Key.error ]
+  | `Write_key of Key.error
+  | `Cannot_hide_input ]
 
 let resolve_path path =
   Result.map
@@ -60,6 +62,9 @@ let pp_error ppf = function
   | `Write_key (`Already_exists path) -> Fmt.pf ppf "melt: %s already exists" path
   | `Write_key error ->
       Fmt.pf ppf "melt: could not write key: %s" (key_error_message error)
+  | `Cannot_hide_input ->
+      Format.pp_print_string ppf
+        "melt: cannot disable console echo; refusing to read recovery phrase"
 
 let read_key path =
   Lwt.catch
@@ -134,28 +139,6 @@ let backup_term (env : Charamel_cli.Env.t) =
   let+ path = backup_path_arg () in
   run_backup env path
 
-let read_all_stdin () =
-  let buffer = Buffer.create 256 in
-  (try
-     while true do
-       Buffer.add_channel buffer stdin 1024
-     done
-   with End_of_file -> ());
-  Buffer.contents buffer
-
-let read_stdin_phrase () =
-  if Charamel_os.Tty.is_tty_stdin then
-    let restore =
-      try Some (Charamel_os.Tty.echo_off ()) with Unix.Unix_error _ -> None
-    in
-    Fun.protect
-      ~finally:(fun () -> match restore with Some restore -> restore () | None -> ())
-      (fun () ->
-        let line = try input_line stdin with End_of_file -> "" in
-        print_newline ();
-        Lwt.return line)
-  else Lwt.return (read_all_stdin ())
-
 let restore_output_arg () =
   let open Cmdliner in
   Arg.(
@@ -167,7 +150,11 @@ let restore_output_arg () =
 let restore_term (env : Charamel_cli.Env.t) =
   let open Cmdliner.Term.Syntax in
   let+ output = restore_output_arg () in
-  read_stdin_phrase () >>= fun words -> run_restore env words output
+  Phrase.read_stdin_phrase () >>= fun phrase ->
+  match (phrase : (string, Phrase.error) result) with
+  | Error `Cannot_hide_input ->
+      Charamel_cli.error (Fmt.str "%a" pp_error `Cannot_hide_input)
+  | Ok words -> run_restore env words output
 
 let backup_command env =
   Cmdliner.Cmd.v

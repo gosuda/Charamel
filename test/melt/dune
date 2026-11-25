@@ -1,9 +1,10 @@
 (test
  (name test_melt)
  (package melt)
- (modules test_melt test_mnemonic test_melt_cli)
+ (modules test_melt test_mnemonic test_melt_cli test_phrase)
  (libraries
   melt_core
+  melt_phrase
   charamel-ssh.keygen
   alcotest
   alcotest-lwt

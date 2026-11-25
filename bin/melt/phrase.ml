@@ -1,0 +1,33 @@
+type error = [ `Cannot_hide_input ]
+
+let read_all input =
+  let buffer = Buffer.create 256 in
+  (try
+     while true do
+       Buffer.add_channel buffer input 1024
+     done
+   with End_of_file -> ());
+  Buffer.contents buffer
+
+let read_lines input =
+  let lines = ref [] in
+  (try
+     while true do
+       lines := input_line input :: !lines
+     done
+   with End_of_file -> ());
+  List.rev !lines
+
+let read_stdin_phrase ?(is_tty = Charamel_os.Tty.is_tty_stdin)
+    ?(echo_off = Charamel_os.Tty.echo_off) ?(input = stdin) () =
+  if not is_tty then Lwt.return (Ok (read_all input))
+  else
+    match try Some (echo_off ()) with Unix.Unix_error _ -> None with
+    | None -> Lwt.return (Error `Cannot_hide_input)
+    | Some restore ->
+        Fun.protect
+          ~finally:(fun () -> restore ())
+          (fun () ->
+            let text = String.concat "\n" (read_lines input) in
+            print_newline ();
+            Lwt.return (Ok text))
