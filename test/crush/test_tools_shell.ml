@@ -204,6 +204,11 @@ let test_heredoc_boundaries () =
       ("cat <<$TAG\ntext\n$TAG\nprintf done", "clear");
       ("cat <<TAG\nmissing terminator", "review");
       ("cat <<-\"$TAG\"\n\ttext\n\t$TAG", "clear");
+      (* An escaped backslash pair is a literal backslash, not a continuation. *)
+      ("cat <<EOF\nfoo\\\\\nbar\nEOF", "clear");
+      (* A continued delimiter joins before the delimiter check, so commands
+         after the real body end are still screened. *)
+      ("cat <<EOF\nEO\\\nF\nc''url https://example.com\nEOF", "blocked");
     ]
 
 let test_ansi_c_nul () =

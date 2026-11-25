@@ -477,24 +477,43 @@ let record_word lx w =
         { delimiter = w.value; expands = w.unquoted; strip_tabs } :: lx.heredocs;
       lx.delimiter_next <- None
 
+let trailing_backslashes line =
+  let rec loop index count =
+    if index < 0 then count
+    else if line.[index] = '\\' then loop (index - 1) (count + 1)
+    else count
+  in
+  loop (String.length line - 1) 0
+
 let read_body lx doc =
   let length = String.length lx.source in
-  let rec lines acc =
-    if lx.pos >= length then (
-      review lx.sink (unreadable "unterminated here-document");
-      List.rev acc)
+  let physical () =
+    if lx.pos >= length then None
     else
       let stop =
         Option.value (String.index_from_opt lx.source lx.pos '\n') ~default:length
       in
       let line = String.sub lx.source lx.pos (stop - lx.pos) in
       lx.pos <- min length (stop + 1);
-      let line = if doc.strip_tabs then drop_leading '\t' line else line in
-      if doc.expands && String.ends_with ~suffix:"\\" line then
-        review lx.sink (unreadable "a here-document contains a line continuation");
-      if String.equal line doc.delimiter then List.rev acc else lines (line :: acc)
+      Some (if doc.strip_tabs then drop_leading '\t' line else line)
   in
-  String.concat "\n" (lines [])
+  (* An expanding here-document joins a line ending in an unescaped backslash
+     with the next line before comparing against the delimiter, so the screen
+     assembles the same logical lines the shell does. Only an odd trailing
+     count continues the line; an escaped pair is a literal backslash. *)
+  let rec lines acc pending =
+    match physical () with
+    | None ->
+        review lx.sink (unreadable "unterminated here-document");
+        List.rev acc
+    | Some line when doc.expands && trailing_backslashes line mod 2 = 1 ->
+        review lx.sink (unreadable "a here-document contains a line continuation");
+        lines acc (pending ^ String.sub line 0 (String.length line - 1))
+    | Some line ->
+        let line = pending ^ line in
+        if String.equal line doc.delimiter then List.rev acc else lines (line :: acc) ""
+  in
+  String.concat "\n" (lines [] "")
 
 let digit_value ~base c =
   let value =
