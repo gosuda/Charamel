@@ -127,6 +127,7 @@ val truncate : ?diagnostics:diagnostic list -> ctx -> string -> output
     the id of the artifact holding the whole. [diagnostics] defaults to the empty list. *)
 
 val request :
+  ?review:string ->
   ctx ->
   read_only:bool ->
   tool:string ->
@@ -134,9 +135,11 @@ val request :
   path:string ->
   description:string ->
   (unit, error) result
-(** [request ctx ~read_only ~tool ~action ~path ~description] authorizes one decoded
-    operation through [ctx.permission]. [read_only] is supplied by trusted tool code
-    rather than model JSON. *)
+(** [request ?review ctx ~read_only ~tool ~action ~path ~description] authorizes one
+    decoded operation through [ctx.permission]. [read_only] is supplied by trusted tool
+    code rather than model JSON. [review] names why the tool could not classify the
+    operation; with it only an explicit approval of this exact action passes (see
+    {!Permission.request}). *)
 
 val schema_object : ?required:string list -> (string * Jsont.json) list -> Jsont.json
 (** [schema_object ?required fields] is a JSON object schema with [fields] as properties.

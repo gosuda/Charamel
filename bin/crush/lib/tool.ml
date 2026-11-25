@@ -164,9 +164,9 @@ let truncate ?(diagnostics = []) ctx text =
   in
   ok ?artifact ~diagnostics content
 
-let request ctx ~read_only ~tool ~action ~path ~description =
+let request ?review ctx ~read_only ~tool ~action ~path ~description =
   let request : Permission.request =
-    { session = ctx.session; tool; action; path; description; read_only }
+    { session = ctx.session; tool; action; path; description; read_only; review }
   in
   match Permission.resolve ctx.permission request with
   | Permission.Allowed -> Ok ()

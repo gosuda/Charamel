@@ -3,9 +3,9 @@ module Permission = Crush_core.Permission
 open Lwt_direct
 
 let request ?(session = "session") ?(tool = "read") ?(action = "read")
-    ?(path = "/project/file") ?(description = "test request") ?(read_only = true) () :
-    Permission.request =
-  { session; tool; action; path; description; read_only }
+    ?(path = "/project/file") ?(description = "test request") ?(read_only = true) ?review
+    () : Permission.request =
+  { session; tool; action; path; description; read_only; review }
 
 let policy ?(cwd = "/project") ?(plans_dir = "/project/.crush/plans") ?(yolo = false)
     ?(allowed_tools = []) ?(deny = []) ?asker ?hook ?on_decision () =
@@ -273,6 +273,42 @@ let matches_cases () =
   Alcotest.check Alcotest.bool "different tool does not match" false
     (Permission.matches ~entry:"git" req)
 
+let review_requires_explicit_approval () =
+  let computed ?(action = "$CMD --version") () =
+    request ~tool:"bash" ~action ~path:"" ~read_only:false ~review:"computed program" ()
+  in
+  let unanswered =
+    Some "needs an explicit approval and no prompt is available: computed program"
+  in
+  let blanket = policy ~yolo:true ~allowed_tools:[ "bash" ] () in
+  Permission.auto_approve_session blanket ~session:"session";
+  check_reason "yolo, a tool-wide entry and session approval do not run it" unanswered
+    (Permission.resolve blanket (computed ()));
+  let hooked = policy ~yolo:true ~hook:(fun _ -> `Allow) () in
+  check_reason "a hook allow does not run it" unanswered
+    (Permission.resolve hooked (computed ()));
+  let exact = policy ~allowed_tools:[ "bash:$CMD --version" ] () in
+  check_allowed "an exact allow entry runs it" (Permission.resolve exact (computed ()));
+  let denied =
+    policy ~yolo:true ~deny:[ "bash" ] ~asker:(fun _ -> Permission.Allow_once) ()
+  in
+  check_reason "a deny entry still refuses it" (Some "denied by permissions.deny: bash")
+    (Permission.resolve denied (computed ()));
+  let calls = ref 0 in
+  let asked =
+    policy ~yolo:true
+      ~asker:(fun _ ->
+        incr calls;
+        Permission.Allow_session)
+      ()
+  in
+  check_allowed "the asker runs it" (Permission.resolve asked (computed ()));
+  check_allowed "the exact session grant runs it again"
+    (Permission.resolve asked (computed ()));
+  check_allowed "another action asks again"
+    (Permission.resolve asked (computed ~action:"$OTHER" ()));
+  Alcotest.check Alcotest.int "the asker is called once per exact action" 2 !calls
+
 let cases =
   [
     Test_tools_test_support.case "plan ceiling" `Quick plan_ceiling;
@@ -296,4 +332,6 @@ let cases =
     Test_tools_test_support.case "policy lock while asking" `Quick
       policy_lock_is_free_while_asking;
     Test_tools_test_support.case "entry matching" `Quick matches_cases;
+    Test_tools_test_support.case "review needs explicit approval" `Quick
+      review_requires_explicit_approval;
   ]

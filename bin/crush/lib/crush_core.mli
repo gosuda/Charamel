@@ -28,6 +28,7 @@ module Jsonx = Jsonx
 module State_file = State_file
 module Ulid = Ulid
 module Tools_fs = Tools_fs
+module Shell_screen = Shell_screen
 module Tools_shell = Tools_shell
 module Tools_search = Tools_search
 module Tools_net = Tools_net
