@@ -965,6 +965,41 @@ let load_with ~fs_root ~env ~cwd ~extra =
 
 let load ~fs_root ~env ~cwd = load_with ~fs_root ~env ~cwd ~extra:[]
 
+(* A grant saves one record per file, so each approved file must expand and
+   validate on its own as well as in the merged configuration: a child override
+   can mask an invalid parent declaration in the merge, and the parent would
+   then fail to load on its own. [validate] is structural, so a layer that
+   references another layer still validates. *)
+let validate_layer ~env path text =
+  match Jsonx.json_of_string text with
+  | Error message -> Lwt.return_error (`Parse (path, message))
+  | Ok json -> (
+      match Jsont.Json.decode jsont json with
+      | Error message -> Lwt.return_error (`Parse (path, message))
+      | Ok config -> (
+          match validate (expand_config ~env config) with
+          | Ok () -> Lwt.return_ok ()
+          | Error message -> Lwt.return_error (`Parse (path, message))))
+
+let check_layer ~fs_root ~env (file : project_file) =
+  read_file fs_root file.path >>= function
+  | Error _ as failure -> Lwt.return failure
+  | Ok None -> Lwt.return_error (`Parse (file.path, "approved configuration is missing"))
+  | Ok (Some text) ->
+      if not (String.equal (Trust.digest text) file.digest) then
+        Lwt.return_error
+          (`Parse
+             ( file.path,
+               "configuration changed while confirming trust; run `crush trust` again" ))
+      else validate_layer ~env file.path text
+
+let rec check_layers ~fs_root ~env = function
+  | [] -> Lwt.return_ok ()
+  | file :: rest -> (
+      check_layer ~fs_root ~env file >>= function
+      | Error _ as failure -> Lwt.return failure
+      | Ok () -> check_layers ~fs_root ~env rest)
+
 let grant_checked ~fs_root ~env ~cwd files =
   match files with
   | [] -> Lwt.return_ok ()
@@ -980,11 +1015,14 @@ let grant_checked ~fs_root ~env ~cwd files =
               files
           in
           (* Reload with the proposed records held in memory: the grant lands on
-             disk only when the exact bytes being approved expand and validate.
-             The store is left unchanged on failure. *)
-          load_with ~fs_root ~env ~cwd ~extra >>= function
+             disk only when every approved layer and the merged configuration
+             expand and validate. The store is left unchanged on failure. *)
+          check_layers ~fs_root ~env files >>= function
           | Error _ as failure -> Lwt.return failure
-          | Ok _ -> Trust.save ~fs_root store (Trust.add records extra)))
+          | Ok () -> (
+              load_with ~fs_root ~env ~cwd ~extra >>= function
+              | Error _ as failure -> Lwt.return failure
+              | Ok _ -> Trust.save ~fs_root store (Trust.add records extra))))
 
 let grant ~fs_root ~env files =
   match files with
