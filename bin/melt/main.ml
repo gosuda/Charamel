@@ -134,12 +134,27 @@ let backup_term (env : Charamel_cli.Env.t) =
   let+ path = backup_path_arg () in
   run_backup env path
 
-let restore_words_arg () =
-  let open Cmdliner in
-  Arg.(
-    required
-      (opt (some string) None
-         (info [ "words" ] ~docv:"WORDS" ~doc:"The 24-word BIP-39 seed phrase.")))
+let read_all_stdin () =
+  let buffer = Buffer.create 256 in
+  (try
+     while true do
+       Buffer.add_channel buffer stdin 1024
+     done
+   with End_of_file -> ());
+  Buffer.contents buffer
+
+let read_stdin_phrase () =
+  if Charamel_os.Tty.is_tty_stdin then
+    let restore =
+      try Some (Charamel_os.Tty.echo_off ()) with Unix.Unix_error _ -> None
+    in
+    Fun.protect
+      ~finally:(fun () -> match restore with Some restore -> restore () | None -> ())
+      (fun () ->
+        let line = try input_line stdin with End_of_file -> "" in
+        print_newline ();
+        Lwt.return line)
+  else Lwt.return (read_all_stdin ())
 
 let restore_output_arg () =
   let open Cmdliner in
@@ -151,8 +166,8 @@ let restore_output_arg () =
 
 let restore_term (env : Charamel_cli.Env.t) =
   let open Cmdliner.Term.Syntax in
-  let+ words = restore_words_arg () and+ output = restore_output_arg () in
-  run_restore env words output
+  let+ output = restore_output_arg () in
+  read_stdin_phrase () >>= fun words -> run_restore env words output
 
 let backup_command env =
   Cmdliner.Cmd.v
@@ -161,7 +176,8 @@ let backup_command env =
 
 let restore_command env =
   Cmdliner.Cmd.v
-    (Cmdliner.Cmd.info "restore" ~doc:"Restore an Ed25519 key pair from 24 BIP-39 words.")
+    (Cmdliner.Cmd.info "restore"
+       ~doc:"Restore an Ed25519 key pair from the 24 BIP-39 words on standard input.")
     (restore_term env)
 
 let () =
