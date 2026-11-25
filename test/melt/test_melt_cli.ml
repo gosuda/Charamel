@@ -238,6 +238,89 @@ let words_option_is_rejected () =
       Alcotest.(check bool) "refused restore writes no key" false (Sys.file_exists output);
       Lwt.return_unit)
 
+(* A pasted phrase may span several lines: run [restore] under [script](1) so its
+   standard input is a pseudoterminal, and feed four six-word lines. The
+   single-[input_line] read saw only the first line and refused the restore. *)
+let script_binary () =
+  let dirs =
+    match Sys.getenv_opt "PATH" with
+    | None -> []
+    | Some path -> String.split_on_char ':' path
+  in
+  List.find_opt
+    (fun path ->
+      try
+        Unix.access path [ Unix.X_OK ];
+        true
+      with Unix.Unix_error _ -> false)
+    (List.filter_map
+       (fun dir ->
+         if String.equal dir "" then None else Some (Filename.concat dir "script"))
+       dirs)
+
+let multiline_phrase_restores_via_pty () =
+  if Sys.win32 then Alcotest.skip ()
+  else
+    match script_binary () with
+    | None -> Alcotest.skip ()
+    | Some script ->
+        Test_support.with_temp_dir (fun root ->
+            let words =
+              match Mnemonic.encode (fixed_seed ()) with
+              | Ok words -> words
+              | Error error ->
+                  Alcotest.failf "test seed did not encode: %a" Mnemonic.pp_error error
+            in
+            let lines =
+              List.init 4 (fun line ->
+                  List.filteri (fun index _ -> index / 6 = line) words
+                  |> String.concat " ")
+            in
+            let payload = String.concat "\n" lines ^ "\n" in
+            let output = Filename.concat root "key" in
+            (* The pipes below carry the pasted phrase and the session transcript. They
+               are close-on-exec so the session and its shell hold no copy of the pipe
+               write end: otherwise the [script] session would never see end-of-file
+               on standard input and the restore would block forever. *)
+            let log =
+              Unix.openfile
+                (Filename.concat root "transcript.log")
+                [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC; Unix.O_CLOEXEC ]
+                0o600
+            in
+            let stdin_read, stdin_write = Unix.pipe ~cloexec:true () in
+            Fun.protect
+              ~finally:(fun () ->
+                (try Unix.close stdin_read with Unix.Unix_error _ -> ());
+                (try Unix.close stdin_write with Unix.Unix_error _ -> ());
+                try Unix.close log with Unix.Unix_error _ -> ())
+              (fun () ->
+                let child =
+                  Fmt.str "%s restore --output %s"
+                    (Filename.quote (executable ()))
+                    (Filename.quote output)
+                in
+                let pid =
+                  Unix.create_process script
+                    [| script; "-qec"; child; "/dev/null" |]
+                    stdin_read log log
+                in
+                Unix.close stdin_read;
+                let payload = Bytes.of_string payload in
+                let rec write_all offset remaining =
+                  if remaining > 0 then
+                    let written = Unix.write stdin_write payload offset remaining in
+                    write_all (offset + written) (remaining - written)
+                in
+                write_all 0 (Bytes.length payload);
+                Unix.close stdin_write;
+                let _, status = Unix.waitpid [] pid in
+                Alcotest.check Alcotest.bool "multiline restore exits successfully" true
+                  (status = Unix.WEXITED 0);
+                Alcotest.check Alcotest.bool "multiline restore writes a key" true
+                  (Sys.file_exists output);
+                Lwt.return_unit))
+
 let invalid_key () =
   Test_support.with_temp_dir (fun root ->
       let path = Filename.concat root "not-a-key" in
@@ -281,6 +364,8 @@ let cases =
         invalid_word ());
     Alcotest_lwt.test_case "restore refuses a --words argument" `Quick (fun _switch () ->
         words_option_is_rejected ());
+    Alcotest_lwt.test_case "multiline phrase restores from a terminal" `Quick
+      (fun _switch () -> multiline_phrase_restores_via_pty ());
     Alcotest_lwt.test_case "backup rejects malformed keys" `Quick (fun _switch () ->
         invalid_key ());
     Alcotest_lwt.test_case "backup rejects non-Ed25519 keys" `Quick (fun _switch () ->
