@@ -211,6 +211,16 @@ let test_heredoc_boundaries () =
       ("cat <<EOF\nEO\\\nF\nc''url https://example.com\nEOF", "blocked");
     ]
 
+let test_command_lookup () =
+  check_posix_verdicts
+    [
+      ("command -v git", "clear");
+      ("command -V git", "clear");
+      ("command -p -v git", "clear");
+      ("command git status", "clear");
+      ("command curl https://example.com", "blocked");
+    ]
+
 let test_ansi_c_nul () =
   check_posix_verdicts
     [
@@ -364,6 +374,18 @@ let test_wrapper_operands () =
       ({|xargs -n 1 printf '%s' "$label"|}, "clear");
       ({|env printf -S "$label"|}, "clear");
       ("env --unmodelled option sh", "review");
+      (* A quoted expansion in an assignment prefix provably forms one
+         argument, but a computed word elsewhere still needs approval. *)
+      ({|env GROUP="$group" printenv GROUP|}, "clear");
+      ({|env "$target" printenv|}, "review");
+      (* Clusters of no-operand xargs switches and the attached optional
+         watch operand leave the command boundary unchanged. *)
+      ({|printf 'a' | xargs -0r printf '%s'|}, "clear");
+      ("watch --differences=permanent -x printf sample", "clear");
+      ("xargs -0I{} sh -c 'echo hi'", "review");
+      (* A literal [flock -c] command string is parsed but still needs an
+         explicit approval. *)
+      ("flock lockfile -c 'printf ready'", "review");
     ]
 
 let test_find_data_slots () =
@@ -494,6 +516,7 @@ let cases =
       test_heredoc_boundaries;
     Test_tools_test_support.case "ANSI-C NUL screening" `Quick test_ansi_c_nul;
     Test_tools_test_support.case "parameter quote context" `Quick test_parameter_quotes;
+    Test_tools_test_support.case "command lookup mode" `Quick test_command_lookup;
     Test_tools_test_support.case "find data positions" `Quick test_find_data_slots;
     Test_tools_test_support.case "screen requires review" `Quick
       test_screen_requires_review;

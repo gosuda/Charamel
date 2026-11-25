@@ -1047,7 +1047,7 @@ let wrapper_syntax = "the screen cannot determine a wrapper's command"
 
 type option_use = Flag | Operand | Unknown
 
-let option_use ~switches ~arguments value =
+let option_use ~switches ~arguments ?(optional = []) value =
   if List.mem value switches then Flag
   else if List.mem value arguments then Operand
   else if
@@ -1059,10 +1059,17 @@ let option_use ~switches ~arguments value =
         && (width = 2 || value.[width] = '='))
       arguments
   then Flag
+  else if
+    List.exists
+      (fun option ->
+        String.length value > String.length option + 1
+        && String.starts_with ~prefix:(option ^ "=") value)
+      optional
+  then Flag
   else Unknown
 
 let rec option_prefix ~switches ~arguments = function
-  | w :: _ when not w.fixed -> Error computed_program
+  | w :: _ when (not w.fixed) && not w.assignment -> Error computed_program
   | w :: rest when String.equal w.value "--" -> Ok rest
   | w :: rest when is_option w -> (
       match (option_use ~switches ~arguments w.value, rest) with
@@ -1106,9 +1113,18 @@ let wrapper_options = function
   | _ -> ([], [])
 
 let rec env_command = function
-  | w :: _ when not w.fixed -> Error computed_program
+  | w :: _ when (not w.fixed) && not w.assignment -> Error computed_program
   | w :: rest when String.contains w.value '=' -> env_command rest
   | words -> Ok words
+
+(* The [command] builtin has an execution mode and a lookup mode: [-v] and [-V]
+   only report how the shell resolves a name without invoking it, so their
+   operands are names, never commands to analyze. *)
+let rec command_lookup = function
+  | w :: _ when w.fixed && (String.equal w.value "-v" || String.equal w.value "-V") ->
+      true
+  | w :: rest when w.fixed && String.equal w.value "-p" -> command_lookup rest
+  | _ -> false
 
 let wrapped_command program args =
   let args =
@@ -1116,15 +1132,17 @@ let wrapped_command program args =
     | "env", w :: rest when w.fixed && String.equal w.value "-" -> rest
     | _ -> args
   in
-  let switches, arguments = wrapper_options program in
-  let* words = option_prefix ~switches ~arguments args in
-  match (program, words) with
-  | "env", _ -> env_command words
-  | "flock", _ :: mode :: _ when is_option mode -> Error wrapper_syntax
-  | ("timeout" | "chroot" | "taskset" | "chrt" | "flock"), operand :: command ->
-      if operand.fixed then Ok command else Error computed_program
-  | ("coproc" | "script" | "runuser"), _ -> Error wrapper_syntax
-  | _ -> Ok words
+  if String.equal program "command" && command_lookup args then Ok []
+  else
+    let switches, arguments = wrapper_options program in
+    let* words = option_prefix ~switches ~arguments args in
+    match (program, words) with
+    | "env", _ -> env_command words
+    | "flock", _ :: mode :: _ when is_option mode -> Error wrapper_syntax
+    | ("timeout" | "chroot" | "taskset" | "chrt" | "flock"), operand :: command ->
+        if operand.fixed then Ok command else Error computed_program
+    | ("coproc" | "script" | "runuser"), _ -> Error wrapper_syntax
+    | _ -> Ok words
 
 let xargs_switches =
   [
@@ -1173,6 +1191,20 @@ let xargs_grouping value =
   || String.starts_with ~prefix:"--max-args=" value
   || String.starts_with ~prefix:"--max-lines=" value
 
+(* Short switches that take no operand cluster after a single dash: GNU accepts
+   [-0r] for [-0 -r]. Only switches that never take an operand may cluster, so a
+   cluster can never swallow the following word. *)
+let xargs_cluster_switches = [ '0'; 'o'; 'p'; 'r'; 't'; 'x' ]
+
+let is_xargs_cluster value =
+  let length = String.length value in
+  length > 2
+  && value.[0] = '-'
+  && value.[1] <> '-'
+  && String.for_all
+       (fun c -> List.mem c xargs_cluster_switches)
+       (String.sub value 1 (length - 1))
+
 let rec xargs_command ~grouped replacement words =
   if grouped && Option.is_some replacement then Error wrapper_syntax
   else
@@ -1195,6 +1227,7 @@ let rec xargs_command ~grouped replacement words =
             | Flag, _ -> xargs_command ~grouped replacement rest
             | Operand, value :: rest when value.fixed ->
                 xargs_command ~grouped replacement rest
+            | _ when is_xargs_cluster w.value -> xargs_command ~grouped replacement rest
             | _ -> Error wrapper_syntax))
     | words -> Ok (replacement, words)
 
@@ -1224,13 +1257,20 @@ let watch_switches =
 
 let watch_arguments = [ "-n"; "--interval"; "-q"; "--equexit" ]
 
+(* procps [watch] takes an optional attached operand for differences:
+   [--differences=permanent]. The attached form can never swallow the following
+   word, so it leaves the command boundary unchanged. *)
+let watch_optional = [ "--differences" ]
+
 let rec watch_command direct = function
   | w :: _ when not w.fixed -> Error computed_program
   | w :: rest when String.equal w.value "--" -> Ok (direct, rest)
   | w :: rest when List.mem w.value [ "-x"; "--exec" ] -> watch_command true rest
   | w :: rest when is_option w -> (
       match
-        (option_use ~switches:watch_switches ~arguments:watch_arguments w.value, rest)
+        ( option_use ~switches:watch_switches ~arguments:watch_arguments
+            ~optional:watch_optional w.value,
+          rest )
       with
       | Flag, _ -> watch_command direct rest
       | Operand, value :: rest when value.fixed -> watch_command direct rest
