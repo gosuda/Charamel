@@ -190,9 +190,11 @@ val grant_checked :
   project_file list ->
   (unit, error) result Lwt.t
 (** [grant_checked ~fs_root ~env ~cwd files] reloads the configuration with [files] held
-    as trusted in memory and records them only when the exact bytes being approved expand
-    and validate. The store is left unchanged on failure, so a grant can never persist
-    settings that the next startup would reject. *)
+    as trusted in memory and records them only when every approved file expands and
+    validates on its own as well as in the merged configuration: a valid child override
+    cannot mask an invalid parent, so approving the child never persists a parent the next
+    startup would reject. The store is left unchanged on failure, so a grant can never
+    persist settings that the next startup would reject. *)
 
 val schema : Jsont.json
 (** [schema] is a JSON Schema 2020-12 description of [jsont]. *)
