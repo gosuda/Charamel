@@ -827,21 +827,66 @@ let strip_member (section, member) (name, value) =
     | None -> (None, true)
     | Some member -> (
         match object_members value with
-        | Some inner when Option.is_some (member_json member inner) ->
-            (Some (name, object_json (remove_member member inner)), true)
+        | Some inner -> (
+            match member_json member inner with
+            | Some (Jsont.Bool (false, _))
+              when String.equal section "options" && String.equal member "auto_lsp" ->
+                (* Disabling a feature is fail-closed: an untrusted layer may opt
+                   out of automatic LSP servers, only enabling them needs trust. *)
+                (Some (name, value), false)
+            | Some _ -> (Some (name, object_json (remove_member member inner)), true)
+            | None -> (Some (name, value), false))
         | _ -> (Some (name, value), false))
+
+let selection_provider value =
+  match object_members value with
+  | None -> None
+  | Some members -> (
+      match member_json "provider" members with
+      | Some (Jsont.String (provider, _)) -> Some provider
+      | _ -> None)
+
+let strip_withheld_selections withheld_providers members =
+  match member_json "models" members with
+  | None -> (members, [])
+  | Some models -> (
+      match object_members models with
+      | None -> (members, [])
+      | Some selections ->
+          let kept, dropped =
+            List.fold_left
+              (fun (kept, dropped) ((name, value) as selection) ->
+                match selection_provider value with
+                | Some id when List.mem id withheld_providers ->
+                    (kept, gated_name ("models", Some name) :: dropped)
+                | _ -> (kept @ [ selection ], dropped))
+              ([], []) selections
+          in
+          if dropped = [] then (members, [])
+          else
+            ( remove_member "models" members @ [ ("models", object_json kept) ],
+              List.rev dropped ))
 
 let without_gated json =
   match object_members json with
   | None -> (json, [])
   | Some members ->
+      let withheld_providers =
+        match member_json "providers" members with
+        | None -> []
+        | Some providers ->
+            List.map fst (Option.value (object_members providers) ~default:[])
+      in
+      let members, dropped_models =
+        strip_withheld_selections withheld_providers members
+      in
       let strip (members, gated) key =
         let kept, found = List.split (List.map (strip_member key) members) in
         ( List.filter_map Fun.id kept,
           if List.mem true found then gated @ [ gated_name key ] else gated )
       in
       let members, gated = List.fold_left strip (members, []) gated_members in
-      (object_json members, gated)
+      (object_json members, gated @ dropped_models)
 
 let canonical_path fs_root path =
   let file = Path.under ~root:fs_root path in
@@ -849,7 +894,7 @@ let canonical_path fs_root path =
   | directory -> Ok (Filename.concat directory (Filename.basename file))
   | exception (Unix.Unix_error _ as exn) -> Error (`Io (path, io_message exn))
 
-let project_layer ~fs_root ~trust path text json =
+let project_layer ~fs_root ~trust ~extra path text json =
   match without_gated json with
   | _, [] -> Lwt.return_ok (json, None)
   | stripped, gated -> (
@@ -860,17 +905,18 @@ let project_layer ~fs_root ~trust path text json =
           Lazy.force trust >|= function
           | Error _ as failure -> failure
           | Ok records ->
-              if Trust.mem records { Trust.path = canonical; digest } then Ok (json, None)
+              if Trust.mem (Trust.add records extra) { Trust.path = canonical; digest }
+              then Ok (json, None)
               else Ok (stripped, Some { path = canonical; digest; gated })))
 
-let load ~fs_root ~env ~cwd =
+let load_with ~fs_root ~env ~cwd ~extra =
   let cwd = absolute_path cwd in
   let home_config = config_home ~env in
   let home = normalize_home_config home_config in
   let trust = lazy (Trust.load ~fs_root (trust_path ~env)) in
   let layer path text json =
     if String.equal path home then Lwt.return_ok (json, None)
-    else project_layer ~fs_root ~trust path text json
+    else project_layer ~fs_root ~trust ~extra path text json
   in
   let rec read_all paths merged contributors untrusted =
     match paths with
@@ -916,6 +962,29 @@ let load ~fs_root ~env ~cwd =
                 | [] -> "<expanded configuration>"
               in
               Lwt.return_error (`Parse (path, message))))
+
+let load ~fs_root ~env ~cwd = load_with ~fs_root ~env ~cwd ~extra:[]
+
+let grant_checked ~fs_root ~env ~cwd files =
+  match files with
+  | [] -> Lwt.return_ok ()
+  | files -> (
+      let store = trust_path ~env in
+      Trust.load ~fs_root store >>= function
+      | Error _ as failure -> Lwt.return failure
+      | Ok records -> (
+          let extra =
+            List.map
+              (fun (file : project_file) ->
+                { Trust.path = file.path; digest = file.digest })
+              files
+          in
+          (* Reload with the proposed records held in memory: the grant lands on
+             disk only when the exact bytes being approved expand and validate.
+             The store is left unchanged on failure. *)
+          load_with ~fs_root ~env ~cwd ~extra >>= function
+          | Error _ as failure -> Lwt.return failure
+          | Ok _ -> Trust.save ~fs_root store (Trust.add records extra)))
 
 let grant ~fs_root ~env files =
   match files with

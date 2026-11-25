@@ -31,9 +31,11 @@ val pager : unit -> string list
     becoming literal text, which is the difference between a highlighted document and one
     full of caret notation. *)
 
-val browser : unit -> string list
-(** [browser ()] is the prefix that opens a URL. macOS gets [open], Windows gets
-    [cmd /c start], and every other POSIX system gets [xdg-open]; [$BROWSER] overrides all
-    three, word-split the same way [$EDITOR] is. This is also the fix for the tool that
-    asked a Mac to run [xdg-open]: the default now follows the platform, so the URL opens
-    without the user setting anything. *)
+val browser : ?win32:bool -> unit -> string list
+(** [browser ?win32 ()] is the prefix that opens a URL. macOS gets [open], Windows gets
+    [rundll32 url.dll,FileProtocolHandler], and every other POSIX system gets [xdg-open];
+    [$BROWSER] overrides all three, word-split the same way [$EDITOR] is. The Windows
+    default takes the URL as data: [cmd /c start] would read it as command text, where the
+    [&] between query parameters ends the command and the browser opens a truncated URL.
+    The default follows the platform, so the URL opens without the user setting anything;
+    [~win32] selects the Windows default and defaults to the host. *)

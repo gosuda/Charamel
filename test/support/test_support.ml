@@ -10,6 +10,20 @@ let contains ~needle ~haystack =
   in
   needle_length = 0 || search 0
 
+let set_prompts script =
+  let marker = "set /p x=" in
+  let marker_length = String.length marker in
+  let length = String.length script in
+  let rec scan index prompts =
+    if index + marker_length > length then List.rev prompts
+    else if String.sub script index marker_length = marker then
+      let start = index + marker_length in
+      let stop = Option.value (String.index_from_opt script start ')') ~default:length in
+      scan stop (String.sub script start (stop - start) :: prompts)
+    else scan (index + 1) prompts
+  in
+  scan 0 []
+
 let feed_stdin channel text =
   let write () = Lwt_io.write channel text >>= fun () -> Lwt_io.close channel in
   if text = "" then Lwt_io.close channel
@@ -18,6 +32,34 @@ let feed_stdin channel text =
       | Unix.Unix_error ((EPIPE | EBADF), _, _) | Lwt_io.Channel_closed _ ->
           Lwt.return_unit
       | exn -> Lwt.fail exn)
+
+let win32_loader_names = [ "PATH"; "SystemRoot"; "SystemDrive"; "PATHEXT" ]
+
+let entry_name entry =
+  match String.index_opt entry '=' with
+  | None -> None
+  | Some index -> Some (String.uppercase_ascii (String.sub entry 0 index))
+
+(* A child that starts with a replaced environment inherits nothing. On Windows the
+   loader resolves the runtime DLLs through PATH, and CreateProcess needs SystemRoot,
+   SystemDrive and PATHEXT, so a child whose environment only isolates HOME and XDG
+   dies with STATUS_DLL_NOT_FOUND before it runs. The isolation entries stay callers'
+   business; the four loader variables always come from the parent on Windows. *)
+let child_environment ~win32 ~getenv env =
+  if not win32 then env
+  else
+    let inherited =
+      List.filter_map
+        (fun name -> Option.map (fun value -> name ^ "=" ^ value) (getenv name))
+        win32_loader_names
+    in
+    let inherited_names = List.filter_map entry_name inherited in
+    let isolated entry =
+      match entry_name entry with
+      | None -> true
+      | Some name -> not (List.exists (String.equal name) inherited_names)
+    in
+    Array.of_list (inherited @ List.filter isolated (Array.to_list env))
 
 let exit_status = function
   | Unix.WEXITED code -> code
@@ -52,6 +94,7 @@ let run_cli_process ~exe ?env ?cwd ~timeout ~stdin args =
   Lwt.return (code, stdout_text, stderr_text)
 
 let run_cli ~exe ?env ?cwd ?(timeout = 10.) ?(stdin = "") args =
+  let env = Option.map (child_environment ~win32:Sys.win32 ~getenv:Sys.getenv_opt) env in
   if Sys.win32 then run_cli_process ~exe ?env ?cwd ~timeout ~stdin args
   else (
     ignore (Sys.set_signal Sys.sigpipe Sys.Signal_ignore);

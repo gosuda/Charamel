@@ -17,12 +17,15 @@ depends: [
   "awa" {>= "0.7.0"}
   "mirage-crypto" {>= "2.4.1"}
   "mirage-crypto-ec"
+  "mirage-crypto-pk"
   "mirage-crypto-rng"
   "x509"
+  "zarith"
   "base64"
   "digestif"
   "cstruct"
   "mtime"
+  "lwt"
   "alcotest" {with-test}
   "alcotest-lwt" {>= "1.9.1" & with-test}
   "qcheck-core" {with-test}

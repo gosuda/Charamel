@@ -68,6 +68,21 @@ let cache_dir ~app =
 
 let rest path count = String.sub path count (String.length path - count)
 
+(* [CreateProcess] fails a working directory with a trailing separator, and the
+   temporary directory Windows reports ends in one, so the spawn strips it. A bare
+   root stays intact: [/], [C:\] and [C:/] name the root, not its parent. *)
+let strip_trailing_separators cwd =
+  let length = String.length cwd in
+  let rec scan index =
+    if index < 0 then 0
+    else match cwd.[index] with '/' | '\\' -> scan (index - 1) | _ -> index + 1
+  in
+  match scan (length - 1) with
+  | 0 -> if length = 0 then cwd else String.sub cwd 0 1
+  | kept when kept >= length -> cwd
+  | 2 when length >= 3 && cwd.[1] = ':' -> cwd
+  | kept -> String.sub cwd 0 kept
+
 let expand_tilde path =
   let expanded remainder =
     match home () with

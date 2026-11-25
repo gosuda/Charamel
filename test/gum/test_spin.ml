@@ -1,5 +1,38 @@
 open Lwt.Syntax
 
+(* The child commands run under the platform shell, the same split the jobs and
+   hooks suites use: [sh -c] on POSIX, [cmd /c] on Windows, where [sh] is absent.
+   [set /p] under [<nul] prints without a newline like [printf], and [ping -n]
+   idles because [sleep] is absent. *)
+(* [set /p] under [<nul] reads EOF and reports status 1 despite printing its
+   prompt, so the Windows capture pins the zero exit explicitly; without it
+   [test_child_capture] would see status 1 instead of 0. A redirection goes in
+   front of [set]: behind it, [cmd] keeps the blank before the redirection in
+   the prompt. *)
+let capture_command_for ~win32 =
+  if win32 then [ "cmd"; "/c"; "(<nul set /p x=out)&(>&2 <nul set /p x=err)&exit 0" ]
+  else [ "sh"; "-c"; "printf out; printf err >&2" ]
+
+let capture_command = capture_command_for ~win32:Sys.win32
+
+let failing_command_for ~win32 =
+  if win32 then [ "cmd"; "/c"; "(<nul set /p x=out)&(>&2 <nul set /p x=err)&exit 7" ]
+  else [ "sh"; "-c"; "printf out; printf err >&2; exit 7" ]
+
+let failing_command = failing_command_for ~win32:Sys.win32
+
+let large_command, large_bytes =
+  if Sys.win32 then
+    ( [
+        "cmd"; "/c"; "for /l %i in (1,1,100000) do @echo 0123456789abcdef0123456789abcdef";
+      ],
+      3400000 )
+  else ([ "sh"; "-c"; "head -c 33554433 /dev/zero" ], 33554433)
+
+let sleep_command =
+  if Sys.win32 then [ "cmd"; "/c"; "ping -n 2 127.0.0.1 >nul" ]
+  else [ "sh"; "-c"; "sleep 1" ]
+
 let stream_order output = String.equal output "outerr" || String.equal output "errout"
 
 let default_env () =
@@ -13,11 +46,7 @@ let default_env () =
   }
 
 let test_child_capture () =
-  let* result =
-    Spin.run_child (default_env ())
-      ~command:[ "sh"; "-c"; "printf out; printf err >&2" ]
-      ~timeout:None
-  in
+  let* result = Spin.run_child (default_env ()) ~command:capture_command ~timeout:None in
   (match result with
   | Error message -> Alcotest.fail message
   | Ok result ->
@@ -27,17 +56,33 @@ let test_child_capture () =
       Alcotest.(check bool) "combined streams" true (stream_order result.Spin.output));
   Lwt.return_unit
 
+(* Linux cannot execute the [cmd /c] fixture, so this pins its shape: the
+   Windows capture must end with an explicit zero exit. *)
+let test_windows_capture_pins_zero_exit () =
+  match capture_command_for ~win32:true with
+  | [ "cmd"; "/c"; script ] ->
+      Alcotest.(check bool)
+        "windows capture ends with an explicit zero exit" true
+        (String.ends_with ~suffix:"&exit 0" script)
+  | _ -> Alcotest.fail "windows capture command shape changed"
+
+let test_windows_prompts_are_bare () =
+  List.iter
+    (function
+      | [ "cmd"; "/c"; script ] ->
+          Alcotest.(check (list string))
+            "windows set /p prompts are the bare text" [ "out"; "err" ]
+            (Test_support.set_prompts script)
+      | _ -> Alcotest.fail "windows spin command shape changed")
+    [ capture_command_for ~win32:true; failing_command_for ~win32:true ]
+
 let test_child_capture_beyond_memory_buffer () =
-  let* result =
-    Spin.run_child (default_env ())
-      ~command:[ "sh"; "-c"; "head -c 33554433 /dev/zero" ]
-      ~timeout:None
-  in
+  let* result = Spin.run_child (default_env ()) ~command:large_command ~timeout:None in
   (match result with
   | Error message -> Alcotest.fail message
   | Ok result ->
       Alcotest.(check int) "status" 0 result.Spin.status;
-      Alcotest.(check int) "stdout bytes" 33554433 (String.length result.Spin.stdout);
+      Alcotest.(check int) "stdout bytes" large_bytes (String.length result.Spin.stdout);
       Alcotest.(check string) "stderr" "" result.Spin.stderr;
       Alcotest.(check bool)
         "combined bytes" true
@@ -97,8 +142,7 @@ let run_non_tty ~code args =
 
 let test_show_output_non_tty () =
   let* stdout, stderr =
-    run_non_tty ~code:0
-      [ "--show-output"; "--"; "sh"; "-c"; "printf out; printf err >&2" ]
+    run_non_tty ~code:0 ([ "--show-output"; "--" ] @ capture_command)
   in
   Alcotest.(check bool) "combined output is routed to stdout" true (stream_order stdout);
   Alcotest.(check string) "spinner is not drawn" "Loading...\n" stderr;
@@ -106,8 +150,7 @@ let test_show_output_non_tty () =
 
 let test_show_error_non_tty () =
   let* stdout, stderr =
-    run_non_tty ~code:7
-      [ "--show-error"; "--"; "sh"; "-c"; "printf out; printf err >&2; exit 7" ]
+    run_non_tty ~code:7 ([ "--show-error"; "--" ] @ failing_command)
   in
   Alcotest.(check bool)
     "failed combined output is routed to stdout" true (stream_order stdout);
@@ -116,32 +159,25 @@ let test_show_error_non_tty () =
 
 let test_show_error_success_suppresses_output () =
   let* stdout, stderr =
-    run_non_tty ~code:0 [ "--show-error"; "--"; "sh"; "-c"; "printf out; printf err >&2" ]
+    run_non_tty ~code:0 ([ "--show-error"; "--" ] @ capture_command)
   in
   Alcotest.(check string) "successful output is hidden" "" stdout;
   Alcotest.(check string) "spinner is not drawn" "Loading...\n" stderr;
   Lwt.return_unit
 
 let test_show_stdout_non_tty () =
-  let* stdout, _ =
-    run_non_tty ~code:0
-      [ "--show-stdout"; "--"; "sh"; "-c"; "printf out; printf err >&2" ]
-  in
+  let* stdout, _ = run_non_tty ~code:0 ([ "--show-stdout"; "--" ] @ capture_command) in
   Alcotest.(check string) "stdout selection" "out" stdout;
   Lwt.return_unit
 
 let test_show_stderr_non_tty () =
-  let* stdout, _ =
-    run_non_tty ~code:0
-      [ "--show-stderr"; "--"; "sh"; "-c"; "printf out; printf err >&2" ]
-  in
+  let* stdout, _ = run_non_tty ~code:0 ([ "--show-stderr"; "--" ] @ capture_command) in
   Alcotest.(check string) "stderr selection" "err" stdout;
   Lwt.return_unit
 
 let test_child_timeout () =
   let* result =
-    Spin.run_child (default_env ()) ~command:[ "sh"; "-c"; "sleep 1" ]
-      ~timeout:(Some 0.01)
+    Spin.run_child (default_env ()) ~command:sleep_command ~timeout:(Some 0.01)
   in
   (match result with
   | Error message -> Alcotest.fail message
@@ -196,6 +232,10 @@ let cases =
         test_child_capture ());
     Alcotest_lwt.test_case "large child capture" `Quick (fun _switch () ->
         test_child_capture_beyond_memory_buffer ());
+    Alcotest_lwt.test_case "windows capture pins zero exit" `Quick (fun _switch () ->
+        Lwt.return (test_windows_capture_pins_zero_exit ()));
+    Alcotest_lwt.test_case "windows prompts are bare" `Quick (fun _switch () ->
+        Lwt.return (test_windows_prompts_are_bare ()));
     Alcotest_lwt.test_case "show output in pipe mode" `Quick (fun _switch () ->
         test_show_output_non_tty ());
     Alcotest_lwt.test_case "show error in pipe mode" `Quick (fun _switch () ->

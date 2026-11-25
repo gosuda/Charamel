@@ -27,13 +27,24 @@ let () =
       exit 0
   | _ -> ()
 
+(* The probe writes through a text-mode channel, so on Windows every line ends with
+   [\r\n]; the values never carry a carriage return, so drop the line-ending one
+   before comparing. Without it every vector fails on Windows with identical values
+   apart from the line endings. *)
+let normalize output =
+  let strip line =
+    if String.ends_with ~suffix:"\r" line then String.sub line 0 (String.length line - 1)
+    else line
+  in
+  String.concat "\n" (List.map strip (String.split_on_char '\n' output))
+
 let capture bindings =
   let* status, output, _stderr =
     Test_support.run_cli ~exe:Sys.executable_name ~env:(Array.of_list bindings)
       ~timeout:5. [ "--xdg-probe"; "run" ]
   in
   Alcotest.(check int) "probe exit status" 0 status;
-  Lwt.return output
+  Lwt.return (normalize output)
 
 (* The fake root must qualify as absolute on the platform under test: "/probe"
    is only absolute on POSIX, so Windows vectors hang off a drive letter. *)
