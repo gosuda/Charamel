@@ -89,8 +89,8 @@ let check_backup_restore root =
   let* status, output, error =
     Test_support.run_cli ~exe:(executable ())
       ~env:(minimal_environment ~root ~home:root)
-      ~timeout:5.
-      [ "restore"; "--words"; phrase; "--output"; restored_path ]
+      ~timeout:5. ~stdin:phrase
+      [ "restore"; "--output"; restored_path ]
   in
   Alcotest.(check int) "restore status" 0 status;
   Alcotest.(check string) "restore stdout" "" output;
@@ -116,8 +116,8 @@ let check_backup_restore root =
   let* status, _, error =
     Test_support.run_cli ~exe:(executable ())
       ~env:(minimal_environment ~root ~home:root)
-      ~timeout:5.
-      [ "restore"; "--words"; phrase; "--output"; collision_path ]
+      ~timeout:5. ~stdin:phrase
+      [ "restore"; "--output"; collision_path ]
   in
   Alcotest.(check int) "collision status" 1 status;
   Alcotest.(check bool)
@@ -155,8 +155,7 @@ let defaults () =
       let* status, output, error =
         Test_support.run_cli ~exe:(executable ())
           ~env:(minimal_environment ~root ~home:restore_home)
-          ~timeout:5.
-          [ "restore"; "--words"; String.trim phrase ]
+          ~timeout:5. ~stdin:(String.trim phrase) [ "restore" ]
       in
       Alcotest.(check int) "default restore status" 0 status;
       Alcotest.(check string) "default restore stdout" "" output;
@@ -181,8 +180,8 @@ let invalid_word () =
       let* status, output, error =
         Test_support.run_cli ~exe:(executable ())
           ~env:(minimal_environment ~root ~home:root)
-          ~timeout:5.
-          [ "restore"; "--words"; unknown_words; "--output"; Filename.concat root "key" ]
+          ~timeout:5. ~stdin:unknown_words
+          [ "restore"; "--output"; Filename.concat root "key" ]
       in
       Alcotest.(check int) "invalid word status" 1 status;
       Alcotest.(check string) "invalid word stdout" "" output;
@@ -209,10 +208,8 @@ let invalid_word () =
       let* status, output, error =
         Test_support.run_cli ~exe:(executable ())
           ~env:(minimal_environment ~root ~home:root)
-          ~timeout:5.
-          [
-            "restore"; "--words"; checksum_words; "--output"; Filename.concat root "key2";
-          ]
+          ~timeout:5. ~stdin:checksum_words
+          [ "restore"; "--output"; Filename.concat root "key2" ]
       in
       Alcotest.(check int) "checksum status" 1 status;
       Alcotest.(check string) "checksum stdout" "" output;
@@ -220,6 +217,25 @@ let invalid_word () =
         "checksum diagnostic" true
         (Test_support.contains ~needle:"melt: mnemonic checksum does not match"
            ~haystack:error);
+      Lwt.return_unit)
+
+let words_option_is_rejected () =
+  Test_support.with_temp_dir (fun root ->
+      let phrase =
+        match Mnemonic.encode (fixed_seed ()) with
+        | Ok words -> String.concat " " words
+        | Error error ->
+            Alcotest.failf "test seed did not encode: %a" Mnemonic.pp_error error
+      in
+      let output = Filename.concat root "key" in
+      let* status, _, _ =
+        Test_support.run_cli ~exe:(executable ())
+          ~env:(minimal_environment ~root ~home:root)
+          ~timeout:5.
+          [ "restore"; "--words"; phrase; "--output"; output ]
+      in
+      Alcotest.(check bool) "a --words argument is refused" true (status <> 0);
+      Alcotest.(check bool) "refused restore writes no key" false (Sys.file_exists output);
       Lwt.return_unit)
 
 let invalid_key () =
@@ -263,6 +279,8 @@ let cases =
         defaults ());
     Alcotest_lwt.test_case "restore rejects an unknown word" `Quick (fun _switch () ->
         invalid_word ());
+    Alcotest_lwt.test_case "restore refuses a --words argument" `Quick (fun _switch () ->
+        words_option_is_rejected ());
     Alcotest_lwt.test_case "backup rejects malformed keys" `Quick (fun _switch () ->
         invalid_key ());
     Alcotest_lwt.test_case "backup rejects non-Ed25519 keys" `Quick (fun _switch () ->
