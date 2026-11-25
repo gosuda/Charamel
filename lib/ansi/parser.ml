@@ -306,6 +306,55 @@ let valid_rune rune len =
       && not ((lead = 0xf0 && get 1 < 0x90) || (lead = 0xf4 && get 1 > 0x8f))
   | _ -> true
 
+(* A 0x9C byte inside an OSC string is the ST terminator unless it continues a
+   multibyte sequence: when the payload so far ends in a lead byte that still
+   expects continuations, the byte is payload. [osc_continues] replays that
+   check from the accumulated payload bytes. *)
+let osc_continues data ndata =
+  let byte index = Char.code (Bytes.get data index) in
+  let rec trailing index count =
+    if index < 0 then (index, count)
+    else
+      let b = byte index in
+      if b >= 0x80 && b <= 0xbf then trailing (index - 1) (count + 1) else (index, count)
+  in
+  let lead, pending = trailing (ndata - 1) 0 in
+  lead >= 0 && utf8_lead_len (byte lead) > pending + 1
+
+let is_continuation byte = byte >= 0x80 && byte <= 0xbf
+
+(* Strict UTF-8 validation mirroring [valid_rune]: ASCII, well-formed
+   continuations, and no overlong, surrogate, or out-of-range encodings. *)
+let is_valid_utf8 text =
+  let length = String.length text in
+  let byte index = String.get_uint8 text index in
+  let rec runes index =
+    if index >= length then true
+    else
+      let lead = byte index in
+      let width = utf8_lead_len lead in
+      if width = 1 then lead < 0x80 && runes (index + 1)
+      else if index + width > length then false
+      else
+        let second = byte (index + 1) in
+        let ok =
+          match width with
+          | 2 -> is_continuation second
+          | 3 ->
+              is_continuation second
+              && is_continuation (byte (index + 2))
+              && not ((lead = 0xe0 && second < 0xa0) || (lead = 0xed && second > 0x9f))
+          | 4 ->
+              is_continuation second
+              && is_continuation (byte (index + 2))
+              && is_continuation (byte (index + 3))
+              && not ((lead = 0xf0 && second < 0x90) || (lead = 0xf4 && second > 0x8f))
+          | _ -> false
+        in
+        ok && runes (index + width)
+  in
+  runes 0
+
 let perform t out kind b next =
   match kind with
   | K_none -> ()
@@ -386,7 +435,13 @@ let step t out b =
     end
   end
   else begin
-    let kind, next = transition t.st b in
+    (* A 0x9C byte that continues a multibyte sequence is OSC payload, not the
+       string terminator; anything else goes through the state machine. *)
+    let kind, next =
+      if t.st = Osc_string && b = 0x9c && osc_continues t.data t.ndata then
+        (K_put, Osc_string)
+      else transition t.st b
+    in
     if (t.st = Escape || t.st = String_escape) && next <> Escape && next <> String_escape
     then clear_seq t;
     (* Upstream starts the DCS payload with a zero command byte when the

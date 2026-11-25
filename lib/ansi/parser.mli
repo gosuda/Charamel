@@ -75,3 +75,8 @@ val flush : t -> action list
     pending ESC becomes [Execute '\027'] and a partially collected rune becomes [Print] of
     its bytes. Every other partial sequence is cancelled without an action. [flush t]
     leaves the parser in the ground state. *)
+
+val is_valid_utf8 : string -> bool
+(** [is_valid_utf8 text] holds when [text] is well-formed UTF-8: ASCII, complete multibyte
+    sequences with valid continuations, and no overlong, surrogate, or out-of-range
+    encodings. *)

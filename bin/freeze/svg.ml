@@ -36,7 +36,7 @@ let run_of_style style text =
   }
 
 let svg_href url =
-  if url = "" then None
+  if url = "" || not (Charamel_ansi.Parser.is_valid_utf8 url) then None
   else
     match String.index_opt url ':' with
     | None -> None

@@ -91,6 +91,30 @@ let test_reset_closes_link () =
     "SGR 0 closes the hyperlink" 1
     (count_occurrences ~needle:"href=\"http://example.com\"" ~haystack:svg)
 
+let test_unicode_hyperlink () =
+  (* Ü is U+00DC, encoded as the bytes C3 9C: the second byte is also the C1
+     string terminator, but here it continues the rune, so the whole target
+     must survive into the href. *)
+  let svg =
+    render_ansi "\027]8;;https://example.com/?a=1;city=Ü\027\\link label\027]8;;\027\\"
+  in
+  Alcotest.(check int)
+    "Unicode hyperlink target survives" 1
+    (count_occurrences ~needle:"href=\"https://example.com/?a=1;city=Ü\"" ~haystack:svg)
+
+let test_malformed_hyperlink_target () =
+  (* A lone continuation byte is not well-formed UTF-8: the label stays plain
+     rather than corrupting the document. *)
+  let svg =
+    render_ansi "\027]8;;https://example.com/\xff\027\\link label\027]8;;\027\\"
+  in
+  Alcotest.(check int)
+    "malformed target leaves a plain label" 0
+    (count_occurrences ~needle:" href=" ~haystack:svg);
+  Alcotest.(check bool)
+    "visible label" true
+    (Test_support.contains ~needle:">link label</" ~haystack:svg)
+
 let hyperlink_cases =
   [
     ("javascript", "javascript:", None);
@@ -158,6 +182,9 @@ let suites =
     Alcotest_lwt.test_case "PTY capture" `Quick (fun _switch () -> test_pty_capture ());
     Alcotest_lwt.test_case_sync "ANSI underline colour" `Quick test_ansi_underline_color;
     Alcotest_lwt.test_case_sync "SGR 0 closes the hyperlink" `Quick test_reset_closes_link;
+    Alcotest_lwt.test_case_sync "Unicode hyperlink target" `Quick test_unicode_hyperlink;
+    Alcotest_lwt.test_case_sync "malformed hyperlink target" `Quick
+      test_malformed_hyperlink_target;
   ]
   @ hyperlink_cases
 

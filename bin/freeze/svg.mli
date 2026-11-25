@@ -17,5 +17,5 @@ val render :
 
     OSC 8 hyperlinks stay clickable only for [http], [https], and [mailto] targets,
     matched case-insensitively on the scheme before the first colon. Any other target, a
-    relative reference, or an empty target renders its label as plain text. An SGR reset
-    closes the hyperlink. *)
+    relative reference, an empty target, or a target that is not well-formed UTF-8 renders
+    its label as plain text. An SGR reset closes the hyperlink. *)

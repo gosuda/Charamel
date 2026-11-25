@@ -246,6 +246,8 @@ let osc_cases =
         check "utf8" "\x1b]2;h\xc3\xa9llo\x07" [ osc [ "2"; "h\xc3\xa9llo" ] ]);
     Alcotest.test_case "osc: string_terminator" `Quick (fun () ->
         check "string_terminator" "\x1b]8;;u\x9c" [ osc [ "8"; ""; "u" ] ]);
+    Alcotest.test_case "osc: c1_continues_utf8" `Quick (fun () ->
+        check "c1_continues_utf8" "\x1b]8;;\xc3\x9c\x07" [ osc [ "8"; ""; "\xc3\x9c" ] ]);
     Alcotest.test_case "osc: c1_collected" `Quick (fun () ->
         check "c1_collected" "\x1b]8;\x9b;\x9c" [ osc [ "8"; "\x9b"; "" ] ]);
     Alcotest.test_case "osc: exceed_max_buffer_size" `Quick (fun () ->
@@ -326,6 +328,22 @@ let utf8 =
         check "bare continuation byte is a C1 control" "\x80" [ execute '\x80' ]);
     Alcotest.test_case "utf8: bare 0xa0 ignored" `Quick (fun () ->
         check "bare 0xa0 ignored" "\xa0" []);
+  ]
+
+let utf8_validation =
+  let check_valid name text expected =
+    Alcotest.test_case ("utf8 validation: " ^ name) `Quick (fun () ->
+        Alcotest.check Alcotest.bool name expected (Parser.is_valid_utf8 text))
+  in
+  [
+    check_valid "ascii" "https://example.com/" true;
+    check_valid "two byte rune" "city=\xc3\x9c" true;
+    check_valid "four byte rune" "\xf0\x9f\x91\x8b" true;
+    check_valid "lone continuation" "a\x9cb" false;
+    check_valid "truncated sequence" "a\xc3" false;
+    check_valid "overlong encoding" "\xc0\xaf" false;
+    check_valid "surrogate" "\xed\xa0\x80" false;
+    check_valid "beyond U+10FFFF" "\xf4\x90\x80\x80" false;
   ]
 
 let composite =
@@ -414,6 +432,7 @@ let cases =
       cancel;
       limits;
       utf8;
+      utf8_validation;
       partition;
       flush;
       sos_pm_apc;
