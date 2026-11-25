@@ -153,8 +153,6 @@ let wrappers =
     "su";
   ]
 
-let operand_wrappers = [ "timeout"; "chroot"; "taskset"; "chrt"; "flock" ]
-
 let exec_flags =
   [
     ("find", [ "-exec"; "-execdir"; "-ok"; "-okdir" ]);
@@ -169,7 +167,6 @@ let code_flags =
     ("script", [ "-c"; "--command" ]);
   ]
 
-let xargs_argument_options = [ "-I"; "-a"; "-d"; "-E"; "-L"; "-n"; "-P"; "-s" ]
 let cmd_runners = [ "if"; "for"; "do"; "else"; "call"; "start"; "cmd" ]
 let executable_suffixes = [ ".exe"; ".com"; ".bat"; ".cmd" ]
 
@@ -230,7 +227,7 @@ let drop_leading c text =
   in
   suffix_from text (first 0)
 
-let program_name text =
+let basename text =
   let name = String.lowercase_ascii text in
   let start =
     match (String.rindex_opt name '/', String.rindex_opt name '\\') with
@@ -238,7 +235,9 @@ let program_name text =
     | Some index, None | None, Some index -> index + 1
     | None, None -> 0
   in
-  let base = drop_leading '=' (suffix_from name start) in
+  drop_leading '=' (suffix_from name start)
+
+let strip_executable_suffix base =
   match
     List.find_opt
       (fun suffix ->
@@ -248,18 +247,19 @@ let program_name text =
   | Some suffix -> String.sub base 0 (String.length base - String.length suffix)
   | None -> base
 
-let rec has_sequence wanted names =
+let rec has_sequence name_of wanted names =
   match (wanted, names) with
   | [], _ -> true
   | _ :: _, [] -> false
   | first :: rest, name :: tail ->
-      if String.equal name first then has_sequence rest tail else has_sequence wanted tail
+      if String.equal (name_of name) first then has_sequence name_of rest tail
+      else has_sequence name_of wanted tail
 
 let refused names =
   match List.find_opt (fun name -> List.mem name refused_programs) names with
   | Some name -> Some name
   | None ->
-      List.find_opt (fun sequence -> has_sequence sequence names) refused_sequences
+      List.find_opt (fun sequence -> has_sequence Fun.id sequence names) refused_sequences
       |> Option.map (String.concat " ")
 
 type word = { value : string; fixed : bool; unquoted : bool; assignment : bool }
@@ -350,6 +350,7 @@ type sink = {
   mutable words : string list;
   mutable commands : (int * word list) list;
   mutable reviews : string list;
+  mutable refused_executable : string option;
 }
 
 let review sink reason = sink.reviews <- reason :: sink.reviews
@@ -479,7 +480,9 @@ let record_word lx w =
 let read_body lx doc =
   let length = String.length lx.source in
   let rec lines acc =
-    if lx.pos >= length then acc
+    if lx.pos >= length then (
+      review lx.sink (unreadable "unterminated here-document");
+      List.rev acc)
     else
       let stop =
         Option.value (String.index_from_opt lx.source lx.pos '\n') ~default:length
@@ -487,9 +490,11 @@ let read_body lx doc =
       let line = String.sub lx.source lx.pos (stop - lx.pos) in
       lx.pos <- min length (stop + 1);
       let line = if doc.strip_tabs then drop_leading '\t' line else line in
-      if String.equal line doc.delimiter then acc else lines (line :: acc)
+      if doc.expands && String.ends_with ~suffix:"\\" line then
+        review lx.sink (unreadable "a here-document contains a line continuation");
+      if String.equal line doc.delimiter then List.rev acc else lines (line :: acc)
   in
-  String.concat "\n" (List.rev (lines []))
+  String.concat "\n" (lines [])
 
 let digit_value ~base c =
   let value =
@@ -550,24 +555,31 @@ let decode_escape lx b escape =
       Buffer.add_char b.buf '\\';
       Buffer.add_char b.buf escape
 
-let rec ansi_c lx b =
+let ansi_c lx b =
   b.is_unquoted <- false;
-  match peek lx 0 with
-  | None -> Error "unterminated $'...' string"
-  | Some '\'' ->
-      advance lx 1;
-      Ok ()
-  | Some '\\' -> (
-      match peek lx 1 with
-      | None -> Error "unterminated $'...' string"
-      | Some escape ->
-          advance lx 2;
-          decode_escape lx b escape;
-          ansi_c lx b)
-  | Some c ->
-      Buffer.add_char b.buf c;
-      advance lx 1;
-      ansi_c lx b
+  let rec read truncated =
+    match peek lx 0 with
+    | None -> Error "unterminated $'...' string"
+    | Some '\'' ->
+        advance lx 1;
+        Ok ()
+    | Some '\\' -> (
+        match peek lx 1 with
+        | None -> Error "unterminated $'...' string"
+        | Some escape ->
+            let start = Buffer.length b.buf in
+            advance lx 2;
+            decode_escape lx b escape;
+            let nul = Buffer.length b.buf > start && Buffer.nth b.buf start = '\000' in
+            if nul then review lx.sink (unreadable "an ANSI-C quote contains NUL");
+            if truncated || nul then Buffer.truncate b.buf start;
+            read (truncated || nul))
+    | Some c ->
+        if not truncated then Buffer.add_char b.buf c;
+        advance lx 1;
+        read truncated
+  in
+  read false
 
 let single_quoted lx b =
   match String.index_from_opt lx.source lx.pos '\'' with
@@ -669,6 +681,22 @@ let on_op lx p op =
 
 let contains_ansi_quote source = contains_substring ~needle:"$'" source
 
+let double_quoted_parameter_word lx =
+  let rec end_of_name offset =
+    match peek lx offset with
+    | Some c when is_name_char c -> end_of_name (offset + 1)
+    | _ -> offset
+  in
+  let operator =
+    match peek lx 0 with
+    | Some c when is_name_char c -> end_of_name 1
+    | Some ('@' | '*' | '#' | '?' | '-' | '$' | '!') -> 1
+    | _ -> 0
+  in
+  let operator = if peek lx operator = Some ':' then operator + 1 else operator in
+  operator > 0
+  && match peek lx operator with Some ('-' | '+' | '=' | '?') -> true | _ -> false
+
 let rec lex_word lx b =
   match peek lx 0 with
   | None -> Ok ()
@@ -694,6 +722,15 @@ let rec lex_word lx b =
       advance lx 1;
       let* () = double_quoted lx b ~closing:true in
       lex_word lx b
+  | Some '$' when Option.is_some lx.delimiter_next -> (
+      match peek lx 1 with
+      | Some ('\'' | '"' | '{' | '(') -> Error "unsupported here-document delimiter"
+      | _ ->
+          Buffer.add_char b.buf '$';
+          advance lx 1;
+          lex_word lx b)
+  | Some '`' when Option.is_some lx.delimiter_next ->
+      Error "unsupported here-document delimiter"
   | Some '$' ->
       let* () = dollar lx b ~in_double:false in
       lex_word lx b
@@ -726,10 +763,10 @@ and double_quoted lx b ~closing =
           add_quoted b '\\';
           advance lx 1);
       double_quoted lx b ~closing
-  | Some '$' ->
+  | Some '$' when Option.is_none lx.delimiter_next ->
       let* () = dollar lx b ~in_double:true in
       double_quoted lx b ~closing
-  | Some '`' ->
+  | Some '`' when Option.is_none lx.delimiter_next ->
       advance lx 1;
       let* () = backquoted lx b ~in_double:closing in
       double_quoted lx b ~closing
@@ -760,7 +797,8 @@ and dollar lx b ~in_double =
       Ok (mark_expansion b)
   | Some '{' ->
       advance lx 2;
-      let* () = nest lx (fun () -> parameter lx (builder ())) in
+      let literal_apostrophe = in_double && double_quoted_parameter_word lx in
+      let* () = nest lx (fun () -> parameter lx (builder ()) ~literal_apostrophe) in
       Ok (mark_expansion b)
   | Some c when is_name_start c ->
       advance lx 2;
@@ -803,7 +841,7 @@ and arithmetic lx scratch depth =
       advance lx 1;
       arithmetic lx scratch depth
 
-and parameter lx scratch =
+and parameter lx scratch ~literal_apostrophe =
   match peek lx 0 with
   | None -> Error "unterminated parameter expansion"
   | Some '}' ->
@@ -811,25 +849,25 @@ and parameter lx scratch =
       Ok ()
   | Some '\\' ->
       advance lx 2;
-      parameter lx scratch
-  | Some '\'' ->
+      parameter lx scratch ~literal_apostrophe
+  | Some '\'' when not literal_apostrophe ->
       advance lx 1;
       let* () = single_quoted lx scratch in
-      parameter lx scratch
+      parameter lx scratch ~literal_apostrophe
   | Some '"' ->
       advance lx 1;
       let* () = double_quoted lx scratch ~closing:true in
-      parameter lx scratch
+      parameter lx scratch ~literal_apostrophe
   | Some '$' ->
-      let* () = dollar lx scratch ~in_double:false in
-      parameter lx scratch
+      let* () = dollar lx scratch ~in_double:literal_apostrophe in
+      parameter lx scratch ~literal_apostrophe
   | Some '`' ->
       advance lx 1;
-      let* () = backquoted lx scratch ~in_double:false in
-      parameter lx scratch
+      let* () = backquoted lx scratch ~in_double:literal_apostrophe in
+      parameter lx scratch ~literal_apostrophe
   | Some _ ->
       advance lx 1;
-      parameter lx scratch
+      parameter lx scratch ~literal_apostrophe
 
 and backquoted lx b ~in_double =
   let body = Buffer.create 32 in
@@ -863,6 +901,10 @@ and backquoted lx b ~in_double =
 and next_token lx =
   skip_blanks lx;
   match peek lx 0 with
+  | (None | Some ('\n' | '&' | '|' | ';' | '(' | ')' | '<' | '>'))
+    when Option.is_some lx.delimiter_next ->
+      Error "missing here-document delimiter"
+  | None when lx.heredocs <> [] -> Error "unterminated here-document"
   | None -> Ok End
   | Some '#' ->
       skip_comment lx;
@@ -879,8 +921,11 @@ and next_token lx =
       let redirects =
         match peek lx 0 with Some ('<' | '>') -> true | Some _ | None -> false
       in
-      if redirects && w.unquoted && (is_all_digits w.value || is_brace_name w.value) then
-        Ok (operator lx)
+      if
+        Option.is_none lx.delimiter_next
+        && redirects && w.unquoted
+        && (is_all_digits w.value || is_brace_name w.value)
+      then Ok (operator lx)
       else (
         record_word lx w;
         Ok (Word w))
@@ -949,13 +994,121 @@ and parse_source sink ~depth source =
     if contains_ansi_quote source then parse false)
 
 let is_option w = String.length w.value > 1 && (w.value.[0] = '-' || w.value.[0] = '+')
+let wrapper_syntax = "the screen cannot determine a wrapper's command"
 
-let rec wrapped_command ~operands = function
-  | [] -> []
-  | w :: rest when w.assignment || is_option w || is_all_digits w.value ->
-      wrapped_command ~operands rest
-  | _ :: rest when operands > 0 -> wrapped_command ~operands:(operands - 1) rest
-  | words -> words
+type option_use = Flag | Operand | Unknown
+
+let option_use ~switches ~arguments value =
+  if List.mem value switches then Flag
+  else if List.mem value arguments then Operand
+  else if
+    List.exists
+      (fun option ->
+        let width = String.length option in
+        String.length value > width
+        && String.starts_with ~prefix:option value
+        && (width = 2 || value.[width] = '='))
+      arguments
+  then Flag
+  else Unknown
+
+let rec option_prefix ~switches ~arguments = function
+  | w :: _ when not w.fixed -> Error computed_program
+  | w :: rest when String.equal w.value "--" -> Ok rest
+  | w :: rest when is_option w -> (
+      match (option_use ~switches ~arguments w.value, rest) with
+      | Flag, _ -> option_prefix ~switches ~arguments rest
+      | Operand, value :: rest when value.fixed -> option_prefix ~switches ~arguments rest
+      | _ -> Error wrapper_syntax)
+  | words -> Ok words
+
+let wrapper_options = function
+  | "env" ->
+      ( [ "-i"; "--ignore-environment"; "-v"; "--debug" ],
+        [ "-u"; "--unset"; "-C"; "--chdir" ] )
+  | "timeout" ->
+      ( [ "--foreground"; "--preserve-status"; "-v"; "--verbose" ],
+        [ "-s"; "--signal"; "-k"; "--kill-after" ] )
+  | "command" -> ([ "-p" ], [])
+  | "time" -> ([ "-p" ], [])
+  | "nice" -> ([], [ "-n"; "--adjustment" ])
+  | "stdbuf" -> ([], [ "-i"; "-o"; "-e"; "--input"; "--output"; "--error" ])
+  | "setsid" -> ([ "-c"; "-f"; "-w"; "--ctty"; "--fork"; "--wait" ], [])
+  | "ionice" -> ([ "-t"; "--ignore" ], [ "-c"; "--class"; "-n"; "--classdata" ])
+  | "chrt" -> ([ "-b"; "-f"; "-i"; "-o"; "-r" ], [])
+  | "taskset" -> ([ "-c"; "--cpu-list" ], [])
+  | "flock" ->
+      ( [
+          "-s";
+          "-x";
+          "-n";
+          "-u";
+          "-o";
+          "-F";
+          "--shared";
+          "--exclusive";
+          "--nonblock";
+          "--unlock";
+          "--close";
+          "--no-fork";
+        ],
+        [ "-w"; "--timeout"; "-E"; "--conflict-exit-code" ] )
+  | "chroot" -> ([], [ "--groups"; "--userspec" ])
+  | _ -> ([], [])
+
+let rec env_command = function
+  | w :: _ when not w.fixed -> Error computed_program
+  | w :: rest when String.contains w.value '=' -> env_command rest
+  | words -> Ok words
+
+let wrapped_command program args =
+  let args =
+    match (program, args) with
+    | "env", w :: rest when w.fixed && String.equal w.value "-" -> rest
+    | _ -> args
+  in
+  let switches, arguments = wrapper_options program in
+  let* words = option_prefix ~switches ~arguments args in
+  match (program, words) with
+  | "env", _ -> env_command words
+  | "flock", _ :: mode :: _ when is_option mode -> Error wrapper_syntax
+  | ("timeout" | "chroot" | "taskset" | "chrt" | "flock"), operand :: command ->
+      if operand.fixed then Ok command else Error computed_program
+  | ("coproc" | "script" | "runuser"), _ -> Error wrapper_syntax
+  | _ -> Ok words
+
+let xargs_switches =
+  [
+    "-0";
+    "--null";
+    "-o";
+    "--open-tty";
+    "-p";
+    "--interactive";
+    "-r";
+    "--no-run-if-empty";
+    "-t";
+    "--verbose";
+    "-x";
+    "--exit";
+  ]
+
+let xargs_arguments =
+  [
+    "-a";
+    "--arg-file";
+    "-d";
+    "--delimiter";
+    "-E";
+    "-L";
+    "--max-lines";
+    "-n";
+    "--max-args";
+    "-P";
+    "--max-procs";
+    "-s";
+    "--max-chars";
+  ]
 
 let replacement_of flag =
   if String.equal flag "-i" || String.equal flag "--replace" then Some "{}"
@@ -964,19 +1117,76 @@ let replacement_of flag =
   then Some (suffix_from flag 2)
   else None
 
-let rec xargs_command replacement = function
-  | [] -> (replacement, [])
-  | w :: rest when String.equal w.value "--" -> (replacement, rest)
-  | w :: token :: rest when String.equal w.value "-I" ->
-      xargs_command (Some token.value) rest
-  | w :: _ :: rest when List.mem w.value xargs_argument_options ->
-      xargs_command replacement rest
-  | w :: rest when is_option w ->
-      let replacement =
-        match replacement_of w.value with Some token -> Some token | None -> replacement
-      in
-      xargs_command replacement rest
-  | words -> (replacement, words)
+let xargs_grouping value =
+  String.starts_with ~prefix:"-n" value
+  || String.starts_with ~prefix:"-L" value
+  || List.mem value [ "--max-args"; "--max-lines" ]
+  || String.starts_with ~prefix:"--max-args=" value
+  || String.starts_with ~prefix:"--max-lines=" value
+
+let rec xargs_command ~grouped replacement words =
+  if grouped && Option.is_some replacement then Error wrapper_syntax
+  else
+    match words with
+    | w :: _ when not w.fixed -> Error computed_program
+    | w :: rest when String.equal w.value "--" -> Ok (replacement, rest)
+    | w :: token :: rest
+      when String.equal w.value "-I" && token.fixed && token.value <> "" ->
+        xargs_command ~grouped (Some token.value) rest
+    | w :: rest when is_option w -> (
+        match replacement_of w.value with
+        | Some "" -> Error wrapper_syntax
+        | Some token -> xargs_command ~grouped (Some token) rest
+        | None -> (
+            let grouped = grouped || xargs_grouping w.value in
+            match
+              ( option_use ~switches:xargs_switches ~arguments:xargs_arguments w.value,
+                rest )
+            with
+            | Flag, _ -> xargs_command ~grouped replacement rest
+            | Operand, value :: rest when value.fixed ->
+                xargs_command ~grouped replacement rest
+            | _ -> Error wrapper_syntax))
+    | words -> Ok (replacement, words)
+
+let watch_switches =
+  [
+    "-b";
+    "--beep";
+    "-c";
+    "--color";
+    "-C";
+    "--no-color";
+    "-d";
+    "--differences";
+    "-e";
+    "--errexit";
+    "-g";
+    "--chgexit";
+    "-p";
+    "--precise";
+    "-r";
+    "--no-rerun";
+    "-t";
+    "--no-title";
+    "-w";
+    "--no-wrap";
+  ]
+
+let watch_arguments = [ "-n"; "--interval"; "-q"; "--equexit" ]
+
+let rec watch_command direct = function
+  | w :: _ when not w.fixed -> Error computed_program
+  | w :: rest when String.equal w.value "--" -> Ok (direct, rest)
+  | w :: rest when List.mem w.value [ "-x"; "--exec" ] -> watch_command true rest
+  | w :: rest when is_option w -> (
+      match
+        (option_use ~switches:watch_switches ~arguments:watch_arguments w.value, rest)
+      with
+      | Flag, _ -> watch_command direct rest
+      | Operand, value :: rest when value.fixed -> watch_command direct rest
+      | _ -> Error wrapper_syntax)
+  | words -> Ok (direct, words)
 
 let code_flag_operand flags w =
   if List.mem w.value flags then None
@@ -1005,15 +1215,31 @@ let takes_code_operand flags w =
   in
   List.mem value flags || List.exists ends_short_cluster flags
 
+let check_executable sink base program args =
+  if Option.is_none sink.refused_executable then
+    if List.mem program refused_programs then sink.refused_executable <- Some program
+    else if program <> base then
+      let matches = function
+        | first :: rest when first = program ->
+            has_sequence (fun word -> basename word.value) rest args
+        | _ -> false
+      in
+      sink.refused_executable <-
+        List.find_opt matches refused_sequences |> Option.map (String.concat " ")
+
 let rec analyze sink ~depth = function
   | [] -> ()
   | name :: args ->
       if not name.fixed then review sink computed_program
-      else analyze_program sink ~depth (program_name name.value) args
+      else
+        let base = basename name.value in
+        let program = strip_executable_suffix base in
+        check_executable sink base program args;
+        analyze_program sink ~depth program args
 
 and analyze_program sink ~depth program args =
-  if List.mem program posix_shells then shell_code sink ~depth ~readable:true args
-  else if List.mem program foreign_shells then shell_code sink ~depth ~readable:false args
+  if List.mem program posix_shells || List.mem program foreign_shells then
+    shell_code sink ~depth program args
   else if List.mem program code_runners then review sink sourced_code
   else if String.equal program "trap" then trap_action sink ~depth args
   else if String.equal program "xargs" then xargs sink ~depth args
@@ -1021,53 +1247,62 @@ and analyze_program sink ~depth program args =
   else if List.mem program wrappers then wrapped sink ~depth program args
   else
     match List.assoc_opt program exec_flags with
-    | Some flags -> exec_commands sink ~depth flags args
+    | Some flags ->
+        if List.exists (fun w -> not w.fixed) args then review sink computed_program;
+        exec_commands sink ~depth flags args
     | None -> ()
 
 and wrapped sink ~depth program args =
-  if List.exists (fun w -> not (w.fixed || w.assignment)) args then
-    review sink computed_program
-  else (
-    Option.iter
-      (fun flags -> code_strings sink ~depth flags args)
-      (List.assoc_opt program code_flags);
-    let operands = if List.mem program operand_wrappers then 1 else 0 in
-    analyze sink ~depth (wrapped_command ~operands args))
+  match wrapped_command program args with
+  | Ok command -> analyze sink ~depth command
+  | Error reason ->
+      review sink reason;
+      Option.iter
+        (fun flags -> code_strings sink ~depth flags args)
+        (List.assoc_opt program code_flags)
 
 and code_strings sink ~depth flags = function
   | [] -> ()
   | w :: rest -> (
       match (code_flag_operand flags w, rest) with
       | Some code, _ ->
-          parse_source sink ~depth:(depth + 1) code;
+          if w.fixed then parse_source sink ~depth:(depth + 1) code
+          else review sink computed_code;
           code_strings sink ~depth flags rest
       | None, code :: rest when takes_code_operand flags w ->
-          parse_source sink ~depth:(depth + 1) code.value;
+          if w.fixed && code.fixed then parse_source sink ~depth:(depth + 1) code.value
+          else review sink computed_code;
           code_strings sink ~depth flags rest
       | None, _ -> code_strings sink ~depth flags rest)
 
 and xargs sink ~depth args =
-  if List.exists (fun w -> not w.fixed) args then review sink computed_program
-  else
-    match xargs_command None args with
-    | Some token, name :: _ when contains_substring ~needle:token name.value ->
-        review sink computed_program
-    | _, command -> analyze sink ~depth command
+  match xargs_command ~grouped:false None args with
+  | Error reason -> review sink reason
+  | Ok (_, []) -> ()
+  | Ok (None, command) ->
+      let input = { value = ""; fixed = false; unquoted = false; assignment = false } in
+      analyze sink ~depth (command @ [ input ])
+  | Ok (Some token, command) ->
+      let command =
+        List.map
+          (fun word ->
+            if contains_substring ~needle:token word.value then
+              { word with fixed = false; assignment = false }
+            else word)
+          command
+      in
+      analyze sink ~depth command
 
 and watch sink ~depth args =
-  let rec command = function
-    | w :: _ :: rest when String.equal w.value "-n" || String.equal w.value "--interval"
-      ->
-        command rest
-    | w :: rest when is_option w -> command rest
-    | words -> words
-  in
-  match command args with
-  | [] -> ()
-  | words when List.exists (fun w -> not w.fixed) words -> review sink computed_code
-  | words ->
-      parse_source sink ~depth:(depth + 1)
-        (String.concat " " (List.map (fun w -> w.value) words))
+  match watch_command false args with
+  | Error reason -> review sink reason
+  | Ok (_, []) -> ()
+  | Ok (true, words) -> analyze sink ~depth words
+  | Ok (false, words) ->
+      if List.exists (fun w -> not w.fixed) words then review sink computed_code
+      else
+        parse_source sink ~depth:(depth + 1)
+          (String.concat " " (List.map (fun w -> w.value) words))
 
 and exec_commands sink ~depth flags = function
   | [] -> ()
@@ -1078,9 +1313,12 @@ and exec_commands sink ~depth flags = function
          | _ -> analyze sink ~depth rest);
       exec_commands sink ~depth flags rest
 
-and shell_code sink ~depth ~readable args =
+and shell_code sink ~depth program args =
+  let finish ~command_string =
+    review sink (if command_string then computed_code else stdin_code)
+  in
   let rec options ~command_string ~from_stdin = function
-    | [] -> if not command_string then review sink stdin_code
+    | [] -> finish ~command_string
     | w :: _ when not w.fixed -> review sink computed_code
     | w :: rest when String.equal w.value "--" -> operand ~command_string ~from_stdin rest
     | w :: _ when String.equal w.value "-" -> review sink stdin_code
@@ -1104,14 +1342,21 @@ and shell_code sink ~depth ~readable args =
         options ~command_string ~from_stdin rest
     | words -> operand ~command_string ~from_stdin words
   and operand ~command_string ~from_stdin = function
-    | [] -> if not command_string then review sink stdin_code
+    | [] -> finish ~command_string
     | w :: _ ->
         if not command_string then (if from_stdin then review sink stdin_code)
         else if not w.fixed then review sink computed_code
-        else if readable then parse_source sink ~depth:(depth + 1) w.value
+        else if List.mem program posix_shells then
+          parse_source sink ~depth:(depth + 1) w.value
         else review sink foreign_code
   in
-  options ~command_string:false ~from_stdin:false args
+  match args with
+  | [ w ]
+    when (program = "bash" || program = "rbash")
+         && w.fixed
+         && (w.value = "--version" || w.value = "--help") ->
+      ()
+  | _ -> options ~command_string:false ~from_stdin:false args
 
 and trap_action sink ~depth args =
   let args =
@@ -1232,26 +1477,34 @@ and analyze_cmd sink ~depth = function
   | [] -> ()
   | name :: args ->
       if not name.fixed then review sink computed_program
-      else if List.mem (program_name (drop_leading '@' name.value)) cmd_runners then
-        List.iter
-          (fun w ->
-            if w.fixed then parse_cmd sink ~depth:(depth + 1) w.value
-            else review sink computed_program)
-          args
+      else
+        let base = basename (drop_leading '@' name.value) in
+        let program = strip_executable_suffix base in
+        check_executable sink base program args;
+        if List.mem program cmd_runners then
+          List.iter
+            (fun w ->
+              if w.fixed then parse_cmd sink ~depth:(depth + 1) w.value
+              else review sink computed_program)
+            args
 
 let screen dialect command =
-  let sink = { words = []; commands = []; reviews = [] } in
+  let sink = { words = []; commands = []; reviews = []; refused_executable = None } in
   (match dialect with
   | Posix ->
       parse_source sink ~depth:0 command;
       drain sink
   | Cmd -> parse_cmd sink ~depth:0 command);
-  let names text = List.map program_name (fragments dialect text) in
-  let decoded = List.concat_map names (List.rev sink.words) in
+  let names text = List.map basename (fragments dialect text) in
   match refused (names command) with
   | Some program -> Blocked program
   | None -> (
-      match refused decoded with
+      match refused (List.concat_map names (List.rev sink.words)) with
       | Some program -> Blocked program
       | None -> (
-          match List.rev sink.reviews with reason :: _ -> Review reason | [] -> Clear))
+          match sink.refused_executable with
+          | Some program -> Blocked program
+          | None -> (
+              match List.rev sink.reviews with
+              | reason :: _ -> Review reason
+              | [] -> Clear)))

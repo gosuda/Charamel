@@ -6,7 +6,7 @@
     actions, and the commands that common wrappers ([env], [xargs], [find -exec], [watch],
     ...) start. When [$'...'] appears it reads the command twice, once as bash and once as
     a shell without that quoting (dash), because the two split such a command into
-    different words.
+    different words. Ambiguous wrapper options and command operands require review.
 
     The list of refused programs is a hint, not a boundary: a program that runs its own
     arguments as code (an interpreter, a script, a build tool) is outside any shell-level
