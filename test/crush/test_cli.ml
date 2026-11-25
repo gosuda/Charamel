@@ -325,6 +325,8 @@ let cases =
       run_fixture_without_trust_store;
     Test_tools_test_support.case "project commands wait for trust" `Quick
       project_commands_wait_for_trust;
+    Test_tools_test_support.case "plain HTTP run reads no trust store" `Quick
+      run_fixture_without_trust_store;
     Test_tools_test_support.case "logout without a credential fails" `Quick
       logout_missing_credential_without_force;
     Test_tools_test_support.case "logout --force treats a missing credential as success"
