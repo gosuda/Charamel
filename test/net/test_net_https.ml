@@ -144,7 +144,10 @@ let with_tls_server ~cert ~priv f =
         in
         Lwt_io.write writer (head ^ body) >>= fun () ->
         Lwt_io.flush writer >>= fun () -> Tls_lwt.Unix.shutdown session `read_write)
-      (fun _exn -> Lwt.return_unit)
+      (fun _exn ->
+        (* A rejected handshake must not leak the accepted socket: close it here,
+           tolerating backends that already closed it on failure. *)
+        Lwt.catch (fun () -> Lwt_unix.close fd) (fun _ -> Lwt.return_unit))
   in
   let rec accept_loop () =
     Lwt.catch
@@ -202,4 +205,45 @@ let rejects_unknown_chain =
       with_tls_server ~cert ~priv (fun port ->
           https_get port >>= fun result -> check_tls_failure "unknown chain" result))
 
-let cases = [ loads_trust_store; rejects_unknown_chain ]
+(* The accepted socket is closed in the [serve] handshake-failure handler, so
+   repeated rejected handshakes must not grow the process file-descriptor count.
+   Linux-only: the count comes from [/proc/self/fd]. *)
+let open_fds () =
+  let dir = Unix.opendir "/proc/self/fd" in
+  Fun.protect
+    ~finally:(fun () -> Unix.closedir dir)
+    (fun () ->
+      let count = ref 0 in
+      (try
+         while true do
+           ignore (Unix.readdir dir);
+           incr count
+         done
+       with End_of_file -> ());
+      !count - 2)
+
+let rejected_handshakes_leak_no_fds =
+  Alcotest_lwt.test_case "rejected handshakes leak no file descriptors" `Quick
+    (fun _switch () ->
+      if not (Sys.file_exists "/proc/self/fd") then Alcotest.skip ()
+      else (
+        Mirage_crypto_rng_unix.use_default ();
+        let _anchor = Lazy.force shared_anchor in
+        let other_priv, other_ca =
+          make_ca ~common_name:"charamel-test-leak" ~serial:"\004" ()
+        in
+        let priv, cert = sign_leaf ~ca_priv:other_priv ~ca_cert:other_ca () in
+        with_tls_server ~cert ~priv (fun port ->
+            let before = open_fds () in
+            let rec loop remaining =
+              if remaining = 0 then Lwt.return_unit
+              else
+                https_get port >>= fun result ->
+                check_tls_failure "unknown chain" result >>= fun () -> loop (remaining - 1)
+            in
+            loop 16 >>= fun () ->
+            let after = open_fds () in
+            Alcotest.(check bool) "no file descriptor growth" true (after <= before);
+            Lwt.return_unit)))
+
+let cases = [ loads_trust_store; rejects_unknown_chain; rejected_handshakes_leak_no_fds ]
