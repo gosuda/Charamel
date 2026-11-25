@@ -447,6 +447,27 @@ let check_dangling_model_selection_falls_back () =
         "home large survives the dangling selection" "home"
         (selected_provider models "large"))
 
+let check_catalog_model_selection_survives_override () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let env = tree_env ~root ~xdg in
+      (* The home selection names a catalog provider and declares no provider
+         section; the project override of that id stays withheld. *)
+      write (xdg ^ "/crush/crush.json")
+        {|{"models":{"large":{"provider":"openai","model":"m"}}}|};
+      write (project ^ "/crush.json") {|{"providers":{"openai":{"type":"openai"}}}|};
+      (* The nested file is untrusted through its own relay provider, so its
+         dangling selection leaves even though the id is a catalog one. *)
+      write (nested ^ "/crush.json")
+        {|{"providers":{"relay":{"type":"anthropic"}},"models":{"small":{"provider":"openai","model":"m"}}}|};
+      let loaded = load_or_fail ~env nested in
+      let models = loaded.Config.config.Config.models in
+      Alcotest.(check string)
+        "home large survives a withheld catalog override" "openai"
+        (selected_provider models "large");
+      Alcotest.(check string)
+        "untrusted dangling small selection is dropped" "<none>"
+        (selected_provider models "small"))
+
 let cases =
   [
     Test_tools_test_support.case "environment expansion" `Quick check_expand;
@@ -474,4 +495,6 @@ let cases =
       check_grant_checked_validates_layers;
     Test_tools_test_support.case "dangling model selection falls back" `Quick
       check_dangling_model_selection_falls_back;
+    Test_tools_test_support.case "catalog selection survives override" `Quick
+      check_catalog_model_selection_survives_override;
   ]

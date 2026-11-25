@@ -916,7 +916,9 @@ let project_layer ~fs_root ~trust ~extra path text json =
    resolution fails instead of falling back to the home selection. Dropping
    those dangling selections (and gating them like any other withheld setting)
    keeps the child from overriding a working home selection with a reference
-   that resolves nowhere. *)
+   that resolves nowhere. The embedded catalog is the one exception: it
+   supplies providers without any configuration, so a withheld override with
+   a catalog id does not remove the catalog entry that [Models.resolve] uses. *)
 let provider_ids json =
   match object_members json with
   | None -> []
@@ -983,14 +985,23 @@ let load_with ~fs_root ~env ~cwd ~extra =
           layers
       in
       let dangling = List.filter (fun id -> not (List.mem id available)) withheld in
-      (* Selections that name a withheld provider cannot resolve, so they leave
-         the merge whichever layer holds them; the strip repeats on every load,
-         so a selection takes effect again once its provider is trusted. Layers
-         that already wait for trust record the dropped selections alongside
-         their other gated settings. *)
+      (* A trusted selection that names an embedded-catalog provider resolves
+         through the catalog, so it stays even while an override with the same
+         id is withheld. Untrusted layers still lose every dangling selection. *)
+      let catalog_ids =
+        List.map
+          (fun p -> p.Charamel_fantasy.Provider_info.id)
+          Charamel_fantasy.Catalog.embedded
+      in
+      let trusted_dangling =
+        List.filter (fun id -> not (List.mem id catalog_ids)) dangling
+      in
       let layers =
         List.map
           (fun (path, _, stripped, ignored) ->
+            let dangling =
+              match ignored with None -> trusted_dangling | Some _ -> dangling
+            in
             match drop_dangling_selections dangling stripped with
             | _, [] -> (path, stripped, ignored)
             | stripped, dropped -> (
