@@ -176,6 +176,27 @@ let oversized_output_denies () =
         expect_failure_denial "oversized output"
           (runner root [ hook ~event:Config.Pre_tool ~command:oversized_deny () ]))
 
+(* An over-limit stderr is a warning on a successful exit, not a denial: the hook prints
+   valid allow JSON on stdout and more than [max_output_size] bytes on stderr. *)
+let oversized_stderr_allows () =
+  if Sys.win32 then
+    (* cmd has no [head] or [tr]; the output cap is the same code path on Windows. *)
+    Alcotest.skip ()
+  else
+    with_environment (fun root ->
+        let command =
+          "printf '{\"decision\":\"allow\"}'; head -c 1048577 /dev/zero | tr '\\000' ' ' \
+           >&2"
+        in
+        let input = json_string "kept" in
+        match
+          pre_tool_outcome (runner root [ hook ~event:Config.Pre_tool ~command () ]) input
+        with
+        | Hooks.Allow json ->
+            Alcotest.check Alcotest.bool "input kept" true (Jsont.Json.equal json input)
+        | Hooks.Deny reason ->
+            Alcotest.failf "oversized stderr denied an allowed call: %s" reason)
+
 let well_formed_allow_keeps_input () =
   with_environment (fun root ->
       let input = json_string "kept" in
@@ -297,6 +318,8 @@ let cases =
       malformed_output_denies;
     Test_tools_test_support.case "oversized pre-tool output denies" `Quick
       oversized_output_denies;
+    Test_tools_test_support.case "oversized stderr on success still allows" `Quick
+      oversized_stderr_allows;
     Test_tools_test_support.case "well-formed allow keeps the input" `Quick
       well_formed_allow_keeps_input;
     Test_tools_test_support.case "failing lifecycle hooks stay observational" `Quick
