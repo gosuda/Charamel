@@ -29,10 +29,10 @@ val pre_tool :
       it is blank.
 
     Every other outcome denies the call: a hook that cannot be started, exits with any
-    other status, prints output that is not such a JSON object, prints more than 1 MiB, or
-    outlives its timeout. These denials carry no process output: the reason is
-    ["pre-tool hook failed"], or ["hook <command> timed out"] for a timeout, and the
-    detail goes to the [crush.hooks] log source. A denial stops the chain. *)
+    other status, prints output that is not such a JSON object, prints standard output of
+    more than 1 MiB, or outlives its timeout. These denials carry no process output: the
+    reason is ["pre-tool hook failed"], or ["hook <command> timed out"] for a timeout, and
+    the detail goes to the [crush.hooks] log source. A denial stops the chain. *)
 
 val post_tool :
   t ->
