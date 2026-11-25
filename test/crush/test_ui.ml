@@ -59,6 +59,7 @@ let permission_round_trip () =
       path = "/tmp/x";
       description = "PUT 1.=1";
       read_only = false;
+      review = None;
     }
   in
   let asker = Ui.Bridge.ask_permission bridge request in
@@ -285,6 +286,7 @@ let serialized_dialogs () =
           path = "/tmp/x";
           description = "PUT 1.=1";
           read_only = false;
+          review = None;
         }
       in
       let question_asker = Ui.Bridge.ask bridge [ question ] in

@@ -91,6 +91,38 @@ let test_reset_closes_link () =
     "SGR 0 closes the hyperlink" 1
     (count_occurrences ~needle:"href=\"http://example.com\"" ~haystack:svg)
 
+let hyperlink_cases =
+  [
+    ("javascript", "javascript:", None);
+    ("data", "data:", None);
+    ("unsupported", "https+example://example.com", None);
+    ("encoded scheme", "%68ttps://example.com", None);
+    ("relative", "/example", None);
+    ("http", "http://example.com", Some "http://example.com");
+    ( "https with query",
+      "https://example.com/?a=1&b=2",
+      Some "https://example.com/?a=1&amp;b=2" );
+    ("mixed case", "HtTpS://example.com", Some "HtTpS://example.com");
+    ("mailto", "mailto:hello@example.com", Some "mailto:hello@example.com");
+  ]
+  |> List.map (fun (name, url, href) ->
+      Alcotest_lwt.test_case_sync ("SVG hyperlink: " ^ name) `Quick (fun () ->
+          let svg =
+            render_ansi (Fmt.str "\027]8;;%s\027\\link label\027]8;;\027\\" url)
+          in
+          Alcotest.(check bool)
+            "visible label" true
+            (Test_support.contains ~needle:">link label</" ~haystack:svg);
+          match href with
+          | None ->
+              Alcotest.(check int)
+                "href count" 0
+                (count_occurrences ~needle:" href=" ~haystack:svg)
+          | Some href ->
+              Alcotest.(check int)
+                "escaped href count" 1
+                (count_occurrences ~needle:(Fmt.str " href=\"%s\"" href) ~haystack:svg)))
+
 let test_pty_capture () =
   if Sys.win32 then Alcotest.skip ()
   else
@@ -121,5 +153,6 @@ let suites =
     Alcotest_lwt.test_case_sync "ANSI underline colour" `Quick test_ansi_underline_color;
     Alcotest_lwt.test_case_sync "SGR 0 closes the hyperlink" `Quick test_reset_closes_link;
   ]
+  @ hyperlink_cases
 
 let () = Test_support.run_lwt "freeze" [ ("freeze", suites) ]

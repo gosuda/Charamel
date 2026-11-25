@@ -34,11 +34,27 @@ let read_json root file =
   | Ok json -> json
   | Error message -> Alcotest.failf "%s holds no JSON value (%s): %S" file message text
 
+let failure_reason = "pre-tool hook failed"
+
+let exit_one =
+  if Sys.win32 then "echo secret 1>&2 & exit /b 1" else "printf secret >&2; exit 1"
+
 let json = Alcotest.testable Jsont.pp_json Jsont.Json.equal
 
 let member name = function
   | Jsont.Object (members, _) -> Option.map snd (Jsont.Json.find_mem name members)
   | _ -> None
+
+let oversized_deny =
+  "printf '%s' '{\"decision\":\"deny\"}'; head -c 1048576 /dev/zero | tr '\\000' ' '"
+
+let pre_tool_outcome runner input =
+  await @@ Hooks.pre_tool runner ~session:"s" ~tool:"write" ~input
+
+let expect_failure_denial label runner =
+  match pre_tool_outcome runner (Jsont.Json.null ()) with
+  | Hooks.Deny reason -> Alcotest.check Alcotest.string label failure_reason reason
+  | Hooks.Allow _ -> Alcotest.failf "%s: an unevaluable hook allowed the call" label
 
 let rewritten_input () =
   with_environment (fun root ->
@@ -123,6 +139,75 @@ let timeout_denies () =
             reason
       | Hooks.Allow _ -> Alcotest.fail "timed out hook was treated as a pass")
 
+let failing_exit_denies () =
+  with_environment (fun root ->
+      expect_failure_denial "exit 1"
+        (runner root [ hook ~event:Config.Pre_tool ~command:exit_one () ]))
+
+let spawn_failure_denies () =
+  with_environment (fun root ->
+      let config =
+        [ hook ~event:Config.Pre_tool ~command:(emit "{\"decision\":\"allow\"}") () ]
+      in
+      expect_failure_denial "spawn failure"
+        (Hooks.create ~config ~cwd:(Filename.concat root "missing")))
+
+let malformed_output_denies () =
+  with_environment (fun root ->
+      let allowed =
+        List.filter
+          (fun output ->
+            let config = [ hook ~event:Config.Pre_tool ~command:(emit output) () ] in
+            match pre_tool_outcome (runner root config) (Jsont.Json.null ()) with
+            | Hooks.Deny reason ->
+                Alcotest.check Alcotest.string output failure_reason reason;
+                false
+            | Hooks.Allow _ -> true)
+          [ "not json"; "{\"decision\":"; "[\"allow\"]"; "{\"decision\":\"maybe\"}" ]
+      in
+      Alcotest.check Alcotest.(list string) "outputs that allowed the call" [] allowed)
+
+let oversized_output_denies () =
+  if Sys.win32 then
+    (* cmd has no [head] or [tr]; the output cap is the same code path on Windows. *)
+    Alcotest.skip ()
+  else
+    with_environment (fun root ->
+        expect_failure_denial "oversized output"
+          (runner root [ hook ~event:Config.Pre_tool ~command:oversized_deny () ]))
+
+let well_formed_allow_keeps_input () =
+  with_environment (fun root ->
+      let input = json_string "kept" in
+      List.iter
+        (fun command ->
+          match
+            pre_tool_outcome
+              (runner root [ hook ~event:Config.Pre_tool ~command () ])
+              input
+          with
+          | Hooks.Allow json ->
+              Alcotest.check Alcotest.bool command true (Jsont.Json.equal json input)
+          | Hooks.Deny reason ->
+              Alcotest.failf "%s: well-formed allow denied: %s" command reason)
+        [ "exit 0"; emit "{\"decision\":\"allow\"}" ])
+
+let lifecycle_failures_stay_observational () =
+  with_environment (fun root ->
+      let config =
+        List.map
+          (fun event -> hook ~event ~command:exit_one ())
+          [ Config.Post_tool; Config.Session_start; Config.Stop ]
+      in
+      List.iter
+        (fun hooks ->
+          await
+          @@ Hooks.post_tool hooks ~session:"s" ~tool:"read" ~input:(json_string "in")
+               ~output:"out" ~is_error:false;
+          await (Hooks.session_start hooks ~session:"s");
+          await (Hooks.stop hooks ~session:"s" ~reason:`Stop))
+        [ runner root config; Hooks.create ~config ~cwd:(Filename.concat root "missing") ])
+
 let post_payload () =
   with_environment (fun root ->
       let config = [ hook ~event:Config.Post_tool ~command:(capture "post.json") () ] in
@@ -205,6 +290,17 @@ let cases =
     Test_tools_test_support.case "exit two denies with stderr" `Quick
       exit_two_denies_with_stderr;
     Test_tools_test_support.case "timeout is an explicit denial" `Quick timeout_denies;
+    Test_tools_test_support.case "failing pre-tool hook denies" `Quick failing_exit_denies;
+    Test_tools_test_support.case "unstartable pre-tool hook denies" `Quick
+      spawn_failure_denies;
+    Test_tools_test_support.case "malformed pre-tool output denies" `Quick
+      malformed_output_denies;
+    Test_tools_test_support.case "oversized pre-tool output denies" `Quick
+      oversized_output_denies;
+    Test_tools_test_support.case "well-formed allow keeps the input" `Quick
+      well_formed_allow_keeps_input;
+    Test_tools_test_support.case "failing lifecycle hooks stay observational" `Quick
+      lifecycle_failures_stay_observational;
     Test_tools_test_support.case "post-tool receives JSON" `Quick post_payload;
     Test_tools_test_support.case "stop carries null and error messages" `Quick
       stop_payloads;

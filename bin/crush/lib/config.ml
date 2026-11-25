@@ -802,29 +802,101 @@ let config_home ~env =
           Filename.concat home ".config/crush"
       | _ -> Charamel_cli.Xdg.config_dir ~app:"crush")
 
+type project_file = { path : string; digest : string; gated : string list }
+type loaded = { config : t; files : string list; untrusted : project_file list }
+
+let trust_path ~env = Filename.concat (config_home ~env) "trust.json"
+
+let gated_members =
+  [
+    ("providers", None);
+    ("mcp", None);
+    ("lsp", None);
+    ("hooks", None);
+    ("permissions", Some "allowed_tools");
+    ("options", Some "auto_lsp");
+  ]
+
+let gated_name (section, member) =
+  match member with None -> section | Some member -> section ^ "." ^ member
+
+let strip_member (section, member) (name, value) =
+  if not (String.equal name section) then (Some (name, value), false)
+  else
+    match member with
+    | None -> (None, true)
+    | Some member -> (
+        match object_members value with
+        | Some inner when Option.is_some (member_json member inner) ->
+            (Some (name, object_json (remove_member member inner)), true)
+        | _ -> (Some (name, value), false))
+
+let without_gated json =
+  match object_members json with
+  | None -> (json, [])
+  | Some members ->
+      let strip (members, gated) key =
+        let kept, found = List.split (List.map (strip_member key) members) in
+        ( List.filter_map Fun.id kept,
+          if List.mem true found then gated @ [ gated_name key ] else gated )
+      in
+      let members, gated = List.fold_left strip (members, []) gated_members in
+      (object_json members, gated)
+
+let canonical_path fs_root path =
+  let file = Path.under ~root:fs_root path in
+  match Unix.realpath (Filename.dirname file) with
+  | directory -> Ok (Filename.concat directory (Filename.basename file))
+  | exception (Unix.Unix_error _ as exn) -> Error (`Io (path, io_message exn))
+
+let project_layer ~fs_root ~trust path text json =
+  match without_gated json with
+  | _, [] -> Lwt.return_ok (json, None)
+  | stripped, gated -> (
+      match canonical_path fs_root path with
+      | Error _ as failure -> Lwt.return failure
+      | Ok canonical -> (
+          let digest = Trust.digest text in
+          Lazy.force trust >|= function
+          | Error _ as failure -> failure
+          | Ok records ->
+              if Trust.mem records { Trust.path = canonical; digest } then Ok (json, None)
+              else Ok (stripped, Some { path = canonical; digest; gated })))
+
 let load ~fs_root ~env ~cwd =
   let cwd = absolute_path cwd in
   let home_config = config_home ~env in
-  let rec read_all paths merged contributors =
+  let home = normalize_home_config home_config in
+  let trust = lazy (Trust.load ~fs_root (trust_path ~env)) in
+  let layer path text json =
+    if String.equal path home then Lwt.return_ok (json, None)
+    else project_layer ~fs_root ~trust path text json
+  in
+  let rec read_all paths merged contributors untrusted =
     match paths with
-    | [] -> Lwt.return_ok (merged, List.rev contributors)
+    | [] -> Lwt.return_ok (merged, List.rev contributors, List.rev untrusted)
     | path :: rest -> (
         read_file fs_root path >>= function
         | Error _ as failure -> Lwt.return failure
-        | Ok None -> read_all rest merged contributors
+        | Ok None -> read_all rest merged contributors untrusted
         | Ok (Some text) -> (
             match Jsonx.json_of_string text with
             | Error message -> Lwt.return_error (`Parse (path, message))
             | Ok json -> (
                 match Jsont.Json.decode jsont json with
                 | Error message -> Lwt.return_error (`Parse (path, message))
-                | Ok _ -> read_all rest (merge_json merged json) (path :: contributors))))
+                | Ok _ -> (
+                    layer path text json >>= function
+                    | Error _ as failure -> Lwt.return failure
+                    | Ok (json, ignored) ->
+                        read_all rest (merge_json merged json) (path :: contributors)
+                          (Option.to_list ignored @ untrusted)))))
   in
   find_git_root fs_root cwd >>= fun git_root ->
-  read_all (search_paths ~cwd ~git_root ~home_config) (Jsont.Json.object' []) []
+  read_all (search_paths ~cwd ~git_root ~home_config) (Jsont.Json.object' []) [] []
   >>= function
   | Error _ as failure -> Lwt.return failure
-  | Ok (merged, contributors) -> (
+  | Ok (merged, contributors, untrusted) -> (
       match Jsont.Json.decode jsont merged with
       | Error message ->
           let path =
@@ -836,7 +908,7 @@ let load ~fs_root ~env ~cwd =
       | Ok config -> (
           let config = expand_config ~env config in
           match validate config with
-          | Ok () -> Lwt.return_ok (config, contributors)
+          | Ok () -> Lwt.return_ok { config; files = contributors; untrusted }
           | Error message ->
               let path =
                 match List.rev contributors with
@@ -844,6 +916,21 @@ let load ~fs_root ~env ~cwd =
                 | [] -> "<expanded configuration>"
               in
               Lwt.return_error (`Parse (path, message))))
+
+let grant ~fs_root ~env files =
+  match files with
+  | [] -> Lwt.return_ok ()
+  | files -> (
+      let store = trust_path ~env in
+      Trust.load ~fs_root store >>= function
+      | Error _ as failure -> Lwt.return failure
+      | Ok records ->
+          Trust.save ~fs_root store
+            (Trust.add records
+               (List.map
+                  (fun (file : project_file) ->
+                    { Trust.path = file.path; digest = file.digest })
+                  files)))
 
 let data_dir config ~cwd =
   if Filename.is_relative config.options.data_dir then

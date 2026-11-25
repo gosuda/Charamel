@@ -10,10 +10,16 @@ type request = {
   path : string;
   description : string;
   read_only : bool;
+  review : string option;
 }
 (** The type for decoded tool requests. A request path is absolute when it names a file
     target and is empty when no target is known. [read_only] is a trusted classification
-    supplied by the tool after decoding its input. *)
+    supplied by the tool after decoding its input. [review] is [Some reason] when the tool
+    could not classify the action; such a request runs only on an explicit approval of
+    this exact action: a configured deny entry, the plan ceiling, an exact [tool:action]
+    allow entry, an exact session grant, and the asker still apply, while yolo, tool-wide
+    allow entries, session-wide approval, a hook [`Allow], and local read-only approval do
+    not. *)
 
 type decision =
   | Allow_once
@@ -43,10 +49,10 @@ val create :
   plans_dir:string ->
   unit ->
   t
-(** [create ~config ~yolo ~cwd ~plans_dir ()] is a permission policy. [asker] defaults to
-    an asker that denies the request. [hook] defaults to a hook that passes the request.
-    [on_decision] defaults to a callback that does nothing. The callback receives each
-    resolved request and outcome once, after the policy and asker locks are released.
+(** [create ~config ~yolo ~cwd ~plans_dir ()] is a permission policy. Without [asker] a
+    request that reaches the asker is denied. [hook] defaults to a hook that passes the
+    request. [on_decision] defaults to a callback that does nothing. The callback receives
+    each resolved request and outcome once, after the policy and asker locks are released.
     [cwd] is the project boundary used for local read-only approval. [plans_dir] is the
     only directory in which a known write or edit target can pass the plan ceiling. *)
 
@@ -70,13 +76,16 @@ val grant_session : t -> request -> unit
 
 val auto_approve_session : t -> session:string -> unit
 (** [auto_approve_session t ~session] records a session-wide approval. A request from
-    [session] can use this approval at the session-grant stage unless an earlier rule
-    denies it. *)
+    [session] without [review] can use this approval at the session-grant stage unless an
+    earlier rule denies it. *)
 
 val resolve : t -> request -> outcome
 (** [resolve t request] applies the plan ceiling, yolo override, configured deny and allow
-    entries, exact grants, hooks, local read-only approval, and the asker in that order.
-    The asker is serialized separately from policy state and hook callbacks. *)
+    entries, exact grants, hooks, local read-only approval, and the asker in that order. A
+    request with [review] skips the yolo override, tool-wide allow entries, session-wide
+    approval, a hook [`Allow], and local read-only approval; without an asker it is denied
+    with its review reason. The asker is serialized separately from policy state and hook
+    callbacks. *)
 
 val pp_request : request Fmt.t
 (** [pp_request] formats a permission request. *)

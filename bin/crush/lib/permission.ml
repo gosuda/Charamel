@@ -7,6 +7,7 @@ type request = {
   path : string;
   description : string;
   read_only : bool;
+  review : string option;
 }
 
 type decision = Allow_once | Allow_session | Deny
@@ -20,7 +21,7 @@ type t = {
   yolo : bool;
   cwd : string;
   plans_dir : string;
-  asker : asker;
+  asker : asker option;
   hook : hook;
   on_decision : request -> outcome -> unit;
   ask_mutex : Lwt_mutex.t;
@@ -29,14 +30,13 @@ type t = {
   mutable auto_approved_sessions : string list;
 }
 
-let default_asker _ = Deny
 let default_hook _ = `Pass
 let default_on_decision _ _ = ()
 
 let with_ask_lock t operation =
   await (Lwt_mutex.with_lock t.ask_mutex (fun () -> Lwt.return (operation ())))
 
-let create ~config ~yolo ?(asker = default_asker) ?(hook = default_hook)
+let create ~config ~yolo ?asker ?(hook = default_hook)
     ?(on_decision = default_on_decision) ~cwd ~plans_dir () =
   let cwd = Path.normalize cwd in
   let plans_dir = Path.normalize ~cwd plans_dir in
@@ -112,9 +112,13 @@ let plan_denial_locked t request =
     Some (Denied (plan_denial t request))
   else None
 
+let denied_outcome_locked t request =
+  List.find_opt (fun entry -> matches ~entry request) t.config.Config.deny
+  |> Option.map (fun entry -> Denied ("denied by permissions.deny: " ^ entry))
+
 let configured_outcome_locked t request =
-  match List.find_opt (fun entry -> matches ~entry request) t.config.Config.deny with
-  | Some entry -> Some (Denied ("denied by permissions.deny: " ^ entry))
+  match denied_outcome_locked t request with
+  | Some outcome -> Some outcome
   | None -> (
       match
         List.find_opt (fun entry -> matches ~entry request) t.config.Config.allowed_tools
@@ -122,10 +126,22 @@ let configured_outcome_locked t request =
       | Some _ -> Some Allowed
       | None -> if session_granted t request then Some Allowed else None)
 
-let policy_outcome_locked t request =
-  match plan_denial_locked t request with
+let explicit_outcome_locked t request =
+  match denied_outcome_locked t request with
   | Some outcome -> Some outcome
-  | None -> if t.yolo then Some Allowed else configured_outcome_locked t request
+  | None ->
+      let names_action entry = String.contains entry ':' && matches ~entry request in
+      if
+        List.exists names_action t.config.Config.allowed_tools
+        || List.exists (key_equal (request_key request)) t.grants
+      then Some Allowed
+      else None
+
+let policy_outcome_locked t request =
+  match (plan_denial_locked t request, request.review) with
+  | Some outcome, _ -> Some outcome
+  | None, Some _ -> explicit_outcome_locked t request
+  | None, None -> if t.yolo then Some Allowed else configured_outcome_locked t request
 
 let outcome_after_answer_locked t request decision =
   match policy_outcome_locked t request with
@@ -144,10 +160,23 @@ let outcome_after_hook_locked t request hook_outcome =
   match policy_outcome_locked t request with
   | Some outcome -> Hook_resolved outcome
   | None -> (
-      match hook_outcome with
-      | `Allow -> Hook_resolved Allowed
-      | `Deny message -> Hook_resolved (Denied message)
-      | `Pass -> Hook_continue)
+      match (hook_outcome, request.review) with
+      | `Deny message, _ -> Hook_resolved (Denied message)
+      | `Allow, None -> Hook_resolved Allowed
+      | `Allow, Some _ | `Pass, _ -> Hook_continue)
+
+let ask t request =
+  match (t.asker, request.review) with
+  | None, Some reason ->
+      Denied ("needs an explicit approval and no prompt is available: " ^ reason)
+  | None, None -> outcome_after_answer_locked t request Deny
+  | Some asker, _ ->
+      let decision = with_ask_lock t (fun () -> asker request) in
+      outcome_after_answer_locked t request decision
+
+let local_read_only t request =
+  Option.is_none request.review && request.read_only
+  && Path.within ~root:t.cwd request.path
 
 let resolve t request =
   let request = normalized_request request in
@@ -158,16 +187,15 @@ let resolve t request =
         let hook_outcome = t.hook request in
         match outcome_after_hook_locked t request hook_outcome with
         | Hook_resolved outcome -> outcome
-        | Hook_continue ->
-            if request.read_only && Path.within ~root:t.cwd request.path then Allowed
-            else
-              let decision = with_ask_lock t (fun () -> t.asker request) in
-              outcome_after_answer_locked t request decision)
+        | Hook_continue -> if local_read_only t request then Allowed else ask t request)
   in
   t.on_decision request result;
   result
 
 let pp_request ppf request =
-  Fmt.pf ppf "{session=%S; tool=%S; action=%S; path=%S; description=%S; read_only=%b}"
+  Fmt.pf ppf
+    "{session=%S; tool=%S; action=%S; path=%S; description=%S; read_only=%b; review=%a}"
     request.session request.tool request.action request.path request.description
     request.read_only
+    Fmt.(option ~none:(any "none") (fmt "%S"))
+    request.review

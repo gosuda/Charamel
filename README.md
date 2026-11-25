@@ -3,11 +3,28 @@
 [![build](https://github.com/gosuda/Charamel/actions/workflows/build.yml/badge.svg)](https://github.com/gosuda/Charamel/actions/workflows/build.yml)
 [![license](https://img.shields.io/badge/License-Apache_2.0-blue)](LICENSE)
 
+**The Charm terminal ecosystem, re-derived in OCaml.** Eighteen libraries and ten command-line
+tools for building terminal software: typed messages instead of Go interfaces, `result` instead of
+`error`, and Lwt fibers instead of goroutines.
+
 The Charm terminal ecosystem, re-derived in pure OCaml: sixteen libraries and ten
 command-line tools for building terminal software, for OCaml developers writing TUIs
 without a Go runtime.
 
-`sequin` (installed below) reads terminal bytes and explains them:
+- **Pure OCaml** — no `.c` or `.h` files and no `foreign_stubs` stanza anywhere in the tracked
+  tree; only dependencies such as `lwt`, `ctypes`, and `mirage-crypto` carry C.
+- **Eighteen libraries** — sixteen under `charamel.*`, two under `charamel-ssh.*`.
+  `charamel.os.win32` builds only on Windows. Each library's `.mli` is its documentation.
+- **Ten tools** — `gum`, `glow`, `freeze`, `sequin`, `pop`, `skate`, `melt`, `keygen`,
+  `hotdiva2000`, `crush`.
+- **Tested per unit** — one suite directory for each tool and for each library except
+  `charamel.lipgloss.terminal` (covered by the `charamel.lipgloss` suite) and `charamel.os.win32`,
+  plus the examples and the shared helpers: 30 alcotest executables, 1,699 cases run by
+  `dune runtest --profile release` (1,701 registered; the 2 Windows-only cases skip on Linux).
+- **One width model** — grapheme-based measurement shared by every renderer, so East Asian and
+  combining text align in tables, borders, and layout.
+- **OCaml >= 5.4** with Lwt for concurrency, `jsont` for JSON, `cmarkit` for Markdown, and `re`
+  for data-driven lexers.
 
 ```sh
 printf '\033[3A' | sequin
@@ -70,6 +87,7 @@ add the library name to your `dune` stanza, for example `(libraries charamel.lip
 | `charamel.colorprofile` | Color support detected from the environment, with writers that reduce SGR colors |
 | `charamel.tea` | Elm-style terminal apps: typed messages, commands, subscriptions, per-frame diff |
 | `charamel.lipgloss` | Immutable styles with borders, layout, tables, trees, lists, and a layered canvas |
+| `charamel.lipgloss.terminal` | Terminal background query and profile-keyed color selection behind `charamel.lipgloss` |
 | `charamel.bubbles` | Seventeen reusable components over `charamel.tea`, from `textinput` to `viewport` |
 | `charamel.huh` | Typed forms with accessible fallbacks |
 | `charamel.glamour` | CommonMark rendered to ANSI with typed themes |
@@ -77,6 +95,7 @@ add the library name to your `dune` stanza, for example `(libraries charamel.lip
 | `charamel.log` | A styled `Logs` reporter in text, logfmt, or JSON |
 | `charamel.harmonica` | Spring and projectile motion advanced by a fixed time step |
 | `charamel.os` | Terminal control, processes, pseudo-terminals, paths, signals, and virtual clocks on Linux, macOS, and Windows |
+| `charamel.os.win32` | Raw Win32 console bindings backing `charamel.os`; Windows builds only |
 | `charamel.cli` | Application runtime with XDG base directories and styled errors |
 | `charamel.net` | HTTP calls with streaming bodies over pure-OCaml TLS, and the SSH transport |
 | `charamel.fantasy` | Streaming chat completions for Anthropic, OpenAI-compatible, OpenAI Responses, and Google, with a bundled model catalog |

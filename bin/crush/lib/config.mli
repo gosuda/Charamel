@@ -71,7 +71,8 @@ type hook = {
   command : string;
   timeout_s : int;
 }
-(** One shell hook declaration. *)
+(** One shell hook declaration. {!Hooks.pre_tool} states the exit-status contract of a
+    [Pre_tool] hook, which fails closed. *)
 
 type trailer = Trailer_none | Co_authored | Assisted  (** Attribution trailer mode. *)
 
@@ -138,12 +139,46 @@ val merge : t -> t -> t
     keyed declarations replace by key; list settings concatenate with stable
     order-preserving deduplication. *)
 
+type project_file = {
+  path : string;  (** The canonical path: the resolved directory, then [crush.json]. *)
+  digest : string;  (** The lowercase SHA-256 hex digest of the file's bytes. *)
+  gated : string list;  (** The gated members the file sets, in a fixed order. *)
+}
+(** A project configuration file that sets gated members. *)
+
+type loaded = {
+  config : t;
+  files : string list;  (** The contributing files, in merge order. *)
+  untrusted : project_file list;
+      (** The project files whose gated members [config] leaves out. *)
+}
+(** A loaded configuration. *)
+
 val load :
   fs_root:string ->
   env:(string -> string option) ->
   cwd:string ->
-  (t * string list, error) result Lwt.t
-(** [load ~fs_root ~env ~cwd] discovers and folds existing configuration files. *)
+  (loaded, error) result Lwt.t
+(** [load ~fs_root ~env ~cwd] discovers and folds existing configuration files.
+
+    The user configuration file in the configuration home applies whole. Every other
+    candidate is a project file, which a cloned repository controls. A project file
+    applies whole only while the trust store holds its canonical path with the digest of
+    its current bytes. Otherwise its gated members, those that start processes, reach
+    credentials, or widen permissions ([providers], [mcp], [lsp], [hooks],
+    [permissions.allowed_tools], and [options.auto_lsp]), are left out and the file is
+    listed in [untrusted]; its other members still apply. The trust store is [trust.json]
+    in the configuration home, read only when a project file sets a gated member. A store
+    that does not decode is an error. *)
+
+val grant :
+  fs_root:string ->
+  env:(string -> string option) ->
+  project_file list ->
+  (unit, error) result Lwt.t
+(** [grant ~fs_root ~env files] records [files] in the trust store, so a later {!load}
+    applies each of them whole while its bytes keep the recorded digest. It is the only
+    writer of the store and runs only on the user's explicit request. *)
 
 val schema : Jsont.json
 (** [schema] is a JSON Schema 2020-12 description of [jsont]. *)

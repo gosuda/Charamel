@@ -13,6 +13,7 @@
   cstruct
   base64
   fmt
+  uri
   lwt
   lwt.unix
   unix))
