@@ -85,10 +85,55 @@ let prepare_directories (env : Env.t) config cwd =
   in
   List.iter (ensure_directory env) xdg
 
-let load_config (env : Env.t) ~cwd (options : cli) =
+let read_config (env : Env.t) ~cwd =
   match await (Config.load ~fs_root:env.Env.fs_root ~env:Sys.getenv_opt ~cwd) with
   | Error error -> Charamel_cli.error (Fmt.str "%a" Config.pp_error error)
-  | Ok (config, _) -> with_data_dir config options
+  | Ok loaded -> loaded
+
+let grant_trust (env : Env.t) untrusted =
+  match await (Config.grant ~fs_root:env.Env.fs_root ~env:Sys.getenv_opt untrusted) with
+  | Error error -> Charamel_cli.error (Fmt.str "%a" Config.pp_error error)
+  | Ok () -> ()
+
+let gated_list (file : Config.project_file) = String.concat ", " file.Config.gated
+
+let report_untrusted (env : Env.t) untrusted =
+  List.iter
+    (fun (file : Config.project_file) ->
+      print_stderr env
+        (Fmt.str
+           "crush: ignoring %s from untrusted project configuration %s; run `crush \
+            trust` to allow them\n"
+           (gated_list file) file.Config.path))
+    untrusted
+
+let confirm_trust (env : Env.t) untrusted =
+  List.iter
+    (fun (file : Config.project_file) ->
+      print_stderr env
+        (Fmt.str "Project configuration %s sets %s.\n" file.Config.path (gated_list file)))
+    untrusted;
+  print_stderr env
+    "Trust it? Its settings can start processes, send your credentials, and widen \
+     permissions. [y/N] ";
+  await (Lwt_io.flush env.Env.stderr);
+  match await (Lwt_io.read_line_opt env.Env.stdin) with
+  | Some answer -> List.mem (String.lowercase_ascii (String.trim answer)) [ "y"; "yes" ]
+  | None -> false
+
+let load_config (env : Env.t) ~cwd ~interactive (options : cli) =
+  let loaded = read_config env ~cwd in
+  let loaded =
+    match loaded.Config.untrusted with
+    | _ :: _ as untrusted when interactive && Charamel_os.Tty.is_tty_stdin ->
+        if confirm_trust env untrusted then (
+          grant_trust env untrusted;
+          read_config env ~cwd)
+        else loaded
+    | _ -> loaded
+  in
+  report_untrusted env loaded.Config.untrusted;
+  with_data_dir loaded.Config.config options
 
 let home_directory () = match Sys.getenv_opt "HOME" with Some home -> home | None -> ""
 let log_path () = Filename.concat (Charamel_cli.Xdg.state_dir ~app:"crush") "crush.log"
@@ -98,7 +143,7 @@ let permission_asker bridge request =
 
 let create_common (env : Env.t) sw (options : cli) ~interactive ~bridge =
   let cwd = cwd_for env options in
-  let config = load_config env ~cwd options in
+  let config = load_config env ~cwd ~interactive options in
   prepare_directories env config cwd;
   let auth =
     match
@@ -856,7 +901,7 @@ let read_log (env : Env.t) ~tail ~follow =
 let dirs (env : Env.t) options =
   spawn (fun () ->
       let cwd = cwd_for env options in
-      let config = load_config env ~cwd options in
+      let config = load_config env ~cwd ~interactive:false options in
       let lines =
         [
           "config: " ^ Charamel_cli.Xdg.config_dir ~app:"crush";
@@ -868,6 +913,20 @@ let dirs (env : Env.t) options =
         ]
       in
       print_stdout env (String.concat "\n" lines ^ "\n"))
+
+let trust_project (env : Env.t) options =
+  spawn (fun () ->
+      let cwd = cwd_for env options in
+      match (read_config env ~cwd).Config.untrusted with
+      | [] -> print_stdout env "No project configuration needs trust.\n"
+      | untrusted ->
+          grant_trust env untrusted;
+          List.iter
+            (fun (file : Config.project_file) ->
+              print_stdout env
+                (Fmt.str "Trusted %s (%s; sha256 %s)\n" file.Config.path (gated_list file)
+                   file.Config.digest))
+            untrusted)
 
 let option_term =
   let open Cmdliner in
@@ -990,6 +1049,14 @@ let command_dirs (env : Env.t) =
     (command_info "dirs" "Show Crush directories.")
     Cmdliner.Term.(const action $ option_term)
 
+let command_trust (env : Env.t) =
+  let action = trust_project env in
+  Cmdliner.Cmd.v
+    (command_info "trust"
+       "Trust the project configuration of the working directory, so its providers, MCP \
+        and LSP servers, hooks, and allowed tools apply until it changes.")
+    Cmdliner.Term.(const action $ option_term)
+
 let command_schema (env : Env.t) =
   let action () =
     spawn (fun () -> print_stdout env (Jsonx.string_of_json Config.schema ^ "\n"))
@@ -1012,6 +1079,7 @@ let commands =
     command_update_providers;
     command_logs;
     command_dirs;
+    command_trust;
     command_schema;
   ]
 

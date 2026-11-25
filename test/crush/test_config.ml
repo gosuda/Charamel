@@ -50,6 +50,16 @@ let with_config_tree f =
         [ xdg ^ "/crush"; nested; project; project ^ "/.git" ];
       f ~root ~xdg ~project ~nested)
 
+let load_or_fail ~env cwd =
+  match await (Config.load ~fs_root:"/" ~env ~cwd) with
+  | Error error -> Alcotest.failf "load failed: %a" Config.pp_error error
+  | Ok loaded -> loaded
+
+let grant_or_fail ~env files =
+  match await (Config.grant ~fs_root:"/" ~env files) with
+  | Error error -> Alcotest.failf "grant failed: %a" Config.pp_error error
+  | Ok () -> ()
+
 let check_layered_load () =
   with_config_tree (fun ~root ~xdg ~project ~nested ->
       let home_file = xdg ^ "/crush/crush.json" in
@@ -69,26 +79,196 @@ let check_layered_load () =
         | "DATA" -> Some "project-data"
         | _ -> None
       in
-      match await (Config.load ~fs_root:"/" ~env:env_lookup ~cwd:nested) with
-      | Error error -> Alcotest.failf "layered load failed: %a" Config.pp_error error
-      | Ok (config, files) -> (
-          Alcotest.(check int) "three files contribute" 3 (List.length files);
-          Alcotest.(check bool) "root scalar wins" true config.Config.options.Config.debug;
+      let first = load_or_fail ~env:env_lookup nested in
+      Alcotest.(check (list string))
+        "the root project file waits for trust"
+        [ Filename.concat (Unix.realpath project) "crush.json" ]
+        (List.map
+           (fun (file : Config.project_file) -> file.Config.path)
+           first.Config.untrusted);
+      grant_or_fail ~env:env_lookup first.Config.untrusted;
+      let { Config.config; files; untrusted } = load_or_fail ~env:env_lookup nested in
+      Alcotest.(check int) "three files contribute" 3 (List.length files);
+      Alcotest.(check int) "every gated file is trusted" 0 (List.length untrusted);
+      Alcotest.(check bool) "root scalar wins" true config.Config.options.Config.debug;
+      Alcotest.(check string)
+        "options values are not expanded" "$DATA" config.Config.options.Config.data_dir;
+      Alcotest.(check (list string))
+        "list merge deduplicates in order" [ "A.md"; "B.md"; "C.md" ]
+        config.Config.context_paths;
+      Alcotest.(check (list string))
+        "permission lists concatenate" [ "read"; "edit" ]
+        config.Config.permissions.Config.allowed_tools;
+      match List.assoc_opt "anthropic" config.Config.providers with
+      | None -> Alcotest.fail "home provider missing"
+      | Some provider ->
+          Alcotest.(check (option string))
+            "environment expands api key" (Some "secret-token") provider.Config.api_key)
+
+let user_config =
+  {|{"permissions":{"allowed_tools":["read"]},"hooks":[{"event":"stop","command":"user-hook"}],"options":{"auto_lsp":false}}|}
+
+let gated_project =
+  {|{"providers":{"relay":{"type":"anthropic","base_url":"http://127.0.0.1:9"}},"mcp":{"probe":{"command":"probe-mcp"}},"lsp":{"probe":{"command":"probe-lsp"}},"hooks":[{"event":"session_start","command":"probe-hook"}],"permissions":{"allowed_tools":["bash"],"deny":["edit"]},"options":{"auto_lsp":true,"debug":true},"context_paths":["PROJECT.md"]}|}
+
+let tree_env ~root ~xdg = function
+  | "XDG_CONFIG_HOME" -> Some xdg
+  | "HOME" -> Some (Filename.concat root "home")
+  | _ -> None
+
+let hook_commands (config : Config.t) =
+  List.map (fun (hook : Config.hook) -> hook.Config.command) config.Config.hooks
+
+let check_gated_config ~trusted (config : Config.t) =
+  let gated untrusted_value trusted_value =
+    if trusted then trusted_value else untrusted_value
+  in
+  let state = if trusted then "trusted" else "untrusted" in
+  Alcotest.(check (list string))
+    (state ^ " MCP servers") (gated [] [ "probe" ])
+    (List.map fst config.Config.mcp);
+  Alcotest.(check (list string))
+    (state ^ " LSP servers") (gated [] [ "probe" ])
+    (List.map fst config.Config.lsp);
+  Alcotest.(check (list string))
+    (state ^ " providers") (gated [] [ "relay" ])
+    (List.map fst config.Config.providers);
+  Alcotest.(check (list string))
+    (state ^ " hooks")
+    (gated [ "user-hook" ] [ "user-hook"; "probe-hook" ])
+    (hook_commands config);
+  Alcotest.(check (list string))
+    (state ^ " allowed tools")
+    (gated [ "read" ] [ "read"; "bash" ])
+    config.Config.permissions.Config.allowed_tools;
+  Alcotest.(check bool)
+    (state ^ " auto_lsp") (gated false true) config.Config.options.Config.auto_lsp;
+  Alcotest.(check (list string))
+    "project deny applies" [ "edit" ] config.Config.permissions.Config.deny;
+  Alcotest.(check bool) "project debug applies" true config.Config.options.Config.debug;
+  Alcotest.(check bool)
+    "project context path applies" true
+    (List.mem "PROJECT.md" config.Config.context_paths)
+
+let sha256 text = Digestif.SHA256.(digest_string text |> to_hex)
+
+let check_project_trust () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let env = tree_env ~root ~xdg in
+      let project_file = project ^ "/crush.json" in
+      write (xdg ^ "/crush/crush.json") user_config;
+      write project_file gated_project;
+      let first = load_or_fail ~env nested in
+      check_gated_config ~trusted:false first.Config.config;
+      (match first.Config.untrusted with
+      | [ file ] ->
           Alcotest.(check string)
-            "options values are not expanded" "$DATA"
-            config.Config.options.Config.data_dir;
+            "canonical path"
+            (Filename.concat (Unix.realpath project) "crush.json")
+            file.Config.path;
+          Alcotest.(check string)
+            "digest of the bytes" (sha256 gated_project) file.Config.digest;
           Alcotest.(check (list string))
-            "list merge deduplicates in order" [ "A.md"; "B.md"; "C.md" ]
-            config.Config.context_paths;
+            "gated members"
+            [
+              "providers";
+              "mcp";
+              "lsp";
+              "hooks";
+              "permissions.allowed_tools";
+              "options.auto_lsp";
+            ]
+            file.Config.gated
+      | files -> Alcotest.failf "expected one untrusted file, got %d" (List.length files));
+      Alcotest.(check bool)
+        "loading writes no trust record" false
+        (Sys.file_exists (xdg ^ "/crush/trust.json"));
+      grant_or_fail ~env first.Config.untrusted;
+      let store = xdg ^ "/crush/trust.json" in
+      Alcotest.(check bool)
+        "the record lives in the config home" true (Sys.file_exists store);
+      if not Sys.win32 then
+        Alcotest.(check int)
+          "the record is private" 0o600
+          ((Unix.stat store).Unix.st_perm land 0o777);
+      let trusted = load_or_fail ~env nested in
+      check_gated_config ~trusted:true trusted.Config.config;
+      Alcotest.(check int) "nothing is untrusted" 0 (List.length trusted.Config.untrusted);
+      write project_file (gated_project ^ "\n");
+      let edited = load_or_fail ~env nested in
+      check_gated_config ~trusted:false edited.Config.config;
+      Alcotest.(check (list string))
+        "an edit revokes trust"
+        [ sha256 (gated_project ^ "\n") ]
+        (List.map
+           (fun (file : Config.project_file) -> file.Config.digest)
+           edited.Config.untrusted))
+
+let check_trust_path () =
+  if Sys.win32 then Alcotest.skip ();
+  with_config_tree (fun ~root ~xdg ~project ~nested:_ ->
+      let env = tree_env ~root ~xdg in
+      write (project ^ "/crush.json") gated_project;
+      grant_or_fail ~env (load_or_fail ~env project).Config.untrusted;
+      let alias = root ^ "/alias" in
+      Unix.symlink project alias;
+      let through_alias = load_or_fail ~env (alias ^ "/src") in
+      Alcotest.(check int)
+        "trust holds through a symlinked directory" 0
+        (List.length through_alias.Config.untrusted);
+      Alcotest.(check (list string))
+        "the symlinked directory keeps the trusted servers" [ "probe" ]
+        (List.map fst through_alias.Config.config.Config.mcp);
+      let copy = root ^ "/copy" in
+      let linked = root ^ "/linked" in
+      List.iter Test_tools_test_support.mkdir_p [ copy ^ "/.git"; linked ^ "/.git" ];
+      write (copy ^ "/crush.json") gated_project;
+      Unix.symlink (project ^ "/crush.json") (linked ^ "/crush.json");
+      Alcotest.(check int)
+        "the same bytes in another directory are untrusted" 1
+        (List.length (load_or_fail ~env copy).Config.untrusted);
+      Alcotest.(check int)
+        "a link to a trusted file from another directory is untrusted" 1
+        (List.length (load_or_fail ~env linked).Config.untrusted))
+
+let check_corrupt_trust_store () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let env = tree_env ~root ~xdg in
+      let store = xdg ^ "/crush/trust.json" in
+      write store "{not json";
+      write (nested ^ "/crush.json") {|{"context_paths":["PLAIN.md"]}|};
+      Alcotest.(check bool)
+        "a project file without gated members needs no trust store" true
+        (List.mem "PLAIN.md" (load_or_fail ~env nested).Config.config.Config.context_paths);
+      write (project ^ "/crush.json") gated_project;
+      match await (Config.load ~fs_root:"/" ~env ~cwd:nested) with
+      | Error (`Parse (path, _)) ->
+          Alcotest.(check string) "the store is named" store path
+      | Error (`Io (path, message)) ->
+          Alcotest.failf "unexpected I/O error %s: %s" path message
+      | Ok _ -> Alcotest.fail "a corrupt trust store was read as trusting nothing")
+
+let duplicate_members =
+  {|{"permissions":{"deny":["edit"]},"permissions":{"allowed_tools":["bash"]},"hooks":[],"hooks":[{"event":"session_start","command":"probe-hook"}]}|}
+
+let check_duplicate_gated_members () =
+  with_config_tree (fun ~root ~xdg ~project:_ ~nested ->
+      let env = tree_env ~root ~xdg in
+      write (nested ^ "/crush.json") duplicate_members;
+      match await (Config.load ~fs_root:"/" ~env ~cwd:nested) with
+      | Error (`Parse _) -> ()
+      | Error (`Io (path, message)) ->
+          Alcotest.failf "unexpected I/O error %s: %s" path message
+      | Ok loaded ->
+          let config = loaded.Config.config in
           Alcotest.(check (list string))
-            "permission lists concatenate" [ "read"; "edit" ]
+            "a repeated permissions member stays gated" []
             config.Config.permissions.Config.allowed_tools;
-          match List.assoc_opt "anthropic" config.Config.providers with
-          | None -> Alcotest.fail "home provider missing"
-          | Some provider ->
-              Alcotest.(check (option string))
-                "environment expands api key" (Some "secret-token")
-                provider.Config.api_key))
+          Alcotest.(check (list string))
+            "a repeated hooks member stays gated" [] (hook_commands config);
+          Alcotest.(check int)
+            "the file is reported" 1
+            (List.length loaded.Config.untrusted))
 
 let check_invalid_config () =
   match
@@ -144,6 +324,14 @@ let cases =
     Test_tools_test_support.case "environment expansion" `Quick check_expand;
     Test_tools_test_support.case "search path ordering" `Quick check_search_paths;
     Test_tools_test_support.case "layered config" `Quick check_layered_load;
+    Test_tools_test_support.case "project config waits for trust" `Quick
+      check_project_trust;
+    Test_tools_test_support.case "trust follows the canonical path" `Quick
+      check_trust_path;
+    Test_tools_test_support.case "corrupt trust store fails closed" `Quick
+      check_corrupt_trust_store;
+    Test_tools_test_support.case "repeated gated members stay gated" `Quick
+      check_duplicate_gated_members;
     Test_tools_test_support.case "invalid config" `Quick check_invalid_config;
     Test_tools_test_support.case "unknown record key" `Quick check_unknown_record_key;
     Test_tools_test_support.case "opaque map keys" `Quick check_opaque_map_keys;

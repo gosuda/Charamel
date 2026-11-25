@@ -45,6 +45,7 @@
   lwt
   lwt.unix
   lwt_direct
+  digestif
   fmt
   jsont
   jsont.bytesrw
