@@ -35,12 +35,19 @@ let job_value id =
 
 let job_kill_value id = Jsont.Json.object' [ json_field "job_id" (Jsont.Json.string id) ]
 
-(* Same shell-compatibility layer as the jobs tests. *)
-let emit text = if Sys.win32 then "(<nul set /p x=" ^ text ^ ")" else "printf " ^ text
+(* Same shell-compatibility layer as the jobs tests: [set /p] under [<nul]
+   reads EOF and reports status 1 despite printing, so the Windows fixtures
+   pin the zero exit explicitly. *)
+let emit_for ~win32 text =
+  if win32 then "(<nul set /p x=" ^ text ^ ")&exit 0" else "printf " ^ text
 
-let both_streams =
-  if Sys.win32 then "(<nul set /p x=out)&(<nul set /p x=err 1>&2)"
+let emit text = emit_for ~win32:Sys.win32 text
+
+let both_streams_for ~win32 =
+  if win32 then "(<nul set /p x=out)&(<nul set /p x=err 1>&2)&exit 0"
   else "printf out; printf err >&2"
+
+let both_streams = both_streams_for ~win32:Sys.win32
 
 let long_sleep seconds =
   if Sys.win32 then "ping -n " ^ string_of_int (seconds + 1) ^ " 127.0.0.1 >nul"
@@ -327,6 +334,16 @@ let test_background_lifecycle () =
     "job kill reports killed" true
     (Test_support.contains ~needle:"killed" ~haystack:killed_output.Tool.content)
 
+(* Linux cannot execute the [cmd /c] fixtures, so this pins their shape: the
+   Windows fixtures must end with an explicit zero exit. *)
+let windows_fixtures_pin_zero_exit () =
+  Alcotest.(check bool)
+    "windows emit ends with an explicit zero exit" true
+    (String.ends_with ~suffix:"&exit 0" (emit_for ~win32:true "probe"));
+  Alcotest.(check bool)
+    "windows both_streams ends with an explicit zero exit" true
+    (String.ends_with ~suffix:"&exit 0" (both_streams_for ~win32:true))
+
 let cases =
   [
     Test_tools_test_support.case "conservative shell classifier" `Quick test_classifier;
@@ -340,4 +357,6 @@ let cases =
     Test_tools_test_support.case "foreground capture" `Quick test_foreground_capture;
     Test_tools_test_support.case "foreground deadline" `Quick test_timeout;
     Test_tools_test_support.case "background lifecycle" `Quick test_background_lifecycle;
+    Test_tools_test_support.case "windows fixtures pin zero exit" `Quick
+      windows_fixtures_pin_zero_exit;
   ]

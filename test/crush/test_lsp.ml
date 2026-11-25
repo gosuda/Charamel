@@ -2,6 +2,16 @@ module Lsp = Crush_core.Lsp
 module Config = Crush_core.Config
 module Path = Crush_core.Path
 
+(* The fixture server is plain Python. [python3] is absent on Windows, where the
+   launcher is [python], so the binary is resolved through PATH at startup. *)
+let python_command =
+  match Charamel_os.Exe.find "python3" with
+  | Some command -> command
+  | None -> (
+      match Charamel_os.Exe.find "python" with
+      | Some command -> command
+      | None -> "python3")
+
 let source_text = "a\240\159\152\128b\n"
 
 let fixture_script =
@@ -67,7 +77,7 @@ let config_with_server script =
   let base = Config.default in
   let server =
     {
-      Config.command = "python3";
+      Config.command = python_command;
       args = [ "-u"; "-c"; script ];
       filetypes = [ "ml" ];
       root_markers = [];

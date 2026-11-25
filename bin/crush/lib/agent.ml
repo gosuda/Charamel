@@ -618,6 +618,44 @@ let execute_calls t turn_sw calls =
       stop_turn = false;
     }
   in
+  let skipped_execution job =
+    {
+      id = job.call.id;
+      name = job.call.name;
+      input = job.input;
+      output = Tool.fail "skipped: an earlier tool call stopped the turn";
+      elapsed_ms = 0;
+      stop_turn = false;
+    }
+  in
+  let ready_execution job =
+    match job.promise with
+    | Some promise -> (
+        match Lwt.state promise with
+        | Lwt.Return execution -> Some execution
+        | Lwt.Sleep | Lwt.Fail _ -> None)
+    | None -> None
+  in
+  let complete_pending job =
+    match ready_execution job with
+    | Some execution -> execution
+    | None -> (
+        if job.invalid then invalid_execution job
+        else
+          match job.tool with
+          | None -> unknown_execution job
+          | Some _ -> skipped_execution job)
+  in
+  let emit_finished execution =
+    emit t
+      (Tool_finished
+         {
+           id = execution.id;
+           name = execution.name;
+           output = execution.output;
+           elapsed_ms = execution.elapsed_ms;
+         })
+  in
   let rec fold pending results stop_turn loop_detected =
     match pending with
     | [] -> Lwt.return (List.rev results, stop_turn, loop_detected)
@@ -632,15 +670,7 @@ let execute_calls t turn_sw calls =
                | Some tool -> run_tool t job.call job.input tool
                | None -> Lwt.return (unknown_execution job)))
         >>= fun (execution : execution) ->
-        emit t
-          (Tool_finished
-             {
-               id = execution.id;
-               name = execution.name;
-               output = execution.output;
-               elapsed_ms = execution.elapsed_ms;
-             })
-        >>= fun () ->
+        emit_finished execution >>= fun () ->
         let output_text =
           match Tool.to_result execution.output with `Text text | `Error text -> text
         in
@@ -649,7 +679,13 @@ let execute_calls t turn_sw calls =
         in
         let stop_turn = stop_turn || execution.stop_turn in
         if loop_detected || stop_turn then
-          Lwt.return (List.rev (execution :: results), stop_turn, loop_detected)
+          Lwt_list.map_s
+            (fun pending_job ->
+              let tail_execution = complete_pending pending_job in
+              emit_finished tail_execution >|= fun () -> tail_execution)
+            rest
+          >>= fun tail ->
+          Lwt.return (List.rev (execution :: results) @ tail, stop_turn, loop_detected)
         else fold rest (execution :: results) stop_turn false
   in
   fold jobs [] false false

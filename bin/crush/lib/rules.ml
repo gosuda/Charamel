@@ -128,7 +128,8 @@ let discover_file fs_root path =
 let rec discover_entries fs_root directory = function
   | [] -> Lwt.return_nil
   | entry :: rest -> (
-      discover_file fs_root (Filename.concat directory entry) >>= fun found ->
+      discover_file fs_root (Path.normalize (Filename.concat directory entry))
+      >>= fun found ->
       discover_entries fs_root directory rest >|= fun others ->
       match found with None -> others | Some rule -> rule :: others)
 

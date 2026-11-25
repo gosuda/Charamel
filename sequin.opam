@@ -12,6 +12,7 @@ depends: [
   "charamel"
   "fmt"
   "cmdliner"
+  "lwt"
   "alcotest" {with-test}
   "alcotest-lwt" {>= "1.9.1" & with-test}
   "qcheck-core" {with-test}

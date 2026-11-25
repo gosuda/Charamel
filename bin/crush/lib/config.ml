@@ -827,21 +827,66 @@ let strip_member (section, member) (name, value) =
     | None -> (None, true)
     | Some member -> (
         match object_members value with
-        | Some inner when Option.is_some (member_json member inner) ->
-            (Some (name, object_json (remove_member member inner)), true)
+        | Some inner -> (
+            match member_json member inner with
+            | Some (Jsont.Bool (false, _))
+              when String.equal section "options" && String.equal member "auto_lsp" ->
+                (* Disabling a feature is fail-closed: an untrusted layer may opt
+                   out of automatic LSP servers, only enabling them needs trust. *)
+                (Some (name, value), false)
+            | Some _ -> (Some (name, object_json (remove_member member inner)), true)
+            | None -> (Some (name, value), false))
         | _ -> (Some (name, value), false))
+
+let selection_provider value =
+  match object_members value with
+  | None -> None
+  | Some members -> (
+      match member_json "provider" members with
+      | Some (Jsont.String (provider, _)) -> Some provider
+      | _ -> None)
+
+let strip_withheld_selections withheld_providers members =
+  match member_json "models" members with
+  | None -> (members, [])
+  | Some models -> (
+      match object_members models with
+      | None -> (members, [])
+      | Some selections ->
+          let kept, dropped =
+            List.fold_left
+              (fun (kept, dropped) ((name, value) as selection) ->
+                match selection_provider value with
+                | Some id when List.mem id withheld_providers ->
+                    (kept, gated_name ("models", Some name) :: dropped)
+                | _ -> (kept @ [ selection ], dropped))
+              ([], []) selections
+          in
+          if dropped = [] then (members, [])
+          else
+            ( remove_member "models" members @ [ ("models", object_json kept) ],
+              List.rev dropped ))
 
 let without_gated json =
   match object_members json with
   | None -> (json, [])
   | Some members ->
+      let withheld_providers =
+        match member_json "providers" members with
+        | None -> []
+        | Some providers ->
+            List.map fst (Option.value (object_members providers) ~default:[])
+      in
+      let members, dropped_models =
+        strip_withheld_selections withheld_providers members
+      in
       let strip (members, gated) key =
         let kept, found = List.split (List.map (strip_member key) members) in
         ( List.filter_map Fun.id kept,
           if List.mem true found then gated @ [ gated_name key ] else gated )
       in
       let members, gated = List.fold_left strip (members, []) gated_members in
-      (object_json members, gated)
+      (object_json members, gated @ dropped_models)
 
 let canonical_path fs_root path =
   let file = Path.under ~root:fs_root path in
@@ -849,7 +894,7 @@ let canonical_path fs_root path =
   | directory -> Ok (Filename.concat directory (Filename.basename file))
   | exception (Unix.Unix_error _ as exn) -> Error (`Io (path, io_message exn))
 
-let project_layer ~fs_root ~trust path text json =
+let project_layer ~fs_root ~trust ~extra path text json =
   match without_gated json with
   | _, [] -> Lwt.return_ok (json, None)
   | stripped, gated -> (
@@ -860,25 +905,52 @@ let project_layer ~fs_root ~trust path text json =
           Lazy.force trust >|= function
           | Error _ as failure -> failure
           | Ok records ->
-              if Trust.mem records { Trust.path = canonical; digest } then Ok (json, None)
+              if Trust.mem (Trust.add records extra) { Trust.path = canonical; digest }
+              then Ok (json, None)
               else Ok (stripped, Some { path = canonical; digest; gated })))
 
-let load ~fs_root ~env ~cwd =
+(* Providers declared only in untrusted layers are withheld from the merged
+   configuration, but a selection in an untrusted layer can still name one of
+   them: the child's own layer has no provider section to withhold, so the
+   per-file strip keeps the selection. After the merge the provider is gone and
+   resolution fails instead of falling back to the home selection. Dropping
+   those dangling selections (and gating them like any other withheld setting)
+   keeps the child from overriding a working home selection with a reference
+   that resolves nowhere. *)
+let provider_ids json =
+  match object_members json with
+  | None -> []
+  | Some members -> (
+      match member_json "providers" members with
+      | None -> []
+      | Some providers ->
+          List.map fst (Option.value (object_members providers) ~default:[]))
+
+let drop_dangling_selections dangling json =
+  match object_members json with
+  | None -> (json, [])
+  | Some members ->
+      let members, dropped = strip_withheld_selections dangling members in
+      (object_json members, dropped)
+
+let load_with ~fs_root ~env ~cwd ~extra =
   let cwd = absolute_path cwd in
   let home_config = config_home ~env in
   let home = normalize_home_config home_config in
   let trust = lazy (Trust.load ~fs_root (trust_path ~env)) in
   let layer path text json =
     if String.equal path home then Lwt.return_ok (json, None)
-    else project_layer ~fs_root ~trust path text json
+    else project_layer ~fs_root ~trust ~extra path text json
   in
-  let rec read_all paths merged contributors untrusted =
+  (* Layers accumulate in path order; the merge folds them root-last so that a
+     child overrides its parent exactly as before. *)
+  let rec read_all paths layers contributors untrusted =
     match paths with
-    | [] -> Lwt.return_ok (merged, List.rev contributors, List.rev untrusted)
+    | [] -> Lwt.return_ok (List.rev layers, List.rev contributors, List.rev untrusted)
     | path :: rest -> (
         read_file fs_root path >>= function
         | Error _ as failure -> Lwt.return failure
-        | Ok None -> read_all rest merged contributors untrusted
+        | Ok None -> read_all rest layers contributors untrusted
         | Ok (Some text) -> (
             match Jsonx.json_of_string text with
             | Error message -> Lwt.return_error (`Parse (path, message))
@@ -888,15 +960,52 @@ let load ~fs_root ~env ~cwd =
                 | Ok _ -> (
                     layer path text json >>= function
                     | Error _ as failure -> Lwt.return failure
-                    | Ok (json, ignored) ->
-                        read_all rest (merge_json merged json) (path :: contributors)
+                    | Ok (stripped, ignored) ->
+                        read_all rest
+                          ((path, json, stripped, ignored) :: layers)
+                          (path :: contributors)
                           (Option.to_list ignored @ untrusted)))))
   in
   find_git_root fs_root cwd >>= fun git_root ->
-  read_all (search_paths ~cwd ~git_root ~home_config) (Jsont.Json.object' []) [] []
-  >>= function
+  read_all (search_paths ~cwd ~git_root ~home_config) [] [] [] >>= function
   | Error _ as failure -> Lwt.return failure
-  | Ok (merged, contributors, untrusted) -> (
+  | Ok (layers, contributors, _) -> (
+      let merged0 =
+        List.fold_left
+          (fun merged (_, _, stripped, _) -> merge_json merged stripped)
+          (Jsont.Json.object' []) layers
+      in
+      let available = provider_ids merged0 in
+      let withheld =
+        List.concat_map
+          (fun (_, original, _, ignored) ->
+            match ignored with None -> [] | Some _ -> provider_ids original)
+          layers
+      in
+      let dangling = List.filter (fun id -> not (List.mem id available)) withheld in
+      (* Selections that name a withheld provider cannot resolve, so they leave
+         the merge whichever layer holds them; the strip repeats on every load,
+         so a selection takes effect again once its provider is trusted. Layers
+         that already wait for trust record the dropped selections alongside
+         their other gated settings. *)
+      let layers =
+        List.map
+          (fun (path, _, stripped, ignored) ->
+            match drop_dangling_selections dangling stripped with
+            | _, [] -> (path, stripped, ignored)
+            | stripped, dropped -> (
+                match ignored with
+                | None -> (path, stripped, None)
+                | Some record ->
+                    (path, stripped, Some { record with gated = record.gated @ dropped })))
+          layers
+      in
+      let merged =
+        List.fold_left
+          (fun merged (_, stripped, _) -> merge_json merged stripped)
+          (Jsont.Json.object' []) layers
+      in
+      let untrusted = List.filter_map (fun (_, _, ignored) -> ignored) layers in
       match Jsont.Json.decode jsont merged with
       | Error message ->
           let path =
@@ -916,6 +1025,67 @@ let load ~fs_root ~env ~cwd =
                 | [] -> "<expanded configuration>"
               in
               Lwt.return_error (`Parse (path, message))))
+
+let load ~fs_root ~env ~cwd = load_with ~fs_root ~env ~cwd ~extra:[]
+
+(* A grant saves one record per file, so each approved file must expand and
+   validate on its own as well as in the merged configuration: a child override
+   can mask an invalid parent declaration in the merge, and the parent would
+   then fail to load on its own. [validate] is structural, so a layer that
+   references another layer still validates. *)
+let validate_layer ~env path text =
+  match Jsonx.json_of_string text with
+  | Error message -> Lwt.return_error (`Parse (path, message))
+  | Ok json -> (
+      match Jsont.Json.decode jsont json with
+      | Error message -> Lwt.return_error (`Parse (path, message))
+      | Ok config -> (
+          match validate (expand_config ~env config) with
+          | Ok () -> Lwt.return_ok ()
+          | Error message -> Lwt.return_error (`Parse (path, message))))
+
+let check_layer ~fs_root ~env (file : project_file) =
+  read_file fs_root file.path >>= function
+  | Error _ as failure -> Lwt.return failure
+  | Ok None -> Lwt.return_error (`Parse (file.path, "approved configuration is missing"))
+  | Ok (Some text) ->
+      if not (String.equal (Trust.digest text) file.digest) then
+        Lwt.return_error
+          (`Parse
+             ( file.path,
+               "configuration changed while confirming trust; run `crush trust` again" ))
+      else validate_layer ~env file.path text
+
+let rec check_layers ~fs_root ~env = function
+  | [] -> Lwt.return_ok ()
+  | file :: rest -> (
+      check_layer ~fs_root ~env file >>= function
+      | Error _ as failure -> Lwt.return failure
+      | Ok () -> check_layers ~fs_root ~env rest)
+
+let grant_checked ~fs_root ~env ~cwd files =
+  match files with
+  | [] -> Lwt.return_ok ()
+  | files -> (
+      let store = trust_path ~env in
+      Trust.load ~fs_root store >>= function
+      | Error _ as failure -> Lwt.return failure
+      | Ok records -> (
+          let extra =
+            List.map
+              (fun (file : project_file) ->
+                { Trust.path = file.path; digest = file.digest })
+              files
+          in
+          (* Reload with the proposed records held in memory: the grant lands on
+             disk only when every approved layer and the merged configuration
+             expand and validate. The store is left unchanged on failure. *)
+          check_layers ~fs_root ~env files >>= function
+          | Error _ as failure -> Lwt.return failure
+          | Ok () -> (
+              load_with ~fs_root ~env ~cwd ~extra >>= function
+              | Error _ as failure -> Lwt.return failure
+              | Ok _ -> Trust.save ~fs_root store (Trust.add records extra))))
 
 let grant ~fs_root ~env files =
   match files with

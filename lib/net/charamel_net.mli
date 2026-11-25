@@ -2,8 +2,8 @@
 
     [Charamel_net] is the one module that hides the transport decision: [cohttp-lwt]
     request and response framing over conduit's pure-OCaml TLS ([tls-lwt] with [ca-certs]
-    trust anchors — never OpenSSL, never [lwt_ssl]), plus {!module:Ssh_server} for SSH
-    servers on awa-mirage.
+    trust anchors, read on the first [https] request — never OpenSSL, never [lwt_ssl]),
+    plus {!module:Ssh_server} for SSH servers on awa-mirage.
 
     Recoverable failures travel as [(value, error)] results; only programming errors
     raise. Every result carries at least the {!type:error} row, so a consumer that adds

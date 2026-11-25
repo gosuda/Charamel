@@ -18,6 +18,12 @@ depends: [
   "uri"
   "domain-name"
   "re"
+  "lwt"
+  "cohttp-lwt"
+  "cohttp-lwt-unix"
+  "conduit-lwt-unix"
+  "tls"
+  "tls-lwt"
   "alcotest" {with-test}
   "alcotest-lwt" {>= "1.9.1" & with-test}
   "qcheck-core" {with-test}

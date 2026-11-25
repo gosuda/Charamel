@@ -45,26 +45,28 @@ let run_child root args =
   match binary_path () with
   | None -> Alcotest.skip ()
   | Some executable ->
-      let _, output, _ =
+      let _, output, error =
         await
         @@ Test_support.run_cli ~exe:executable ~env:(child_environment root) ~cwd:root
              ~timeout:15. args
       in
-      output
+      (output, error)
 
-let run_child_status root args =
+let run_child_status ?(env = []) root args =
   match binary_path () with
   | None -> Alcotest.skip ()
   | Some executable ->
       await
-      @@ Test_support.run_cli ~exe:executable ~env:(child_environment root) ~cwd:root
-           ~timeout:20. args
+      @@ Test_support.run_cli ~exe:executable
+           ~env:(Array.append (child_environment root) (Array.of_list env))
+           ~cwd:root ~timeout:20. args
 
 let dirs_command () =
   Test_tools_test_support.with_scratch (fun root ->
-      let output = run_child root [ "dirs" ] in
+      let output, error = run_child root [ "dirs" ] in
       Alcotest.(check bool)
-        "config directory" true
+        ("config directory; stderr was: " ^ error)
+        true
         (Test_support.contains ~needle:"config:" ~haystack:output);
       Alcotest.(check bool)
         "project key" true
@@ -72,9 +74,10 @@ let dirs_command () =
 
 let schema_command () =
   Test_tools_test_support.with_scratch (fun root ->
-      let output = run_child root [ "schema" ] in
+      let output, error = run_child root [ "schema" ] in
       Alcotest.(check bool)
-        "schema object" true
+        ("schema object; stderr was: " ^ error)
+        true
         (String.length output > 2 && output.[0] = '{');
       Alcotest.(check bool)
         "provider schema" true
@@ -104,19 +107,31 @@ let fixture_config port =
 let user_config root =
   List.fold_left Filename.concat root [ "config"; "crush"; "crush.json" ]
 
-let run_fixture () =
+let run_fixture_in ~env () =
   Test_tools_test_support.with_scratch (fun root ->
       Test_tools_test_support.with_http_fixture ~content_type:"text/event-stream"
         fixture_body (fun port ->
-          write_private (user_config root) (fixture_config port);
+          write_private (Filename.concat root "crush.json") (fixture_config port);
+          let trust_status, _, _ = run_child_status root [ "trust"; "--cwd"; root ] in
+          Alcotest.(check int) "fixture project is trusted" 0 trust_status;
           let status, output, error =
-            run_child_status root [ "run"; "-y"; "--cwd"; root; "say"; "hi" ]
+            run_child_status ~env:(env root) root
+              [ "run"; "-y"; "--cwd"; root; "say"; "hi" ]
           in
-          Alcotest.(check int) "run exits successfully" 0 status;
+          Alcotest.(check int) ("run exits successfully; stderr was: " ^ error) 0 status;
           Alcotest.(check bool)
             "assistant text is streamed" true
             (Test_support.contains ~needle:"pong" ~haystack:output);
           Alcotest.(check string) "fixture diagnostics are empty" "" error))
+
+let run_fixture = run_fixture_in ~env:(fun _root -> [])
+
+(* A plain-HTTP provider needs no trust store, so a run must not read one: here
+   SSL_CERT_FILE names a missing file, and on Windows the system store logs a
+   warning for every anchor it cannot decode. *)
+let run_fixture_without_trust_store =
+  run_fixture_in ~env:(fun root ->
+      [ "SSL_CERT_FILE=" ^ Filename.concat root "missing-trust-store.pem" ])
 
 let json_string value = Crush_core.Jsonx.string_of_json (Jsont.Json.string value)
 
@@ -183,7 +198,9 @@ let providers_catalog_body =
 let logout_missing_credential_without_force () =
   Test_tools_test_support.with_scratch (fun root ->
       let status, _output, error = run_child_status root [ "logout"; "anthropic" ] in
-      Alcotest.(check int) "logout without a stored credential fails" 1 status;
+      Alcotest.(check int)
+        ("logout without a stored credential fails; stderr was: " ^ error)
+        1 status;
       Alcotest.(check bool)
         "missing credential is reported" true
         (Test_support.contains ~needle:"no credentials for provider anthropic"
@@ -194,7 +211,9 @@ let logout_missing_credential_with_force () =
       let status, output, error =
         run_child_status root [ "logout"; "--force"; "anthropic" ]
       in
-      Alcotest.(check int) "--force treats a missing credential as success" 0 status;
+      Alcotest.(check int)
+        ("--force treats a missing credential as success; stderr was: " ^ error)
+        0 status;
       Alcotest.(check string) "no diagnostics on stderr" "" error;
       Alcotest.(check bool)
         "logout confirmation" true
@@ -208,7 +227,7 @@ let login_existing_oauth_without_force () =
       in
       write_private auth_path auth_contents;
       let status, output, error = run_child_status root [ "login"; "anthropic" ] in
-      Alcotest.(check int) "login without force succeeds" 0 status;
+      Alcotest.(check int) ("login without force succeeds; stderr was: " ^ error) 0 status;
       Alcotest.(check string) "no diagnostics on stderr" "" error;
       Alcotest.(check bool)
         "already logged in notice" true
@@ -229,12 +248,16 @@ let sessions_lists_a_persisted_session () =
           let run_status, _run_output, run_error =
             run_child_status root [ "run"; "-y"; "--cwd"; root; "say"; "hi" ]
           in
-          Alcotest.(check int) "seeding run exits successfully" 0 run_status;
+          Alcotest.(check int)
+            ("seeding run exits successfully; stderr was: " ^ run_error)
+            0 run_status;
           Alcotest.(check string) "seeding run has no diagnostics" "" run_error;
           let status, output, error =
             run_child_status root [ "sessions"; "--cwd"; root ]
           in
-          Alcotest.(check int) "sessions exits successfully" 0 status;
+          Alcotest.(check int)
+            ("sessions exits successfully; stderr was: " ^ error)
+            0 status;
           Alcotest.(check string) "no diagnostics" "" error;
           (* Session.index_entry stores id/title only; the model is not persisted in the index. *)
           let listed =
@@ -251,7 +274,7 @@ let sessions_lists_a_persisted_session () =
 let logs_are_empty_before_any_run () =
   Test_tools_test_support.with_scratch (fun root ->
       let status, output, error = run_child_status root [ "logs"; "--cwd"; root ] in
-      Alcotest.(check int) "logs exits successfully" 0 status;
+      Alcotest.(check int) ("logs exits successfully; stderr was: " ^ error) 0 status;
       Alcotest.(check string) "no diagnostics" "" error;
       Alcotest.(check string) "no log lines before anything ran" "" output)
 
@@ -260,7 +283,7 @@ let logs_rejects_a_zero_tail () =
       let status, _output, error =
         run_child_status root [ "logs"; "--tail"; "0"; "--cwd"; root ]
       in
-      Alcotest.(check int) "a zero tail is a usage error" 2 status;
+      Alcotest.(check int) ("a zero tail is a usage error; stderr was: " ^ error) 2 status;
       Alcotest.(check bool)
         "the tail bound is reported" true
         (Test_support.contains ~needle:"--tail must be at least 1" ~haystack:error))
@@ -270,7 +293,9 @@ let update_providers_rejects_the_embedded_source () =
       let status, _output, error =
         run_child_status root [ "update-providers"; "--source"; "embedded" ]
       in
-      Alcotest.(check int) "the embedded source is rejected" 2 status;
+      Alcotest.(check int)
+        ("the embedded source is rejected; stderr was: " ^ error)
+        2 status;
       Alcotest.(check bool)
         "the usage message names --source" true
         (Test_support.contains ~needle:"--source expects a catalog URL" ~haystack:error))
@@ -283,19 +308,56 @@ let update_providers_refreshes_from_a_fixture () =
             run_child_status root
               [ "update-providers"; "--source"; Fmt.str "http://127.0.0.1:%d" port ]
           in
-          Alcotest.(check int) "update-providers exits successfully" 0 status;
+          Alcotest.(check int)
+            ("update-providers exits successfully; stderr was: " ^ error)
+            0 status;
           Alcotest.(check string) "no diagnostics" "" error;
           Alcotest.(check bool)
             "the refresh is confirmed" true
             (Test_support.contains ~needle:"Updated provider catalog" ~haystack:output)))
+
+let trust_hint_names_cwd () =
+  Test_tools_test_support.with_scratch (fun root ->
+      write_private (user_config root) {|{"permissions":{"allowed_tools":["read"]}}|};
+      write_private
+        (Filename.concat root "crush.json")
+        {|{"providers":{"relay":{"type":"anthropic","base_url":"http://127.0.0.1:9"}}}|};
+      let _status, _output, error = run_child_status root [ "dirs"; "--cwd"; root ] in
+      Alcotest.(check bool)
+        "hint names --cwd" true
+        (Test_support.contains ~needle:"--cwd" ~haystack:error);
+      Alcotest.(check bool)
+        "hint names the run directory" true
+        (Test_support.contains ~needle:root ~haystack:error))
+
+let trust_output_sanitizes_control_chars () =
+  if Sys.win32 then Alcotest.skip ();
+  Test_tools_test_support.with_scratch (fun root ->
+      write_private (user_config root) {|{"permissions":{"allowed_tools":["read"]}}|};
+      let bad = root ^ "/bad\x01dir" in
+      Test_tools_test_support.mkdir_p bad;
+      write_private (bad ^ "/crush.json")
+        {|{"providers":{"relay":{"type":"anthropic","base_url":"http://127.0.0.1:9"}}}|};
+      let status, output, _error = run_child_status root [ "trust"; "--cwd"; bad ] in
+      Alcotest.(check int) "trust succeeds" 0 status;
+      Alcotest.(check bool)
+        "control is sanitized to ?" true
+        (Test_support.contains ~needle:"bad?dir" ~haystack:output);
+      Alcotest.(check bool)
+        "no raw control in output" false
+        (Test_support.contains ~needle:"\x01" ~haystack:output))
 
 let cases =
   [
     Test_tools_test_support.case "dirs uses child environment" `Quick dirs_command;
     Test_tools_test_support.case "schema emits configuration schema" `Quick schema_command;
     Test_tools_test_support.case "run uses configured HTTP provider" `Quick run_fixture;
+    Test_tools_test_support.case "plain HTTP run reads no trust store" `Quick
+      run_fixture_without_trust_store;
     Test_tools_test_support.case "project commands wait for trust" `Quick
       project_commands_wait_for_trust;
+    Test_tools_test_support.case "plain HTTP run reads no trust store" `Quick
+      run_fixture_without_trust_store;
     Test_tools_test_support.case "logout without a credential fails" `Quick
       logout_missing_credential_without_force;
     Test_tools_test_support.case "logout --force treats a missing credential as success"
@@ -312,4 +374,8 @@ let cases =
       update_providers_rejects_the_embedded_source;
     Test_tools_test_support.case "update-providers refreshes from a fixture" `Quick
       update_providers_refreshes_from_a_fixture;
+    Test_tools_test_support.case "trust hint names the run directory" `Quick
+      trust_hint_names_cwd;
+    Test_tools_test_support.case "trust output sanitizes control characters" `Quick
+      trust_output_sanitizes_control_chars;
   ]

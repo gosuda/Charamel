@@ -72,3 +72,9 @@ val temp_dir : unit -> string
     reason {!val:home} is: [Filename.temp_dir_name] decides once, at initialization, and a
     caller that sets [TMPDIR] afterwards would not see it. POSIX uses [$TMPDIR] and then
     [/tmp]; Windows uses [%TMP%], then [%TEMP%], then [%SystemRoot%\Temp]. *)
+
+val strip_trailing_separators : string -> string
+(** [strip_trailing_separators cwd] drops trailing slashes and backslashes from a working
+    directory for the spawn: C:\Temp\ becomes C:\Temp, /tmp/ becomes /tmp. A bare root (/,
+    C:\ or C:/) is returned unchanged. The function names no platform: both separators are
+    stripped everywhere, so a test on one system pins the rules of the other. *)

@@ -34,7 +34,11 @@ type common = {
 type agent_runtime = { common : common; agent : Agent.t; permission : Permission.t ref }
 
 let random_bytes length = Mirage_crypto_rng_unix.getrandom length
-let with_root (env : Env.t) target = Filename.concat env.Env.fs_root target
+
+(* [Filename.concat] is a blind join: on Windows [concat "\\" "C:\..."] spells
+   ["\C:\..."], which no API accepts. Absolute targets name the file, so they
+   pass through; only relative targets join the sandbox root. *)
+let with_root (env : Env.t) target = Path.join_root ~root:env.Env.fs_root target
 let print_stdout (env : Env.t) text = await (Lwt_io.write env.Env.stdout text)
 let print_stderr (env : Env.t) text = await (Lwt_io.write env.Env.stderr text)
 
@@ -90,28 +94,46 @@ let read_config (env : Env.t) ~cwd =
   | Error error -> Charamel_cli.error (Fmt.str "%a" Config.pp_error error)
   | Ok loaded -> loaded
 
-let grant_trust (env : Env.t) untrusted =
-  match await (Config.grant ~fs_root:env.Env.fs_root ~env:Sys.getenv_opt untrusted) with
+let grant_trust (env : Env.t) ~cwd untrusted =
+  match
+    await
+      (Config.grant_checked ~fs_root:env.Env.fs_root ~env:Sys.getenv_opt ~cwd untrusted)
+  with
   | Error error -> Charamel_cli.error (Fmt.str "%a" Config.pp_error error)
   | Ok () -> ()
 
 let gated_list (file : Config.project_file) = String.concat ", " file.Config.gated
 
-let report_untrusted (env : Env.t) untrusted =
+let display_path path =
+  (* Repository-controlled paths reach the terminal: neutralize control
+     characters so a crafted directory name cannot rewrite the trust notice. *)
+  String.map (fun c -> if c < ' ' || c = '\x7f' then '?' else c) path
+
+(* The working directory is repository-controlled like the project paths, so it
+   is quoted for the shell and neutralized for the terminal: a directory name
+   with a space must paste as one argument, and control characters must not
+   rewrite the notice. *)
+let display_cwd cwd = display_path (Filename.quote cwd)
+
+let report_untrusted (env : Env.t) ~cwd untrusted =
   List.iter
     (fun (file : Config.project_file) ->
       print_stderr env
         (Fmt.str
-           "crush: ignoring %s from untrusted project configuration %s; run `crush \
-            trust` to allow them\n"
-           (gated_list file) file.Config.path))
+           "crush: ignoring %s from untrusted project configuration %s; run `crush trust \
+            --cwd %s` to allow them\n"
+           (gated_list file)
+           (display_path file.Config.path)
+           (display_cwd cwd)))
     untrusted
 
 let confirm_trust (env : Env.t) untrusted =
   List.iter
     (fun (file : Config.project_file) ->
       print_stderr env
-        (Fmt.str "Project configuration %s sets %s.\n" file.Config.path (gated_list file)))
+        (Fmt.str "Project configuration %s sets %s.\n"
+           (display_path file.Config.path)
+           (gated_list file)))
     untrusted;
   print_stderr env
     "Trust it? Its settings can start processes, send your credentials, and widen \
@@ -127,12 +149,12 @@ let load_config (env : Env.t) ~cwd ~interactive (options : cli) =
     match loaded.Config.untrusted with
     | _ :: _ as untrusted when interactive && Charamel_os.Tty.is_tty_stdin ->
         if confirm_trust env untrusted then (
-          grant_trust env untrusted;
+          grant_trust env ~cwd untrusted;
           read_config env ~cwd)
         else loaded
     | _ -> loaded
   in
-  report_untrusted env loaded.Config.untrusted;
+  report_untrusted env ~cwd loaded.Config.untrusted;
   with_data_dir loaded.Config.config options
 
 let home_directory () = match Sys.getenv_opt "HOME" with Some home -> home | None -> ""
@@ -920,12 +942,13 @@ let trust_project (env : Env.t) options =
       match (read_config env ~cwd).Config.untrusted with
       | [] -> print_stdout env "No project configuration needs trust.\n"
       | untrusted ->
-          grant_trust env untrusted;
+          grant_trust env ~cwd untrusted;
           List.iter
             (fun (file : Config.project_file) ->
               print_stdout env
-                (Fmt.str "Trusted %s (%s; sha256 %s)\n" file.Config.path (gated_list file)
-                   file.Config.digest))
+                (Fmt.str "Trusted %s (%s; sha256 %s)\n"
+                   (display_path file.Config.path)
+                   (gated_list file) file.Config.digest))
             untrusted)
 
 let option_term =

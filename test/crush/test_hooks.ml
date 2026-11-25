@@ -24,10 +24,26 @@ let capture file = if Sys.win32 then "findstr \"^\" > " ^ file else "cat > " ^ f
 let with_environment f = Test_tools_test_support.with_scratch (fun root -> f root)
 let runner root config = Hooks.create ~config ~cwd:root
 let read_payload root file = Test_tools_test_support.load_file (Filename.concat root file)
+
+(* The stop and session-start payloads are compared as the JSON they encode: the
+   Windows [capture] is [findstr], which ends what it copies with CRLF, and a
+   Windows [cwd] reaches the hook with every backslash JSON-escaped. *)
+let read_json root file =
+  let text = read_payload root file in
+  match Jsont_bytesrw.decode_string Jsont.json text with
+  | Ok json -> json
+  | Error message -> Alcotest.failf "%s holds no JSON value (%s): %S" file message text
+
 let failure_reason = "pre-tool hook failed"
 
 let exit_one =
   if Sys.win32 then "echo secret 1>&2 & exit /b 1" else "printf secret >&2; exit 1"
+
+let json = Alcotest.testable Jsont.pp_json Jsont.Json.equal
+
+let member name = function
+  | Jsont.Object (members, _) -> Option.map snd (Jsont.Json.find_mem name members)
+  | _ -> None
 
 let oversized_deny =
   "printf '%s' '{\"decision\":\"deny\"}'; head -c 1048576 /dev/zero | tr '\\000' ' '"
@@ -209,13 +225,15 @@ let stop_payloads () =
       let config = [ hook ~event:Config.Stop ~command:(capture "stop.json") () ] in
       let runner = runner root config in
       await (Hooks.stop runner ~session:"s" ~reason:`Stop);
-      let stop = read_payload root "stop.json" in
-      Alcotest.check Alcotest.bool "stop null message" true
-        (String.ends_with ~suffix:"\"message\":null}" stop);
+      let stop = read_json root "stop.json" in
+      Alcotest.check (Alcotest.option json) "stop null message"
+        (Some (Jsont.Json.null ()))
+        (member "message" stop);
       await (Hooks.stop runner ~session:"s" ~reason:(`Error "boom"));
-      let error = read_payload root "stop.json" in
-      Alcotest.check Alcotest.bool "stop error message" true
-        (String.ends_with ~suffix:"\"message\":\"boom\"}" error))
+      let error = read_json root "stop.json" in
+      Alcotest.check (Alcotest.option json) "stop error message"
+        (Some (json_string "boom"))
+        (member "message" error))
 
 let lifecycle_payload () =
   with_environment (fun root ->
@@ -224,11 +242,15 @@ let lifecycle_payload () =
       in
       let runner = runner root config in
       await (Hooks.session_start runner ~session:"session-1");
-      let payload = read_payload root "hook.json" in
       let expected =
-        "{\"event\":\"session_start\",\"session\":\"session-1\",\"cwd\":\"" ^ root ^ "\"}"
+        Jsont.Json.object'
+          [
+            Jsont.Json.mem (Jsont.Json.name "event") (json_string "session_start");
+            Jsont.Json.mem (Jsont.Json.name "session") (json_string "session-1");
+            Jsont.Json.mem (Jsont.Json.name "cwd") (json_string root);
+          ]
       in
-      Alcotest.check Alcotest.string "session payload" expected payload)
+      Alcotest.check json "session payload" expected (read_json root "hook.json"))
 
 let descendant_cleanup () =
   if Sys.win32 then
