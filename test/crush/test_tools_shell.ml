@@ -398,6 +398,23 @@ let test_find_data_slots () =
       ({|find . -name "$@" -print|}, "review");
     ]
 
+let test_ansi_c_bash_equivalence () =
+  if not Sys.win32 then (
+    await
+    @@ with_ctx ~asker:(fun _ -> Permission.Allow_once)
+    @@ fun ctx ->
+    (* Bash truncates an argument at an ANSI-C NUL escape; the screen models
+       that truncation, so the suffix never reaches the command. *)
+    let output =
+      output_or_fail (run_command ctx {|bash -c "printf '%s' \$'before\\0after'"|})
+    in
+    Alcotest.(check bool)
+      "bash truncates at NUL" true
+      (Test_support.contains ~needle:"before" ~haystack:output.Tool.content);
+    Alcotest.(check bool)
+      "bash drops the NUL suffix" false
+      (Test_support.contains ~needle:"after" ~haystack:output.Tool.content))
+
 let test_xargs_replacement () =
   check_posix_verdicts
     [
@@ -518,6 +535,8 @@ let cases =
     Test_tools_test_support.case "parameter quote context" `Quick test_parameter_quotes;
     Test_tools_test_support.case "command lookup mode" `Quick test_command_lookup;
     Test_tools_test_support.case "find data positions" `Quick test_find_data_slots;
+    Test_tools_test_support.case "ANSI-C NUL matches bash" `Quick
+      test_ansi_c_bash_equivalence;
     Test_tools_test_support.case "screen requires review" `Quick
       test_screen_requires_review;
     Test_tools_test_support.case "screen clears ordinary commands" `Quick
