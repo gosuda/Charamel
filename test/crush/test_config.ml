@@ -319,6 +319,85 @@ let check_jsonx_presence () =
         "integer helper" (Some 3)
         (Crush_core.Jsonx.int_member "number" json)
 
+let selected_provider models name =
+  let selection =
+    match name with "large" -> models.Config.large | _ -> models.Config.small
+  in
+  match selection with Some sel -> sel.Config.provider | None -> "<none>"
+
+let check_withheld_model_selections () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let env = tree_env ~root ~xdg in
+      write (xdg ^ "/crush/crush.json")
+        {|{"providers":{"home":{"type":"anthropic"}},"models":{"large":{"provider":"home","model":"m"},"small":{"provider":"home","model":"m"}}}|};
+      write (project ^ "/crush.json")
+        {|{"providers":{"relay":{"type":"anthropic"}},"models":{"large":{"provider":"relay","model":"m"},"small":{"provider":"relay","model":"m"}}}|};
+      let loaded = load_or_fail ~env nested in
+      let models = loaded.Config.config.Config.models in
+      Alcotest.(check string)
+        "home large survives withheld provider" "home"
+        (selected_provider models "large");
+      Alcotest.(check string)
+        "home small survives withheld provider" "home"
+        (selected_provider models "small");
+      let gated =
+        List.concat_map
+          (fun (file : Config.project_file) -> file.Config.gated)
+          loaded.Config.untrusted
+      in
+      List.iter
+        (fun needle ->
+          Alcotest.(check bool) ("gated lists " ^ needle) true (List.mem needle gated))
+        [ "providers"; "models.large"; "models.small" ];
+      write (project ^ "/crush.json")
+        {|{"providers":{"relay":{"type":"anthropic"}},"models":{"large":{"provider":"external","model":"m"}}}|};
+      let reloaded = load_or_fail ~env nested in
+      Alcotest.(check string)
+        "selection naming another provider is preserved" "external"
+        (selected_provider reloaded.Config.config.Config.models "large"))
+
+let check_untrusted_auto_lsp_false_preserved () =
+  with_config_tree (fun ~root ~xdg ~project:_ ~nested ->
+      let env = tree_env ~root ~xdg in
+      write (xdg ^ "/crush/crush.json") {|{"permissions":{"allowed_tools":["read"]}}|};
+      write (nested ^ "/crush.json") {|{"options":{"auto_lsp":false}}|};
+      let loaded = load_or_fail ~env nested in
+      Alcotest.(check bool)
+        "explicit false opt-out applies without trust" false
+        loaded.Config.config.Config.options.Config.auto_lsp;
+      Alcotest.(check int)
+        "false opt-out needs no trust" 0
+        (List.length loaded.Config.untrusted))
+
+let check_grant_checked_validates () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let env = tree_env ~root ~xdg in
+      write (xdg ^ "/crush/crush.json") {|{"permissions":{"allowed_tools":["read"]}}|};
+      write (project ^ "/crush.json")
+        {|{"hooks":[{"event":"session_start","command":"${TEAM_HOOK}"}]}|};
+      let loaded = load_or_fail ~env nested in
+      Alcotest.(check int) "hook waits for trust" 1 (List.length loaded.Config.untrusted);
+      (match
+         await
+           (Config.grant_checked ~fs_root:"/" ~env ~cwd:nested loaded.Config.untrusted)
+       with
+      | Ok () -> Alcotest.fail "grant_checked accepted an invalid hook"
+      | Error _ -> ());
+      Alcotest.(check bool)
+        "failing grant writes no trust record" false
+        (Sys.file_exists (xdg ^ "/crush/trust.json"));
+      let env2 = function "TEAM_HOOK" -> Some "echo hi" | name -> env name in
+      (match
+         await
+           (Config.grant_checked ~fs_root:"/" ~env:env2 ~cwd:nested
+              loaded.Config.untrusted)
+       with
+      | Error error -> Alcotest.failf "valid grant failed: %a" Config.pp_error error
+      | Ok () -> ());
+      Alcotest.(check bool)
+        "valid grant writes the store" true
+        (Sys.file_exists (xdg ^ "/crush/trust.json")))
+
 let cases =
   [
     Test_tools_test_support.case "environment expansion" `Quick check_expand;
@@ -336,4 +415,10 @@ let cases =
     Test_tools_test_support.case "unknown record key" `Quick check_unknown_record_key;
     Test_tools_test_support.case "opaque map keys" `Quick check_opaque_map_keys;
     Test_tools_test_support.case "JSON presence helpers" `Quick check_jsonx_presence;
+    Test_tools_test_support.case "withheld providers drop their selections" `Quick
+      check_withheld_model_selections;
+    Test_tools_test_support.case "untrusted auto_lsp false is preserved" `Quick
+      check_untrusted_auto_lsp_false_preserved;
+    Test_tools_test_support.case "grant_checked validates before saving" `Quick
+      check_grant_checked_validates;
   ]

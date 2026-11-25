@@ -166,10 +166,13 @@ val load :
     applies whole only while the trust store holds its canonical path with the digest of
     its current bytes. Otherwise its gated members, those that start processes, reach
     credentials, or widen permissions ([providers], [mcp], [lsp], [hooks],
-    [permissions.allowed_tools], and [options.auto_lsp]), are left out and the file is
-    listed in [untrusted]; its other members still apply. The trust store is [trust.json]
-    in the configuration home, read only when a project file sets a gated member. A store
-    that does not decode is an error. *)
+    [permissions.allowed_tools], and [options.auto_lsp]), are left out, except that an
+    explicit [options.auto_lsp: false] still applies and a [models.large] or
+    [models.small] selection naming a provider the same file declares is left out with
+    them; the file is then listed in [untrusted] with the withheld members named; its
+    other members still apply. The trust store is [trust.json] in the configuration home,
+    read only when a project file sets a gated member. A store that does not decode is an
+    error. *)
 
 val grant :
   fs_root:string ->
@@ -177,8 +180,19 @@ val grant :
   project_file list ->
   (unit, error) result Lwt.t
 (** [grant ~fs_root ~env files] records [files] in the trust store, so a later {!load}
-    applies each of them whole while its bytes keep the recorded digest. It is the only
-    writer of the store and runs only on the user's explicit request. *)
+    applies each of them whole while its bytes keep the recorded digest. It records
+    without validating and stays for tests; user-facing flows use {!grant_checked}. *)
+
+val grant_checked :
+  fs_root:string ->
+  env:(string -> string option) ->
+  cwd:string ->
+  project_file list ->
+  (unit, error) result Lwt.t
+(** [grant_checked ~fs_root ~env ~cwd files] reloads the configuration with [files] held
+    as trusted in memory and records them only when the exact bytes being approved expand
+    and validate. The store is left unchanged on failure, so a grant can never persist
+    settings that the next startup would reject. *)
 
 val schema : Jsont.json
 (** [schema] is a JSON Schema 2020-12 description of [jsont]. *)

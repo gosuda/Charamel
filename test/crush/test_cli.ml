@@ -316,6 +316,37 @@ let update_providers_refreshes_from_a_fixture () =
             "the refresh is confirmed" true
             (Test_support.contains ~needle:"Updated provider catalog" ~haystack:output)))
 
+let trust_hint_names_cwd () =
+  Test_tools_test_support.with_scratch (fun root ->
+      write_private (user_config root) {|{"permissions":{"allowed_tools":["read"]}}|};
+      write_private
+        (Filename.concat root "crush.json")
+        {|{"providers":{"relay":{"type":"anthropic","base_url":"http://127.0.0.1:9"}}}|};
+      let _status, _output, error = run_child_status root [ "dirs"; "--cwd"; root ] in
+      Alcotest.(check bool)
+        "hint names --cwd" true
+        (Test_support.contains ~needle:"--cwd" ~haystack:error);
+      Alcotest.(check bool)
+        "hint names the run directory" true
+        (Test_support.contains ~needle:root ~haystack:error))
+
+let trust_output_sanitizes_control_chars () =
+  if Sys.win32 then Alcotest.skip ();
+  Test_tools_test_support.with_scratch (fun root ->
+      write_private (user_config root) {|{"permissions":{"allowed_tools":["read"]}}|};
+      let bad = root ^ "/bad\x01dir" in
+      Test_tools_test_support.mkdir_p bad;
+      write_private (bad ^ "/crush.json")
+        {|{"providers":{"relay":{"type":"anthropic","base_url":"http://127.0.0.1:9"}}}|};
+      let status, output, _error = run_child_status root [ "trust"; "--cwd"; bad ] in
+      Alcotest.(check int) "trust succeeds" 0 status;
+      Alcotest.(check bool)
+        "control is sanitized to ?" true
+        (Test_support.contains ~needle:"bad?dir" ~haystack:output);
+      Alcotest.(check bool)
+        "no raw control in output" false
+        (Test_support.contains ~needle:"\x01" ~haystack:output))
+
 let cases =
   [
     Test_tools_test_support.case "dirs uses child environment" `Quick dirs_command;
@@ -343,4 +374,8 @@ let cases =
       update_providers_rejects_the_embedded_source;
     Test_tools_test_support.case "update-providers refreshes from a fixture" `Quick
       update_providers_refreshes_from_a_fixture;
+    Test_tools_test_support.case "trust hint names the run directory" `Quick
+      trust_hint_names_cwd;
+    Test_tools_test_support.case "trust output sanitizes control characters" `Quick
+      trust_output_sanitizes_control_chars;
   ]
