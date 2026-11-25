@@ -7,7 +7,7 @@
 tools for building terminal software: typed messages instead of Go interfaces, `result` instead of
 `error`, and Lwt fibers instead of goroutines.
 
-The Charm terminal ecosystem, re-derived in pure OCaml: sixteen libraries and ten
+The Charm terminal ecosystem, re-derived in pure OCaml: eighteen libraries and ten
 command-line tools for building terminal software, for OCaml developers writing TUIs
 without a Go runtime.
 
