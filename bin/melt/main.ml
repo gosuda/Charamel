@@ -168,8 +168,8 @@ let restore_command env =
        ~man:
          [
            `P
-             "Paste the phrase, then send end-of-file: Ctrl-D on an empty line on \
-              POSIX, or Ctrl-Z followed by Enter on Windows. Terminal input is hidden.";
+             "Paste the phrase, then send end-of-file: Ctrl-D on an empty line on POSIX, \
+              or Ctrl-Z followed by Enter on Windows. Terminal input is hidden.";
          ])
     (restore_term env)
 

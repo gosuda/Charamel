@@ -96,8 +96,7 @@ module Tty : sig
   (** Put back the state captured by {!enter_raw} or {!echo_off}. POSIX writes the saved
       [termios] with [TCSADRAIN]. Windows restores only the input mode after {!echo_off},
       or both console modes and code pages after {!enter_raw}. A mode the console rejects
-      in the meantime is not an error, because
-      the terminal is already on its way out. *)
+      in the meantime is not an error, because the terminal is already on its way out. *)
 
   val controlling_input : unit -> Lwt_io.input_channel
   (** A channel over the controlling terminal, independent of the process standard input,

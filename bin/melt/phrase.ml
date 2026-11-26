@@ -30,8 +30,7 @@ let read_stdin_phrase ?(is_tty = Charamel_os.Tty.is_tty_stdin)
           ~finally:(fun () -> restore ())
           (fun () ->
             tell
-              (if Sys.win32 then
-                 "Enter recovery phrase; finish with Ctrl-Z, then Enter:"
+              (if Sys.win32 then "Enter recovery phrase; finish with Ctrl-Z, then Enter:"
                else "Enter recovery phrase; finish with Ctrl-D on an empty line:");
             let text = String.concat "\n" (read_lines input) in
             tell "";

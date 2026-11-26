@@ -255,8 +255,7 @@ let multiline_phrase_restores_via_pty () =
         in
         let lines =
           List.init 4 (fun line ->
-              List.filteri (fun index _ -> index / 6 = line) words
-              |> String.concat " ")
+              List.filteri (fun index _ -> index / 6 = line) words |> String.concat " ")
         in
         let payload = String.concat "\n" lines ^ "\n\004" in
         let output = Filename.concat root "key" in

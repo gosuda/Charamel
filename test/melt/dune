@@ -6,6 +6,7 @@
   melt_core
   melt_phrase
   charamel-ssh.keygen
+  charamel.os
   alcotest
   alcotest-lwt
   fmt

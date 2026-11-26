@@ -21,9 +21,8 @@ val read_stdin_phrase :
     [input] (default: [stdin]) is returned, as from a pipe or a file. When true, echo is
     disabled through [echo_off] (default: {!Charamel_os.Tty.echo_off}) for the duration of
     the read. A prompt on standard error explains how to send end-of-file: Ctrl-D on an
-    empty line on POSIX, or Ctrl-Z followed by Enter on Windows. Every line of [input]
-    is read to end-of-file, and the lines are joined with
-    ["\n"]. When [echo_off] raises [Unix.Unix_error], the result is
-    [Error `Cannot_hide_input] and [input] is never read. [prompt] defaults to
-    [prerr_endline]. A [Sys_error] while writing this optional diagnostic does not
-    prevent reading the phrase or restoring echo. *)
+    empty line on POSIX, or Ctrl-Z followed by Enter on Windows. Every line of [input] is
+    read to end-of-file, and the lines are joined with ["\n"]. When [echo_off] raises
+    [Unix.Unix_error], the result is [Error `Cannot_hide_input] and [input] is never read.
+    [prompt] defaults to [prerr_endline]. A [Sys_error] while writing this optional
+    diagnostic does not prevent reading the phrase or restoring echo. *)
