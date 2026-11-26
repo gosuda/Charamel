@@ -1358,8 +1358,7 @@ and wrapped sink ~depth program args =
          | Ok words ->
              let rec assignments = function
                | word :: rest
-                 when word.assignment
-                      || (word.fixed && String.contains word.value '=') ->
+                 when word.assignment || (word.fixed && String.contains word.value '=') ->
                    assignments rest
                | command -> analyze sink ~depth command
              in
@@ -1425,32 +1424,119 @@ and exec_commands sink ~depth program flags args =
   let data_flags =
     if program = "find" then
       [
-        "-name"; "-iname"; "-path"; "-ipath"; "-wholename"; "-iwholename";
-        "-regex"; "-iregex"; "-maxdepth"; "-mindepth"; "-type"; "-xtype";
-        "-newer"; "-anewer"; "-cnewer"; "-samefile"; "-amin"; "-atime";
-        "-cmin"; "-ctime"; "-mmin"; "-mtime"; "-used"; "-size"; "-inum";
-        "-links"; "-perm"; "-user"; "-group"; "-uid"; "-gid"; "-lname";
-        "-ilname"; "-fstype"; "-context"; "-regextype"; "-files0-from";
-        "-fprint"; "-fprint0"; "-fls"; "-printf"; "-D";
+        "-name";
+        "-iname";
+        "-path";
+        "-ipath";
+        "-wholename";
+        "-iwholename";
+        "-regex";
+        "-iregex";
+        "-maxdepth";
+        "-mindepth";
+        "-type";
+        "-xtype";
+        "-newer";
+        "-anewer";
+        "-cnewer";
+        "-samefile";
+        "-amin";
+        "-atime";
+        "-cmin";
+        "-ctime";
+        "-mmin";
+        "-mtime";
+        "-used";
+        "-size";
+        "-inum";
+        "-links";
+        "-perm";
+        "-user";
+        "-group";
+        "-uid";
+        "-gid";
+        "-lname";
+        "-ilname";
+        "-fstype";
+        "-context";
+        "-regextype";
+        "-files0-from";
+        "-fprint";
+        "-fprint0";
+        "-fls";
+        "-printf";
+        "-D";
       ]
     else [ "-e"; "--extension"; "-E"; "--exclude"; "-t"; "--type"; "-d"; "--max-depth" ]
   in
   let switches =
     if program = "find" then
       [
-        "-H"; "-L"; "-P"; "-daystart"; "-follow"; "-warn"; "-nowarn";
-        "-noleaf"; "-ignore_readdir_race"; "-noignore_readdir_race";
-        "-depth"; "-xdev"; "-mount"; "-print"; "-print0"; "-ls";
-        "-prune"; "-quit"; "-delete"; "-true"; "-false"; "-empty";
-        "-readable"; "-writable"; "-executable"; "-nogroup"; "-nouser";
-        "-a"; "-and"; "-o"; "-or"; "-not"; "--help"; "--version";
+        "-H";
+        "-L";
+        "-P";
+        "-O0";
+        "-O1";
+        "-O2";
+        "-O3";
+        "-daystart";
+        "-follow";
+        "-warn";
+        "-nowarn";
+        "-noleaf";
+        "-ignore_readdir_race";
+        "-noignore_readdir_race";
+        "-depth";
+        "-xdev";
+        "-mount";
+        "-print";
+        "-print0";
+        "-ls";
+        "-prune";
+        "-quit";
+        "-delete";
+        "-true";
+        "-false";
+        "-empty";
+        "-readable";
+        "-writable";
+        "-executable";
+        "-nogroup";
+        "-nouser";
+        "-a";
+        "-and";
+        "-o";
+        "-or";
+        "-not";
+        "--help";
+        "--version";
       ]
     else
       [
-        "-H"; "--hidden"; "-I"; "--no-ignore"; "-L"; "--follow";
-        "-s"; "--case-sensitive"; "-i"; "--ignore-case"; "-F"; "--fixed-strings";
-        "-a"; "--absolute-path"; "-l"; "--list-details"; "-0"; "--print0";
-        "-q"; "--quiet"; "--help"; "--version";
+        "-H";
+        "--hidden";
+        "-I";
+        "--no-ignore";
+        "-L";
+        "--follow";
+        "-s";
+        "--case-sensitive";
+        "-i";
+        "--ignore-case";
+        "-F";
+        "--fixed-strings";
+        "-g";
+        "--glob";
+        "-a";
+        "--absolute-path";
+        "-l";
+        "--list-details";
+        "-0";
+        "--print0";
+        "-q";
+        "--quiet";
+        "--help";
+        "--version";
       ]
   in
   let rec command_words ~batch reversed = function
@@ -1458,18 +1544,18 @@ and exec_commands sink ~depth program flags args =
     | word :: rest
       when word.fixed
            && (word.value = ";"
-              || (batch && word.value = "+"
-                 && match reversed with
-                    | previous :: _ -> previous.fixed && previous.value = "{}"
-                    | [] -> false)) ->
+              || batch && word.value = "+"
+                 &&
+                 match reversed with
+                 | previous :: _ -> previous.fixed && previous.value = "{}"
+                 | [] -> false) ->
         (List.rev reversed, rest)
     | word :: rest -> command_words ~batch (word :: reversed) rest
   in
   let action flag rest =
     let batch = program = "find" && List.mem flag [ "-exec"; "-execdir" ] in
     let command, rest = command_words ~batch [] rest in
-    if List.exists (fun word -> not word.fixed) command then
-      review sink computed_program;
+    if List.exists (fun word -> not word.fixed) command then review sink computed_program;
     (match command with
     | name :: _ when String.contains name.value '{' -> review sink computed_program
     | _ -> analyze sink ~depth command);
@@ -1477,29 +1563,31 @@ and exec_commands sink ~depth program flags args =
   in
   let rec ambiguous = function
     | [] -> ()
+    | word :: _ when program = "fd" && word.fixed && word.value = "--" -> ()
     | word :: rest when word.fixed && List.mem word.value flags ->
         ambiguous (action word.value rest)
     | _ :: rest -> ambiguous rest
   in
-  let rec scan = function
+  let rec scan ~ambiguous_checked = function
     | [] -> ()
     | flag :: file :: format :: rest
       when program = "find" && flag.fixed && flag.value = "-fprintf" ->
         if not (file.single && format.single) then review sink computed_program;
-        scan rest
+        scan ~ambiguous_checked rest
     | flag :: operand :: rest when flag.fixed && List.mem flag.value data_flags ->
         if not operand.single then review sink computed_program;
-        scan rest
+        scan ~ambiguous_checked rest
     | word :: rest when program = "fd" && word.fixed && word.value = "--" ->
         if List.exists (fun word -> not word.single) rest then
           review sink computed_program
     | word :: rest when word.fixed && List.mem word.value flags ->
-        scan (action word.value rest)
+        scan ~ambiguous_checked (action word.value rest)
     | word :: rest when word.fixed && is_option word ->
-        if List.mem word.value switches then scan rest
+        if List.mem word.value switches then scan ~ambiguous_checked rest
         else (
           review sink wrapper_syntax;
-          ambiguous rest)
+          if not ambiguous_checked then ambiguous rest;
+          scan ~ambiguous_checked:true rest)
     | word :: rest ->
         let fixed_path_prefix =
           List.exists
@@ -1508,9 +1596,9 @@ and exec_commands sink ~depth program flags args =
         in
         if (not word.fixed) && not (word.single && fixed_path_prefix) then
           review sink computed_program;
-        scan rest
+        scan ~ambiguous_checked rest
   in
-  scan args
+  scan ~ambiguous_checked:false args
 
 and shell_code sink ~depth program args =
   let finish ~command_string =

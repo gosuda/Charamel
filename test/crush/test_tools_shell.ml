@@ -401,6 +401,18 @@ let test_wrapper_operands () =
 let test_find_data_slots () =
   check_posix_verdicts
     [
+      ("fd -g README.md", "clear");
+      ("fd --glob README.md", "clear");
+      ("find -O0 . -print", "clear");
+      ("find -O1 . -print", "clear");
+      ("find -O2 . -print", "clear");
+      ("find -O3 . -print", "clear");
+      ("fd --color never -- -x ./links.com", "review");
+      ("fd --future-option -- -X ./links.com", "review");
+      ({|find -O3 . -name -exec -exec ./cu''rl.exe '{}' \;|}, "blocked");
+      ({|find . -future-option -name -exec -exec ./cu''rl.exe '{}' \;|}, "blocked");
+      ( {|find . -future-option -fprintf out -exec -execdir ./cu''rl.exe '{}' \;|},
+        "blocked" );
       ({|find . -name "$pattern" -print|}, "clear");
       ({|find . -maxdepth "$depth" -mindepth "$minimum" -type "$kind"|}, "clear");
       ({|find . -maxdepth $depth -type "$kind"|}, "review");

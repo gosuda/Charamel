@@ -6,8 +6,8 @@
     actions, and the commands that common wrappers ([env], [xargs], [find -exec], [watch],
     ...) start. When [$'...'] appears it reads the command twice, once as bash and once as
     a shell without that quoting (dash), because the two split such a command into
-    different words. Ambiguous wrapper options and command operands require review.
-    A computed [find] or [fd] argument needs review unless a literal option makes it a
+    different words. Ambiguous wrapper options and command operands require review. A
+    computed [find] or [fd] argument needs review unless a literal option makes it a
     single data operand, or a fixed path prefix rules out an option. An unquoted [env]
     assignment that can split into more arguments also needs review.
 
