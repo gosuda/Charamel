@@ -54,9 +54,26 @@ let echo_failure_refuses_the_read =
             "unconsumed-recovery-phrase" (input_line input);
           Lwt.return_unit))
 
+let prompt_failure_does_not_prevent_reading =
+  Alcotest_lwt.test_case "failed prompt output still reads and restores echo" `Quick
+    (fun _switch () ->
+      with_pipe_input "abandon abandon\n" (fun input ->
+          let restored = ref false in
+          let echo_off () = fun () -> restored := true in
+          let prompt _ = raise (Sys_error "stderr is full") in
+          let* result =
+            Phrase.read_stdin_phrase ~is_tty:true ~echo_off ~input ~prompt ()
+          in
+          (match result with
+          | Ok text -> Alcotest.check Alcotest.string "phrase read" "abandon abandon" text
+          | Error _ -> Alcotest.fail "diagnostic failure prevented the read");
+          Alcotest.check Alcotest.bool "echo restored" true !restored;
+          Lwt.return_unit))
+
 let cases =
   [
     piped_input_is_returned_whole;
     terminal_input_joins_lines;
     echo_failure_refuses_the_read;
+    prompt_failure_does_not_prevent_reading;
   ]

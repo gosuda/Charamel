@@ -19,19 +19,20 @@ let read_lines input =
   List.rev !lines
 
 let read_stdin_phrase ?(is_tty = Charamel_os.Tty.is_tty_stdin)
-    ?(echo_off = Charamel_os.Tty.echo_off) ?(input = stdin) () =
+    ?(echo_off = Charamel_os.Tty.echo_off) ?(input = stdin) ?(prompt = prerr_endline) () =
   if not is_tty then Lwt.return (Ok (read_all input))
   else
     match try Some (echo_off ()) with Unix.Unix_error _ -> None with
     | None -> Lwt.return (Error `Cannot_hide_input)
     | Some restore ->
+        let tell message = try prompt message with Sys_error _ -> () in
         Fun.protect
           ~finally:(fun () -> restore ())
           (fun () ->
-            prerr_endline
+            tell
               (if Sys.win32 then
                  "Enter recovery phrase; finish with Ctrl-Z, then Enter:"
                else "Enter recovery phrase; finish with Ctrl-D on an empty line:");
             let text = String.concat "\n" (read_lines input) in
-            prerr_newline ();
+            tell "";
             Lwt.return (Ok text))

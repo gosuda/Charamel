@@ -12,6 +12,7 @@ val read_stdin_phrase :
   ?is_tty:bool ->
   ?echo_off:(unit -> unit -> unit) ->
   ?input:in_channel ->
+  ?prompt:(string -> unit) ->
   unit ->
   (string, error) result Lwt.t
 (** [read_stdin_phrase ()] reads the recovery phrase.
@@ -23,4 +24,6 @@ val read_stdin_phrase :
     empty line on POSIX, or Ctrl-Z followed by Enter on Windows. Every line of [input]
     is read to end-of-file, and the lines are joined with
     ["\n"]. When [echo_off] raises [Unix.Unix_error], the result is
-    [Error `Cannot_hide_input] and [input] is never read. *)
+    [Error `Cannot_hide_input] and [input] is never read. [prompt] defaults to
+    [prerr_endline]. A [Sys_error] while writing this optional diagnostic does not
+    prevent reading the phrase or restoring echo. *)
