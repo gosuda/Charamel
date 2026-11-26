@@ -126,8 +126,7 @@ let with_tls_server ?(on_accept = fun () -> ()) ~cert ~priv f =
     Lwt.catch
       (fun () -> Lwt_unix.close fd)
       (function
-        | Unix.Unix_error (Unix.EBADF, _, _) -> Lwt.return_unit
-        | exn -> Lwt.fail exn)
+        | Unix.Unix_error (Unix.EBADF, _, _) -> Lwt.return_unit | exn -> Lwt.fail exn)
   in
   let serve fd =
     Lwt.finalize
@@ -280,9 +279,7 @@ let rejected_handshakes_leak_no_fds =
    [with_tls_server] finalizer if the timeout fires while parked on it.
    Polling a flag with the cancellable [Lwt_unix.sleep] lets teardown run. *)
 let wait_for_flag flag =
-  let rec loop () =
-    if !flag then Lwt.return_unit else Lwt_unix.sleep 0.01 >>= loop
-  in
+  let rec loop () = if !flag then Lwt.return_unit else Lwt_unix.sleep 0.01 >>= loop in
   loop ()
 
 let stalled_handshake_does_not_block_teardown =
@@ -296,10 +293,11 @@ let stalled_handshake_does_not_block_teardown =
       Lwt.finalize
         (fun () ->
           Lwt_unix.with_timeout 5. (fun () ->
-              with_tls_server ~on_accept:(fun () -> accepted := true)
-                ~cert ~priv (fun port ->
-                  Lwt_unix.connect client
-                    (Unix.ADDR_INET (Unix.inet_addr_loopback, port))
+              with_tls_server
+                ~on_accept:(fun () -> accepted := true)
+                ~cert ~priv
+                (fun port ->
+                  Lwt_unix.connect client (Unix.ADDR_INET (Unix.inet_addr_loopback, port))
                   >>= fun () -> wait_for_flag accepted)))
         (fun () -> Lwt_unix.close client))
 
