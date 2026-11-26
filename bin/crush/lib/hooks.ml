@@ -92,7 +92,7 @@ let run_command t ~timeout ~command ~payload =
     Lwt.both stdout stderr >>= fun (stdout, stderr) ->
     input >>= fun () ->
     Lwt.protected (Charamel_os.Process.await process) >|= fun code ->
-    completed := true;
+    if code = 0 then completed := true;
     Done (code, stdout, stderr)
   in
   Lwt.finalize
