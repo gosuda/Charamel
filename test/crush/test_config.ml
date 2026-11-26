@@ -29,7 +29,15 @@ let check_search_paths () =
   Alcotest.(check (list string))
     "home and cwd without git root"
     [ "/home/test/crush.json"; Filename.concat "/repo/src" "crush.json" ]
-    paths
+    paths;
+  let candidates cwd git_root =
+    Config.search_paths ~cwd ~git_root:(Some git_root)
+      ~home_config:"/home/test/crush.json"
+  in
+  Alcotest.(check (list string))
+    "trailing current-directory components preserve the candidate set"
+    (candidates "/repo/src/lib" "/repo")
+    (candidates "/repo/src/lib/./." "/repo/.")
 
 let write path body =
   Test_tools_test_support.mkdir_p (Filename.dirname path);
@@ -48,7 +56,13 @@ let with_config_tree f =
       let nested = Filename.concat project "src" in
       List.iter Test_tools_test_support.mkdir_p
         [ xdg ^ "/crush"; nested; project; project ^ "/.git" ];
-      f ~root ~xdg ~project ~nested)
+      let previous_cache = Sys.getenv_opt "XDG_CACHE_HOME" in
+      Fun.protect
+        ~finally:(fun () ->
+          Unix.putenv "XDG_CACHE_HOME" (Option.value previous_cache ~default:""))
+        (fun () ->
+          Unix.putenv "XDG_CACHE_HOME" (Filename.concat root "cache");
+          f ~root ~xdg ~project ~nested))
 
 let load_or_fail ~env cwd =
   match await (Config.load ~fs_root:"/" ~env ~cwd) with
@@ -452,8 +466,11 @@ let check_catalog_model_selection_survives_override () =
       let env = tree_env ~root ~xdg in
       let model =
         Charamel_fantasy.Catalog.embedded
-        |> List.find (fun provider -> provider.Charamel_fantasy.Provider_info.id = "openai")
-        |> fun provider -> (List.hd provider.Charamel_fantasy.Provider_info.models).Charamel_fantasy.Model.id
+        |> List.find (fun provider ->
+            provider.Charamel_fantasy.Provider_info.id = "openai")
+        |> fun provider ->
+        let model = List.hd provider.Charamel_fantasy.Provider_info.models in
+        model.Charamel_fantasy.Model.id
       in
       (* The home selection names a catalog provider and declares no provider
          section; the project override of that id stays withheld. *)
@@ -478,8 +495,11 @@ let check_model_only_layer_requires_its_own_trust () =
       let env = tree_env ~root ~xdg in
       let model =
         Charamel_fantasy.Catalog.embedded
-        |> List.find (fun provider -> provider.Charamel_fantasy.Provider_info.id = "openai")
-        |> fun provider -> (List.hd provider.Charamel_fantasy.Provider_info.models).Charamel_fantasy.Model.id
+        |> List.find (fun provider ->
+            provider.Charamel_fantasy.Provider_info.id = "openai")
+        |> fun provider ->
+        let model = List.hd provider.Charamel_fantasy.Provider_info.models in
+        model.Charamel_fantasy.Model.id
       in
       write (xdg ^ "/crush/crush.json")
         {|{"providers":{"home":{"type":"anthropic"}},"models":{"large":{"provider":"home","model":"m"}}}|};
@@ -498,12 +518,61 @@ let check_model_only_layer_requires_its_own_trust () =
       grant_or_fail ~env child_records;
       Alcotest.(check string) "trusted child can select a real catalog model" "openai"
         (selected_provider (load_or_fail ~env nested).Config.config.Config.models "large");
-      write child {|{"models":{"large":{"provider":"openai","model":"override-only-model"}}}|};
+      write child
+        {|{"models":{"large":{"provider":"openai","model":"override-only-model"}}}|};
       let loaded = load_or_fail ~env nested in
       grant_or_fail ~env
         (List.filter (fun file -> file.Config.path = child) loaded.Config.untrusted);
       Alcotest.(check string) "trusted child cannot select a withheld-only model" "home"
         (selected_provider (load_or_fail ~env nested).Config.config.Config.models "large"))
+
+let check_refreshed_catalog_model_survives_override () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let provider =
+        List.find
+          (fun provider ->
+            provider.Charamel_fantasy.Provider_info.id = "openai")
+          Charamel_fantasy.Catalog.embedded
+      in
+      let existing = List.hd provider.Charamel_fantasy.Provider_info.models in
+      let model =
+        { existing with Charamel_fantasy.Model.id = "refreshed-catalog-only" }
+      in
+      let provider =
+        { provider with Charamel_fantasy.Provider_info.models = [ model ] }
+      in
+      (match
+         await
+         @@ Crush_core.Models.save_catalog ~fs_root:"/" ~etag:"fixture"
+              [ provider ]
+       with
+      | Ok () -> ()
+      | Error error ->
+          Alcotest.failf "save catalog failed: %a"
+            Crush_core.Models.pp_update_error error);
+      let env = tree_env ~root ~xdg in
+      write (xdg ^ "/crush/crush.json")
+        (Fmt.str {|{"models":{"large":{"provider":"openai","model":%S}}}|}
+           model.Charamel_fantasy.Model.id);
+      write (project ^ "/crush.json")
+        {|{"providers":{"openai":{"type":"openai"}}}|};
+      let loaded = load_or_fail ~env nested in
+      Alcotest.(check string)
+        "home selection uses the refreshed catalog" "openai"
+        (selected_provider loaded.Config.config.Config.models "large");
+      let resolved =
+        await @@ Crush_core.Models.catalog ~fs_root:"/" loaded.Config.config
+      in
+      Alcotest.(check bool)
+        "model resolution uses the same refreshed catalog" true
+        (List.exists
+           (fun provider ->
+             List.exists
+               (fun candidate ->
+                 candidate.Charamel_fantasy.Model.id
+                 = model.Charamel_fantasy.Model.id)
+               provider.Charamel_fantasy.Provider_info.models)
+           resolved))
 
 let check_missing_catalog_model_drops_home_selection () =
   with_config_tree (fun ~root ~xdg ~project ~nested ->
@@ -547,4 +616,6 @@ let cases =
       check_missing_catalog_model_drops_home_selection;
     Test_tools_test_support.case "catalog selection survives override" `Quick
       check_catalog_model_selection_survives_override;
+    Test_tools_test_support.case "refreshed catalog selection survives override" `Quick
+      check_refreshed_catalog_model_survives_override;
   ]

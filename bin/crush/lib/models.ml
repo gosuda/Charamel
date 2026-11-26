@@ -39,55 +39,8 @@ let pp_error ppf = function
   | `Disabled reason -> Fmt.pf ppf "provider credential disabled: %s" reason
   | `Auth error -> Fmt.pf ppf "%a" Auth.pp_error error
 
-let catalog_cache_path () =
-  Filename.concat (Charamel_cli.Xdg.cache_dir ~app:"crush") "providers.json"
-
-let provider_json json = Jsont.Json.decode Charamel_fantasy.Provider_info.jsont json
-
-let catalog_json json =
-  match json with
-  | Jsont.Object (members, _) -> (
-      match Jsont.Json.find_mem "providers" members with
-      | Some (_, Jsont.Array (values, _)) ->
-          let rec decode acc = function
-            | [] -> Ok (List.rev acc)
-            | value :: rest -> (
-                match provider_json value with
-                | Ok provider -> decode (provider :: acc) rest
-                | Error message -> Error message)
-          in
-          decode [] values
-      | Some _ -> Error "providers cache member is not an array"
-      | None -> Error "providers cache has no providers member")
-  | _ -> Error "providers cache must be an object"
-
-let cache_size_limit = 10 * 1024 * 1024
+let catalog_cache_path = Catalog_cache.path
 let cache_path fs_root = Path.under ~root:fs_root (catalog_cache_path ())
-
-let read_cache_file path =
-  Lwt.catch
-    (fun () ->
-      Lwt_unix.lstat path >>= fun stat ->
-      if stat.Unix.st_kind <> Unix.S_REG then
-        Lwt.return (Error "providers cache is not a regular file")
-      else if stat.Unix.st_size > cache_size_limit then
-        Lwt.return (Error "providers cache exceeds 10 MiB")
-      else
-        Lwt_io.with_file ~mode:Lwt_io.Input path (fun channel -> Lwt_io.read channel)
-        >|= fun text -> Ok text)
-    (function
-      | Unix.Unix_error _ | Sys_error _ ->
-          Lwt.return (Error "providers cache cannot be read")
-      | exn -> Lwt.fail exn)
-
-let load_cache fs_root =
-  read_cache_file (cache_path fs_root) >>= function
-  | Error _ as failure -> Lwt.return failure
-  | Ok text ->
-      Lwt.return
-        (match Jsonx.json_of_string text with
-        | Ok json -> catalog_json json
-        | Error _ -> Error "providers cache is not valid JSON")
 
 let model_id model = model.Charamel_fantasy.Model.id
 
@@ -136,10 +89,7 @@ let configured_only config existing_ids =
     config.Config.providers
 
 let catalog ~fs_root config =
-  load_cache fs_root >|= fun base ->
-  let base =
-    match base with Ok values -> values | Error _ -> Charamel_fantasy.Catalog.embedded
-  in
+  Catalog_cache.load ~fs_root >|= fun base ->
   let with_ids = List.map (fun p -> (p.Charamel_fantasy.Provider_info.id, p)) base in
   let known_ids = List.map fst with_ids in
   let overlaid = List.map (fun pair -> overlay_provider pair config) with_ids in
@@ -431,7 +381,7 @@ type update_error =
   [ `Io of string * string | `Parse of string | `Fetch of Charamel_fantasy.Error.t ]
 
 let cache_etag fs_root =
-  read_cache_file (cache_path fs_root) >|= function
+  Catalog_cache.read ~fs_root >|= function
   | Error _ -> None
   | Ok text -> (
       match Jsonx.json_of_string text with

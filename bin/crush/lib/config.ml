@@ -709,15 +709,23 @@ let normalize_home_config path =
   if Filename.basename path = "crush.json" then path
   else Filename.concat path "crush.json"
 
+let rec without_trailing_current_directory path =
+  let parent = Filename.dirname path in
+  if Filename.basename path = "." && parent <> path then
+    without_trailing_current_directory parent
+  else path
+
 let search_paths ~cwd ~git_root ~home_config =
   let home = normalize_home_config home_config in
   let cwd =
-    if Filename.is_relative cwd then Filename.concat (Sys.getcwd ()) cwd else cwd
+    (if Filename.is_relative cwd then Filename.concat (Sys.getcwd ()) cwd else cwd)
+    |> without_trailing_current_directory
   in
   let git_root =
     Option.map
       (fun path ->
-        if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path)
+        (if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path)
+        |> without_trailing_current_directory)
       git_root
   in
   let rec ancestors path =
@@ -923,9 +931,9 @@ let project_layer ~fs_root ~trust ~extra path text json =
    resolution fails instead of falling back to the home selection. Dropping
    those dangling selections (and gating them like any other withheld setting)
    keeps the child from overriding a working home selection with a reference
-   that resolves nowhere. The embedded catalog is the one exception: it
+   that resolves nowhere. The active provider catalog is the one exception: it
    supplies models without any configuration, so an independently trusted selection
-   may still name a model that actually exists in the embedded catalog. *)
+   may still name a model that actually exists in that catalog. *)
 let provider_ids json =
   match object_members json with
   | None -> []
@@ -935,7 +943,7 @@ let provider_ids json =
       | Some providers ->
           List.map fst (Option.value (object_members providers) ~default:[]))
 
-let catalog_selection value =
+let catalog_selection catalog value =
   match selection_provider value, object_members value with
   | Some provider_id, Some members -> (
       match member_json "model" members with
@@ -946,17 +954,17 @@ let catalog_selection value =
               && List.exists
                    (fun model -> String.equal model.Charamel_fantasy.Model.id model_id)
                    provider.Charamel_fantasy.Provider_info.models)
-            Charamel_fantasy.Catalog.embedded
+            catalog
       | _ -> false)
   | _ -> false
 
-let drop_dangling_selections ~trusted dangling json =
+let drop_dangling_selections ~catalog ~trusted dangling json =
   match object_members json with
   | None -> (json, [])
   | Some members ->
       let members, dropped =
         strip_withheld_selections
-          ~keep:(fun value -> trusted && catalog_selection value)
+          ~keep:(fun value -> trusted && catalog_selection catalog value)
           dangling members
       in
       (object_json members, dropped)
@@ -1011,17 +1019,19 @@ let load_with ~fs_root ~env ~cwd ~extra =
           layers
       in
       let dangling = List.filter (fun id -> not (List.mem id available)) withheld in
+      (if dangling = [] then Lwt.return [] else Catalog_cache.load ~fs_root)
+      >>= fun catalog ->
       let rec clean_layers cleaned = function
         | [] -> Lwt.return_ok (List.rev cleaned)
         | (path, text, _, stripped, ignored) :: rest -> (
             let finish stripped ignored =
               clean_layers ((path, stripped, ignored) :: cleaned) rest
             in
-            match drop_dangling_selections ~trusted:false dangling stripped with
+            match drop_dangling_selections ~catalog ~trusted:false dangling stripped with
             | _, [] -> finish stripped ignored
             | _ when String.equal path home ->
                 let stripped, _ =
-                  drop_dangling_selections ~trusted:true dangling stripped
+                  drop_dangling_selections ~catalog ~trusted:true dangling stripped
                 in
                 finish stripped ignored
             | _ ->
@@ -1032,7 +1042,7 @@ let load_with ~fs_root ~env ~cwd ~extra =
                 | Error _ as failure -> Lwt.return failure
                 | Ok (record, trusted) ->
                     let stripped, dropped =
-                      drop_dangling_selections ~trusted dangling stripped
+                      drop_dangling_selections ~catalog ~trusted dangling stripped
                     in
                     let ignored =
                       if trusted || dropped = [] then ignored
@@ -1043,31 +1053,31 @@ let load_with ~fs_root ~env ~cwd ~extra =
       clean_layers [] layers >>= function
       | Error _ as failure -> Lwt.return failure
       | Ok layers ->
-      let merged =
-        List.fold_left
-          (fun merged (_, stripped, _) -> merge_json merged stripped)
-          (Jsont.Json.object' []) layers
-      in
-      let untrusted = List.filter_map (fun (_, _, ignored) -> ignored) layers in
-      match Jsont.Json.decode jsont merged with
-      | Error message ->
-          let path =
-            match List.rev contributors with
-            | path :: _ -> path
-            | [] -> "<merged configuration>"
+          let merged =
+            List.fold_left
+              (fun merged (_, stripped, _) -> merge_json merged stripped)
+              (Jsont.Json.object' []) layers
           in
-          Lwt.return_error (`Parse (path, message))
-      | Ok config -> (
-          let config = expand_config ~env config in
-          match validate config with
-          | Ok () -> Lwt.return_ok { config; files = contributors; untrusted }
+          let untrusted = List.filter_map (fun (_, _, ignored) -> ignored) layers in
+          match Jsont.Json.decode jsont merged with
           | Error message ->
               let path =
                 match List.rev contributors with
                 | path :: _ -> path
-                | [] -> "<expanded configuration>"
+                | [] -> "<merged configuration>"
               in
-              Lwt.return_error (`Parse (path, message))))
+              Lwt.return_error (`Parse (path, message))
+          | Ok config -> (
+              let config = expand_config ~env config in
+              match validate config with
+              | Ok () -> Lwt.return_ok { config; files = contributors; untrusted }
+              | Error message ->
+                  let path =
+                    match List.rev contributors with
+                    | path :: _ -> path
+                    | [] -> "<expanded configuration>"
+                  in
+                  Lwt.return_error (`Parse (path, message))))
 
 let load ~fs_root ~env ~cwd = load_with ~fs_root ~env ~cwd ~extra:[]
 

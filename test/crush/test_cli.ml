@@ -349,9 +349,13 @@ let trust_output_sanitizes_control_chars () =
 
 let trust_hint_controls_are_copy_safe () =
   if Sys.win32 then Alcotest.skip ();
+  let executable =
+    match binary_path () with Some path -> path | None -> Alcotest.skip ()
+  in
   List.iter
     (fun name ->
       Test_tools_test_support.with_scratch (fun root ->
+          Test_tools_test_support.mkdir_p (Filename.concat root ".git");
           let cwd = Filename.concat root name in
           Test_tools_test_support.mkdir_p cwd;
           write_private (Filename.concat cwd "crush.json")
@@ -377,7 +381,21 @@ let trust_hint_controls_are_copy_safe () =
           Alcotest.(check int) "copyable argument executes" 0 status;
           Alcotest.(check string) "argument has no shell diagnostics" "" diagnostics;
           Alcotest.(check string) "argument keeps the exact directory"
-            (Unix.realpath cwd) (Unix.realpath decoded)))
+            (Unix.realpath cwd) (Unix.realpath decoded);
+          let status, _, diagnostics =
+            await
+            @@ Test_support.run_cli ~exe:"/bin/sh" ~env:(child_environment root)
+                 ~timeout:10.
+                 [ "-c"; Filename.quote executable ^ " trust --cwd " ^ argument ]
+          in
+          Alcotest.(check int)
+            ("copyable trust command succeeds: " ^ diagnostics) 0 status;
+          let status, _, diagnostics = run_child_status root [ "dirs"; "--cwd"; cwd ] in
+          Alcotest.(check int) "trusted configuration reloads" 0 status;
+          Alcotest.(check bool)
+            "the copied command grants the canonical project" false
+            (Test_support.contains ~needle:"untrusted project configuration"
+               ~haystack:diagnostics)))
     [ "tab\tdir"; "line\ndir\n"; "control\x01dir" ]
 
 let cases =
