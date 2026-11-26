@@ -536,15 +536,13 @@ let run_tool ?(note_body : execution -> unit = fun _ -> ()) t (call : call) inpu
   (* The body has finished; the observational post-tool hook below must not decide
      whether this call ran. Record the outcome now so a turn stopped by an earlier
      call reports this result instead of [skipped]. *)
-  note_body
-    { id = call.id; name = call.name; input = hook_input; output; elapsed_ms; stop_turn };
+  let result =
+    { id = call.id; name = call.name; input = hook_input; output; elapsed_ms; stop_turn }
+  in
+  note_body result;
   Hooks.post_tool t.deps.hooks ~session:(Session.id t.session) ~tool:tool.Tool.name
     ~input:hook_input ~output:output.Tool.content ~is_error:output.Tool.is_error
-  >|= fun () ->
-  let elapsed_ms =
-    int_of_float ((Charamel_os.Time.now t.deps.clock -. started) *. 1000.)
-  in
-  { id = call.id; name = call.name; input = hook_input; output; elapsed_ms; stop_turn }
+  >|= fun () -> result
 
 let schedule_call ?(invalid = false) t (call : call) input =
   let tool = Toolset.find t.tools call.name in

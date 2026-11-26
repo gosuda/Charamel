@@ -90,7 +90,8 @@ let config ~base_url (model : Charamel_fantasy.Model.t) =
     models = { large = Some selected; small = Some selected };
   }
 
-let with_agent ?(hooks_config : Config.hook list = []) ~queue ~fallback f =
+let with_agent ?(hooks_config : Config.hook list = [])
+    ?(clock = Charamel_os.Time.lwt) ~queue ~fallback f =
   Test_tools_test_support.with_scratch (fun root ->
       let old_data = Sys.getenv_opt "XDG_DATA_HOME" in
       Unix.putenv "XDG_DATA_HOME" root;
@@ -103,7 +104,6 @@ let with_agent ?(hooks_config : Config.hook list = []) ~queue ~fallback f =
           Test_tools_test_support.with_http_server ~content_type:"text/event-stream" ~body
             (fun port ->
               let sw = Lwt_switch.create () in
-              let clock = Charamel_os.Time.lwt in
               let base_url = Fmt.str "http://127.0.0.1:%d" port in
               let selected_model = model ~base_url in
               let config = config ~base_url selected_model in
@@ -283,10 +283,8 @@ let two_tool_response model_id name1 input1 name2 input2 =
      {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":1}}\n\n"
   ^ "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 
-(* A call whose body finished before an earlier call stopped the turn keeps its own
-   result: the pre-tool hook denies [denied.txt] after a delay that lets the [allowed.txt]
-   body finish, while the post-tool hook holds the allowed call inside post_tool. Without
-   the recorded body outcome the allowed call is reported as skipped. *)
+(* The allowed call signals that its body finished before the denial can stop the
+   turn. Its post hook stays blocked until cancellation. *)
 let body_outcome_survives_stop_turn () =
   if Sys.win32 then
     (* The hook scripts below are POSIX shell; the output cap is the same code path on
@@ -295,10 +293,13 @@ let body_outcome_survives_stop_turn () =
   else
     let model_id = "fixture-model" in
     let pre =
-      "if grep -q denied.txt; then sleep 1; echo denied-by-hook 1>&2; exit 2; else exit \
-       0; fi"
+      "if grep -q denied.txt; then read ready < .body-ready; echo denied-by-hook 1>&2; \
+       exit 2; else exit 0; fi"
     in
-    let post = "if grep -q allowed.txt; then sleep 5; fi; exit 0" in
+    let post =
+      "if grep -q allowed.txt; then printf 'ready\\n' > .body-ready; read release < \
+       .post-release; fi; exit 0"
+    in
     let hooks_config : Config.hook list =
       [
         { event = Config.Pre_tool; matcher = None; command = pre; timeout_s = 30 };
@@ -314,6 +315,8 @@ let body_outcome_survives_stop_turn () =
         ]
       ~fallback:(text_response model_id "done")
       (fun agent _session events root ->
+        Unix.mkfifo (Filename.concat root ".body-ready") 0o600;
+        Unix.mkfifo (Filename.concat root ".post-release") 0o600;
         Test_tools_test_support.write_file
           (Filename.concat root "denied.txt")
           "denied-body";
@@ -346,6 +349,65 @@ let body_outcome_survives_stop_turn () =
           "kept body is not marked skipped" false
           (Test_support.contains ~needle:"skipped" ~haystack:allowed))
 
+let post_hook_time_is_not_tool_time () =
+  if Sys.win32 then Alcotest.skip ()
+  else
+    let virtual_clock, advance = Charamel_os.Time.create_virtual () in
+    let clock = Charamel_os.Time.of_virtual virtual_clock in
+    let hooks_config : Config.hook list =
+      [
+        {
+          event = Config.Post_tool;
+          matcher = None;
+          command = "cat >/dev/null; printf 'ready\\n' > .timing-ready; read release < .timing-release";
+          timeout_s = 30;
+        };
+      ]
+    in
+    with_agent ~hooks_config ~clock
+      ~queue:
+        [
+          tool_response "fixture-model" "read" "{\"path\":\"allowed.txt\"}";
+          text_response "fixture-model" "done";
+        ]
+      ~fallback:(text_response "fixture-model" "done")
+      (fun agent _session events root ->
+        let ready_path = Filename.concat root ".timing-ready" in
+        let release_path = Filename.concat root ".timing-release" in
+        Unix.mkfifo ready_path 0o600;
+        Unix.mkfifo release_path 0o600;
+        let open_fifo path =
+          Unix.openfile path [ Unix.O_RDWR; Unix.O_NONBLOCK ] 0
+          |> Lwt_unix.of_unix_file_descr
+        in
+        let ready = Lwt_io.of_fd ~mode:Lwt_io.input (open_fifo ready_path) in
+        let release = Lwt_io.of_fd ~mode:Lwt_io.output (open_fifo release_path) in
+        Fun.protect
+          ~finally:(fun () ->
+            await (Lwt_io.close ready);
+            await (Lwt_io.close release))
+          (fun () ->
+            Test_tools_test_support.write_file
+              (Filename.concat root "allowed.txt") "allowed-body";
+            let pending = Agent.prompt agent "read the file" in
+            ignore
+              (await
+                 (Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line ready)));
+            advance 10.;
+            await (Lwt_io.write_line release "resume");
+            await (Lwt_io.flush release);
+            (match await pending with
+            | Error error -> Alcotest.failf "agent prompt failed: %a" Agent.pp_error error
+            | Ok _ -> ());
+            let timings =
+              List.filter_map
+                (function
+                  | Agent.Tool_finished { elapsed_ms; _ } -> Some elapsed_ms
+                  | _ -> None)
+                !events
+            in
+            Alcotest.(check (list int)) "post-hook time excluded" [ 0 ] timings))
+
 let cases =
   [
     Test_tools_test_support.case "tool call and stop use HTTP fixture" `Quick
@@ -353,4 +415,6 @@ let cases =
     Test_tools_test_support.case "last ten triples stop repeated calls" `Quick loop_guard;
     Test_tools_test_support.case "finished body survives an earlier stop" `Quick
       body_outcome_survives_stop_turn;
+    Test_tools_test_support.case "post-hook time is not tool time" `Quick
+      post_hook_time_is_not_tool_time;
   ]
