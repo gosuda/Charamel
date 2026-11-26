@@ -1,10 +1,12 @@
 (test
  (name test_melt)
  (package melt)
- (modules test_melt test_mnemonic test_melt_cli)
+ (modules test_melt test_mnemonic test_melt_cli test_phrase)
  (libraries
   melt_core
+  melt_phrase
   charamel-ssh.keygen
+  charamel.os
   alcotest
   alcotest-lwt
   fmt
@@ -14,3 +16,20 @@
   mirage-crypto-rng.unix
   unix)
  (deps %{exe:../../bin/melt/main.exe}))
+
+(rule
+ (aliases runtest windows-console)
+ (package melt)
+ (enabled_if
+  (= %{os_type} "Win32"))
+ (deps windows_console.ps1 %{exe:../../bin/melt/main.exe})
+ (action
+  (run
+   powershell.exe
+   -NoProfile
+   -ExecutionPolicy
+   Bypass
+   -File
+   %{dep:windows_console.ps1}
+   -Melt
+   %{exe:../../bin/melt/main.exe})))

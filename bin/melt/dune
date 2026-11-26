@@ -10,6 +10,7 @@
  (package melt)
  (libraries
   melt_core
+  melt_phrase
   charamel.cli
   charamel-ssh.keygen
   charamel.os
@@ -19,3 +20,9 @@
   cmdliner
   fmt
   mirage-crypto-rng.unix))
+
+(library
+ (name melt_phrase)
+ (modules phrase)
+ (package melt)
+ (libraries lwt charamel.os unix))

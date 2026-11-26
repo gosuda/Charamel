@@ -11,7 +11,8 @@ type error =
   | `Parse_key of Charamel_ssh_keygen.error
   | `Unsupported_key
   | `Mnemonic of Melt_core.Mnemonic.error
-  | `Write_key of Charamel_ssh_keygen.error ]
+  | `Write_key of Charamel_ssh_keygen.error
+  | `Cannot_hide_input ]
 (** [error] is a typed failure raised by a backup or restore operation. *)
 
 val pp_error : error Fmt.t

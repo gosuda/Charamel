@@ -88,14 +88,15 @@ module Tty : sig
   val echo_off : unit -> saved
   (** Turn echo off, leaving everything else — canonical mode included — alone, so a
       password prompt still gets line editing. POSIX clears [ECHO] on [Unix.stdin];
-      Windows clears [ENABLE_ECHO_INPUT]. Code pages are untouched.
+      Windows clears [ENABLE_ECHO_INPUT] on the input handle only, so redirected standard
+      output is supported. Output mode and code pages are untouched.
       @raise Unix_error when the standard input is not a terminal. *)
 
   val restore : saved -> unit
   (** Put back the state captured by {!enter_raw} or {!echo_off}. POSIX writes the saved
-      [termios] with [TCSADRAIN]. Windows restores both console modes and the code pages
-      saved at entry; a mode the console rejects in the meantime is not an error, because
-      the terminal is already on its way out. *)
+      [termios] with [TCSADRAIN]. Windows restores only the input mode after {!echo_off},
+      or both console modes and code pages after {!enter_raw}. A mode the console rejects
+      in the meantime is not an error, because the terminal is already on its way out. *)
 
   val controlling_input : unit -> Lwt_io.input_channel
   (** A channel over the controlling terminal, independent of the process standard input,
