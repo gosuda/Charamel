@@ -330,11 +330,22 @@ let body_outcome_survives_stop_turn () =
           Test_tools_test_support.load_file (Filename.concat root ".post-pid")
           |> String.trim |> int_of_string
         in
-        (match Unix.kill post_pid 0 with
-        | () ->
-            Unix.kill (0 - post_pid) Sys.sigkill;
-            Alcotest.fail "cancelling the post hook left its process alive"
-        | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ());
+        (* The switch callback only requests cancellation; the hook finalizer
+           still has to kill and reap the shell, and an unreaped zombie still
+           answers signal 0. Poll until the pid is gone instead of asserting
+           on the first check. *)
+        let rec wait_gone attempts =
+          match Unix.kill post_pid 0 with
+          | () ->
+              if attempts <= 0 then (
+                (try Unix.kill (0 - post_pid) Sys.sigkill with _ -> ());
+                Alcotest.fail "cancelling the post hook left its process alive")
+              else (
+                await (Lwt_unix.sleep 0.05);
+                wait_gone (attempts - 1))
+          | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ()
+        in
+        wait_gone 100;
         let finished =
           List.filter_map
             (function
