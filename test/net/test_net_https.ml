@@ -106,7 +106,7 @@ let has_terminator text =
   in
   last >= 0 && scan 0
 
-let with_tls_server ~cert ~priv f =
+let with_tls_server ?(on_accept = fun () -> ()) ~cert ~priv f =
   let socket = Lwt_unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
   Lwt_unix.bind socket (Unix.ADDR_INET (Unix.inet_addr_of_string "127.0.0.1", 0))
   >>= fun () ->
@@ -121,41 +121,72 @@ let with_tls_server ~cert ~priv f =
     | Ok config -> config
     | Error (`Msg message) -> Alcotest.failf "TLS fixture: %s" message
   in
-  let serve fd =
+  let accepted = ref [] in
+  let close_fd fd =
     Lwt.catch
-      (fun () ->
-        Tls_lwt.Unix.server_of_fd config fd >>= fun session ->
-        let reader, writer = Tls_lwt.of_t session in
-        let received = Buffer.create 256 in
-        let rec read_request () =
-          Lwt_io.read ~count:1024 reader >>= fun chunk ->
-          if String.length chunk = 0 then Lwt.return_unit
-          else (
-            Buffer.add_string received chunk;
-            if has_terminator (Buffer.contents received) then Lwt.return_unit
-            else read_request ())
-        in
-        read_request () >>= fun () ->
-        let body = "hello" in
-        let head =
-          Printf.sprintf
-            "HTTP/1.1 200 OK\r\ncontent-length: %d\r\nconnection: close\r\n\r\n"
-            (String.length body)
-        in
-        Lwt_io.write writer (head ^ body) >>= fun () ->
-        Lwt_io.flush writer >>= fun () -> Tls_lwt.Unix.shutdown session `read_write)
-      (fun _exn -> Lwt.return_unit)
+      (fun () -> Lwt_unix.close fd)
+      (function
+        | Unix.Unix_error (Unix.EBADF, _, _) -> Lwt.return_unit | exn -> Lwt.fail exn)
   in
+  let serve fd =
+    Lwt.finalize
+      (fun () ->
+        Lwt.catch
+          (fun () ->
+            Tls_lwt.Unix.server_of_fd config fd >>= fun session ->
+            let reader, writer = Tls_lwt.of_t session in
+            let received = Buffer.create 256 in
+            let rec read_request () =
+              Lwt_io.read ~count:1024 reader >>= fun chunk ->
+              if String.length chunk = 0 then Lwt.return_unit
+              else (
+                Buffer.add_string received chunk;
+                if has_terminator (Buffer.contents received) then Lwt.return_unit
+                else read_request ())
+            in
+            read_request () >>= fun () ->
+            let body = "hello" in
+            let head =
+              Printf.sprintf
+                "HTTP/1.1 200 OK\r\ncontent-length: %d\r\nconnection: close\r\n\r\n"
+                (String.length body)
+            in
+            Lwt_io.write writer (head ^ body) >>= fun () ->
+            Lwt_io.flush writer >>= fun () -> Tls_lwt.Unix.shutdown session `read_write)
+          (function
+            | Tls_lwt.Tls_alert _ | Tls_lwt.Tls_failure _ | End_of_file
+            | Unix.Unix_error _ | Lwt_io.Channel_closed _ | Lwt.Canceled ->
+                Lwt.return_unit
+            | exn -> Lwt.fail exn))
+      (fun () ->
+        accepted := List.filter (fun active -> active != fd) !accepted;
+        close_fd fd)
+  in
+  let handlers = ref [] in
   let rec accept_loop () =
     Lwt.catch
       (fun () ->
         Lwt_unix.accept socket >>= fun (fd, _) ->
-        Lwt.async (fun () -> serve fd);
+        accepted := fd :: !accepted;
+        on_accept ();
+        let handler = serve fd in
+        handlers := handler :: !handlers;
         accept_loop ())
-      (fun _exn -> Lwt.return_unit)
+      (function
+        | Unix.Unix_error (Unix.EBADF, _, _) | Lwt.Canceled -> Lwt.return_unit
+        | exn -> Lwt.fail exn)
   in
   let loop = accept_loop () in
-  Lwt.finalize (fun () -> f port) (fun () -> Lwt_unix.close socket >>= fun () -> loop)
+  Lwt.finalize
+    (fun () -> f port)
+    (fun () ->
+      Lwt_unix.close socket >>= fun () ->
+      loop >>= fun () ->
+      Lwt_list.iter_p close_fd !accepted >>= fun () ->
+      List.iter Lwt.cancel !handlers;
+      Lwt.catch
+        (fun () -> Lwt.join !handlers)
+        (function Lwt.Canceled -> Lwt.return_unit | exn -> Lwt.fail exn))
 
 let https_get port =
   Charamel_net.call ~meth:`GET ~body:None
@@ -202,4 +233,109 @@ let rejects_unknown_chain =
       with_tls_server ~cert ~priv (fun port ->
           https_get port >>= fun result -> check_tls_failure "unknown chain" result))
 
-let cases = [ loads_trust_store; rejects_unknown_chain ]
+(* The accepted socket is closed in the [serve] handshake-failure handler, so
+   repeated rejected handshakes must not grow the process file-descriptor count.
+   Linux-only: the count comes from [/proc/self/fd]. *)
+let open_fds () =
+  let dir = Unix.opendir "/proc/self/fd" in
+  Fun.protect
+    ~finally:(fun () -> Unix.closedir dir)
+    (fun () ->
+      let count = ref 0 in
+      (try
+         while true do
+           ignore (Unix.readdir dir);
+           incr count
+         done
+       with End_of_file -> ());
+      !count - 2)
+
+let rejected_handshakes_leak_no_fds =
+  Alcotest_lwt.test_case "rejected handshakes leak no file descriptors" `Quick
+    (fun _switch () ->
+      if not (Sys.file_exists "/proc/self/fd") then Alcotest.skip ()
+      else (
+        Mirage_crypto_rng_unix.use_default ();
+        let _anchor = Lazy.force shared_anchor in
+        let other_priv, other_ca =
+          make_ca ~common_name:"charamel-test-leak" ~serial:"\004" ()
+        in
+        let priv, cert = sign_leaf ~ca_priv:other_priv ~ca_cert:other_ca () in
+        let before = open_fds () in
+        with_tls_server ~cert ~priv (fun port ->
+            let rec loop remaining =
+              if remaining = 0 then Lwt.return_unit
+              else
+                https_get port >>= fun result ->
+                check_tls_failure "unknown chain" result >>= fun () -> loop (remaining - 1)
+            in
+            loop 16)
+        >>= fun () ->
+        let after = open_fds () in
+        Alcotest.(check bool) "no file descriptor growth" true (after <= before);
+        Lwt.return_unit))
+
+(* A bare [Lwt.wait] is not cancellable, which would strand the
+   [with_tls_server] finalizer if the timeout fires while parked on it.
+   Polling a flag with the cancellable [Lwt_unix.sleep] lets teardown run. *)
+let wait_for_flag flag =
+  let rec loop () = if !flag then Lwt.return_unit else Lwt_unix.sleep 0.01 >>= loop in
+  loop ()
+
+let stalled_handshake_does_not_block_teardown =
+  Alcotest_lwt.test_case "a stalled handshake does not block fixture teardown" `Quick
+    (fun _switch () ->
+      Mirage_crypto_rng_unix.use_default ();
+      let anchor = Lazy.force shared_anchor in
+      let priv, cert = sign_leaf ~ca_priv:anchor.priv ~ca_cert:anchor.cert () in
+      let client = Lwt_unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+      let accepted = ref false in
+      Lwt.finalize
+        (fun () ->
+          Lwt_unix.with_timeout 5. (fun () ->
+              with_tls_server
+                ~on_accept:(fun () -> accepted := true)
+                ~cert ~priv
+                (fun port ->
+                  Lwt_unix.connect client (Unix.ADDR_INET (Unix.inet_addr_loopback, port))
+                  >>= fun () -> wait_for_flag accepted)))
+        (fun () -> Lwt_unix.close client))
+
+(* Without a cancellable wait the timeout below strands the [Lwt.finalize]
+   cleanup: cancelling a bare [Lwt.wait] waiter is a no-op. *)
+let cancelled_wait_still_runs_teardown =
+  Alcotest_lwt.test_case "a cancelled accept wait still runs teardown" `Quick
+    (fun _switch () ->
+      let cleaned = ref false in
+      (* [arrived] is never set: models accept not firing before the timeout. *)
+      let arrived = ref false in
+      let guarded =
+        Lwt.finalize
+          (fun () -> wait_for_flag arrived)
+          (fun () ->
+            cleaned := true;
+            Lwt.return_unit)
+      in
+      Lwt.catch
+        (fun () -> Lwt_unix.with_timeout 0.05 (fun () -> guarded))
+        (function Lwt_unix.Timeout -> Lwt.return_unit | exn -> Lwt.fail exn)
+      >>= fun () ->
+      (* The finalizer lands on later iterations; yield before judging whether
+         teardown ran. A parked waiter still fails after the bound. *)
+      let rec wait_clean attempts =
+        if !cleaned then Lwt.return_unit
+        else if attempts <= 0 then Lwt.return_unit
+        else Lwt.pause () >>= fun () -> wait_clean (attempts - 1)
+      in
+      wait_clean 100 >>= fun () ->
+      Alcotest.check Alcotest.bool "teardown ran after cancel" true !cleaned;
+      Lwt.return_unit)
+
+let cases =
+  [
+    loads_trust_store;
+    rejects_unknown_chain;
+    rejected_handshakes_leak_no_fds;
+    stalled_handshake_does_not_block_teardown;
+    cancelled_wait_still_runs_teardown;
+  ]
