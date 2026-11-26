@@ -126,8 +126,7 @@ let with_tls_server ?(on_accept = fun () -> ()) ~cert ~priv f =
     Lwt.catch
       (fun () -> Lwt_unix.close fd)
       (function
-        | Unix.Unix_error (Unix.EBADF, _, _) -> Lwt.return_unit
-        | exn -> Lwt.fail exn)
+        | Unix.Unix_error (Unix.EBADF, _, _) -> Lwt.return_unit | exn -> Lwt.fail exn)
   in
   let serve fd =
     Lwt.finalize
@@ -287,10 +286,11 @@ let stalled_handshake_does_not_block_teardown =
       Lwt.finalize
         (fun () ->
           Lwt_unix.with_timeout 5. (fun () ->
-              with_tls_server ~on_accept:(fun () -> Lwt.wakeup_later accept ())
-                ~cert ~priv (fun port ->
-                  Lwt_unix.connect client
-                    (Unix.ADDR_INET (Unix.inet_addr_loopback, port))
+              with_tls_server
+                ~on_accept:(fun () -> Lwt.wakeup_later accept ())
+                ~cert ~priv
+                (fun port ->
+                  Lwt_unix.connect client (Unix.ADDR_INET (Unix.inet_addr_loopback, port))
                   >>= fun () -> accepted)))
         (fun () -> Lwt_unix.close client))
 
