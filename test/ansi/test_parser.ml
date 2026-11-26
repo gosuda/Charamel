@@ -256,6 +256,47 @@ let osc_cases =
           [ osc [ "52"; "c"; String.make 65531 'a' ] ]);
   ]
 
+let osc_utf8_termination =
+  let cases =
+    List.map
+      (fun (name, prefix) ->
+        (name, "\x1b]8;;" ^ prefix ^ "\x9clabel", osc [ "8"; ""; prefix ] :: prints "label"))
+      [
+        ("invalid E0 second byte", "\xe0");
+        ("surrogate prefix", "\xed\xa0");
+        ("overlong four-byte prefix", "\xf0\x80");
+        ("out-of-range prefix", "\xf4\x90");
+      ]
+  in
+  let before_limit = String.make 65532 'a' in
+  let at_limit = String.make 65533 'a' in
+  let cases =
+    cases
+    @ [
+        ( "control interrupts prefix",
+          "\x1b]8;;\xc3\000\x9clabel",
+          osc [ "8"; ""; "\xc3" ] :: prints "label" );
+        ( "continuation crosses storage limit",
+          "\x1b]8;;" ^ before_limit ^ "\xc3\xbc\x9clabel",
+          osc [ "8"; ""; before_limit ^ "\xc3" ] :: prints "label" );
+        ( "whole rune beyond storage limit",
+          "\x1b]8;;" ^ at_limit ^ "\xc3\x9c\x9clabel",
+          osc [ "8"; ""; at_limit ] :: prints "label" );
+        ( "legal E0 continuation",
+          "\x1b]8;;\xe0\xa0\x9c\x9clabel",
+          osc [ "8"; ""; "\xe0\xa0\x9c" ] :: prints "label" );
+      ]
+  in
+  List.map
+    (fun (name, input, expected) ->
+      Alcotest.test_case ("osc: " ^ name) `Quick (fun () ->
+          List.iter
+            (fun chunk ->
+              Alcotest.check parser_testable (Printf.sprintf "%s, chunk %d" name chunk)
+                expected (feed_all ~chunk input))
+            [ 0; 1; 7; 65536 ]))
+    cases
+
 let cancel =
   [
     Alcotest.test_case "cancel: CAN in OSC" `Quick (fun () ->
@@ -429,6 +470,7 @@ let cases =
       dcs_cases;
       csi_cases;
       osc_cases;
+      osc_utf8_termination;
       cancel;
       limits;
       utf8;

@@ -63,6 +63,11 @@ val feed : t -> string -> action list
     while the sequence still terminates only at its normal terminator, so storage stays
     bounded through arbitrarily long payload input.
 
+    In OSC, byte 0x9C is payload only when it is a valid continuation of the immediately
+    preceding UTF-8 prefix; otherwise it terminates the string. The prefix check rejects
+    overlong, surrogate and out-of-range encodings, and tracks every incoming byte even
+    after payload storage reaches its limit.
+
     A printable rune is reported by one [Print] action per rune. Bytes collected for an
     incomplete rune swallow every byte, controls included, until the length announced by
     the lead byte is reached, and an invalid rune completes as U+FFFD. In SOS, PM and APC

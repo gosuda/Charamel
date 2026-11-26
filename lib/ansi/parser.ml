@@ -207,6 +207,9 @@ type t = {
   mutable final : int;
   data : Bytes.t;
   mutable ndata : int;
+  mutable osc_remaining : int;
+  mutable osc_min : int;
+  mutable osc_max : int;
   rune : Bytes.t;
   mutable rlen : int;
 }
@@ -223,6 +226,9 @@ let create () =
     final = 0;
     data = Bytes.create max_data;
     ndata = 0;
+    osc_remaining = 0;
+    osc_min = 0x80;
+    osc_max = 0xbf;
     rune = Bytes.create 4;
     rlen = 0;
   }
@@ -306,20 +312,22 @@ let valid_rune rune len =
       && not ((lead = 0xf0 && get 1 < 0x90) || (lead = 0xf4 && get 1 > 0x8f))
   | _ -> true
 
-(* A 0x9C byte inside an OSC string is the ST terminator unless it continues a
-   multibyte sequence: when the payload so far ends in a lead byte that still
-   expects continuations, the byte is payload. [osc_continues] replays that
-   check from the accumulated payload bytes. *)
-let osc_continues data ndata =
-  let byte index = Char.code (Bytes.get data index) in
-  let rec trailing index count =
-    if index < 0 then (index, count)
-    else
-      let b = byte index in
-      if b >= 0x80 && b <= 0xbf then trailing (index - 1) (count + 1) else (index, count)
-  in
-  let lead, pending = trailing (ndata - 1) 0 in
-  lead >= 0 && utf8_lead_len (byte lead) > pending + 1
+(* Track the next legal UTF-8 continuation independently of bounded payload storage.
+   Only a continuation in this range can make 0x9C payload instead of a terminator. *)
+let osc_continues t byte =
+  t.osc_remaining > 0 && byte >= t.osc_min && byte <= t.osc_max
+
+let consume_osc_byte t byte =
+  if osc_continues t byte then begin
+    t.osc_remaining <- t.osc_remaining - 1;
+    t.osc_min <- 0x80;
+    t.osc_max <- 0xbf
+  end
+  else begin
+    t.osc_remaining <- utf8_lead_len byte - 1;
+    t.osc_min <- (if byte = 0xe0 then 0xa0 else if byte = 0xf0 then 0x90 else 0x80);
+    t.osc_max <- (if byte = 0xed then 0x9f else if byte = 0xf4 then 0x8f else 0xbf)
+  end
 
 let is_continuation byte = byte >= 0x80 && byte <= 0xbf
 
@@ -386,6 +394,7 @@ let perform t out kind b next =
       end
   | K_start ->
       t.ndata <- 0;
+      t.osc_remaining <- 0;
       if next = Dcs_string then t.final <- b
   | K_put -> put_data t b
   | K_dispatch -> (
@@ -438,10 +447,13 @@ let step t out b =
     (* A 0x9C byte that continues a multibyte sequence is OSC payload, not the
        string terminator; anything else goes through the state machine. *)
     let kind, next =
-      if t.st = Osc_string && b = 0x9c && osc_continues t.data t.ndata then
+      if t.st = Osc_string && b = 0x9c && osc_continues t b then
         (K_put, Osc_string)
       else transition t.st b
     in
+    if t.st = Osc_string then begin
+      if next = Osc_string then consume_osc_byte t b else t.osc_remaining <- 0
+    end;
     if (t.st = Escape || t.st = String_escape) && next <> Escape && next <> String_escape
     then clear_seq t;
     (* Upstream starts the DCS payload with a zero command byte when the
