@@ -63,11 +63,15 @@ let write_input channel payload =
 
 let run_command t ~timeout ~command ~payload =
   let child = ref None in
+  (* A hook that exits on its own keeps what it detached: only a hook that
+     never reported back is killed, on timeout, cancellation, or an
+     exception before normal completion. Reaping always runs. *)
+  let completed = ref false in
   let cleanup () =
     match !child with
     | None -> Lwt.return_unit
     | Some process ->
-        if Charamel_os.Process.group_alive process then
+        if (not !completed) && Charamel_os.Process.group_alive process then
           Charamel_os.Process.kill_tree process;
         Lwt.protected (Charamel_os.Process.await process) >|= fun _ -> ()
   in
@@ -88,6 +92,7 @@ let run_command t ~timeout ~command ~payload =
     Lwt.both stdout stderr >>= fun (stdout, stderr) ->
     input >>= fun () ->
     Lwt.protected (Charamel_os.Process.await process) >|= fun code ->
+    completed := true;
     Done (code, stdout, stderr)
   in
   Lwt.finalize

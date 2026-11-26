@@ -303,6 +303,40 @@ let descendant_cleanup () =
           | () -> Alcotest.fail "timed-out hook left a child process"
           | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ())
 
+let successful_hook_spares_detached_child () =
+  if Sys.win32 then
+    (* cmd cannot publish a child's pid for [kill]; the tree-kill coverage lives
+       in the jobs tests instead. *)
+    Alcotest.skip ()
+  else
+    with_environment (fun root ->
+        let config =
+          [
+            hook ~event:Config.Pre_tool
+              ~command:"sleep 30 >/dev/null 2>&1 & echo $! > child.pid" ();
+          ]
+        in
+        let runner = runner root config in
+        (match
+           await
+           @@ Hooks.pre_tool runner ~session:"s" ~tool:"write" ~input:(Jsont.Json.null ())
+         with
+        | Hooks.Allow _ -> ()
+        | Hooks.Deny reason -> Alcotest.failf "successful hook denied: %s" reason);
+        (* An orphaned zombie still answers signal 0 until it is reaped. Wait
+           past that window so the check below proves a live child. *)
+        await (Lwt_unix.sleep 0.5);
+        let child_path = Filename.concat root "child.pid" in
+        if not (Sys.file_exists child_path) then
+          Alcotest.fail "hook exited before recording its child";
+        let pid =
+          int_of_string (String.trim (Test_tools_test_support.load_file child_path))
+        in
+        match Unix.kill pid 0 with
+        | () -> Unix.kill pid Sys.sigkill
+        | exception Unix.Unix_error (Unix.ESRCH, _, _) ->
+            Alcotest.fail "successful hook killed its detached child")
+
 let cases =
   [
     Test_tools_test_support.case "pre-tool allow can rewrite input" `Quick rewritten_input;
@@ -331,4 +365,6 @@ let cases =
       lifecycle_payload;
     Test_tools_test_support.case "timeout cleans descendant process group" `Quick
       descendant_cleanup;
+    Test_tools_test_support.case "success spares a detached child" `Quick
+      successful_hook_spares_detached_child;
   ]
