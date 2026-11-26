@@ -1,12 +1,12 @@
 name: build
 
 on:
-  push:
   pull_request:
+  merge_group:
+  schedule:
+    - cron: '47 4 * * 1'
+  workflow_dispatch:
 
-# A newer push makes older runs on the same branch or pull request
-# obsolete: cancel them instead of stacking runner time behind a stale
-# verdict. This workflow publishes nothing, so every run is cancelable.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ocaml-compiler: ["5.4.0", "5.5.1"]
+        ocaml-compiler: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["5.4.0","5.5.1"]' || '["5.5.1"]') }}
     runs-on: depot-ubuntu-24.04
     # Backstop against a wedged step, not the cost control: steady-state
     # cached runs finish in ~2-3 min (see PR body). Cold runs after a
@@ -65,10 +65,11 @@ jobs:
   # platform slice does not differ by compiler minor, and the 5.4.0
   # floor is still proved on Linux.
   native:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [depot-macos-latest, depot-windows-2025]
     runs-on: ${{ matrix.os }}
     # Owner cap: native legs must stay under 5 min exec (target <= 4).
     # The timeout is a backstop against the hung-suite pathology that
