@@ -110,6 +110,13 @@ let test_classifier () =
   Alcotest.(check bool)
     "find exec is mutable" false
     (Tools_shell.is_read_only "find . -exec cat {} \\;");
+  List.iter
+    (fun action ->
+      Alcotest.(check bool)
+        ("fd " ^ action ^ " is mutable")
+        false
+        (Tools_shell.is_read_only ("fd -g README.md " ^ action ^ " touch changed")))
+    [ "-x"; "-X"; "--exec"; "--exec-batch" ];
   Alcotest.(check bool)
     "sed in-place is mutable" false
     (Tools_shell.is_read_only "sed -i s/a/b/ file");
@@ -434,6 +441,11 @@ let test_find_data_slots () =
       ({|find . -exec printf '%s' "$label" \;|}, "review");
     ]
 
+let test_nested_fd_actions () =
+  let command = String.concat "" (List.init 24 (fun _ -> "fd --color never -X ")) in
+  check_posix_verdicts
+    [ (command ^ "printf ready", "review"); (command ^ "./cu''rl.exe", "blocked") ]
+
 let test_ansi_c_bash_equivalence () =
   if not Sys.win32 then (
     if Option.is_none (Charamel_os.Exe.find "bash") then Alcotest.skip ();
@@ -572,6 +584,8 @@ let cases =
     Test_tools_test_support.case "parameter quote context" `Quick test_parameter_quotes;
     Test_tools_test_support.case "command lookup mode" `Quick test_command_lookup;
     Test_tools_test_support.case "find data positions" `Quick test_find_data_slots;
+    Test_tools_test_support.case "nested fd actions are screened once" `Quick
+      test_nested_fd_actions;
     Test_tools_test_support.case "ANSI-C NUL matches bash" `Quick
       test_ansi_c_bash_equivalence;
     Test_tools_test_support.case "screen requires review" `Quick

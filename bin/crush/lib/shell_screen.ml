@@ -1552,14 +1552,20 @@ and exec_commands sink ~depth program flags args =
         (List.rev reversed, rest)
     | word :: rest -> command_words ~batch (word :: reversed) rest
   in
-  let action flag rest =
-    let batch = program = "find" && List.mem flag [ "-exec"; "-execdir" ] in
-    let command, rest = command_words ~batch [] rest in
-    if List.exists (fun word -> not word.fixed) command then review sink computed_program;
-    (match command with
-    | name :: _ when String.contains name.value '{' -> review sink computed_program
-    | _ -> analyze sink ~depth command);
-    rest
+  let actions = ref [] in
+  let action flag words =
+    match List.find_opt (fun (start, _) -> start == words) !actions with
+    | Some (_, rest) -> rest
+    | None ->
+        let batch = program = "find" && List.mem flag [ "-exec"; "-execdir" ] in
+        let command, rest = command_words ~batch [] words in
+        actions := (words, rest) :: !actions;
+        if List.exists (fun word -> not word.fixed) command then
+          review sink computed_program;
+        (match command with
+        | name :: _ when String.contains name.value '{' -> review sink computed_program
+        | _ -> analyze sink ~depth command);
+        rest
   in
   let rec ambiguous = function
     | [] -> ()
