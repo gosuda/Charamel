@@ -276,6 +276,15 @@ let rejected_handshakes_leak_no_fds =
         Alcotest.(check bool) "no file descriptor growth" true (after <= before);
         Lwt.return_unit))
 
+(* A bare [Lwt.wait] is not cancellable, which would strand the
+   [with_tls_server] finalizer if the timeout fires while parked on it.
+   Polling a flag with the cancellable [Lwt_unix.sleep] lets teardown run. *)
+let wait_for_flag flag =
+  let rec loop () =
+    if !flag then Lwt.return_unit else Lwt_unix.sleep 0.01 >>= loop
+  in
+  loop ()
+
 let stalled_handshake_does_not_block_teardown =
   Alcotest_lwt.test_case "a stalled handshake does not block fixture teardown" `Quick
     (fun _switch () ->
@@ -283,16 +292,46 @@ let stalled_handshake_does_not_block_teardown =
       let anchor = Lazy.force shared_anchor in
       let priv, cert = sign_leaf ~ca_priv:anchor.priv ~ca_cert:anchor.cert () in
       let client = Lwt_unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
-      let accepted, accept = Lwt.wait () in
+      let accepted = ref false in
       Lwt.finalize
         (fun () ->
           Lwt_unix.with_timeout 5. (fun () ->
-              with_tls_server ~on_accept:(fun () -> Lwt.wakeup_later accept ())
+              with_tls_server ~on_accept:(fun () -> accepted := true)
                 ~cert ~priv (fun port ->
                   Lwt_unix.connect client
                     (Unix.ADDR_INET (Unix.inet_addr_loopback, port))
-                  >>= fun () -> accepted)))
+                  >>= fun () -> wait_for_flag accepted)))
         (fun () -> Lwt_unix.close client))
+
+(* Without a cancellable wait the timeout below strands the [Lwt.finalize]
+   cleanup: cancelling a bare [Lwt.wait] waiter is a no-op. *)
+let cancelled_wait_still_runs_teardown =
+  Alcotest_lwt.test_case "a cancelled accept wait still runs teardown" `Quick
+    (fun _switch () ->
+      let cleaned = ref false in
+      (* [arrived] is never set: models accept not firing before the timeout. *)
+      let arrived = ref false in
+      let guarded =
+        Lwt.finalize
+          (fun () -> wait_for_flag arrived)
+          (fun () ->
+            cleaned := true;
+            Lwt.return_unit)
+      in
+      Lwt.catch
+        (fun () -> Lwt_unix.with_timeout 0.05 (fun () -> guarded))
+        (function Lwt_unix.Timeout -> Lwt.return_unit | exn -> Lwt.fail exn)
+      >>= fun () ->
+      (* The finalizer lands on later iterations; yield before judging whether
+         teardown ran. A parked waiter still fails after the bound. *)
+      let rec wait_clean attempts =
+        if !cleaned then Lwt.return_unit
+        else if attempts <= 0 then Lwt.return_unit
+        else Lwt.pause () >>= fun () -> wait_clean (attempts - 1)
+      in
+      wait_clean 100 >>= fun () ->
+      Alcotest.check Alcotest.bool "teardown ran after cancel" true !cleaned;
+      Lwt.return_unit)
 
 let cases =
   [
@@ -300,4 +339,5 @@ let cases =
     rejects_unknown_chain;
     rejected_handshakes_leak_no_fds;
     stalled_handshake_does_not_block_teardown;
+    cancelled_wait_still_runs_teardown;
   ]
