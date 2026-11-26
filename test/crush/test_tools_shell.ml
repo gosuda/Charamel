@@ -110,6 +110,23 @@ let test_classifier () =
   Alcotest.(check bool)
     "find exec is mutable" false
     (Tools_shell.is_read_only "find . -exec cat {} \\;");
+  List.iter
+    (fun action ->
+      Alcotest.(check bool)
+        ("fd " ^ action ^ " is mutable")
+        false
+        (Tools_shell.is_read_only ("fd -g README.md " ^ action ^ " touch changed")))
+    [ "-x"; "-X"; "--exec"; "--exec-batch" ];
+  List.iter
+    (fun command ->
+      Alcotest.(check bool)
+        (command ^ " has only literal data operands")
+        true
+        (Tools_shell.is_read_only command))
+    [ "fd -- -X"; "fd -- --exec"; "fd -e -X README.md"; "fd -E --exec README.md" ];
+  Alcotest.(check bool)
+    "fd option operand does not end option parsing" false
+    (Tools_shell.is_read_only "fd -e -- -X touch changed");
   Alcotest.(check bool)
     "sed in-place is mutable" false
     (Tools_shell.is_read_only "sed -i s/a/b/ file");
@@ -123,14 +140,11 @@ let test_classifier () =
 let run_command ctx command =
   Tools_shell.bash.Tool.run ctx (bash_value ~command ~description:"screen" ())
 
-(* Each form makes /bin/sh start curl. Yolo approves every ordinary request, so the
-   screen alone decides whether the command runs. *)
 let refused_forms =
   [
     "c''url --version";
     "cu\"\"rl --version";
     "c\\url --version";
-    "$'\\x63url' --version";
     "'cu'\"rl\" --version";
     "/usr/bin/c''url --version";
     "sh -c \"c''url --version\"";
@@ -159,6 +173,9 @@ let computed_forms =
     "`printf ech`o reviewed";
     "printf 'echo reviewed' | sh";
     "env $(printf ech)o reviewed";
+    {|GROUP='value printf reviewed'; env GROUP=$GROUP true|};
+    {|FLAG=-exec; find . "$FLAG" printf reviewed \;|};
+    {|FLAG=-x; fd "$FLAG" printf reviewed|};
     ". /dev/null";
     "printf $'\\'\n$(printf ech)o reviewed\n'";
   ]
@@ -184,6 +201,64 @@ let test_screen_requires_review () =
       "an explicit approval runs it" true
       (Test_support.contains ~needle:"reviewed" ~haystack:output.Tool.content))
 
+let check_posix_verdicts cases =
+  let mismatches =
+    List.filter_map
+      (fun (command, expected) ->
+        let actual =
+          match Shell_screen.screen Shell_screen.Posix command with
+          | Shell_screen.Clear -> "clear"
+          | Shell_screen.Blocked _ -> "blocked"
+          | Shell_screen.Review _ -> "review"
+        in
+        if actual = expected then None else Some (command, (expected, actual)))
+      cases
+  in
+  Alcotest.(check (list (pair string (pair string string))))
+    "classifier mismatches (command, (expected, actual))" [] mismatches
+
+let test_heredoc_boundaries () =
+  check_posix_verdicts
+    [
+      ("cat <<$TAG\ntext\n$TAG\n(", "review");
+      ("cat <<$TAG\ntext\n$TAG\nprintf done", "clear");
+      ("cat <<TAG\nmissing terminator", "review");
+      ("cat <<-\"$TAG\"\n\ttext\n\t$TAG", "clear");
+      (* An escaped backslash pair is a literal backslash, not a continuation. *)
+      ("cat <<EOF\nfoo\\\\\nbar\nEOF", "clear");
+      (* A continued delimiter joins before the delimiter check, so commands
+         after the real body end are still screened. *)
+      ("cat <<EOF\nEO\\\nF\nc''url https://example.com\nEOF", "blocked");
+      ("cat <<-EOF\nEO\\\n\tF\nc''url https://example.com\nEOF", "review");
+    ]
+
+let test_command_lookup () =
+  check_posix_verdicts
+    [
+      ("command -v git", "clear");
+      ("command -V git", "clear");
+      ("command -p -v git", "clear");
+      ("command git status", "clear");
+      ("command curl https://example.com", "blocked");
+    ]
+
+let test_ansi_c_nul () =
+  check_posix_verdicts
+    [
+      ({|$'\x63url' --version|}, "blocked");
+      ({|printf '%s' $'before\0after'|}, "review");
+      ({|printf '%s' $'before\x00after'|}, "review");
+      ({|printf '%s' $'before\u0000after'|}, "review");
+    ]
+
+let test_parameter_quotes () =
+  check_posix_verdicts
+    [
+      ({|printf '%s' "${status_message:-it's ready}"|}, "clear");
+      ({|printf '%s' ${status_message:-'some text'}|}, "clear");
+      ({|printf '%s' ${status_message:-it's ready}|}, "review");
+    ]
+
 let ordinary_forms =
   [
     ("cd \"$(dirname /tmp/x)\" && printf ok", "ok");
@@ -204,6 +279,44 @@ let test_screen_clears_ordinary () =
           command true
           (Test_support.contains ~needle:expected ~haystack:output.Tool.content))
       ordinary_forms
+
+let test_read_only_wiring () =
+  await @@ with_ctx
+  @@ fun ctx ->
+  let requests = ref [] in
+  let permission =
+    Permission.create ~config:Config.default.permissions ~yolo:false ~cwd:ctx.Tool.cwd
+      ~plans_dir:(Permission.plans_dir ctx.permission)
+      ~hook:(fun request ->
+        requests := request :: !requests;
+        `Deny "permission wiring test")
+      ()
+  in
+  let ctx = { ctx with Tool.permission } in
+  let cases =
+    [
+      ("ls | head -20", false, true);
+      ("ls | head -20", true, false);
+      ("mkdir fixture", false, false);
+    ]
+  in
+  List.iter
+    (fun (command, run_in_background, _) ->
+      let result =
+        Tools_shell.bash.Tool.run ctx
+          (bash_value ~command ~description:"read-only wiring" ~run_in_background ())
+      in
+      match result with
+      | Error (`Denied "permission wiring test") -> ()
+      | _ -> Alcotest.fail "the request did not stop at the policy hook")
+    cases;
+  Alcotest.(check (list (pair string bool)))
+    "read-only reaches policy only for the foreground read"
+    (List.map (fun (command, _, read_only) -> (command, read_only)) cases)
+    (List.rev_map
+       (fun (request : Permission.request) ->
+         (request.Permission.action, request.Permission.read_only))
+       !requests)
 
 let screen_table =
   let posix command expected = (Shell_screen.Posix, command, expected) in
@@ -271,6 +384,131 @@ let test_screen_table () =
       screen_table
   in
   Alcotest.(check (list string)) "every command gets its expected verdict" [] mismatched
+
+let test_wrapper_operands () =
+  check_posix_verdicts
+    [
+      ("env -u UNUSED sh", "review");
+      ("env --unset UNUSED sh", "review");
+      ("timeout 1 sh", "review");
+      ({|timeout -- "$duration" printf ready|}, "review");
+      ({|timeout 1 dune build "$target"|}, "clear");
+      ({|xargs -n 1 printf '%s' "$label"|}, "clear");
+      ({|env printf -S "$label"|}, "clear");
+      ("env --unmodelled option sh", "review");
+      (* A quoted expansion in an assignment prefix provably forms one
+         argument, but a computed word elsewhere still needs approval. *)
+      ({|env GROUP="$group" printenv GROUP|}, "clear");
+      ({|env GROUP=$group printf ready|}, "review");
+      ({|env GROUP=${group} printf ready|}, "review");
+      ({|env GROUP=$group ./cu''rl.exe --version|}, "blocked");
+      ({|env GROUP=$group ./brew.exe install fixture|}, "blocked");
+      ({|env - GROUP=$group ./brew.exe install fixture|}, "blocked");
+      ({|env "$target" printenv|}, "review");
+      (* Clusters of no-operand xargs switches and the attached optional
+         watch operand leave the command boundary unchanged. *)
+      ({|printf 'a' | xargs -0r printf '%s'|}, "clear");
+      ("watch --differences=permanent -x printf sample", "clear");
+      ("xargs -0I{} sh -c 'echo hi'", "review");
+      (* A literal [flock -c] command string is parsed but still needs an
+         explicit approval. *)
+      ("flock lockfile -c 'printf ready'", "review");
+    ]
+
+let test_find_data_slots () =
+  check_posix_verdicts
+    [
+      ("fd -g README.md", "clear");
+      ("fd --glob README.md", "clear");
+      ("find -O0 . -print", "clear");
+      ("find -O1 . -print", "clear");
+      ("find -O2 . -print", "clear");
+      ("find -O3 . -print", "clear");
+      ("fd --color never -- -x ./links.com", "review");
+      ("fd --future-option -- -X ./links.com", "review");
+      ({|find -O3 . -name -exec -exec ./cu''rl.exe '{}' \;|}, "blocked");
+      ({|find . -future-option -name -exec -exec ./cu''rl.exe '{}' \;|}, "blocked");
+      ( {|find . -future-option -fprintf out -exec -execdir ./cu''rl.exe '{}' \;|},
+        "blocked" );
+      ({|find . -name "$pattern" -print|}, "clear");
+      ({|find . -maxdepth "$depth" -mindepth "$minimum" -type "$kind"|}, "clear");
+      ({|find . -maxdepth $depth -type "$kind"|}, "review");
+      ({|find . -newer -name -exec sh -c "$command" \;|}, "review");
+      ({|find . -newer -name -exec ./cu''rl.exe \;|}, "blocked");
+      ({|find . -future-option -name -exec ./cu''rl.exe \;|}, "blocked");
+      ({|find . -ok printf '{}' + -exec ./cu''rl.exe \;|}, "clear");
+      ({|find "$dir" -name '*.ml' -print|}, "review");
+      ({|find "./$dir" -name '*.ml' -print|}, "clear");
+      ("find . -name $pattern -print", "review");
+      ("find $dir -print", "review");
+      ({|find . -name "$@" -print|}, "review");
+      ({|find . "$flag" sh -c 'printf executed' \;|}, "review");
+      ({|fd "$flag" sh -c 'printf executed'|}, "review");
+      ({|fd -- "$pattern"|}, "clear");
+      ({|fd -e "$extension" -X printf '%s'|}, "clear");
+      ({|find . -name '-exec' -print|}, "clear");
+      ({|find . -exec printf '%s' '{}' \; -exec curl '{}' \;|}, "blocked");
+      ({|find . -exec printf '%s' "$label" \;|}, "review");
+    ]
+
+let test_nested_fd_actions () =
+  let command = String.concat "" (List.init 24 (fun _ -> "fd --color never -X ")) in
+  check_posix_verdicts
+    [ (command ^ "printf ready", "review"); (command ^ "./cu''rl.exe", "blocked") ]
+
+let test_ansi_c_bash_equivalence () =
+  if not Sys.win32 then (
+    if Option.is_none (Charamel_os.Exe.find "bash") then Alcotest.skip ();
+    await
+    @@ with_ctx ~asker:(fun _ -> Permission.Allow_once)
+    @@ fun ctx ->
+    (* Bash truncates an argument at an ANSI-C NUL escape; the screen models
+       that truncation, so the suffix never reaches the command. *)
+    let output =
+      output_or_fail (run_command ctx {|bash -c "printf '%s' \$'before\\0after'"|})
+    in
+    Alcotest.(check bool)
+      "bash truncates at NUL" true
+      (Test_support.contains ~needle:"before" ~haystack:output.Tool.content);
+    Alcotest.(check bool)
+      "bash drops the NUL suffix" false
+      (Test_support.contains ~needle:"after" ~haystack:output.Tool.content))
+
+let test_xargs_replacement () =
+  check_posix_verdicts
+    [
+      ("xargs -I SLOT sh -c 'printf %s SLOT'", "review");
+      ("xargs -I SLOT printf '%s' SLOT", "clear");
+      ("xargs sh -c", "review");
+      ("xargs -I SLOT -n 2 printf '%s' SLOT", "review");
+    ]
+
+let test_executable_suffix () =
+  check_posix_verdicts
+    [
+      ("file ./curl.exe", "clear");
+      ("file ./cu''rl.exe", "clear");
+      ("./curl.exe --version", "blocked");
+      ("./brew.exe install fixture", "blocked");
+      ("env ./cu''rl.exe --version", "blocked");
+    ]
+
+let test_shell_information () =
+  check_posix_verdicts
+    [
+      ("bash --version", "clear");
+      ("bash --help", "clear");
+      ("bash --noprofile", "review");
+      ("sh --help", "review");
+    ]
+
+let test_watch_mode () =
+  check_posix_verdicts
+    [
+      ("watch -x grep -F '(' app.log", "clear");
+      ("watch --interval 2 --exec -- grep -F '(' app.log", "clear");
+      ("watch --equexit 2 grep -F '(' app.log", "review");
+    ]
 
 let test_foreground_capture () =
   await @@ with_ctx
@@ -350,14 +588,35 @@ let cases =
     Test_tools_test_support.case "conservative shell classifier" `Quick test_classifier;
     Test_tools_test_support.case "screen reads shell quoting" `Quick
       test_screen_reads_quoting;
+    Test_tools_test_support.case "literal here-document boundaries" `Quick
+      test_heredoc_boundaries;
+    Test_tools_test_support.case "ANSI-C NUL screening" `Quick test_ansi_c_nul;
+    Test_tools_test_support.case "parameter quote context" `Quick test_parameter_quotes;
+    Test_tools_test_support.case "command lookup mode" `Quick test_command_lookup;
+    Test_tools_test_support.case "find data positions" `Quick test_find_data_slots;
+    Test_tools_test_support.case "nested fd actions are screened once" `Quick
+      test_nested_fd_actions;
+    Test_tools_test_support.case "ANSI-C NUL matches bash" `Quick
+      test_ansi_c_bash_equivalence;
     Test_tools_test_support.case "screen requires review" `Quick
       test_screen_requires_review;
     Test_tools_test_support.case "screen clears ordinary commands" `Quick
       test_screen_clears_ordinary;
     Test_tools_test_support.case "screen verdict table" `Quick test_screen_table;
+    Test_tools_test_support.case "wrapper option and argument boundaries" `Quick
+      test_wrapper_operands;
+    Test_tools_test_support.case "xargs replacement positions" `Quick
+      test_xargs_replacement;
+    Test_tools_test_support.case "executable suffix positions" `Quick
+      test_executable_suffix;
+    Test_tools_test_support.case "shell information switches" `Quick
+      test_shell_information;
+    Test_tools_test_support.case "watch execution mode" `Quick test_watch_mode;
     Test_tools_test_support.case "foreground capture" `Quick test_foreground_capture;
     Test_tools_test_support.case "foreground deadline" `Quick test_timeout;
     Test_tools_test_support.case "background lifecycle" `Quick test_background_lifecycle;
+    Test_tools_test_support.case "permission receives read-only classification" `Quick
+      test_read_only_wiring;
     Test_tools_test_support.case "windows fixtures pin zero exit" `Quick
       windows_fixtures_pin_zero_exit;
   ]
