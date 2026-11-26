@@ -149,16 +149,23 @@ let with_tls_server ~cert ~priv f =
            tolerating backends that already closed it on failure. *)
         Lwt.catch (fun () -> Lwt_unix.close fd) (fun _ -> Lwt.return_unit))
   in
+  let handlers = ref [] in
   let rec accept_loop () =
     Lwt.catch
       (fun () ->
         Lwt_unix.accept socket >>= fun (fd, _) ->
-        Lwt.async (fun () -> serve fd);
+        let handler = serve fd in
+        handlers := handler :: !handlers;
+        Lwt.async (fun () -> handler);
         accept_loop ())
       (fun _exn -> Lwt.return_unit)
   in
   let loop = accept_loop () in
-  Lwt.finalize (fun () -> f port) (fun () -> Lwt_unix.close socket >>= fun () -> loop)
+  Lwt.finalize
+    (fun () -> f port)
+    (fun () ->
+      Lwt_unix.close socket >>= fun () ->
+      loop >>= fun () -> Lwt.join !handlers)
 
 let https_get port =
   Charamel_net.call ~meth:`GET ~body:None
@@ -233,17 +240,18 @@ let rejected_handshakes_leak_no_fds =
           make_ca ~common_name:"charamel-test-leak" ~serial:"\004" ()
         in
         let priv, cert = sign_leaf ~ca_priv:other_priv ~ca_cert:other_ca () in
+        let before = open_fds () in
         with_tls_server ~cert ~priv (fun port ->
-            let before = open_fds () in
             let rec loop remaining =
               if remaining = 0 then Lwt.return_unit
               else
                 https_get port >>= fun result ->
                 check_tls_failure "unknown chain" result >>= fun () -> loop (remaining - 1)
             in
-            loop 16 >>= fun () ->
-            let after = open_fds () in
-            Alcotest.(check bool) "no file descriptor growth" true (after <= before);
-            Lwt.return_unit)))
+            loop 16)
+        >>= fun () ->
+        let after = open_fds () in
+        Alcotest.(check bool) "no file descriptor growth" true (after <= before);
+        Lwt.return_unit))
 
 let cases = [ loads_trust_store; rejects_unknown_chain; rejected_handshakes_leak_no_fds ]

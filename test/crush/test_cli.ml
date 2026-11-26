@@ -135,7 +135,8 @@ let run_fixture = run_fixture_in ~env:(fun _root -> [])
 let run_fixture_without_trust_store =
   run_fixture_in ~env:(fun root ->
       let poison = Filename.concat root "not-a-certificate.pem" in
-      Test_tools_test_support.write_file poison "not_a_certificate\n";
+      Test_tools_test_support.write_file poison
+        "-----BEGIN CERTIFICATE-----\nnot-valid-base64!\n-----END CERTIFICATE-----\n";
       [
         "SSL_CERT_FILE=" ^ Filename.concat root "missing-trust-store.pem";
         "OCAML_EXTRA_CA_CERTS=" ^ poison;
