@@ -423,8 +423,11 @@ let prepare_dir path =
       Lwt.catch (fun () -> Lwt_unix.chmod path 0o700) (fun _ -> Lwt.return_unit)
       >|= fun () -> Ok ()
 
-let save_catalog ~fs_root ~etag providers =
-  let filename = cache_path fs_root in
+let cache_destination fs_root =
+  try Ok (cache_path fs_root)
+  with Invalid_argument message -> Error (`Io ("providers.json", message))
+
+let write_catalog ~filename ~etag providers =
   let parent = Filename.dirname filename in
   prepare_dir parent >>= function
   | Error _ as failure -> Lwt.return failure
@@ -436,11 +439,19 @@ let save_catalog ~fs_root ~etag providers =
           | Ok () -> Ok ()
           | Error (`Io (path, message)) -> Error (`Io (path, message))))
 
+let save_catalog ~fs_root ~etag providers =
+  match cache_destination fs_root with
+  | Error error -> Lwt.return (Error error)
+  | Ok filename -> write_catalog ~filename ~etag providers
+
 let update_catalog ?source ~fs_root () =
-  cache_etag fs_root >>= fun etag ->
-  Charamel_fantasy.Catalog.fetch ?base_url:source ?etag () >>= function
-  | Error `Not_modified -> Lwt.return (Ok Not_modified)
-  | Error (#Charamel_fantasy.Error.t as error) -> Lwt.return (Error (`Fetch error))
-  | Ok (providers, new_etag) ->
-      save_catalog ~fs_root ~etag:new_etag providers
-      >|= Result.map (fun () -> Updated new_etag)
+  match cache_destination fs_root with
+  | Error error -> Lwt.return (Error error)
+  | Ok filename -> (
+      cache_etag fs_root >>= fun etag ->
+      Charamel_fantasy.Catalog.fetch ?base_url:source ?etag () >>= function
+      | Error `Not_modified -> Lwt.return (Ok Not_modified)
+      | Error (#Charamel_fantasy.Error.t as error) -> Lwt.return (Error (`Fetch error))
+      | Ok (providers, new_etag) ->
+          write_catalog ~filename ~etag:new_etag providers
+          >|= Result.map (fun () -> Updated new_etag))

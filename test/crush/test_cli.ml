@@ -316,6 +316,37 @@ let update_providers_refreshes_from_a_fixture () =
             "the refresh is confirmed" true
             (Test_support.contains ~needle:"Updated provider catalog" ~haystack:output)))
 
+let update_providers_without_cache_directory () =
+  let executable =
+    match binary_path () with Some path -> path | None -> Alcotest.skip ()
+  in
+  Test_tools_test_support.with_scratch (fun root ->
+      let config = Filename.concat root "config" in
+      Test_tools_test_support.mkdir_p config;
+      let env =
+        [|
+          "XDG_CONFIG_HOME=" ^ config;
+          "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin";
+        |]
+      in
+      let requests = ref 0 in
+      Test_tools_test_support.with_http_server ~content_type:"application/json"
+        ~body:(fun () ->
+          incr requests;
+          providers_catalog_body)
+        (fun port ->
+          let status, _, error =
+            await
+            @@ Test_support.run_cli ~exe:executable ~env ~cwd:root ~timeout:20.
+                 [ "update-providers"; "--source"; Fmt.str "http://127.0.0.1:%d" port ]
+          in
+          Alcotest.(check bool) "refresh refuses an unavailable cache" true (status <> 0);
+          Alcotest.(check bool)
+            ("refresh reports the unavailable cache path; stderr: " ^ error)
+            true
+            (Test_support.contains ~needle:"providers.json:" ~haystack:error);
+          Alcotest.(check int) "no download without a cache destination" 0 !requests))
+
 let trust_hint_names_cwd () =
   Test_tools_test_support.with_scratch (fun root ->
       write_private (user_config root) {|{"permissions":{"allowed_tools":["read"]}}|};
@@ -463,6 +494,8 @@ let cases =
       update_providers_rejects_the_embedded_source;
     Test_tools_test_support.case "update-providers refreshes from a fixture" `Quick
       update_providers_refreshes_from_a_fixture;
+    Test_tools_test_support.case "update-providers needs a cache directory" `Quick
+      update_providers_without_cache_directory;
     Test_tools_test_support.case "trust hint names the run directory" `Quick
       trust_hint_names_cwd;
     Test_tools_test_support.case "trust output sanitizes control characters" `Quick
