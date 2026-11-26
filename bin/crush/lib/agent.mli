@@ -105,7 +105,10 @@ val cancel : t -> unit
     job that has not started running yet. A tool already running runs to completion, and
     the turn stops at the next checkpoint; a subagent launched by that tool is interrupted
     with it. Prompt completion waits for active hook process cleanup, including when
-    cancellation has already started switch shutdown. It does not cancel [deps.sw]. *)
+    cancellation has already started switch shutdown. Completed tool results, including
+    inline writes, are persisted before the interrupted prompt settles. Closed or
+    cancelled post-tool hooks cannot discard those results. It does not cancel [deps.sw].
+*)
 
 val prompt :
   t ->

@@ -472,7 +472,54 @@ let stopped_turn_leaves_pending_approval () =
               "approval remains unanswered" true (Lwt.is_sleeping approval);
             Alcotest.(check bool) "stopped agent is idle" false (Agent.busy agent)))
 
-let explicit_cancel_joins_hook_cleanup () =
+let check_persisted_write session events root =
+  Alcotest.(check string)
+    "write completed" "saved body"
+    (Test_tools_test_support.load_file (Filename.concat root "notes.txt"));
+  let reopened =
+    match
+      await
+      @@ Session.open_ (Session.store ~fs_root:root ~cwd:root) ~id:(Session.id session)
+    with
+    | Ok session -> session
+    | Error error -> Alcotest.failf "session reopen failed: %a" Session.pp_error error
+  in
+  let results =
+    Array.to_list (Session.events reopened)
+    |> List.filter_map (function
+      | Session.Tool_result { id = "call-1"; name = "write"; output; _ } -> Some output
+      | _ -> None)
+  in
+  let output =
+    match results with
+    | [ `Text output ] -> output
+    | _ -> Alcotest.fail "completed write result was not persisted exactly once"
+  in
+  Alcotest.(check bool)
+    "persisted result describes the write" true
+    (String.starts_with ~prefix:"wrote " output
+    && Test_support.contains ~needle:"notes.txt" ~haystack:output);
+  let history =
+    Session.messages reopened
+    |> List.concat_map (fun message -> message.Charamel_fantasy.Message.parts)
+    |> List.filter_map (function
+      | Charamel_fantasy.Message.Tool_result
+          { id = "call-1"; name = "write"; output = `Text text } ->
+          Some text
+      | _ -> None)
+  in
+  Alcotest.(check (list string)) "resumed history includes the write" [ output ] history;
+  let finished =
+    List.filter_map
+      (function
+        | Agent.Tool_finished { id = "call-1"; name = "write"; output; _ } ->
+            Some output.Crush_core.Tool.content
+        | _ -> None)
+      !events
+  in
+  Alcotest.(check (list string)) "write completion reported once" [ output ] finished
+
+let explicit_cancel_joins_hook_cleanup ?(external_cancel = false) () =
   if Sys.win32 then Alcotest.skip ()
   else
     let hooks_config : Config.hook list =
@@ -488,9 +535,13 @@ let explicit_cancel_joins_hook_cleanup () =
       ]
     in
     with_agent ~hooks_config
-      ~queue:[ tool_response "fixture-model" "read" "{\"path\":\"allowed.txt\"}" ]
+      ~queue:
+        [
+          tool_response "fixture-model" "write"
+            "{\"path\":\"notes.txt\",\"content\":\"saved body\"}";
+        ]
       ~fallback:(text_response "fixture-model" "done")
-      (fun agent _session _events root ->
+      (fun agent session events root ->
         let ready_path = Filename.concat root ".cancel-ready" in
         Unix.mkfifo ready_path 0o600;
         Unix.mkfifo (Filename.concat root ".cancel-release") 0o600;
@@ -499,8 +550,7 @@ let explicit_cancel_joins_hook_cleanup () =
           |> Lwt_unix.of_unix_file_descr
         in
         let ready = Lwt_io.of_fd ~mode:Lwt_io.input fd in
-        Test_tools_test_support.write_file (Filename.concat root "allowed.txt") "ready";
-        let pending = Agent.prompt agent "read the file" in
+        let pending = Agent.prompt agent "write the file" in
         Fun.protect
           ~finally:(fun () ->
             Agent.cancel agent;
@@ -511,17 +561,70 @@ let explicit_cancel_joins_hook_cleanup () =
               Test_tools_test_support.load_file (Filename.concat root ".cancel-pid")
               |> String.trim |> int_of_string
             in
-            Agent.cancel agent;
-            (match await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected pending)) with
-            | Ok `Interrupted -> ()
-            | Ok _ -> Alcotest.fail "cancel did not interrupt the turn"
-            | Error error -> Alcotest.failf "agent prompt failed: %a" Agent.pp_error error);
+            if external_cancel then Lwt.cancel pending else Agent.cancel agent;
+            let finished =
+              Lwt.catch
+                (fun () -> Lwt.map Option.some (Lwt.protected pending))
+                (function
+                  | Lwt.Canceled when external_cancel -> Lwt.return_none
+                  | exn -> Lwt.fail exn)
+            in
+            (match await (Lwt_unix.with_timeout 5. (fun () -> finished)) with
+            | Some (Ok `Interrupted) when not external_cancel -> ()
+            | None when external_cancel -> ()
+            | Some (Error error) ->
+                Alcotest.failf "agent prompt failed: %a" Agent.pp_error error
+            | Some (Ok _) | None -> Alcotest.fail "cancel did not interrupt the turn");
             (match Unix.kill pid 0 with
             | () ->
                 Unix.kill (0 - pid) Sys.sigkill;
                 Alcotest.fail "cancel completed before hook process cleanup"
             | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ());
-            Alcotest.(check bool) "cancelled agent is idle" false (Agent.busy agent)))
+            Alcotest.(check bool) "cancelled agent is idle" false (Agent.busy agent);
+            check_persisted_write session events root))
+
+let cancelled_body_skips_closed_post_hook () =
+  let approval, answer = Lwt.wait () in
+  let asked, announce = Lwt.wait () in
+  let asker _ =
+    if Lwt.is_sleeping asked then Lwt.wakeup_later announce ();
+    await approval
+  in
+  let hooks_config : Config.hook list =
+    [
+      {
+        event = Config.Post_tool;
+        matcher = None;
+        command = "echo unexpected > closed-post-hook";
+        timeout_s = 30;
+      };
+    ]
+  in
+  with_agent ~asker ~hooks_config
+    ~queue:
+      [
+        tool_response "fixture-model" "write"
+          "{\"path\":\"notes.txt\",\"content\":\"saved body\"}";
+      ]
+    ~fallback:(text_response "fixture-model" "done")
+    (fun agent session events root ->
+      let pending = Agent.prompt agent "write the file" in
+      Fun.protect
+        ~finally:(fun () ->
+          if Lwt.is_sleeping approval then Lwt.wakeup_later answer Permission.Deny;
+          Agent.cancel agent)
+        (fun () ->
+          await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected asked));
+          Agent.cancel agent;
+          Lwt.wakeup_later answer Permission.Allow_once;
+          (match await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected pending)) with
+          | Ok `Interrupted -> ()
+          | Ok _ -> Alcotest.fail "cancel did not interrupt the turn"
+          | Error error -> Alcotest.failf "agent prompt failed: %a" Agent.pp_error error);
+          Alcotest.(check bool)
+            "closed post hook never started" false
+            (Sys.file_exists (Filename.concat root "closed-post-hook"));
+          check_persisted_write session events root))
 
 let cases =
   [
@@ -535,5 +638,9 @@ let cases =
     Test_tools_test_support.case "stopped turn does not await sibling approval" `Quick
       stopped_turn_leaves_pending_approval;
     Test_tools_test_support.case "explicit cancel joins hook cleanup" `Quick
-      explicit_cancel_joins_hook_cleanup;
+      (explicit_cancel_joins_hook_cleanup ~external_cancel:false);
+    Test_tools_test_support.case "external cancel persists completed write" `Quick
+      (explicit_cancel_joins_hook_cleanup ~external_cancel:true);
+    Test_tools_test_support.case "cancelled body skips closed post hook" `Quick
+      cancelled_body_skips_closed_post_hook;
   ]

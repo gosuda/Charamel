@@ -117,6 +117,7 @@ type scheduled = {
   mutable promise : execution Lwt.t option;
   mutable body : execution option;
   mutable hook : unit Lwt.t option;
+  mutable reported : bool;
 }
 
 type turn_state = {
@@ -534,8 +535,8 @@ let consume_stream t turn_sw (model : Models.resolved) provider_auth messages st
 
 let result_output error = Tool.fail (Fmt.str "%a" Tool.pp_error error)
 
-let run_tool ?(note_body : execution -> unit = fun _ -> ()) ~hooks_open ~note_hook t
-    (call : call) input (tool : Tool.t) : execution Lwt.t =
+let run_tool ~(note_body : execution -> unit) ~hooks_open ~note_hook t (call : call) input
+    (tool : Tool.t) : execution Lwt.t =
   let started = Charamel_os.Time.now t.deps.clock in
   let ctx = tool_context t ~call_id:call.id in
   let hook run =
@@ -570,14 +571,30 @@ let run_tool ?(note_body : execution -> unit = fun _ -> ()) ~hooks_open ~note_ho
     { id = call.id; name = call.name; input = hook_input; output; elapsed_ms; stop_turn }
   in
   note_body result;
-  hook (fun () ->
-      Hooks.post_tool t.deps.hooks ~session:(Session.id t.session) ~tool:tool.Tool.name
-        ~input:hook_input ~output:output.Tool.content ~is_error:output.Tool.is_error)
+  (if not !hooks_open then Lwt.return_unit
+   else
+     Lwt.catch
+       (fun () ->
+         hook (fun () ->
+             Hooks.post_tool t.deps.hooks ~session:(Session.id t.session)
+               ~tool:tool.Tool.name ~input:hook_input ~output:output.Tool.content
+               ~is_error:output.Tool.is_error))
+       (function
+         | Lwt.Canceled when not !hooks_open -> Lwt.return_unit | exn -> Lwt.fail exn))
   >|= fun () -> result
 
 let schedule_call ?(invalid = false) t (call : call) input =
   let tool = Toolset.find t.tools call.name in
-  { call; input; tool; invalid; promise = None; body = None; hook = None }
+  {
+    call;
+    input;
+    tool;
+    invalid;
+    promise = None;
+    body = None;
+    hook = None;
+    reported = false;
+  }
 
 let read_only job = match job.tool with Some tool -> tool.Tool.read_only | None -> false
 
@@ -593,7 +610,8 @@ let start_job t pool hooks_open job tool =
                  t job.call job.input tool))
          Lwt.fail)
 
-let execute_calls t turn_sw calls =
+let execute_calls t (turn : turn) calls =
+  let turn_sw = turn.switch in
   let jobs =
     List.filter_map
       (fun call ->
@@ -677,12 +695,15 @@ let execute_calls t turn_sw calls =
       stop_turn = false;
     }
   in
-  let skipped_execution job =
+  let skipped_execution ~interrupted job =
     {
       id = job.call.id;
       name = job.call.name;
       input = job.input;
-      output = Tool.fail "skipped: an earlier tool call stopped the turn";
+      output =
+        Tool.fail
+          (if interrupted then "skipped: the turn was interrupted"
+           else "skipped: an earlier tool call stopped the turn");
       elapsed_ms = 0;
       stop_turn = false;
     }
@@ -695,7 +716,7 @@ let execute_calls t turn_sw calls =
         | Lwt.Sleep | Lwt.Fail _ -> None)
     | None -> None
   in
-  let complete_pending job =
+  let complete_pending ~interrupted job =
     match ready_execution job with
     | Some execution -> execution
     | None -> (
@@ -707,17 +728,20 @@ let execute_calls t turn_sw calls =
               match job.tool with
               | None -> unknown_execution job
               (* The body never ran: no pre-tool decision, no tool output. *)
-              | Some _ -> skipped_execution job))
+              | Some _ -> skipped_execution ~interrupted job))
   in
-  let emit_finished execution =
-    emit t
-      (Tool_finished
-         {
-           id = execution.id;
-           name = execution.name;
-           output = execution.output;
-           elapsed_ms = execution.elapsed_ms;
-         })
+  let emit_finished job execution =
+    if job.reported then Lwt.return_unit
+    else (
+      job.reported <- true;
+      emit t
+        (Tool_finished
+           {
+             id = execution.id;
+             name = execution.name;
+             output = execution.output;
+             elapsed_ms = execution.elapsed_ms;
+           }))
   in
   let rec fold pending results stop_turn loop_detected =
     match pending with
@@ -733,10 +757,11 @@ let execute_calls t turn_sw calls =
                | Some tool ->
                    run_tool ~hooks_open
                      ~note_hook:(fun hook -> job.hook <- hook)
+                     ~note_body:(fun execution -> job.body <- Some execution)
                      t job.call job.input tool
                | None -> Lwt.return (unknown_execution job)))
         >>= fun (execution : execution) ->
-        emit_finished execution >>= fun () ->
+        emit_finished job execution >>= fun () ->
         let output_text =
           match Tool.to_result execution.output with `Text text | `Error text -> text
         in
@@ -748,14 +773,27 @@ let execute_calls t turn_sw calls =
           hooks_open := false;
           Lwt_list.map_s
             (fun pending_job ->
-              let tail_execution = complete_pending pending_job in
-              emit_finished tail_execution >|= fun () -> tail_execution)
+              let tail_execution = complete_pending ~interrupted:false pending_job in
+              emit_finished pending_job tail_execution >|= fun () -> tail_execution)
             rest
           >>= fun tail ->
           Lwt.return (List.rev (execution :: results) @ tail, stop_turn, loop_detected))
         else fold rest (execution :: results) stop_turn false
   in
-  fold jobs [] false false
+  Lwt.catch
+    (fun () ->
+      fold jobs [] false false >|= fun (executions, stop_turn, loop_detected) ->
+      (executions, stop_turn, loop_detected, None))
+    (function
+      | (Interrupted _ | Lwt.Canceled | Lwt_switch.Off) as error ->
+          shutdown_turn turn >>= fun () ->
+          Lwt_list.map_s
+            (fun job ->
+              let execution = complete_pending ~interrupted:true job in
+              emit_finished job execution >|= fun () -> execution)
+            jobs
+          >|= fun executions -> (executions, false, false, Some error)
+      | exn -> Lwt.fail exn)
 
 let session_output output =
   match Tool.to_result output with
@@ -898,7 +936,8 @@ let is_http_401 = function
 let disable_oauth t provider_id rejected reason =
   Auth.disable t.deps.auth ~provider:provider_id ~rejected ~reason ~now_ms:(now_ms t)
 
-let run_turn t turn_sw first_prompt user_message attachments state =
+let run_turn t turn first_prompt user_message attachments state =
+  let turn_sw = turn.switch in
   let user_message = add_attachments user_message attachments in
   let* () = append t (Session.Message { ms = now_ms t; message = user_message }) in
   let force_retry_used = ref false in
@@ -952,8 +991,8 @@ let run_turn t turn_sw first_prompt user_message attachments state =
         state.last_turn <- state.last_turn @ [ assistant ];
         match (stream_result.finish, stream_result.calls) with
         | `Tool_calls, calls when calls <> [] ->
-            execute_calls t turn_sw calls
-            >>= fun (executions, stop_turn, loop_detected) ->
+            execute_calls t turn calls
+            >>= fun (executions, stop_turn, loop_detected, interrupted) ->
             let results =
               List.map
                 (fun execution ->
@@ -968,6 +1007,10 @@ let run_turn t turn_sw first_prompt user_message attachments state =
               in
               state.last_turn <- state.last_turn @ [ tool_message ];
               let* () = persist_executions t executions in
+              (match interrupted with
+                | Some error -> Lwt.fail error
+                | None -> checkpoint t)
+              >>= fun () ->
               if loop_detected then Lwt.return (Ok `Loop_detected)
               else if stop_turn then Lwt.return (Ok `Stop)
               else if
@@ -1033,7 +1076,7 @@ let prompt t ?(attachments = []) text =
       Lwt.finalize
         (fun () ->
           Lwt.catch
-            (fun () -> run_turn t switch text text attachments state)
+            (fun () -> run_turn t turn text text attachments state)
             (function
               | Interrupted User_cancel -> Lwt.return (Ok `Interrupted)
               | Interrupted (External_cancel error) ->

@@ -303,7 +303,7 @@ let descendant_cleanup () =
           | () -> Alcotest.fail "timed-out hook left a child process"
           | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ())
 
-let successful_hook_keeps_detached_worker () =
+let successful_hook_keeps_detached_worker ?(deny = false) () =
   if Sys.win32 then Alcotest.skip ()
   else
     with_environment (fun root ->
@@ -332,11 +332,22 @@ let successful_hook_keeps_detached_worker () =
               "cat >/dev/null; (read release < worker-release; printf 'done\\n' > \
                worker-finished) </dev/null >/dev/null 2>&1 & printf '%s\\n' \"$!\" > \
                worker.pid"
+              ^ if deny then "; printf '%s\\n' '{\"decision\":\"deny\"}'" else ""
             in
-            let runner = runner root [ hook ~event:Config.Post_tool ~command () ] in
-            await
-            @@ Hooks.post_tool runner ~session:"s" ~tool:"write"
-                 ~input:(Jsont.Json.null ()) ~output:"done" ~is_error:false;
+            let event = if deny then Config.Pre_tool else Config.Post_tool in
+            let runner = runner root [ hook ~event ~command () ] in
+            if deny then
+              match
+                await
+                @@ Hooks.pre_tool runner ~session:"s" ~tool:"write"
+                     ~input:(Jsont.Json.null ())
+              with
+              | Hooks.Deny _ -> ()
+              | Hooks.Allow _ -> Alcotest.fail "exit-zero JSON denial was allowed"
+            else
+              await
+              @@ Hooks.post_tool runner ~session:"s" ~tool:"write"
+                   ~input:(Jsont.Json.null ()) ~output:"done" ~is_error:false;
             await (Lwt_io.write_line release "continue");
             await (Lwt_io.flush release);
             let message =
@@ -347,37 +358,51 @@ let successful_hook_keeps_detached_worker () =
               "detached worker finishes after hook returns" "done" message))
 
 let failing_hook_kills_detached_child () =
-  if Sys.win32 then
-    (* cmd cannot publish a child's pid for [kill]; the tree-kill coverage lives
-       in the jobs tests instead. *)
-    Alcotest.skip ()
+  if Sys.win32 then Alcotest.skip ()
   else
     with_environment (fun root ->
-        let config =
-          [
-            hook ~event:Config.Pre_tool
-              ~command:"sleep 30 >/dev/null 2>&1 & echo $! > child.pid; exit 2" ();
-          ]
+        let state_path = Filename.concat root "worker-state" in
+        Unix.mkfifo state_path 0o600;
+        Unix.mkfifo (Filename.concat root "worker-started") 0o600;
+        Unix.mkfifo (Filename.concat root "worker-release") 0o600;
+        let fd =
+          Unix.openfile state_path [ Unix.O_RDONLY; Unix.O_NONBLOCK ] 0
+          |> Lwt_unix.of_unix_file_descr
         in
-        let runner = runner root config in
-        (match
-           await
-           @@ Hooks.pre_tool runner ~session:"s" ~tool:"write" ~input:(Jsont.Json.null ())
-         with
-        | Hooks.Deny _ -> ()
-        | Hooks.Allow _ -> Alcotest.fail "failing hook was treated as a pass");
-        (* An orphaned zombie still answers signal 0 until it is reaped. Wait
-           past that window so the check below proves a live child. *)
-        await (Lwt_unix.sleep 0.5);
-        let child_path = Filename.concat root "child.pid" in
-        if not (Sys.file_exists child_path) then
-          Alcotest.fail "hook exited before recording its child";
-        let pid =
-          int_of_string (String.trim (Test_tools_test_support.load_file child_path))
-        in
-        match Unix.kill pid 0 with
-        | () -> Alcotest.fail "failing hook left its detached child"
-        | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ())
+        let state = Lwt_io.of_fd ~mode:Lwt_io.input fd in
+        let stopped = ref false in
+        let pid_path = Filename.concat root "worker.pid" in
+        Fun.protect
+          ~finally:(fun () ->
+            (if (not !stopped) && Sys.file_exists pid_path then
+               let pid = int_of_string (String.trim (read_payload root "worker.pid")) in
+               try Unix.kill pid Sys.sigkill
+               with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
+            await (Lwt_io.close state))
+          (fun () ->
+            let command =
+              "cat >/dev/null; (exec 3>worker-state; printf 'ready\\n' >&3; printf \
+               'ready\\n' > worker-started; read release < worker-release; printf \
+               'done\\n' >&3) </dev/null >/dev/null 2>&1 & printf '%s\\n' \"$!\" > \
+               worker.pid; read ready < worker-started; exit 2"
+            in
+            let runner = runner root [ hook ~event:Config.Pre_tool ~command () ] in
+            (match
+               await
+               @@ Hooks.pre_tool runner ~session:"s" ~tool:"write"
+                    ~input:(Jsont.Json.null ())
+             with
+            | Hooks.Deny _ -> ()
+            | Hooks.Allow _ -> Alcotest.fail "failing hook was treated as a pass");
+            let ready =
+              await @@ Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line state)
+            in
+            Alcotest.(check string) "child held the FIFO before failure" "ready" ready;
+            let eof =
+              await @@ Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line_opt state)
+            in
+            Alcotest.(check (option string)) "failed hook leaves no live writer" None eof;
+            stopped := true))
 
 let cases =
   [
@@ -408,7 +433,9 @@ let cases =
     Test_tools_test_support.case "timeout cleans descendant process group" `Quick
       descendant_cleanup;
     Test_tools_test_support.case "successful hook preserves detached worker" `Quick
-      successful_hook_keeps_detached_worker;
+      (successful_hook_keeps_detached_worker ~deny:false);
+    Test_tools_test_support.case "exit-zero denial preserves detached worker" `Quick
+      (successful_hook_keeps_detached_worker ~deny:true);
     Test_tools_test_support.case "failing hook kills detached child" `Quick
       failing_hook_kills_detached_child;
   ]
