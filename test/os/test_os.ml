@@ -1863,7 +1863,9 @@ let environment_replaces_and_directory_applies () =
 let null_and_inherit_are_not_pipes () =
   posix_only ();
   run (fun () ->
-      let child = Charamel_os.Process.spawn ~stdout:`Null [ "/bin/true" ] in
+      (* [true] is looked up through [PATH], not pinned to [/bin/true]:
+         macOS keeps it in [/usr/bin], and a hardcoded [/bin] misses there. *)
+      let child = Charamel_os.Process.spawn ~stdout:`Null [ "true" ] in
       Alcotest.check_raises "asking for a non-pipe stream is a programming error"
         (Invalid_argument "Charamel_os.Process.stdout_r: that stream was not a pipe")
         (fun () -> ignore (Charamel_os.Process.stdout_r child));
