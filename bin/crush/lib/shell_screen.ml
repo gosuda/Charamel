@@ -517,7 +517,7 @@ let read_body lx doc =
       in
       let line = String.sub lx.source lx.pos (stop - lx.pos) in
       lx.pos <- min length (stop + 1);
-      Some (if doc.strip_tabs then drop_leading '\t' line else line)
+      Some line
   in
   (* An expanding here-document joins a line ending in an unescaped backslash
      with the next line before comparing against the delimiter, so the screen
@@ -533,6 +533,7 @@ let read_body lx doc =
         lines acc (pending ^ String.sub line 0 (String.length line - 1))
     | Some line ->
         let line = pending ^ line in
+        let line = if doc.strip_tabs then drop_leading '\t' line else line in
         if String.equal line doc.delimiter then List.rev acc else lines (line :: acc) ""
   in
   String.concat "\n" (lines [] "")
@@ -1113,7 +1114,8 @@ let wrapper_options = function
   | _ -> ([], [])
 
 let rec env_command = function
-  | w :: _ when (not w.fixed) && not w.assignment -> Error computed_program
+  | w :: _ when (not w.fixed) && ((not w.assignment) || not w.single) ->
+      Error computed_program
   | w :: rest when String.contains w.value '=' -> env_command rest
   | words -> Ok words
 
@@ -1336,10 +1338,7 @@ and analyze_program sink ~depth program args =
   else if List.mem program wrappers then wrapped sink ~depth program args
   else
     match List.assoc_opt program exec_flags with
-    | Some flags ->
-        if List.exists (fun w -> (not w.fixed) && not w.single) args then
-          review sink computed_program;
-        exec_commands sink ~depth flags args
+    | Some flags -> exec_commands sink ~depth program flags args
     | None -> ()
 
 and wrapped sink ~depth program args =
@@ -1402,19 +1401,47 @@ and watch sink ~depth args =
         parse_source sink ~depth:(depth + 1)
           (String.concat " " (List.map (fun w -> w.value) words))
 
-(* [find] and [fd] predicates other than the code runners take data: paths,
-   names, and sizes. A word that provably expands to exactly one argument cannot
-   change the expression or reach an executable position, so only computed
-   words that may split still require review. *)
-and exec_commands sink ~depth flags = function
+(* A computed scalar is safe in a known data operand, but can become an execution
+   option elsewhere. Dynamic command templates can also change their terminator. *)
+and exec_commands sink ~depth program flags args =
+  let data_flags =
+    if program = "find" then
+      [ "-name"; "-iname"; "-path"; "-ipath"; "-wholename"; "-iwholename"; "-regex"; "-iregex" ]
+    else [ "-e"; "--extension"; "-E"; "--exclude"; "-t"; "--type"; "-d"; "--max-depth" ]
+  in
+  let rec command_words reversed = function
+    | [] -> (List.rev reversed, [])
+    | word :: rest
+      when word.fixed
+           && (word.value = ";"
+              || (program = "find" && word.value = "+"
+                 && match reversed with previous :: _ -> previous.fixed && previous.value = "{}" | [] -> false)) ->
+        (List.rev reversed, rest)
+    | word :: rest -> command_words (word :: reversed) rest
+  in
+  match args with
   | [] -> ()
+  | flag :: operand :: rest when flag.fixed && List.mem flag.value data_flags ->
+      if not operand.single then review sink computed_program;
+      exec_commands sink ~depth program flags rest
+  | word :: rest when program = "fd" && word.fixed && word.value = "--" ->
+      if List.exists (fun word -> not word.single) rest then review sink computed_program
   | w :: rest ->
-      if List.mem w.value flags then
-        match rest with
+      if w.fixed && List.mem w.value flags then begin
+        let command, rest = command_words [] rest in
+        if List.exists (fun word -> not word.fixed) command then review sink computed_program;
+        (match command with
         | name :: _ when String.contains name.value '{' -> review sink computed_program
-        | _ -> analyze sink ~depth rest
-      else if (not w.fixed) && not w.single then review sink computed_program;
-      exec_commands sink ~depth flags rest
+        | _ -> analyze sink ~depth command);
+        exec_commands sink ~depth program flags rest
+      end
+      else begin
+        let path_prefix =
+          List.exists (fun prefix -> String.starts_with ~prefix w.value) [ "/"; "./"; "../" ]
+        in
+        if (not w.fixed) && not (w.single && path_prefix) then review sink computed_program;
+        exec_commands sink ~depth program flags rest
+      end
 
 and shell_code sink ~depth program args =
   let finish ~command_string =
@@ -1590,7 +1617,15 @@ and analyze_cmd sink ~depth = function
         let base = basename (drop_leading '@' name.value) in
         let program = strip_executable_suffix base in
         check_executable sink base program args;
-        if List.mem program cmd_runners then
+        (* A [for] header names its loop variable and set, neither of which is
+           code: [%f] and [%%f] expand to file names, and the set is data. The
+           body after [do] is the command, analysed as one unit so an argument
+           holding a loop variable is not read as a program. An absent [do]
+           keeps the old review-every-word shape, so an unsupported form stays
+           under review. *)
+        if String.equal program "for" then ()
+        else if String.equal program "do" then analyze_cmd sink ~depth args
+        else if List.mem program cmd_runners then
           List.iter
             (fun w ->
               if w.fixed then parse_cmd sink ~depth:(depth + 1) w.value

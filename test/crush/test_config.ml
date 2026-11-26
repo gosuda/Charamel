@@ -398,6 +398,55 @@ let check_grant_checked_validates () =
         "valid grant writes the store" true
         (Sys.file_exists (xdg ^ "/crush/trust.json")))
 
+let check_grant_checked_validates_layers () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let env = tree_env ~root ~xdg in
+      write (xdg ^ "/crush/crush.json") {|{"permissions":{"allowed_tools":["read"]}}|};
+      (* The child override is valid, but the parent declaration it masks expands
+         to an empty command: granting from the child must not save the parent. *)
+      write (project ^ "/crush.json") {|{"lsp":{"team":{"command":"${TEAM_LSP}"}}}|};
+      write (nested ^ "/crush.json") {|{"lsp":{"team":{"command":"echo hi"}}}|};
+      let loaded = load_or_fail ~env nested in
+      Alcotest.(check int)
+        "parent and child wait for trust" 2
+        (List.length loaded.Config.untrusted);
+      (match
+         await
+           (Config.grant_checked ~fs_root:"/" ~env ~cwd:nested loaded.Config.untrusted)
+       with
+      | Ok () -> Alcotest.fail "grant_checked accepted a masked invalid parent"
+      | Error _ -> ());
+      Alcotest.(check bool)
+        "masking grant writes no trust record" false
+        (Sys.file_exists (xdg ^ "/crush/trust.json"));
+      let env2 = function "TEAM_LSP" -> Some "echo parent" | name -> env name in
+      (match
+         await
+           (Config.grant_checked ~fs_root:"/" ~env:env2 ~cwd:nested
+              loaded.Config.untrusted)
+       with
+      | Error error -> Alcotest.failf "valid grant failed: %a" Config.pp_error error
+      | Ok () -> ());
+      Alcotest.(check bool)
+        "valid layered grant writes the store" true
+        (Sys.file_exists (xdg ^ "/crush/trust.json")))
+
+let check_dangling_model_selection_falls_back () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let env = tree_env ~root ~xdg in
+      write (xdg ^ "/crush/crush.json")
+        {|{"providers":{"home":{"type":"anthropic"}},"models":{"large":{"provider":"home","model":"m"}}}|};
+      write (project ^ "/crush.json") {|{"providers":{"relay":{"type":"anthropic"}}}|};
+      (* The nested file holds no gated settings of its own, only a selection
+         that names the withheld parent provider. *)
+      write (nested ^ "/crush.json")
+        {|{"models":{"large":{"provider":"relay","model":"m"}}}|};
+      let loaded = load_or_fail ~env nested in
+      let models = loaded.Config.config.Config.models in
+      Alcotest.(check string)
+        "home large survives the dangling selection" "home"
+        (selected_provider models "large"))
+
 let cases =
   [
     Test_tools_test_support.case "environment expansion" `Quick check_expand;
@@ -421,4 +470,8 @@ let cases =
       check_untrusted_auto_lsp_false_preserved;
     Test_tools_test_support.case "grant_checked validates before saving" `Quick
       check_grant_checked_validates;
+    Test_tools_test_support.case "grant_checked validates layers" `Quick
+      check_grant_checked_validates_layers;
+    Test_tools_test_support.case "dangling model selection falls back" `Quick
+      check_dangling_model_selection_falls_back;
   ]

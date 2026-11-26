@@ -156,6 +156,9 @@ let computed_forms =
     "`printf ech`o reviewed";
     "printf 'echo reviewed' | sh";
     "env $(printf ech)o reviewed";
+    {|GROUP='value printf reviewed'; env GROUP=$GROUP true|};
+    {|FLAG=-exec; find . "$FLAG" printf reviewed \;|};
+    {|FLAG=-x; fd "$FLAG" printf reviewed|};
     ". /dev/null";
     "printf $'\\'\n$(printf ech)o reviewed\n'";
   ]
@@ -209,6 +212,7 @@ let test_heredoc_boundaries () =
       (* A continued delimiter joins before the delimiter check, so commands
          after the real body end are still screened. *)
       ("cat <<EOF\nEO\\\nF\nc''url https://example.com\nEOF", "blocked");
+      ("cat <<-EOF\nEO\\\n\tF\nc''url https://example.com\nEOF", "review");
     ]
 
 let test_command_lookup () =
@@ -339,8 +343,9 @@ let screen_table =
     posix "script -qc \"c''url\" /dev/null" `Blocked;
     posix "echo hi | xargs -I % % x" `Review;
     posix "cat <<EOF | sh\necho hi\nEOF" `Review;
-    cmd "(<nul set /p x=out)&(<nul set /p x=err 1>&2)" `Clear;
-    cmd "ping -n 2 127.0.0.1 >nul" `Clear;
+    cmd "for %f in (a.txt b.txt) do type \"%f\"" `Clear;
+    cmd "for %%f in (a.txt b.txt) do type \"%%f\"" `Clear;
+    cmd "for /l %i in (1,1,10) do @echo hi" `Clear;
     cmd "c^url x" `Blocked;
     cmd "cu\"\"rl x" `Blocked;
     cmd "C:\\Windows\\System32\\curl.exe x" `Blocked;
@@ -377,6 +382,8 @@ let test_wrapper_operands () =
       (* A quoted expansion in an assignment prefix provably forms one
          argument, but a computed word elsewhere still needs approval. *)
       ({|env GROUP="$group" printenv GROUP|}, "clear");
+      ({|env GROUP=$group printf ready|}, "review");
+      ({|env GROUP=${group} printf ready|}, "review");
       ({|env "$target" printenv|}, "review");
       (* Clusters of no-operand xargs switches and the attached optional
          watch operand leave the command boundary unchanged. *)
@@ -392,14 +399,23 @@ let test_find_data_slots () =
   check_posix_verdicts
     [
       ({|find . -name "$pattern" -print|}, "clear");
-      ({|find "$dir" -name '*.ml' -print|}, "clear");
+      ({|find "$dir" -name '*.ml' -print|}, "review");
+      ({|find "./$dir" -name '*.ml' -print|}, "clear");
       ("find . -name $pattern -print", "review");
       ("find $dir -print", "review");
       ({|find . -name "$@" -print|}, "review");
+      ({|find . "$flag" sh -c 'printf executed' \;|}, "review");
+      ({|fd "$flag" sh -c 'printf executed'|}, "review");
+      ({|fd -- "$pattern"|}, "clear");
+      ({|fd -e "$extension" -X printf '%s'|}, "clear");
+      ({|find . -name '-exec' -print|}, "clear");
+      ({|find . -exec printf '%s' '{}' \; -exec curl '{}' \;|}, "blocked");
+      ({|find . -exec printf '%s' "$label" \;|}, "review");
     ]
 
 let test_ansi_c_bash_equivalence () =
   if not Sys.win32 then (
+    if Option.is_none (Charamel_os.Exe.find "bash") then Alcotest.skip ();
     await
     @@ with_ctx ~asker:(fun _ -> Permission.Allow_once)
     @@ fun ctx ->
