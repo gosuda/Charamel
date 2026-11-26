@@ -297,8 +297,8 @@ let body_outcome_survives_stop_turn () =
        exit 2; else exit 0; fi"
     in
     let post =
-      "if grep -q allowed.txt; then printf 'ready\\n' > .body-ready; read release < \
-       .post-release; fi; exit 0"
+      "if grep -q allowed.txt; then printf '%s\\n' \"$$\" > .post-pid; printf \
+       'ready\\n' > .body-ready; read release < .post-release; fi; exit 0"
     in
     let hooks_config : Config.hook list =
       [
@@ -326,6 +326,15 @@ let body_outcome_survives_stop_turn () =
         (match await (Agent.prompt agent "read both files") with
         | Error error -> Alcotest.failf "agent prompt failed: %a" Agent.pp_error error
         | Ok finish -> Alcotest.(check bool) "finished" true (finish = `Stop));
+        let post_pid =
+          Test_tools_test_support.load_file (Filename.concat root ".post-pid")
+          |> String.trim |> int_of_string
+        in
+        (match Unix.kill post_pid 0 with
+        | () ->
+            Unix.kill (0 - post_pid) Sys.sigkill;
+            Alcotest.fail "cancelling the post hook left its process alive"
+        | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ());
         let finished =
           List.filter_map
             (function
