@@ -260,7 +260,9 @@ let osc_utf8_termination =
   let cases =
     List.map
       (fun (name, prefix) ->
-        (name, "\x1b]8;;" ^ prefix ^ "\x9clabel", osc [ "8"; ""; prefix ] :: prints "label"))
+        ( name,
+          "\x1b]8;;" ^ prefix ^ "\x9clabel",
+          osc [ "8"; ""; prefix ] :: prints "label" ))
       [
         ("invalid E0 second byte", "\xe0");
         ("surrogate prefix", "\xed\xa0");
@@ -292,7 +294,8 @@ let osc_utf8_termination =
       Alcotest.test_case ("osc: " ^ name) `Quick (fun () ->
           List.iter
             (fun chunk ->
-              Alcotest.check parser_testable (Printf.sprintf "%s, chunk %d" name chunk)
+              Alcotest.check parser_testable
+                (Printf.sprintf "%s, chunk %d" name chunk)
                 expected (feed_all ~chunk input))
             [ 0; 1; 7; 65536 ]))
     cases

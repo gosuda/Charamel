@@ -314,8 +314,7 @@ let valid_rune rune len =
 
 (* Track the next legal UTF-8 continuation independently of bounded payload storage.
    Only a continuation in this range can make 0x9C payload instead of a terminator. *)
-let osc_continues t byte =
-  t.osc_remaining > 0 && byte >= t.osc_min && byte <= t.osc_max
+let osc_continues t byte = t.osc_remaining > 0 && byte >= t.osc_min && byte <= t.osc_max
 
 let consume_osc_byte t byte =
   if osc_continues t byte then begin
@@ -447,13 +446,12 @@ let step t out b =
     (* A 0x9C byte that continues a multibyte sequence is OSC payload, not the
        string terminator; anything else goes through the state machine. *)
     let kind, next =
-      if t.st = Osc_string && b = 0x9c && osc_continues t b then
-        (K_put, Osc_string)
+      if t.st = Osc_string && b = 0x9c && osc_continues t b then (K_put, Osc_string)
       else transition t.st b
     in
-    if t.st = Osc_string then begin
-      if next = Osc_string then consume_osc_byte t b else t.osc_remaining <- 0
-    end;
+    if t.st = Osc_string then
+      begin if next = Osc_string then consume_osc_byte t b else t.osc_remaining <- 0
+      end;
     if (t.st = Escape || t.st = String_escape) && next <> Escape && next <> String_escape
     then clear_seq t;
     (* Upstream starts the DCS payload with a zero command byte when the
