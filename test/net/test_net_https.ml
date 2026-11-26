@@ -106,7 +106,7 @@ let has_terminator text =
   in
   last >= 0 && scan 0
 
-let with_tls_server ~cert ~priv f =
+let with_tls_server ?(on_accept = fun () -> ()) ~cert ~priv f =
   let socket = Lwt_unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
   Lwt_unix.bind socket (Unix.ADDR_INET (Unix.inet_addr_of_string "127.0.0.1", 0))
   >>= fun () ->
@@ -121,51 +121,73 @@ let with_tls_server ~cert ~priv f =
     | Ok config -> config
     | Error (`Msg message) -> Alcotest.failf "TLS fixture: %s" message
   in
-  let serve fd =
+  let accepted = ref [] in
+  let close_fd fd =
     Lwt.catch
+      (fun () -> Lwt_unix.close fd)
+      (function
+        | Unix.Unix_error (Unix.EBADF, _, _) -> Lwt.return_unit
+        | exn -> Lwt.fail exn)
+  in
+  let serve fd =
+    Lwt.finalize
       (fun () ->
-        Tls_lwt.Unix.server_of_fd config fd >>= fun session ->
-        let reader, writer = Tls_lwt.of_t session in
-        let received = Buffer.create 256 in
-        let rec read_request () =
-          Lwt_io.read ~count:1024 reader >>= fun chunk ->
-          if String.length chunk = 0 then Lwt.return_unit
-          else (
-            Buffer.add_string received chunk;
-            if has_terminator (Buffer.contents received) then Lwt.return_unit
-            else read_request ())
-        in
-        read_request () >>= fun () ->
-        let body = "hello" in
-        let head =
-          Printf.sprintf
-            "HTTP/1.1 200 OK\r\ncontent-length: %d\r\nconnection: close\r\n\r\n"
-            (String.length body)
-        in
-        Lwt_io.write writer (head ^ body) >>= fun () ->
-        Lwt_io.flush writer >>= fun () -> Tls_lwt.Unix.shutdown session `read_write)
-      (fun _exn ->
-        (* A rejected handshake must not leak the accepted socket: close it here,
-           tolerating backends that already closed it on failure. *)
-        Lwt.catch (fun () -> Lwt_unix.close fd) (fun _ -> Lwt.return_unit))
+        Lwt.catch
+          (fun () ->
+            Tls_lwt.Unix.server_of_fd config fd >>= fun session ->
+            let reader, writer = Tls_lwt.of_t session in
+            let received = Buffer.create 256 in
+            let rec read_request () =
+              Lwt_io.read ~count:1024 reader >>= fun chunk ->
+              if String.length chunk = 0 then Lwt.return_unit
+              else (
+                Buffer.add_string received chunk;
+                if has_terminator (Buffer.contents received) then Lwt.return_unit
+                else read_request ())
+            in
+            read_request () >>= fun () ->
+            let body = "hello" in
+            let head =
+              Printf.sprintf
+                "HTTP/1.1 200 OK\r\ncontent-length: %d\r\nconnection: close\r\n\r\n"
+                (String.length body)
+            in
+            Lwt_io.write writer (head ^ body) >>= fun () ->
+            Lwt_io.flush writer >>= fun () -> Tls_lwt.Unix.shutdown session `read_write)
+          (function
+            | Tls_lwt.Tls_alert _ | Tls_lwt.Tls_failure _ | End_of_file
+            | Unix.Unix_error _ | Lwt_io.Channel_closed _ | Lwt.Canceled ->
+                Lwt.return_unit
+            | exn -> Lwt.fail exn))
+      (fun () ->
+        accepted := List.filter (fun active -> active != fd) !accepted;
+        close_fd fd)
   in
   let handlers = ref [] in
   let rec accept_loop () =
     Lwt.catch
       (fun () ->
         Lwt_unix.accept socket >>= fun (fd, _) ->
+        accepted := fd :: !accepted;
+        on_accept ();
         let handler = serve fd in
         handlers := handler :: !handlers;
-        Lwt.async (fun () -> handler);
         accept_loop ())
-      (fun _exn -> Lwt.return_unit)
+      (function
+        | Unix.Unix_error (Unix.EBADF, _, _) | Lwt.Canceled -> Lwt.return_unit
+        | exn -> Lwt.fail exn)
   in
   let loop = accept_loop () in
   Lwt.finalize
     (fun () -> f port)
     (fun () ->
       Lwt_unix.close socket >>= fun () ->
-      loop >>= fun () -> Lwt.join !handlers)
+      loop >>= fun () ->
+      Lwt_list.iter_p close_fd !accepted >>= fun () ->
+      List.iter Lwt.cancel !handlers;
+      Lwt.catch
+        (fun () -> Lwt.join !handlers)
+        (function Lwt.Canceled -> Lwt.return_unit | exn -> Lwt.fail exn))
 
 let https_get port =
   Charamel_net.call ~meth:`GET ~body:None
@@ -254,4 +276,28 @@ let rejected_handshakes_leak_no_fds =
         Alcotest.(check bool) "no file descriptor growth" true (after <= before);
         Lwt.return_unit))
 
-let cases = [ loads_trust_store; rejects_unknown_chain; rejected_handshakes_leak_no_fds ]
+let stalled_handshake_does_not_block_teardown =
+  Alcotest_lwt.test_case "a stalled handshake does not block fixture teardown" `Quick
+    (fun _switch () ->
+      Mirage_crypto_rng_unix.use_default ();
+      let anchor = Lazy.force shared_anchor in
+      let priv, cert = sign_leaf ~ca_priv:anchor.priv ~ca_cert:anchor.cert () in
+      let client = Lwt_unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+      let accepted, accept = Lwt.wait () in
+      Lwt.finalize
+        (fun () ->
+          Lwt_unix.with_timeout 5. (fun () ->
+              with_tls_server ~on_accept:(fun () -> Lwt.wakeup_later accept ())
+                ~cert ~priv (fun port ->
+                  Lwt_unix.connect client
+                    (Unix.ADDR_INET (Unix.inet_addr_loopback, port))
+                  >>= fun () -> accepted)))
+        (fun () -> Lwt_unix.close client))
+
+let cases =
+  [
+    loads_trust_store;
+    rejects_unknown_chain;
+    rejected_handshakes_leak_no_fds;
+    stalled_handshake_does_not_block_teardown;
+  ]
