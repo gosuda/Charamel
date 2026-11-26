@@ -104,7 +104,11 @@ val cancel : t -> unit
     turns off that turn's switch, which cancels the in-flight provider stream and any tool
     job that has not started running yet. A tool already running runs to completion, and
     the turn stops at the next checkpoint; a subagent launched by that tool is interrupted
-    with it. It does not cancel [deps.sw]. *)
+    with it. Prompt completion waits for active hook process cleanup, including when
+    cancellation has already started switch shutdown. Completed tool results, including
+    inline writes, are persisted before the interrupted prompt settles. Closed or
+    cancelled post-tool hooks cannot discard those results. It does not cancel [deps.sw].
+*)
 
 val prompt :
   t ->
@@ -114,7 +118,8 @@ val prompt :
 (** [prompt t ?attachments text] sends [text] to the provider and executes its tool calls.
     Attachment data is already wire-encoded and is passed directly to the provider.
     Attachments are MIME, data, and optional-name triples. A prompt submitted while
-    another prompt is active returns [`Busy]. *)
+    another prompt is active returns [`Busy]. A stopped parallel batch does not wait for
+    unfinished sibling tool bodies. Those bodies cannot start new hooks after shutdown. *)
 
 val compact : t -> (unit, error) result Lwt.t
 (** [compact t] compacts the current session through the small model. *)

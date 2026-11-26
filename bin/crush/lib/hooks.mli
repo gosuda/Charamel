@@ -2,7 +2,12 @@
 
     Hooks receive one bounded JSON request on standard input. Pre-tool hooks authorize a
     call, may replace its decoded input, and fail closed; lifecycle hooks are
-    observational. *)
+    observational. Each invocation owns its process until it is reaped. Cancellation and
+    timeout stop the process group before the invocation settles. Exit status 0 with
+    drained streams preserves detached descendants, including a JSON pre-tool denial.
+    Nonzero exit statuses stop the process group, including an exit-2 denial. On Windows,
+    process-group termination has the child-only scope of
+    {!Charamel_os.Process.kill_tree}. *)
 
 type t
 (** The configured hook runner. *)

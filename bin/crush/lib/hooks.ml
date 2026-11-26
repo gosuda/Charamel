@@ -63,7 +63,15 @@ let write_input channel payload =
 
 let run_command t ~timeout ~command ~payload =
   let child = ref None in
-  let kill () = Option.iter Charamel_os.Process.kill_tree !child in
+  let completed = ref false in
+  let cleanup () =
+    match !child with
+    | None -> Lwt.return_unit
+    | Some process ->
+        if (not !completed) && Charamel_os.Process.group_alive process then
+          Charamel_os.Process.kill_tree process;
+        Lwt.protected (Charamel_os.Process.await process) >|= fun _ -> ()
+  in
   let body () =
     let process =
       Charamel_os.Process.spawn ~cwd:t.cwd ~env:(Unix.environment ()) ~stdin:`Pipe
@@ -80,17 +88,20 @@ let run_command t ~timeout ~command ~payload =
     let stderr = read_channel (Charamel_os.Process.stderr_r process) in
     Lwt.both stdout stderr >>= fun (stdout, stderr) ->
     input >>= fun () ->
-    Charamel_os.Process.await process >|= fun code -> Done (code, stdout, stderr)
+    Lwt.protected (Charamel_os.Process.await process) >|= fun code ->
+    if code = 0 then completed := true;
+    Done (code, stdout, stderr)
   in
-  Lwt.catch
-    (fun () -> Lwt_unix.with_timeout timeout body)
-    (function
-      | Lwt_unix.Timeout ->
-          kill ();
-          Lwt.return Timeout
-      | Unix.Unix_error (error, function_name, argument) ->
-          Lwt.return (Failed (unix_message function_name argument error))
-      | exn -> Lwt.fail exn)
+  Lwt.finalize
+    (fun () ->
+      Lwt.catch
+        (fun () -> Lwt_unix.with_timeout timeout body)
+        (function
+          | Lwt_unix.Timeout -> Lwt.return Timeout
+          | Unix.Unix_error (error, function_name, argument) ->
+              Lwt.return (Failed (unix_message function_name argument error))
+          | exn -> Lwt.fail exn))
+    cleanup
 
 let compile_matcher command =
   Option.map (fun pattern ->

@@ -90,7 +90,8 @@ let config ~base_url (model : Charamel_fantasy.Model.t) =
     models = { large = Some selected; small = Some selected };
   }
 
-let with_agent ~queue ~fallback f =
+let with_agent ?asker ?(hooks_config : Config.hook list = [])
+    ?(clock = Charamel_os.Time.lwt) ~queue ~fallback f =
   Test_tools_test_support.with_scratch (fun root ->
       let old_data = Sys.getenv_opt "XDG_DATA_HOME" in
       Unix.putenv "XDG_DATA_HOME" root;
@@ -103,7 +104,6 @@ let with_agent ~queue ~fallback f =
           Test_tools_test_support.with_http_server ~content_type:"text/event-stream" ~body
             (fun port ->
               let sw = Lwt_switch.create () in
-              let clock = Charamel_os.Time.lwt in
               let base_url = Fmt.str "http://127.0.0.1:%d" port in
               let selected_model = model ~base_url in
               let config = config ~base_url selected_model in
@@ -139,11 +139,12 @@ let with_agent ~queue ~fallback f =
                     Alcotest.failf "session setup failed: %a" Session.pp_error error
               in
               let permission =
-                Permission.create ~config:config.Config.permissions ~yolo:true ~cwd:root
+                Permission.create ~config:config.Config.permissions
+                  ~yolo:(Option.is_none asker) ?asker ~cwd:root
                   ~plans_dir:(Filename.concat root ".crush/plans")
                   ()
               in
-              let hooks = Hooks.create ~config:[] ~cwd:root in
+              let hooks = Hooks.create ~config:hooks_config ~cwd:root in
               let rules = await (Rules.load ~fs_root:root ~cwd:root ~config) in
               let skills = await (Skills.load ~fs_root:root ~config ~home:root) in
               let mcp = await (Mcp.create ~cwd:root ~config) in
@@ -200,7 +201,7 @@ let with_agent ~queue ~fallback f =
                 | Error error ->
                     Alcotest.failf "agent setup failed: %a" Agent.pp_error error
               in
-              f agent session events))
+              f agent session events root))
         ~finally:(fun () ->
           match old_data with
           | Some value -> Unix.putenv "XDG_DATA_HOME" value
@@ -226,7 +227,7 @@ let tool_call_and_stop () =
   with_agent
     ~queue:[ tool_response model_id "read" read_input; text_response model_id "done" ]
     ~fallback:(text_response model_id "done")
-    (fun agent session _events ->
+    (fun agent session _events _root ->
       let path = Filename.concat (Filename.get_temp_dir_name ()) "note.txt" in
       ignore path;
       match await (Agent.prompt agent "read note.txt") with
@@ -247,16 +248,399 @@ let loop_guard () =
   let repeated =
     tool_response model_id "bash" "{\"command\":\"echo same\",\"description\":\"same\"}"
   in
-  with_agent ~queue:[] ~fallback:repeated (fun agent _session _events ->
+  with_agent ~queue:[] ~fallback:repeated (fun agent _session _events _root ->
       match await (Agent.prompt agent "repeat") with
       | Error error -> Alcotest.failf "loop prompt failed: %a" Agent.pp_error error
       | Ok finish ->
           Alcotest.(check bool)
             "loop detected at fifth triple" true (finish = `Loop_detected))
 
+let two_tool_response model_id name1 input1 name2 input2 =
+  message_start model_id
+  ^ Fmt.str
+      "event: content_block_start\n\
+       data: \
+       {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call-1\",\"name\":%S,\"input\":{}}}\n\n"
+      name1
+  ^ Fmt.str
+      "event: content_block_delta\n\
+       data: \
+       {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":%S}}\n\n"
+      input1
+  ^ "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+  ^ Fmt.str
+      "event: content_block_start\n\
+       data: \
+       {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call-2\",\"name\":%S,\"input\":{}}}\n\n"
+      name2
+  ^ Fmt.str
+      "event: content_block_delta\n\
+       data: \
+       {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":%S}}\n\n"
+      input2
+  ^ "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n"
+  ^ "event: message_delta\n\
+     data: \
+     {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":1}}\n\n"
+  ^ "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+(* The allowed call signals that its body finished before the denial can stop the
+   turn. Its post hook stays blocked until cancellation. *)
+let body_outcome_survives_stop_turn () =
+  if Sys.win32 then
+    (* The hook scripts below are POSIX shell; the output cap is the same code path on
+       Windows. *)
+    Alcotest.skip ()
+  else
+    let model_id = "fixture-model" in
+    let pre =
+      "if grep -q denied.txt; then read ready < .body-ready; echo denied-by-hook 1>&2; \
+       exit 2; else exit 0; fi"
+    in
+    let post =
+      "if grep -q allowed.txt; then printf '%s\\n' \"$$\" > .post-pid; printf 'ready\\n' \
+       > .body-ready; read release < .post-release; fi; exit 0"
+    in
+    let hooks_config : Config.hook list =
+      [
+        { event = Config.Pre_tool; matcher = None; command = pre; timeout_s = 30 };
+        { event = Config.Post_tool; matcher = None; command = post; timeout_s = 30 };
+      ]
+    in
+    with_agent ~hooks_config
+      ~queue:
+        [
+          two_tool_response model_id "read" "{\"path\":\"denied.txt\"}" "read"
+            "{\"path\":\"allowed.txt\"}";
+          text_response model_id "done";
+        ]
+      ~fallback:(text_response model_id "done")
+      (fun agent _session events root ->
+        Unix.mkfifo (Filename.concat root ".body-ready") 0o600;
+        Unix.mkfifo (Filename.concat root ".post-release") 0o600;
+        Test_tools_test_support.write_file
+          (Filename.concat root "denied.txt")
+          "denied-body";
+        Test_tools_test_support.write_file
+          (Filename.concat root "allowed.txt")
+          "allowed-body";
+        (match await (Agent.prompt agent "read both files") with
+        | Error error -> Alcotest.failf "agent prompt failed: %a" Agent.pp_error error
+        | Ok finish -> Alcotest.(check bool) "finished" true (finish = `Stop));
+        let post_pid =
+          Test_tools_test_support.load_file (Filename.concat root ".post-pid")
+          |> String.trim |> int_of_string
+        in
+        (match Unix.kill post_pid 0 with
+        | () ->
+            Unix.kill (0 - post_pid) Sys.sigkill;
+            Alcotest.fail "cancelling the post hook left its process alive"
+        | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ());
+        let finished =
+          List.filter_map
+            (function
+              | Agent.Tool_finished { id; output; _ } -> Some (id, output) | _ -> None)
+            !events
+        in
+        let content id =
+          match List.assoc_opt id finished with
+          | Some output -> output.Crush_core.Tool.content
+          | None -> Alcotest.failf "no Tool_finished event for %s" id
+        in
+        let denied = content "call-1" in
+        let allowed = content "call-2" in
+        Alcotest.(check bool)
+          "denied call stops the turn" true
+          (Test_support.contains ~needle:"denied-by-hook" ~haystack:denied);
+        Alcotest.(check bool)
+          "recorded body is kept" true
+          (Test_support.contains ~needle:"allowed-body" ~haystack:allowed);
+        Alcotest.(check bool)
+          "kept body is not marked skipped" false
+          (Test_support.contains ~needle:"skipped" ~haystack:allowed))
+
+let post_hook_time_is_not_tool_time () =
+  if Sys.win32 then Alcotest.skip ()
+  else
+    let virtual_clock, advance = Charamel_os.Time.create_virtual () in
+    let clock = Charamel_os.Time.of_virtual virtual_clock in
+    let hooks_config : Config.hook list =
+      [
+        {
+          event = Config.Post_tool;
+          matcher = None;
+          command =
+            "cat >/dev/null; printf 'ready\\n' > .timing-ready; read release < \
+             .timing-release";
+          timeout_s = 30;
+        };
+      ]
+    in
+    with_agent ~hooks_config ~clock
+      ~queue:
+        [
+          tool_response "fixture-model" "read" "{\"path\":\"allowed.txt\"}";
+          text_response "fixture-model" "done";
+        ]
+      ~fallback:(text_response "fixture-model" "done")
+      (fun agent _session events root ->
+        let ready_path = Filename.concat root ".timing-ready" in
+        let release_path = Filename.concat root ".timing-release" in
+        Unix.mkfifo ready_path 0o600;
+        Unix.mkfifo release_path 0o600;
+        let open_fifo path =
+          Unix.openfile path [ Unix.O_RDWR; Unix.O_NONBLOCK ] 0
+          |> Lwt_unix.of_unix_file_descr
+        in
+        let ready = Lwt_io.of_fd ~mode:Lwt_io.input (open_fifo ready_path) in
+        let release = Lwt_io.of_fd ~mode:Lwt_io.output (open_fifo release_path) in
+        Fun.protect
+          ~finally:(fun () ->
+            await (Lwt_io.close ready);
+            await (Lwt_io.close release))
+          (fun () ->
+            Test_tools_test_support.write_file
+              (Filename.concat root "allowed.txt")
+              "allowed-body";
+            let pending = Agent.prompt agent "read the file" in
+            ignore (await (Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line ready)));
+            advance 10.;
+            await (Lwt_io.write_line release "resume");
+            await (Lwt_io.flush release);
+            (match await pending with
+            | Error error -> Alcotest.failf "agent prompt failed: %a" Agent.pp_error error
+            | Ok _ -> ());
+            let timings =
+              List.filter_map
+                (function
+                  | Agent.Tool_finished { elapsed_ms; _ } -> Some elapsed_ms | _ -> None)
+                !events
+            in
+            Alcotest.(check (list int)) "post-hook time excluded" [ 0 ] timings))
+
+let stopped_turn_leaves_pending_approval () =
+  if Sys.win32 then Alcotest.skip ()
+  else
+    let approval, answer = Lwt.wait () in
+    let asked, announce = Lwt.wait () in
+    let asker _ =
+      if Lwt.is_sleeping asked then Lwt.wakeup_later announce ();
+      await approval
+    in
+    let hooks_config : Config.hook list =
+      [
+        {
+          event = Config.Pre_tool;
+          matcher = None;
+          command =
+            "if grep -q denied.txt; then read ready < .approval-open; echo denied >&2; \
+             exit 2; fi";
+          timeout_s = 30;
+        };
+      ]
+    in
+    with_agent ~asker ~hooks_config
+      ~queue:
+        [
+          two_tool_response "fixture-model" "read" "{\"path\":\"denied.txt\"}" "read"
+            "{\"path\":\"../pending-approval.txt\"}";
+        ]
+      ~fallback:(text_response "fixture-model" "done")
+      (fun agent _session _events root ->
+        let ready_path = Filename.concat root ".approval-open" in
+        Unix.mkfifo ready_path 0o600;
+        let fd =
+          Unix.openfile ready_path [ Unix.O_RDWR; Unix.O_NONBLOCK ] 0
+          |> Lwt_unix.of_unix_file_descr
+        in
+        let ready = Lwt_io.of_fd ~mode:Lwt_io.output fd in
+        let pending = Agent.prompt agent "read both files" in
+        Fun.protect
+          ~finally:(fun () ->
+            if Lwt.is_sleeping approval then Lwt.wakeup_later answer Permission.Deny;
+            ignore (await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected pending)));
+            await (Lwt_io.close ready))
+          (fun () ->
+            await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected asked));
+            await (Lwt_io.write_line ready "deny");
+            await (Lwt_io.flush ready);
+            (match await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected pending)) with
+            | Ok `Stop -> ()
+            | Ok _ -> Alcotest.fail "denied call did not stop the turn"
+            | Error error -> Alcotest.failf "agent prompt failed: %a" Agent.pp_error error);
+            Alcotest.(check bool)
+              "approval remains unanswered" true (Lwt.is_sleeping approval);
+            Alcotest.(check bool) "stopped agent is idle" false (Agent.busy agent)))
+
+let check_persisted_write session events root =
+  Alcotest.(check string)
+    "write completed" "saved body"
+    (Test_tools_test_support.load_file (Filename.concat root "notes.txt"));
+  let reopened =
+    match
+      await
+      @@ Session.open_ (Session.store ~fs_root:root ~cwd:root) ~id:(Session.id session)
+    with
+    | Ok session -> session
+    | Error error -> Alcotest.failf "session reopen failed: %a" Session.pp_error error
+  in
+  let results =
+    Array.to_list (Session.events reopened)
+    |> List.filter_map (function
+      | Session.Tool_result { id = "call-1"; name = "write"; output; _ } -> Some output
+      | _ -> None)
+  in
+  let output =
+    match results with
+    | [ `Text output ] -> output
+    | _ -> Alcotest.fail "completed write result was not persisted exactly once"
+  in
+  Alcotest.(check bool)
+    "persisted result describes the write" true
+    (String.starts_with ~prefix:"wrote " output
+    && Test_support.contains ~needle:"notes.txt" ~haystack:output);
+  let history =
+    Session.messages reopened
+    |> List.concat_map (fun message -> message.Charamel_fantasy.Message.parts)
+    |> List.filter_map (function
+      | Charamel_fantasy.Message.Tool_result
+          { id = "call-1"; name = "write"; output = `Text text } ->
+          Some text
+      | _ -> None)
+  in
+  Alcotest.(check (list string)) "resumed history includes the write" [ output ] history;
+  let finished =
+    List.filter_map
+      (function
+        | Agent.Tool_finished { id = "call-1"; name = "write"; output; _ } ->
+            Some output.Crush_core.Tool.content
+        | _ -> None)
+      !events
+  in
+  Alcotest.(check (list string)) "write completion reported once" [ output ] finished
+
+let explicit_cancel_joins_hook_cleanup ?(external_cancel = false) () =
+  if Sys.win32 then Alcotest.skip ()
+  else
+    let hooks_config : Config.hook list =
+      [
+        {
+          event = Config.Post_tool;
+          matcher = None;
+          command =
+            "cat >/dev/null; printf '%s\\n' \"$$\" > .cancel-pid; printf 'ready\\n' > \
+             .cancel-ready; read release < .cancel-release";
+          timeout_s = 30;
+        };
+      ]
+    in
+    with_agent ~hooks_config
+      ~queue:
+        [
+          tool_response "fixture-model" "write"
+            "{\"path\":\"notes.txt\",\"content\":\"saved body\"}";
+        ]
+      ~fallback:(text_response "fixture-model" "done")
+      (fun agent session events root ->
+        let ready_path = Filename.concat root ".cancel-ready" in
+        Unix.mkfifo ready_path 0o600;
+        Unix.mkfifo (Filename.concat root ".cancel-release") 0o600;
+        let fd =
+          Unix.openfile ready_path [ Unix.O_RDWR; Unix.O_NONBLOCK ] 0
+          |> Lwt_unix.of_unix_file_descr
+        in
+        let ready = Lwt_io.of_fd ~mode:Lwt_io.input fd in
+        let pending = Agent.prompt agent "write the file" in
+        Fun.protect
+          ~finally:(fun () ->
+            Agent.cancel agent;
+            await (Lwt_io.close ready))
+          (fun () ->
+            ignore (await (Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line ready)));
+            let pid =
+              Test_tools_test_support.load_file (Filename.concat root ".cancel-pid")
+              |> String.trim |> int_of_string
+            in
+            if external_cancel then Lwt.cancel pending else Agent.cancel agent;
+            let finished =
+              Lwt.catch
+                (fun () -> Lwt.map Option.some (Lwt.protected pending))
+                (function
+                  | Lwt.Canceled when external_cancel -> Lwt.return_none
+                  | exn -> Lwt.fail exn)
+            in
+            (match await (Lwt_unix.with_timeout 5. (fun () -> finished)) with
+            | Some (Ok `Interrupted) when not external_cancel -> ()
+            | None when external_cancel -> ()
+            | Some (Error error) ->
+                Alcotest.failf "agent prompt failed: %a" Agent.pp_error error
+            | Some (Ok _) | None -> Alcotest.fail "cancel did not interrupt the turn");
+            (match Unix.kill pid 0 with
+            | () ->
+                Unix.kill (0 - pid) Sys.sigkill;
+                Alcotest.fail "cancel completed before hook process cleanup"
+            | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ());
+            Alcotest.(check bool) "cancelled agent is idle" false (Agent.busy agent);
+            check_persisted_write session events root))
+
+let cancelled_body_skips_closed_post_hook () =
+  let approval, answer = Lwt.wait () in
+  let asked, announce = Lwt.wait () in
+  let asker _ =
+    if Lwt.is_sleeping asked then Lwt.wakeup_later announce ();
+    await approval
+  in
+  let hooks_config : Config.hook list =
+    [
+      {
+        event = Config.Post_tool;
+        matcher = None;
+        command = "echo unexpected > closed-post-hook";
+        timeout_s = 30;
+      };
+    ]
+  in
+  with_agent ~asker ~hooks_config
+    ~queue:
+      [
+        tool_response "fixture-model" "write"
+          "{\"path\":\"notes.txt\",\"content\":\"saved body\"}";
+      ]
+    ~fallback:(text_response "fixture-model" "done")
+    (fun agent session events root ->
+      let pending = Agent.prompt agent "write the file" in
+      Fun.protect
+        ~finally:(fun () ->
+          if Lwt.is_sleeping approval then Lwt.wakeup_later answer Permission.Deny;
+          Agent.cancel agent)
+        (fun () ->
+          await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected asked));
+          Agent.cancel agent;
+          Lwt.wakeup_later answer Permission.Allow_once;
+          (match await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected pending)) with
+          | Ok `Interrupted -> ()
+          | Ok _ -> Alcotest.fail "cancel did not interrupt the turn"
+          | Error error -> Alcotest.failf "agent prompt failed: %a" Agent.pp_error error);
+          Alcotest.(check bool)
+            "closed post hook never started" false
+            (Sys.file_exists (Filename.concat root "closed-post-hook"));
+          check_persisted_write session events root))
+
 let cases =
   [
     Test_tools_test_support.case "tool call and stop use HTTP fixture" `Quick
       tool_call_and_stop;
     Test_tools_test_support.case "last ten triples stop repeated calls" `Quick loop_guard;
+    Test_tools_test_support.case "finished body survives an earlier stop" `Quick
+      body_outcome_survives_stop_turn;
+    Test_tools_test_support.case "post-hook time is not tool time" `Quick
+      post_hook_time_is_not_tool_time;
+    Test_tools_test_support.case "stopped turn does not await sibling approval" `Quick
+      stopped_turn_leaves_pending_approval;
+    Test_tools_test_support.case "explicit cancel joins hook cleanup" `Quick
+      (explicit_cancel_joins_hook_cleanup ~external_cancel:false);
+    Test_tools_test_support.case "external cancel persists completed write" `Quick
+      (explicit_cancel_joins_hook_cleanup ~external_cancel:true);
+    Test_tools_test_support.case "cancelled body skips closed post hook" `Quick
+      cancelled_body_skips_closed_post_hook;
   ]

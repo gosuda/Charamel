@@ -176,6 +176,27 @@ let oversized_output_denies () =
         expect_failure_denial "oversized output"
           (runner root [ hook ~event:Config.Pre_tool ~command:oversized_deny () ]))
 
+(* An over-limit stderr is a warning on a successful exit, not a denial: the hook prints
+   valid allow JSON on stdout and more than [max_output_size] bytes on stderr. *)
+let oversized_stderr_allows () =
+  if Sys.win32 then
+    (* cmd has no [head] or [tr]; the output cap is the same code path on Windows. *)
+    Alcotest.skip ()
+  else
+    with_environment (fun root ->
+        let command =
+          "printf '{\"decision\":\"allow\"}'; head -c 1048577 /dev/zero | tr '\\000' ' ' \
+           >&2"
+        in
+        let input = json_string "kept" in
+        match
+          pre_tool_outcome (runner root [ hook ~event:Config.Pre_tool ~command () ]) input
+        with
+        | Hooks.Allow json ->
+            Alcotest.check Alcotest.bool "input kept" true (Jsont.Json.equal json input)
+        | Hooks.Deny reason ->
+            Alcotest.failf "oversized stderr denied an allowed call: %s" reason)
+
 let well_formed_allow_keeps_input () =
   with_environment (fun root ->
       let input = json_string "kept" in
@@ -282,6 +303,111 @@ let descendant_cleanup () =
           | () -> Alcotest.fail "timed-out hook left a child process"
           | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ())
 
+let successful_hook_keeps_detached_worker ?(deny = false) () =
+  if Sys.win32 then Alcotest.skip ()
+  else
+    with_environment (fun root ->
+        let release_path = Filename.concat root "worker-release" in
+        let finished_path = Filename.concat root "worker-finished" in
+        Unix.mkfifo release_path 0o600;
+        Unix.mkfifo finished_path 0o600;
+        let open_fifo path =
+          Unix.openfile path [ Unix.O_RDWR; Unix.O_NONBLOCK ] 0
+          |> Lwt_unix.of_unix_file_descr
+        in
+        let release = Lwt_io.of_fd ~mode:Lwt_io.output (open_fifo release_path) in
+        let finished = Lwt_io.of_fd ~mode:Lwt_io.input (open_fifo finished_path) in
+        let pid_path = Filename.concat root "worker.pid" in
+        let completed = ref false in
+        Fun.protect
+          ~finally:(fun () ->
+            (if (not !completed) && Sys.file_exists pid_path then
+               let pid = int_of_string (String.trim (read_payload root "worker.pid")) in
+               try Unix.kill pid Sys.sigkill
+               with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
+            await (Lwt_io.close release);
+            await (Lwt_io.close finished))
+          (fun () ->
+            let command =
+              "cat >/dev/null; (read release < worker-release; printf 'done\\n' > \
+               worker-finished) </dev/null >/dev/null 2>&1 & printf '%s\\n' \"$!\" > \
+               worker.pid"
+              ^ if deny then "; printf '%s\\n' '{\"decision\":\"deny\"}'" else ""
+            in
+            let event = if deny then Config.Pre_tool else Config.Post_tool in
+            let runner = runner root [ hook ~event ~command () ] in
+            if deny then
+              match
+                await
+                @@ Hooks.pre_tool runner ~session:"s" ~tool:"write"
+                     ~input:(Jsont.Json.null ())
+              with
+              | Hooks.Deny _ -> ()
+              | Hooks.Allow _ -> Alcotest.fail "exit-zero JSON denial was allowed"
+            else
+              await
+              @@ Hooks.post_tool runner ~session:"s" ~tool:"write"
+                   ~input:(Jsont.Json.null ()) ~output:"done" ~is_error:false;
+            await (Lwt_io.write_line release "continue");
+            await (Lwt_io.flush release);
+            let message =
+              await @@ Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line finished)
+            in
+            completed := true;
+            Alcotest.(check string)
+              "detached worker finishes after hook returns" "done" message))
+
+let failing_hook_kills_detached_child () =
+  if Sys.win32 then Alcotest.skip ()
+  else
+    with_environment (fun root ->
+        let state_path = Filename.concat root "worker-state" in
+        Unix.mkfifo state_path 0o600;
+        Unix.mkfifo (Filename.concat root "worker-started") 0o600;
+        Unix.mkfifo (Filename.concat root "worker-release") 0o600;
+        let fd =
+          Unix.openfile state_path [ Unix.O_RDONLY; Unix.O_NONBLOCK ] 0
+          |> Lwt_unix.of_unix_file_descr
+        in
+        let state = Lwt_io.of_fd ~mode:Lwt_io.input fd in
+        let stopped = ref false in
+        let pid_path = Filename.concat root "worker.pid" in
+        Fun.protect
+          ~finally:(fun () ->
+            (if (not !stopped) && Sys.file_exists pid_path then
+               let pid = int_of_string (String.trim (read_payload root "worker.pid")) in
+               try Unix.kill pid Sys.sigkill
+               with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
+            await (Lwt_io.close state))
+          (fun () ->
+            let command =
+              "cat >/dev/null; (exec 3>worker-state; printf 'ready\\n' >&3; printf \
+               'ready\\n' > worker-started; read release < worker-release; printf \
+               'done\\n' >&3) </dev/null >/dev/null 2>&1 & printf '%s\\n' \"$!\" > \
+               worker.pid; read ready < worker-started; printf 'exit-two-cleanup\\n' \
+               >&2; exit 2"
+            in
+            let runner = runner root [ hook ~event:Config.Pre_tool ~command () ] in
+            (match
+               await
+               @@ Hooks.pre_tool runner ~session:"s" ~tool:"write"
+                    ~input:(Jsont.Json.null ())
+             with
+            | Hooks.Deny "exit-two-cleanup" -> ()
+            | Hooks.Deny reason ->
+                Alcotest.failf "nonzero hook did not report its exit-two denial: %s"
+                  reason
+            | Hooks.Allow _ -> Alcotest.fail "failing hook was treated as a pass");
+            let ready =
+              await @@ Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line state)
+            in
+            Alcotest.(check string) "child held the FIFO before failure" "ready" ready;
+            let eof =
+              await @@ Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line_opt state)
+            in
+            Alcotest.(check (option string)) "failed hook leaves no live writer" None eof;
+            stopped := true))
+
 let cases =
   [
     Test_tools_test_support.case "pre-tool allow can rewrite input" `Quick rewritten_input;
@@ -297,6 +423,8 @@ let cases =
       malformed_output_denies;
     Test_tools_test_support.case "oversized pre-tool output denies" `Quick
       oversized_output_denies;
+    Test_tools_test_support.case "oversized stderr on success still allows" `Quick
+      oversized_stderr_allows;
     Test_tools_test_support.case "well-formed allow keeps the input" `Quick
       well_formed_allow_keeps_input;
     Test_tools_test_support.case "failing lifecycle hooks stay observational" `Quick
@@ -308,4 +436,10 @@ let cases =
       lifecycle_payload;
     Test_tools_test_support.case "timeout cleans descendant process group" `Quick
       descendant_cleanup;
+    Test_tools_test_support.case "successful hook preserves detached worker" `Quick
+      (successful_hook_keeps_detached_worker ~deny:false);
+    Test_tools_test_support.case "exit-zero denial preserves detached worker" `Quick
+      (successful_hook_keeps_detached_worker ~deny:true);
+    Test_tools_test_support.case "failing hook kills detached child" `Quick
+      failing_hook_kills_detached_child;
   ]
