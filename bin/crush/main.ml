@@ -106,18 +106,23 @@ let gated_list (file : Config.project_file) = String.concat ", " file.Config.gat
 
 let display_path path =
   (* Repository-controlled paths reach the terminal: neutralize control
-     characters so a crafted directory name cannot rewrite the trust notice.
-     A horizontal tab only advances to the next tab stop, so it stays, and the
-     quoted hint still pastes as one shell argument. *)
+     characters so a crafted directory name cannot rewrite the trust notice. *)
   String.map
-    (fun c -> if c = '\t' then c else if c < ' ' || c = '\x7f' then '?' else c)
+    (fun c -> if c < ' ' || c = '\x7f' then '?' else c)
     path
 
 (* The working directory is repository-controlled like the project paths, so it
    is quoted for the shell and neutralized for the terminal: a directory name
    with a space must paste as one argument, and control characters must not
    rewrite the notice. *)
-let display_cwd cwd = display_path (Filename.quote cwd)
+let display_cwd cwd =
+  if String.exists (fun c -> c < ' ' || c = '\x7f') cwd && not Sys.win32 then
+    let encoded = Buffer.create (5 * String.length cwd) in
+    String.iter (fun c -> Printf.bprintf encoded "\\0%03o" (Char.code c)) cwd;
+    (* The final /. prevents command substitution from stripping a newline that
+       belongs to the directory name. The displayed command contains no controls. *)
+    Fmt.str "\"$(printf '%%b/.' %s)\"" (Filename.quote (Buffer.contents encoded))
+  else display_path (Filename.quote cwd)
 
 let report_untrusted (env : Env.t) ~cwd untrusted =
   List.iter

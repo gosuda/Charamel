@@ -347,6 +347,39 @@ let trust_output_sanitizes_control_chars () =
         "no raw control in output" false
         (Test_support.contains ~needle:"\x01" ~haystack:output))
 
+let trust_hint_controls_are_copy_safe () =
+  if Sys.win32 then Alcotest.skip ();
+  List.iter
+    (fun name ->
+      Test_tools_test_support.with_scratch (fun root ->
+          let cwd = Filename.concat root name in
+          Test_tools_test_support.mkdir_p cwd;
+          write_private (Filename.concat cwd "crush.json")
+            {|{"providers":{"relay":{"type":"anthropic"}}}|};
+          let _, _, error = run_child_status root [ "dirs"; "--cwd"; cwd ] in
+          Alcotest.(check bool) "hint has no literal tab" false
+            (String.contains error '\t');
+          let start = String.index error '`' + 1 in
+          let stop = String.index_from error start '`' in
+          let hint = String.sub error start (stop - start) in
+          let prefix = "crush trust --cwd " in
+          Alcotest.(check bool) "trust command prefix" true
+            (String.starts_with ~prefix hint);
+          let argument =
+            String.sub hint (String.length prefix)
+              (String.length hint - String.length prefix)
+          in
+          let status, decoded, diagnostics =
+            await
+            @@ Test_support.run_cli ~exe:"/bin/sh" ~env:(child_environment root)
+                 ~timeout:5. [ "-c"; "printf '%s' " ^ argument ]
+          in
+          Alcotest.(check int) "copyable argument executes" 0 status;
+          Alcotest.(check string) "argument has no shell diagnostics" "" diagnostics;
+          Alcotest.(check string) "argument keeps the exact directory"
+            (Unix.realpath cwd) (Unix.realpath decoded)))
+    [ "tab\tdir"; "line\ndir\n"; "control\x01dir" ]
+
 let cases =
   [
     Test_tools_test_support.case "dirs uses child environment" `Quick dirs_command;
@@ -378,4 +411,6 @@ let cases =
       trust_hint_names_cwd;
     Test_tools_test_support.case "trust output sanitizes control characters" `Quick
       trust_output_sanitizes_control_chars;
+    Test_tools_test_support.case "trust hints preserve paths without raw controls" `Quick
+      trust_hint_controls_are_copy_safe;
   ]

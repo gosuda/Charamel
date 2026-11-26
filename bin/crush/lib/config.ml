@@ -846,7 +846,7 @@ let selection_provider value =
       | Some (Jsont.String (provider, _)) -> Some provider
       | _ -> None)
 
-let strip_withheld_selections withheld_providers members =
+let strip_withheld_selections ?(keep = fun _ -> false) withheld_providers members =
   match member_json "models" members with
   | None -> (members, [])
   | Some models -> (
@@ -857,7 +857,7 @@ let strip_withheld_selections withheld_providers members =
             List.fold_left
               (fun (kept, dropped) ((name, value) as selection) ->
                 match selection_provider value with
-                | Some id when List.mem id withheld_providers ->
+                | Some id when List.mem id withheld_providers && not (keep value) ->
                     (kept, gated_name ("models", Some name) :: dropped)
                 | _ -> (kept @ [ selection ], dropped))
               ([], []) selections
@@ -894,20 +894,27 @@ let canonical_path fs_root path =
   | directory -> Ok (Filename.concat directory (Filename.basename file))
   | exception (Unix.Unix_error _ as exn) -> Error (`Io (path, io_message exn))
 
+let project_trust ~fs_root ~trust ~extra path text =
+  match canonical_path fs_root path with
+  | Error _ as failure -> Lwt.return failure
+  | Ok canonical -> (
+      let digest = Trust.digest text in
+      Lazy.force trust >|= function
+      | Error _ as failure -> failure
+      | Ok records ->
+          let trusted =
+            Trust.mem (Trust.add records extra) { Trust.path = canonical; digest }
+          in
+          Ok ({ path = canonical; digest; gated = [] }, trusted))
+
 let project_layer ~fs_root ~trust ~extra path text json =
   match without_gated json with
   | _, [] -> Lwt.return_ok (json, None)
-  | stripped, gated -> (
-      match canonical_path fs_root path with
-      | Error _ as failure -> Lwt.return failure
-      | Ok canonical -> (
-          let digest = Trust.digest text in
-          Lazy.force trust >|= function
-          | Error _ as failure -> failure
-          | Ok records ->
-              if Trust.mem (Trust.add records extra) { Trust.path = canonical; digest }
-              then Ok (json, None)
-              else Ok (stripped, Some { path = canonical; digest; gated })))
+  | stripped, gated ->
+      project_trust ~fs_root ~trust ~extra path text >|= function
+      | Error _ as failure -> failure
+      | Ok (_, true) -> Ok (json, None)
+      | Ok (record, false) -> Ok (stripped, Some { record with gated })
 
 (* Providers declared only in untrusted layers are withheld from the merged
    configuration, but a selection in an untrusted layer can still name one of
@@ -917,8 +924,8 @@ let project_layer ~fs_root ~trust ~extra path text json =
    those dangling selections (and gating them like any other withheld setting)
    keeps the child from overriding a working home selection with a reference
    that resolves nowhere. The embedded catalog is the one exception: it
-   supplies providers without any configuration, so a withheld override with
-   a catalog id does not remove the catalog entry that [Models.resolve] uses. *)
+   supplies models without any configuration, so an independently trusted selection
+   may still name a model that actually exists in the embedded catalog. *)
 let provider_ids json =
   match object_members json with
   | None -> []
@@ -928,11 +935,30 @@ let provider_ids json =
       | Some providers ->
           List.map fst (Option.value (object_members providers) ~default:[]))
 
-let drop_dangling_selections dangling json =
+let catalog_selection value =
+  match selection_provider value, object_members value with
+  | Some provider_id, Some members -> (
+      match member_json "model" members with
+      | Some (Jsont.String (model_id, _)) ->
+          List.exists
+            (fun provider ->
+              String.equal provider.Charamel_fantasy.Provider_info.id provider_id
+              && List.exists
+                   (fun model -> String.equal model.Charamel_fantasy.Model.id model_id)
+                   provider.Charamel_fantasy.Provider_info.models)
+            Charamel_fantasy.Catalog.embedded
+      | _ -> false)
+  | _ -> false
+
+let drop_dangling_selections ~trusted dangling json =
   match object_members json with
   | None -> (json, [])
   | Some members ->
-      let members, dropped = strip_withheld_selections dangling members in
+      let members, dropped =
+        strip_withheld_selections
+          ~keep:(fun value -> trusted && catalog_selection value)
+          dangling members
+      in
       (object_json members, dropped)
 
 let load_with ~fs_root ~env ~cwd ~extra =
@@ -964,7 +990,7 @@ let load_with ~fs_root ~env ~cwd ~extra =
                     | Error _ as failure -> Lwt.return failure
                     | Ok (stripped, ignored) ->
                         read_all rest
-                          ((path, json, stripped, ignored) :: layers)
+                          ((path, text, json, stripped, ignored) :: layers)
                           (path :: contributors)
                           (Option.to_list ignored @ untrusted)))))
   in
@@ -974,43 +1000,49 @@ let load_with ~fs_root ~env ~cwd ~extra =
   | Ok (layers, contributors, _) -> (
       let merged0 =
         List.fold_left
-          (fun merged (_, _, stripped, _) -> merge_json merged stripped)
+          (fun merged (_, _, _, stripped, _) -> merge_json merged stripped)
           (Jsont.Json.object' []) layers
       in
       let available = provider_ids merged0 in
       let withheld =
         List.concat_map
-          (fun (_, original, _, ignored) ->
+          (fun (_, _, original, _, ignored) ->
             match ignored with None -> [] | Some _ -> provider_ids original)
           layers
       in
       let dangling = List.filter (fun id -> not (List.mem id available)) withheld in
-      (* A trusted selection that names an embedded-catalog provider resolves
-         through the catalog, so it stays even while an override with the same
-         id is withheld. Untrusted layers still lose every dangling selection. *)
-      let catalog_ids =
-        List.map
-          (fun p -> p.Charamel_fantasy.Provider_info.id)
-          Charamel_fantasy.Catalog.embedded
-      in
-      let trusted_dangling =
-        List.filter (fun id -> not (List.mem id catalog_ids)) dangling
-      in
-      let layers =
-        List.map
-          (fun (path, _, stripped, ignored) ->
-            let dangling =
-              match ignored with None -> trusted_dangling | Some _ -> dangling
+      let rec clean_layers cleaned = function
+        | [] -> Lwt.return_ok (List.rev cleaned)
+        | (path, text, _, stripped, ignored) :: rest -> (
+            let finish stripped ignored =
+              clean_layers ((path, stripped, ignored) :: cleaned) rest
             in
-            match drop_dangling_selections dangling stripped with
-            | _, [] -> (path, stripped, ignored)
-            | stripped, dropped -> (
-                match ignored with
-                | None -> (path, stripped, None)
-                | Some record ->
-                    (path, stripped, Some { record with gated = record.gated @ dropped })))
-          layers
+            match drop_dangling_selections ~trusted:false dangling stripped with
+            | _, [] -> finish stripped ignored
+            | _ when String.equal path home ->
+                let stripped, _ =
+                  drop_dangling_selections ~trusted:true dangling stripped
+                in
+                finish stripped ignored
+            | _ ->
+                (match ignored with
+                | Some record -> Lwt.return_ok (record, false)
+                | None -> project_trust ~fs_root ~trust ~extra path text)
+                >>= function
+                | Error _ as failure -> Lwt.return failure
+                | Ok (record, trusted) ->
+                    let stripped, dropped =
+                      drop_dangling_selections ~trusted dangling stripped
+                    in
+                    let ignored =
+                      if trusted || dropped = [] then ignored
+                      else Some { record with gated = record.gated @ dropped }
+                    in
+                    finish stripped ignored)
       in
+      clean_layers [] layers >>= function
+      | Error _ as failure -> Lwt.return failure
+      | Ok layers ->
       let merged =
         List.fold_left
           (fun merged (_, stripped, _) -> merge_json merged stripped)
