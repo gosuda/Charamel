@@ -86,11 +86,12 @@ val save_catalog :
   Charamel_fantasy.Provider_info.t list ->
   (unit, update_error) result Lwt.t
 (** [save_catalog ~fs_root ~etag providers] atomically writes the provider cache in its
-    JSON object shape. *)
+    JSON object shape. An unavailable cache directory returns [Io]. *)
 
 val update_catalog :
   ?source:string -> fs_root:string -> unit -> (update_result, update_error) result Lwt.t
-(** [update_catalog ?source ~fs_root ()] refreshes the cache from the catalog endpoint.
-    Existing ETags are sent conditionally. A [304] leaves the cache untouched and returns
-    [Not_modified]. Transport, HTTP, and write failures leave the previous cache
-    untouched. *)
+(** [update_catalog ?source ~fs_root ()] refreshes the cache from the catalog endpoint. If
+    no cache path can be resolved, it returns [Io] before any network request. Write
+    permissions are checked when the fetched catalog is saved. Existing ETags are sent
+    conditionally. A [304] leaves the cache untouched and returns [Not_modified].
+    Transport, HTTP, and write failures leave the previous cache untouched. *)

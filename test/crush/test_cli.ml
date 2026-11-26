@@ -316,6 +316,37 @@ let update_providers_refreshes_from_a_fixture () =
             "the refresh is confirmed" true
             (Test_support.contains ~needle:"Updated provider catalog" ~haystack:output)))
 
+let update_providers_without_cache_directory () =
+  let executable =
+    match binary_path () with Some path -> path | None -> Alcotest.skip ()
+  in
+  Test_tools_test_support.with_scratch (fun root ->
+      let config = Filename.concat root "config" in
+      Test_tools_test_support.mkdir_p config;
+      let env =
+        [|
+          "XDG_CONFIG_HOME=" ^ config;
+          "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin";
+        |]
+      in
+      let requests = ref 0 in
+      Test_tools_test_support.with_http_server ~content_type:"application/json"
+        ~body:(fun () ->
+          incr requests;
+          providers_catalog_body)
+        (fun port ->
+          let status, _, error =
+            await
+            @@ Test_support.run_cli ~exe:executable ~env ~cwd:root ~timeout:20.
+                 [ "update-providers"; "--source"; Fmt.str "http://127.0.0.1:%d" port ]
+          in
+          Alcotest.(check bool) "refresh refuses an unavailable cache" true (status <> 0);
+          Alcotest.(check bool)
+            ("refresh reports the unavailable cache path; stderr: " ^ error)
+            true
+            (Test_support.contains ~needle:"providers.json:" ~haystack:error);
+          Alcotest.(check int) "no download without a cache destination" 0 !requests))
+
 let trust_hint_names_cwd () =
   Test_tools_test_support.with_scratch (fun root ->
       write_private (user_config root) {|{"permissions":{"allowed_tools":["read"]}}|};
@@ -347,6 +378,95 @@ let trust_output_sanitizes_control_chars () =
         "no raw control in output" false
         (Test_support.contains ~needle:"\x01" ~haystack:output))
 
+let trust_hint_controls_are_copy_safe () =
+  if Sys.win32 then Alcotest.skip ();
+  let executable =
+    match binary_path () with Some path -> path | None -> Alcotest.skip ()
+  in
+  List.iter
+    (fun name ->
+      Test_tools_test_support.with_scratch (fun root ->
+          Test_tools_test_support.mkdir_p (Filename.concat root ".git");
+          let cwd = Filename.concat root name in
+          Test_tools_test_support.mkdir_p cwd;
+          write_private
+            (Filename.concat cwd "crush.json")
+            {|{"providers":{"relay":{"type":"anthropic"}}}|};
+          let _, _, error = run_child_status root [ "dirs"; "--cwd"; cwd ] in
+          Alcotest.(check bool)
+            "hint has no literal tab" false (String.contains error '\t');
+          let start = String.index error '`' + 1 in
+          let stop = String.index_from error start '`' in
+          let hint = String.sub error start (stop - start) in
+          let prefix = "crush trust --cwd " in
+          Alcotest.(check bool)
+            "trust command prefix" true
+            (String.starts_with ~prefix hint);
+          let argument =
+            String.sub hint (String.length prefix)
+              (String.length hint - String.length prefix)
+          in
+          let status, decoded, diagnostics =
+            await
+            @@ Test_support.run_cli ~exe:"/bin/sh" ~env:(child_environment root)
+                 ~timeout:5.
+                 [ "-c"; "printf '%s' " ^ argument ]
+          in
+          Alcotest.(check int) "copyable argument executes" 0 status;
+          Alcotest.(check string) "argument has no shell diagnostics" "" diagnostics;
+          Alcotest.(check string)
+            "argument keeps the exact directory" (Unix.realpath cwd)
+            (Unix.realpath decoded);
+          let status, _, diagnostics =
+            await
+            @@ Test_support.run_cli ~exe:"/bin/sh" ~env:(child_environment root)
+                 ~timeout:10.
+                 [ "-c"; Filename.quote executable ^ " trust --cwd " ^ argument ]
+          in
+          Alcotest.(check int)
+            ("copyable trust command succeeds: " ^ diagnostics)
+            0 status;
+          let status, _, diagnostics = run_child_status root [ "dirs"; "--cwd"; cwd ] in
+          Alcotest.(check int) "trusted configuration reloads" 0 status;
+          Alcotest.(check bool)
+            "the copied command grants the canonical project" false
+            (Test_support.contains ~needle:"untrusted project configuration"
+               ~haystack:diagnostics)))
+    [ "tab\tdir"; "line\ndir\n"; "control\x01dir" ]
+
+let trust_without_cache_directory () =
+  let executable =
+    match binary_path () with Some path -> path | None -> Alcotest.skip ()
+  in
+  Test_tools_test_support.with_scratch (fun root ->
+      let config = Filename.concat root "config" in
+      Test_tools_test_support.mkdir_p config;
+      write_private
+        (Filename.concat root "crush.json")
+        {|{"providers":{"openai":{"type":"openai"}}}|};
+      let env =
+        [|
+          "XDG_CONFIG_HOME=" ^ config;
+          "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin";
+        |]
+      in
+      let run () =
+        await
+        @@ Test_support.run_cli ~exe:executable ~env ~cwd:root ~timeout:20.
+             [ "trust"; "--cwd"; root ]
+      in
+      let status, output, error = run () in
+      Alcotest.(check int) ("trust succeeds without a cache path: " ^ error) 0 status;
+      Alcotest.(check bool)
+        "provider approval is recorded" true
+        (Test_support.contains ~needle:"Trusted " ~haystack:output);
+      let status, output, error = run () in
+      Alcotest.(check int) ("approved project reloads: " ^ error) 0 status;
+      Alcotest.(check bool)
+        "the saved approval is reused" true
+        (Test_support.contains ~needle:"No project configuration needs trust."
+           ~haystack:output))
+
 let cases =
   [
     Test_tools_test_support.case "dirs uses child environment" `Quick dirs_command;
@@ -374,8 +494,14 @@ let cases =
       update_providers_rejects_the_embedded_source;
     Test_tools_test_support.case "update-providers refreshes from a fixture" `Quick
       update_providers_refreshes_from_a_fixture;
+    Test_tools_test_support.case "update-providers needs a cache directory" `Quick
+      update_providers_without_cache_directory;
     Test_tools_test_support.case "trust hint names the run directory" `Quick
       trust_hint_names_cwd;
     Test_tools_test_support.case "trust output sanitizes control characters" `Quick
       trust_output_sanitizes_control_chars;
+    Test_tools_test_support.case "trust hints preserve paths without raw controls" `Quick
+      trust_hint_controls_are_copy_safe;
+    Test_tools_test_support.case "trust works without a cache directory" `Quick
+      trust_without_cache_directory;
   ]

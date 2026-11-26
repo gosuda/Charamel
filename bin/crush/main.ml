@@ -113,7 +113,14 @@ let display_path path =
    is quoted for the shell and neutralized for the terminal: a directory name
    with a space must paste as one argument, and control characters must not
    rewrite the notice. *)
-let display_cwd cwd = display_path (Filename.quote cwd)
+let display_cwd cwd =
+  if String.exists (fun c -> c < ' ' || c = '\x7f') cwd && not Sys.win32 then (
+    let encoded = Buffer.create (5 * String.length cwd) in
+    String.iter (fun c -> Printf.bprintf encoded "\\0%03o" (Char.code c)) cwd;
+    (* The final /. prevents command substitution from stripping a newline that
+       belongs to the directory name. The displayed command contains no controls. *)
+    Fmt.str "\"$(printf '%%b/.' %s)\"" (Filename.quote (Buffer.contents encoded)))
+  else display_path (Filename.quote cwd)
 
 let report_untrusted (env : Env.t) ~cwd untrusted =
   List.iter

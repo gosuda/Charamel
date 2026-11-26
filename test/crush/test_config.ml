@@ -29,7 +29,15 @@ let check_search_paths () =
   Alcotest.(check (list string))
     "home and cwd without git root"
     [ "/home/test/crush.json"; Filename.concat "/repo/src" "crush.json" ]
-    paths
+    paths;
+  let candidates cwd git_root =
+    Config.search_paths ~cwd ~git_root:(Some git_root)
+      ~home_config:"/home/test/crush.json"
+  in
+  Alcotest.(check (list string))
+    "trailing current-directory components preserve the candidate set"
+    (candidates "/repo/src/lib" "/repo")
+    (candidates "/repo/src/lib/./." "/repo/.")
 
 let write path body =
   Test_tools_test_support.mkdir_p (Filename.dirname path);
@@ -48,7 +56,13 @@ let with_config_tree f =
       let nested = Filename.concat project "src" in
       List.iter Test_tools_test_support.mkdir_p
         [ xdg ^ "/crush"; nested; project; project ^ "/.git" ];
-      f ~root ~xdg ~project ~nested)
+      let previous_cache = Sys.getenv_opt "XDG_CACHE_HOME" in
+      Fun.protect
+        ~finally:(fun () ->
+          Unix.putenv "XDG_CACHE_HOME" (Option.value previous_cache ~default:""))
+        (fun () ->
+          Unix.putenv "XDG_CACHE_HOME" (Filename.concat root "cache");
+          f ~root ~xdg ~project ~nested))
 
 let load_or_fail ~env cwd =
   match await (Config.load ~fs_root:"/" ~env ~cwd) with
@@ -447,6 +461,132 @@ let check_dangling_model_selection_falls_back () =
         "home large survives the dangling selection" "home"
         (selected_provider models "large"))
 
+let check_catalog_model_selection_survives_override () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let env = tree_env ~root ~xdg in
+      let model =
+        Charamel_fantasy.Catalog.embedded
+        |> List.find (fun provider ->
+            provider.Charamel_fantasy.Provider_info.id = "openai")
+        |> fun provider ->
+        let model = List.hd provider.Charamel_fantasy.Provider_info.models in
+        model.Charamel_fantasy.Model.id
+      in
+      (* The home selection names a catalog provider and declares no provider
+         section; the project override of that id stays withheld. *)
+      write (xdg ^ "/crush/crush.json")
+        (Fmt.str {|{"models":{"large":{"provider":"openai","model":%S}}}|} model);
+      write (project ^ "/crush.json") {|{"providers":{"openai":{"type":"openai"}}}|};
+      (* The nested file is untrusted through its own relay provider, so its
+         dangling selection leaves even though the id is a catalog one. *)
+      write (nested ^ "/crush.json")
+        {|{"providers":{"relay":{"type":"anthropic"}},"models":{"small":{"provider":"openai","model":"m"}}}|};
+      let loaded = load_or_fail ~env nested in
+      let models = loaded.Config.config.Config.models in
+      Alcotest.(check string)
+        "home large survives a withheld catalog override" "openai"
+        (selected_provider models "large");
+      Alcotest.(check string)
+        "untrusted dangling small selection is dropped" "<none>"
+        (selected_provider models "small"))
+
+let check_model_only_layer_requires_its_own_trust () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let env = tree_env ~root ~xdg in
+      let model =
+        Charamel_fantasy.Catalog.embedded
+        |> List.find (fun provider ->
+            provider.Charamel_fantasy.Provider_info.id = "openai")
+        |> fun provider ->
+        let model = List.hd provider.Charamel_fantasy.Provider_info.models in
+        model.Charamel_fantasy.Model.id
+      in
+      write (xdg ^ "/crush/crush.json")
+        {|{"providers":{"home":{"type":"anthropic"}},"models":{"large":{"provider":"home","model":"m"}}}|};
+      write (project ^ "/crush.json") {|{"providers":{"openai":{"type":"openai"}}}|};
+      let child = nested ^ "/crush.json" in
+      write child
+        (Fmt.str {|{"models":{"large":{"provider":"openai","model":%S}}}|} model);
+      let loaded = load_or_fail ~env nested in
+      Alcotest.(check string)
+        "model-only child cannot replace home" "home"
+        (selected_provider loaded.Config.config.Config.models "large");
+      let child_records =
+        List.filter (fun file -> file.Config.path = child) loaded.Config.untrusted
+      in
+      Alcotest.(check int)
+        "model-only child has a trust record" 1 (List.length child_records);
+      grant_or_fail ~env child_records;
+      Alcotest.(check string)
+        "trusted child can select a real catalog model" "openai"
+        (selected_provider (load_or_fail ~env nested).Config.config.Config.models "large");
+      write child
+        {|{"models":{"large":{"provider":"openai","model":"override-only-model"}}}|};
+      let loaded = load_or_fail ~env nested in
+      grant_or_fail ~env
+        (List.filter (fun file -> file.Config.path = child) loaded.Config.untrusted);
+      Alcotest.(check string)
+        "trusted child cannot select a withheld-only model" "home"
+        (selected_provider (load_or_fail ~env nested).Config.config.Config.models "large"))
+
+let check_refreshed_catalog_model_survives_override () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let provider =
+        List.find
+          (fun provider -> provider.Charamel_fantasy.Provider_info.id = "openai")
+          Charamel_fantasy.Catalog.embedded
+      in
+      let existing = List.hd provider.Charamel_fantasy.Provider_info.models in
+      let model =
+        { existing with Charamel_fantasy.Model.id = "refreshed-catalog-only" }
+      in
+      let provider =
+        { provider with Charamel_fantasy.Provider_info.models = [ model ] }
+      in
+      (match
+         await @@ Crush_core.Models.save_catalog ~fs_root:"/" ~etag:"fixture" [ provider ]
+       with
+      | Ok () -> ()
+      | Error error ->
+          Alcotest.failf "save catalog failed: %a" Crush_core.Models.pp_update_error error);
+      let env = tree_env ~root ~xdg in
+      write (xdg ^ "/crush/crush.json")
+        (Fmt.str {|{"models":{"large":{"provider":"openai","model":%S}}}|}
+           model.Charamel_fantasy.Model.id);
+      write (project ^ "/crush.json") {|{"providers":{"openai":{"type":"openai"}}}|};
+      let loaded = load_or_fail ~env nested in
+      Alcotest.(check string)
+        "home selection uses the refreshed catalog" "openai"
+        (selected_provider loaded.Config.config.Config.models "large");
+      let resolved =
+        await @@ Crush_core.Models.catalog ~fs_root:"/" loaded.Config.config
+      in
+      Alcotest.(check bool)
+        "model resolution uses the same refreshed catalog" true
+        (List.exists
+           (fun provider ->
+             List.exists
+               (fun candidate ->
+                 candidate.Charamel_fantasy.Model.id = model.Charamel_fantasy.Model.id)
+               provider.Charamel_fantasy.Provider_info.models)
+           resolved);
+      write (xdg ^ "/crush/crush.json")
+        (Fmt.str {|{"models":{"large":{"provider":"openai","model":%S}}}|}
+           existing.Charamel_fantasy.Model.id);
+      Alcotest.(check string)
+        "an embedded model removed by the refresh loses the trust exception" "<none>"
+        (selected_provider (load_or_fail ~env nested).Config.config.Config.models "large"))
+
+let check_missing_catalog_model_drops_home_selection () =
+  with_config_tree (fun ~root ~xdg ~project ~nested ->
+      let env = tree_env ~root ~xdg in
+      write (xdg ^ "/crush/crush.json")
+        {|{"models":{"large":{"provider":"openai","model":"override-only-model"}}}|};
+      write (project ^ "/crush.json") {|{"providers":{"openai":{"type":"openai"}}}|};
+      Alcotest.(check string)
+        "withheld-only home selection permits the default" "<none>"
+        (selected_provider (load_or_fail ~env nested).Config.config.Config.models "large"))
+
 let cases =
   [
     Test_tools_test_support.case "environment expansion" `Quick check_expand;
@@ -474,4 +614,12 @@ let cases =
       check_grant_checked_validates_layers;
     Test_tools_test_support.case "dangling model selection falls back" `Quick
       check_dangling_model_selection_falls_back;
+    Test_tools_test_support.case "model-only layer requires its own trust" `Quick
+      check_model_only_layer_requires_its_own_trust;
+    Test_tools_test_support.case "withheld-only model permits the default" `Quick
+      check_missing_catalog_model_drops_home_selection;
+    Test_tools_test_support.case "catalog selection survives override" `Quick
+      check_catalog_model_selection_survives_override;
+    Test_tools_test_support.case "refreshed catalog selection survives override" `Quick
+      check_refreshed_catalog_model_survives_override;
   ]
