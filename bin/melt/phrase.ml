@@ -28,6 +28,10 @@ let read_stdin_phrase ?(is_tty = Charamel_os.Tty.is_tty_stdin)
         Fun.protect
           ~finally:(fun () -> restore ())
           (fun () ->
+            prerr_endline
+              (if Sys.win32 then
+                 "Enter recovery phrase; finish with Ctrl-Z, then Enter:"
+               else "Enter recovery phrase; finish with Ctrl-D on an empty line:");
             let text = String.concat "\n" (read_lines input) in
-            print_newline ();
+            prerr_newline ();
             Lwt.return (Ok text))

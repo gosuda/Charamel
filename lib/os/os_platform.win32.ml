@@ -31,7 +31,7 @@ let output = Charamel_os_win32.std_output ()
 let not_a_console operation = raise (Unix.Unix_error (Unix.ENOTTY, operation, "CON"))
 
 module Tty = struct
-  type saved = {
+  type console_state = {
     input : Charamel_os_win32.handle;
     output : Charamel_os_win32.handle;
     input_mode : int;
@@ -39,6 +39,10 @@ module Tty = struct
     input_cp : int;
     output_cp : int;
   }
+
+  type saved =
+    | Raw of console_state
+    | Echo of { input : Charamel_os_win32.handle; input_mode : int }
 
   let is_stdin = Charamel_os_win32.get_console_mode input <> None
   let is_stdout = Charamel_os_win32.get_console_mode output <> None
@@ -86,20 +90,23 @@ module Tty = struct
       not_a_console "SetConsoleMode";
     ignore (Charamel_os_win32.set_console_cp utf8_code_page);
     ignore (Charamel_os_win32.set_console_output_cp utf8_code_page);
-    state
+    Raw state
 
   let echo_off () =
-    let state = saved_state () in
-    let input_flags = state.input_mode land lnot enable_echo_input in
+    let input_mode = mode input in
+    let input_flags = input_mode land lnot enable_echo_input in
     if not (Charamel_os_win32.set_console_mode input input_flags) then
       not_a_console "SetConsoleMode";
-    state
+    Echo { input; input_mode }
 
-  let restore { input; output; input_mode; output_mode; input_cp; output_cp } =
-    ignore (Charamel_os_win32.set_console_mode input input_mode);
-    ignore (Charamel_os_win32.set_console_mode output output_mode);
-    ignore (Charamel_os_win32.set_console_cp input_cp);
-    ignore (Charamel_os_win32.set_console_output_cp output_cp)
+  let restore = function
+    | Echo { input; input_mode } ->
+        ignore (Charamel_os_win32.set_console_mode input input_mode)
+    | Raw { input; output; input_mode; output_mode; input_cp; output_cp } ->
+        ignore (Charamel_os_win32.set_console_mode input input_mode);
+        ignore (Charamel_os_win32.set_console_mode output output_mode);
+        ignore (Charamel_os_win32.set_console_cp input_cp);
+        ignore (Charamel_os_win32.set_console_output_cp output_cp)
 
   let controlling_input () =
     let fd = Unix.openfile "CONIN$" [ Unix.O_RDONLY ] 0 in

@@ -238,88 +238,93 @@ let words_option_is_rejected () =
       Alcotest.(check bool) "refused restore writes no key" false (Sys.file_exists output);
       Lwt.return_unit)
 
-(* A pasted phrase may span several lines: run [restore] under [script](1) so its
-   standard input is a pseudoterminal, and feed four six-word lines. The
-   single-[input_line] read saw only the first line and refused the restore. *)
-let script_binary () =
-  let dirs =
-    match Sys.getenv_opt "PATH" with
-    | None -> []
-    | Some path -> String.split_on_char ':' path
-  in
-  List.find_opt
-    (fun path ->
-      try
-        Unix.access path [ Unix.X_OK ];
-        true
-      with Unix.Unix_error _ -> false)
-    (List.filter_map
-       (fun dir ->
-         if String.equal dir "" then None else Some (Filename.concat dir "script"))
-       dirs)
+let pty_value = function
+  | Ok value -> value
+  | Error `Unsupported -> Alcotest.fail "PTY unexpectedly unsupported"
+  | Error (`Error message) -> Alcotest.failf "PTY fixture: %s" message
 
 let multiline_phrase_restores_via_pty () =
   if Sys.win32 then Alcotest.skip ()
   else
-    match script_binary () with
-    | None -> Alcotest.skip ()
-    | Some script ->
-        Test_support.with_temp_dir (fun root ->
-            let words =
-              match Mnemonic.encode (fixed_seed ()) with
-              | Ok words -> words
-              | Error error ->
-                  Alcotest.failf "test seed did not encode: %a" Mnemonic.pp_error error
-            in
-            let lines =
-              List.init 4 (fun line ->
-                  List.filteri (fun index _ -> index / 6 = line) words
-                  |> String.concat " ")
-            in
-            let payload = String.concat "\n" lines ^ "\n" in
-            let output = Filename.concat root "key" in
-            (* The pipes below carry the pasted phrase and the session transcript. They
-               are close-on-exec so the session and its shell hold no copy of the pipe
-               write end: otherwise the [script] session would never see end-of-file
-               on standard input and the restore would block forever. *)
-            let log =
-              Unix.openfile
-                (Filename.concat root "transcript.log")
-                [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC; Unix.O_CLOEXEC ]
-                0o600
-            in
-            let stdin_read, stdin_write = Unix.pipe ~cloexec:true () in
-            Fun.protect
-              ~finally:(fun () ->
-                (try Unix.close stdin_read with Unix.Unix_error _ -> ());
-                (try Unix.close stdin_write with Unix.Unix_error _ -> ());
-                try Unix.close log with Unix.Unix_error _ -> ())
-              (fun () ->
-                let child =
-                  Fmt.str "%s restore --output %s"
-                    (Filename.quote (executable ()))
-                    (Filename.quote output)
+    Test_support.with_temp_dir (fun root ->
+        let words =
+          match Mnemonic.encode (fixed_seed ()) with
+          | Ok words -> words
+          | Error error ->
+              Alcotest.failf "test seed did not encode: %a" Mnemonic.pp_error error
+        in
+        let lines =
+          List.init 4 (fun line ->
+              List.filteri (fun index _ -> index / 6 = line) words
+              |> String.concat " ")
+        in
+        let payload = String.concat "\n" lines ^ "\n\004" in
+        let output = Filename.concat root "key" in
+        let* created = Charamel_os.Pty.create () in
+        let terminal = pty_value created in
+        let child = ref None in
+        let reaped = ref false in
+        let transcript = Buffer.create 256 in
+        Lwt.finalize
+          (fun () ->
+            Lwt_unix.with_timeout 10. (fun () ->
+                let* spawned =
+                  Charamel_os.Pty.exec terminal
+                    [ executable (); "restore"; "--output"; output ]
                 in
-                let pid =
-                  Unix.create_process script
-                    [| script; "-qec"; child; "/dev/null" |]
-                    stdin_read log log
+                let pid = pty_value spawned in
+                child := Some pid;
+                let rec await_prompt () =
+                  let* result = Charamel_os.Pty.read terminal 4096 in
+                  let text = pty_value result in
+                  if text = "" then Alcotest.fail "restore exited before its input prompt";
+                  Buffer.add_string transcript text;
+                  if
+                    Test_support.contains ~needle:"finish with Ctrl-D"
+                      ~haystack:(Buffer.contents transcript)
+                  then Lwt.return_unit
+                  else await_prompt ()
                 in
-                Unix.close stdin_read;
-                let payload = Bytes.of_string payload in
-                let rec write_all offset remaining =
-                  if remaining > 0 then
-                    let written = Unix.write stdin_write payload offset remaining in
-                    write_all (offset + written) (remaining - written)
+                let rec write_all offset =
+                  if offset = String.length payload then Lwt.return_unit
+                  else
+                    let* result =
+                      Charamel_os.Pty.write terminal payload offset
+                        (String.length payload - offset)
+                    in
+                    let count = pty_value result in
+                    if count = 0 then Alcotest.fail "PTY write made no progress";
+                    write_all (offset + count)
                 in
-                write_all 0 (Bytes.length payload);
-                Unix.close stdin_write;
-                let _, status = Unix.waitpid [] pid in
+                let rec drain () =
+                  let* result = Charamel_os.Pty.read terminal 4096 in
+                  let text = pty_value result in
+                  if text = "" then Lwt.return_unit
+                  else (
+                    Buffer.add_string transcript text;
+                    drain ())
+                in
+                let* () = await_prompt () in
+                let* () = write_all 0 in
+                let* _, status = Lwt_unix.waitpid [] pid in
+                reaped := true;
+                let* () = drain () in
                 Alcotest.check Alcotest.bool "multiline restore exits successfully" true
                   (status = Unix.WEXITED 0);
                 Alcotest.check Alcotest.bool "multiline restore writes a key" true
                   (Sys.file_exists output);
+                Alcotest.check Alcotest.bool "terminal does not echo the phrase" false
+                  (Test_support.contains ~needle:(List.hd lines)
+                     ~haystack:(Buffer.contents transcript));
                 Lwt.return_unit))
+          (fun () ->
+            if not !reaped then Charamel_os.Pty.terminate terminal;
+            Charamel_os.Pty.close terminal;
+            match !child with
+            | Some pid when not !reaped ->
+                let* _ = Lwt_unix.waitpid [] pid in
+                Lwt.return_unit
+            | Some _ | None -> Lwt.return_unit))
 
 let invalid_key () =
   Test_support.with_temp_dir (fun root ->

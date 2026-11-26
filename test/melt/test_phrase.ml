@@ -44,12 +44,14 @@ let terminal_input_joins_lines =
 
 let echo_failure_refuses_the_read =
   Alcotest_lwt.test_case "an echo failure refuses the read" `Quick (fun _switch () ->
-      with_pipe_input "" (fun input ->
+      with_pipe_input "unconsumed-recovery-phrase\n" (fun input ->
           let echo_off () = raise (Unix.Unix_error (Unix.ENOTTY, "echo_off", "")) in
           let* result = Phrase.read_stdin_phrase ~is_tty:true ~echo_off ~input () in
           (match result with
           | Error `Cannot_hide_input -> ()
           | Ok _ -> Alcotest.fail "unhidden input was read instead of refused");
+          Alcotest.check Alcotest.string "input remains unread"
+            "unconsumed-recovery-phrase" (input_line input);
           Lwt.return_unit))
 
 let cases =

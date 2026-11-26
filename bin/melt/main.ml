@@ -164,7 +164,13 @@ let backup_command env =
 let restore_command env =
   Cmdliner.Cmd.v
     (Cmdliner.Cmd.info "restore"
-       ~doc:"Restore an Ed25519 key pair from the 24 BIP-39 words on standard input.")
+       ~doc:"Restore an Ed25519 key pair from the 24 BIP-39 words on standard input."
+       ~man:
+         [
+           `P
+             "Paste the phrase, then send end-of-file: Ctrl-D on an empty line on \
+              POSIX, or Ctrl-Z followed by Enter on Windows. Terminal input is hidden.";
+         ])
     (restore_term env)
 
 let () =
