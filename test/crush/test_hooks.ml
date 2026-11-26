@@ -303,39 +303,48 @@ let descendant_cleanup () =
           | () -> Alcotest.fail "timed-out hook left a child process"
           | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ())
 
-let successful_hook_spares_detached_child () =
-  if Sys.win32 then
-    (* cmd cannot publish a child's pid for [kill]; the tree-kill coverage lives
-       in the jobs tests instead. *)
-    Alcotest.skip ()
+let successful_hook_keeps_detached_worker () =
+  if Sys.win32 then Alcotest.skip ()
   else
     with_environment (fun root ->
-        let config =
-          [
-            hook ~event:Config.Pre_tool
-              ~command:"sleep 30 >/dev/null 2>&1 & echo $! > child.pid" ();
-          ]
+        let release_path = Filename.concat root "worker-release" in
+        let finished_path = Filename.concat root "worker-finished" in
+        Unix.mkfifo release_path 0o600;
+        Unix.mkfifo finished_path 0o600;
+        let open_fifo path =
+          Unix.openfile path [ Unix.O_RDWR; Unix.O_NONBLOCK ] 0
+          |> Lwt_unix.of_unix_file_descr
         in
-        let runner = runner root config in
-        (match
-           await
-           @@ Hooks.pre_tool runner ~session:"s" ~tool:"write" ~input:(Jsont.Json.null ())
-         with
-        | Hooks.Allow _ -> ()
-        | Hooks.Deny reason -> Alcotest.failf "successful hook denied: %s" reason);
-        (* An orphaned zombie still answers signal 0 until it is reaped. Wait
-           past that window so the check below proves a live child. *)
-        await (Lwt_unix.sleep 0.5);
-        let child_path = Filename.concat root "child.pid" in
-        if not (Sys.file_exists child_path) then
-          Alcotest.fail "hook exited before recording its child";
-        let pid =
-          int_of_string (String.trim (Test_tools_test_support.load_file child_path))
-        in
-        match Unix.kill pid 0 with
-        | () -> Unix.kill pid Sys.sigkill
-        | exception Unix.Unix_error (Unix.ESRCH, _, _) ->
-            Alcotest.fail "successful hook killed its detached child")
+        let release = Lwt_io.of_fd ~mode:Lwt_io.output (open_fifo release_path) in
+        let finished = Lwt_io.of_fd ~mode:Lwt_io.input (open_fifo finished_path) in
+        let pid_path = Filename.concat root "worker.pid" in
+        let completed = ref false in
+        Fun.protect
+          ~finally:(fun () ->
+            (if (not !completed) && Sys.file_exists pid_path then
+               let pid = int_of_string (String.trim (read_payload root "worker.pid")) in
+               try Unix.kill pid Sys.sigkill
+               with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
+            await (Lwt_io.close release);
+            await (Lwt_io.close finished))
+          (fun () ->
+            let command =
+              "cat >/dev/null; (read release < worker-release; printf 'done\\n' > \
+               worker-finished) </dev/null >/dev/null 2>&1 & printf '%s\\n' \"$!\" > \
+               worker.pid"
+            in
+            let runner = runner root [ hook ~event:Config.Post_tool ~command () ] in
+            await
+            @@ Hooks.post_tool runner ~session:"s" ~tool:"write"
+                 ~input:(Jsont.Json.null ()) ~output:"done" ~is_error:false;
+            await (Lwt_io.write_line release "continue");
+            await (Lwt_io.flush release);
+            let message =
+              await @@ Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line finished)
+            in
+            completed := true;
+            Alcotest.(check string)
+              "detached worker finishes after hook returns" "done" message))
 
 let failing_hook_kills_detached_child () =
   if Sys.win32 then
@@ -398,8 +407,8 @@ let cases =
       lifecycle_payload;
     Test_tools_test_support.case "timeout cleans descendant process group" `Quick
       descendant_cleanup;
-    Test_tools_test_support.case "success spares a detached child" `Quick
-      successful_hook_spares_detached_child;
-    Test_tools_test_support.case "failure kills a detached child" `Quick
+    Test_tools_test_support.case "successful hook preserves detached worker" `Quick
+      successful_hook_keeps_detached_worker;
+    Test_tools_test_support.case "failing hook kills detached child" `Quick
       failing_hook_kills_detached_child;
   ]

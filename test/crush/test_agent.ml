@@ -90,8 +90,8 @@ let config ~base_url (model : Charamel_fantasy.Model.t) =
     models = { large = Some selected; small = Some selected };
   }
 
-let with_agent ?(hooks_config : Config.hook list = []) ?(clock = Charamel_os.Time.lwt)
-    ~queue ~fallback f =
+let with_agent ?asker ?(hooks_config : Config.hook list = [])
+    ?(clock = Charamel_os.Time.lwt) ~queue ~fallback f =
   Test_tools_test_support.with_scratch (fun root ->
       let old_data = Sys.getenv_opt "XDG_DATA_HOME" in
       Unix.putenv "XDG_DATA_HOME" root;
@@ -139,7 +139,8 @@ let with_agent ?(hooks_config : Config.hook list = []) ?(clock = Charamel_os.Tim
                     Alcotest.failf "session setup failed: %a" Session.pp_error error
               in
               let permission =
-                Permission.create ~config:config.Config.permissions ~yolo:true ~cwd:root
+                Permission.create ~config:config.Config.permissions
+                  ~yolo:(Option.is_none asker) ?asker ~cwd:root
                   ~plans_dir:(Filename.concat root ".crush/plans")
                   ()
               in
@@ -330,22 +331,11 @@ let body_outcome_survives_stop_turn () =
           Test_tools_test_support.load_file (Filename.concat root ".post-pid")
           |> String.trim |> int_of_string
         in
-        (* The switch callback only requests cancellation; the hook finalizer
-           still has to kill and reap the shell, and an unreaped zombie still
-           answers signal 0. Poll until the pid is gone instead of asserting
-           on the first check. *)
-        let rec wait_gone attempts =
-          match Unix.kill post_pid 0 with
-          | () ->
-              if attempts <= 0 then (
-                (try Unix.kill (0 - post_pid) Sys.sigkill with _ -> ());
-                Alcotest.fail "cancelling the post hook left its process alive")
-              else (
-                await (Lwt_unix.sleep 0.05);
-                wait_gone (attempts - 1))
-          | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ()
-        in
-        wait_gone 100;
+        (match Unix.kill post_pid 0 with
+        | () ->
+            Unix.kill (0 - post_pid) Sys.sigkill;
+            Alcotest.fail "cancelling the post hook left its process alive"
+        | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ());
         let finished =
           List.filter_map
             (function
@@ -428,6 +418,111 @@ let post_hook_time_is_not_tool_time () =
             in
             Alcotest.(check (list int)) "post-hook time excluded" [ 0 ] timings))
 
+let stopped_turn_leaves_pending_approval () =
+  if Sys.win32 then Alcotest.skip ()
+  else
+    let approval, answer = Lwt.wait () in
+    let asked, announce = Lwt.wait () in
+    let asker _ =
+      if Lwt.is_sleeping asked then Lwt.wakeup_later announce ();
+      await approval
+    in
+    let hooks_config : Config.hook list =
+      [
+        {
+          event = Config.Pre_tool;
+          matcher = None;
+          command =
+            "if grep -q denied.txt; then read ready < .approval-open; echo denied >&2; \
+             exit 2; fi";
+          timeout_s = 30;
+        };
+      ]
+    in
+    with_agent ~asker ~hooks_config
+      ~queue:
+        [
+          two_tool_response "fixture-model" "read" "{\"path\":\"denied.txt\"}" "read"
+            "{\"path\":\"../pending-approval.txt\"}";
+        ]
+      ~fallback:(text_response "fixture-model" "done")
+      (fun agent _session _events root ->
+        let ready_path = Filename.concat root ".approval-open" in
+        Unix.mkfifo ready_path 0o600;
+        let fd =
+          Unix.openfile ready_path [ Unix.O_RDWR; Unix.O_NONBLOCK ] 0
+          |> Lwt_unix.of_unix_file_descr
+        in
+        let ready = Lwt_io.of_fd ~mode:Lwt_io.output fd in
+        let pending = Agent.prompt agent "read both files" in
+        Fun.protect
+          ~finally:(fun () ->
+            if Lwt.is_sleeping approval then Lwt.wakeup_later answer Permission.Deny;
+            ignore (await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected pending)));
+            await (Lwt_io.close ready))
+          (fun () ->
+            await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected asked));
+            await (Lwt_io.write_line ready "deny");
+            await (Lwt_io.flush ready);
+            (match await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected pending)) with
+            | Ok `Stop -> ()
+            | Ok _ -> Alcotest.fail "denied call did not stop the turn"
+            | Error error -> Alcotest.failf "agent prompt failed: %a" Agent.pp_error error);
+            Alcotest.(check bool)
+              "approval remains unanswered" true (Lwt.is_sleeping approval);
+            Alcotest.(check bool) "stopped agent is idle" false (Agent.busy agent)))
+
+let explicit_cancel_joins_hook_cleanup () =
+  if Sys.win32 then Alcotest.skip ()
+  else
+    let hooks_config : Config.hook list =
+      [
+        {
+          event = Config.Post_tool;
+          matcher = None;
+          command =
+            "cat >/dev/null; printf '%s\\n' \"$$\" > .cancel-pid; printf 'ready\\n' > \
+             .cancel-ready; read release < .cancel-release";
+          timeout_s = 30;
+        };
+      ]
+    in
+    with_agent ~hooks_config
+      ~queue:[ tool_response "fixture-model" "read" "{\"path\":\"allowed.txt\"}" ]
+      ~fallback:(text_response "fixture-model" "done")
+      (fun agent _session _events root ->
+        let ready_path = Filename.concat root ".cancel-ready" in
+        Unix.mkfifo ready_path 0o600;
+        Unix.mkfifo (Filename.concat root ".cancel-release") 0o600;
+        let fd =
+          Unix.openfile ready_path [ Unix.O_RDWR; Unix.O_NONBLOCK ] 0
+          |> Lwt_unix.of_unix_file_descr
+        in
+        let ready = Lwt_io.of_fd ~mode:Lwt_io.input fd in
+        Test_tools_test_support.write_file (Filename.concat root "allowed.txt") "ready";
+        let pending = Agent.prompt agent "read the file" in
+        Fun.protect
+          ~finally:(fun () ->
+            Agent.cancel agent;
+            await (Lwt_io.close ready))
+          (fun () ->
+            ignore (await (Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line ready)));
+            let pid =
+              Test_tools_test_support.load_file (Filename.concat root ".cancel-pid")
+              |> String.trim |> int_of_string
+            in
+            Agent.cancel agent;
+            (match await (Lwt_unix.with_timeout 5. (fun () -> Lwt.protected pending)) with
+            | Ok `Interrupted -> ()
+            | Ok _ -> Alcotest.fail "cancel did not interrupt the turn"
+            | Error error -> Alcotest.failf "agent prompt failed: %a" Agent.pp_error error);
+            (match Unix.kill pid 0 with
+            | () ->
+                Unix.kill (0 - pid) Sys.sigkill;
+                Alcotest.fail "cancel completed before hook process cleanup"
+            | exception Unix.Unix_error (Unix.ESRCH, _, _) -> ());
+            Alcotest.(check bool) "cancelled agent is idle" false (Agent.busy agent)))
+
 let cases =
   [
     Test_tools_test_support.case "tool call and stop use HTTP fixture" `Quick
@@ -437,4 +532,8 @@ let cases =
       body_outcome_survives_stop_turn;
     Test_tools_test_support.case "post-hook time is not tool time" `Quick
       post_hook_time_is_not_tool_time;
+    Test_tools_test_support.case "stopped turn does not await sibling approval" `Quick
+      stopped_turn_leaves_pending_approval;
+    Test_tools_test_support.case "explicit cancel joins hook cleanup" `Quick
+      explicit_cancel_joins_hook_cleanup;
   ]

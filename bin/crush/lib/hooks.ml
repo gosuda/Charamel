@@ -63,9 +63,6 @@ let write_input channel payload =
 
 let run_command t ~timeout ~command ~payload =
   let child = ref None in
-  (* A hook that exits on its own keeps what it detached: only a hook that
-     never reported back is killed, on timeout, cancellation, or an
-     exception before normal completion. Reaping always runs. *)
   let completed = ref false in
   let cleanup () =
     match !child with
