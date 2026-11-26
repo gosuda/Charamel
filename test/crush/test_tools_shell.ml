@@ -117,6 +117,16 @@ let test_classifier () =
         false
         (Tools_shell.is_read_only ("fd -g README.md " ^ action ^ " touch changed")))
     [ "-x"; "-X"; "--exec"; "--exec-batch" ];
+  List.iter
+    (fun command ->
+      Alcotest.(check bool)
+        (command ^ " has only literal data operands")
+        true
+        (Tools_shell.is_read_only command))
+    [ "fd -- -X"; "fd -- --exec"; "fd -e -X README.md"; "fd -E --exec README.md" ];
+  Alcotest.(check bool)
+    "fd option operand does not end option parsing" false
+    (Tools_shell.is_read_only "fd -e -- -X touch changed");
   Alcotest.(check bool)
     "sed in-place is mutable" false
     (Tools_shell.is_read_only "sed -i s/a/b/ file");

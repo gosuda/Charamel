@@ -94,7 +94,7 @@ let safe_simple_command command args =
       "printenv";
     ]
   in
-  if command = "fd" then not (has_option_prefix [ "--exec"; "-x"; "-X" ] args)
+  if command = "fd" then not (Shell_screen.fd_executes args)
   else if command = "rg" then not (has_option_prefix [ "--pre"; "--pre-glob" ] args)
   else List.mem command safe || (command = "env" && args = [])
 

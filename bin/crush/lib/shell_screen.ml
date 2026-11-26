@@ -153,11 +153,18 @@ let wrappers =
     "su";
   ]
 
+let fd_exec_flags = [ "-x"; "-X"; "--exec"; "--exec-batch" ]
+
+let fd_data_flags =
+  [ "-e"; "--extension"; "-E"; "--exclude"; "-t"; "--type"; "-d"; "--max-depth" ]
+
+let rec fd_executes = function
+  | flag :: _operand :: rest when List.mem flag fd_data_flags -> fd_executes rest
+  | "--" :: _ | [] -> false
+  | flag :: rest -> List.mem flag fd_exec_flags || fd_executes rest
+
 let exec_flags =
-  [
-    ("find", [ "-exec"; "-execdir"; "-ok"; "-okdir" ]);
-    ("fd", [ "-x"; "-X"; "--exec"; "--exec-batch" ]);
-  ]
+  [ ("find", [ "-exec"; "-execdir"; "-ok"; "-okdir" ]); ("fd", fd_exec_flags) ]
 
 let code_flags =
   [
@@ -1467,7 +1474,7 @@ and exec_commands sink ~depth program flags args =
         "-printf";
         "-D";
       ]
-    else [ "-e"; "--extension"; "-E"; "--exclude"; "-t"; "--type"; "-d"; "--max-depth" ]
+    else fd_data_flags
   in
   let switches =
     if program = "find" then

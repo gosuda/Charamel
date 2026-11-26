@@ -40,3 +40,8 @@ val platform : dialect
 val screen : dialect -> string -> verdict
 (** [screen dialect command] classifies [command]. {!Blocked} takes precedence over
     {!Review}, and a command that fails to parse is {!Review} unless it is {!Blocked}. *)
+
+val fd_executes : string list -> bool
+(** [fd_executes args] recognizes execution actions in literal [fd] arguments that have
+    already passed {!screen} as {!Clear}. Known data operands and arguments after [--] are
+    not options. The argument list excludes the program name. *)
