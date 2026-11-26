@@ -91,6 +91,41 @@ let test_reset_closes_link () =
     "SGR 0 closes the hyperlink" 1
     (count_occurrences ~needle:"href=\"http://example.com\"" ~haystack:svg)
 
+let test_unicode_hyperlink () =
+  (* Ü is U+00DC, encoded as the bytes C3 9C: the second byte is also the C1
+     string terminator, but here it continues the rune, so the whole target
+     must survive into the href. *)
+  let svg =
+    render_ansi "\027]8;;https://example.com/?a=1;city=Ü\027\\link label\027]8;;\027\\"
+  in
+  Alcotest.(check int)
+    "Unicode hyperlink target survives" 1
+    (count_occurrences ~needle:"href=\"https://example.com/?a=1;city=Ü\"" ~haystack:svg)
+
+let test_malformed_hyperlink_target () =
+  (* A lone continuation byte is not well-formed UTF-8: the label stays plain
+     rather than corrupting the document. *)
+  let svg =
+    render_ansi "\027]8;;https://example.com/\xff\027\\link label\027]8;;\027\\"
+  in
+  Alcotest.(check int)
+    "malformed target leaves a plain label" 0
+    (count_occurrences ~needle:" href=" ~haystack:svg);
+  Alcotest.(check bool)
+    "visible label" true
+    (Test_support.contains ~needle:">link label</" ~haystack:svg)
+
+let test_zero_channel_keeps_link () =
+  (* The zeroes in an extended color are channel values, not resets, so the
+     coloured run keeps the hyperlink. *)
+  let svg =
+    render_ansi
+      "\027]8;;http://example.com\027\\link label\027[38;2;255;0;0mred\027[0m plain"
+  in
+  Alcotest.(check int)
+    "zero colour channels keep the hyperlink" 2
+    (count_occurrences ~needle:"href=\"http://example.com\"" ~haystack:svg)
+
 let hyperlink_cases =
   [
     ("javascript", "javascript:", None);
@@ -104,6 +139,12 @@ let hyperlink_cases =
       Some "https://example.com/?a=1&amp;b=2" );
     ("mixed case", "HtTpS://example.com", Some "HtTpS://example.com");
     ("mailto", "mailto:hello@example.com", Some "mailto:hello@example.com");
+    ( "numeric hostname",
+      "https://12345678901234567890.example.com/",
+      Some "https://12345678901234567890.example.com/" );
+    ( "semicolon in target",
+      "https://example.com/?a=1;b=2",
+      Some "https://example.com/?a=1;b=2" );
   ]
   |> List.map (fun (name, url, href) ->
       Alcotest_lwt.test_case_sync ("SVG hyperlink: " ^ name) `Quick (fun () ->
@@ -152,6 +193,11 @@ let suites =
     Alcotest_lwt.test_case "PTY capture" `Quick (fun _switch () -> test_pty_capture ());
     Alcotest_lwt.test_case_sync "ANSI underline colour" `Quick test_ansi_underline_color;
     Alcotest_lwt.test_case_sync "SGR 0 closes the hyperlink" `Quick test_reset_closes_link;
+    Alcotest_lwt.test_case_sync "Unicode hyperlink target" `Quick test_unicode_hyperlink;
+    Alcotest_lwt.test_case_sync "malformed hyperlink target" `Quick
+      test_malformed_hyperlink_target;
+    Alcotest_lwt.test_case_sync "zero channels keep the hyperlink" `Quick
+      test_zero_channel_keeps_link;
   ]
   @ hyperlink_cases
 

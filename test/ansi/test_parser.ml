@@ -246,6 +246,8 @@ let osc_cases =
         check "utf8" "\x1b]2;h\xc3\xa9llo\x07" [ osc [ "2"; "h\xc3\xa9llo" ] ]);
     Alcotest.test_case "osc: string_terminator" `Quick (fun () ->
         check "string_terminator" "\x1b]8;;u\x9c" [ osc [ "8"; ""; "u" ] ]);
+    Alcotest.test_case "osc: c1_continues_utf8" `Quick (fun () ->
+        check "c1_continues_utf8" "\x1b]8;;\xc3\x9c\x07" [ osc [ "8"; ""; "\xc3\x9c" ] ]);
     Alcotest.test_case "osc: c1_collected" `Quick (fun () ->
         check "c1_collected" "\x1b]8;\x9b;\x9c" [ osc [ "8"; "\x9b"; "" ] ]);
     Alcotest.test_case "osc: exceed_max_buffer_size" `Quick (fun () ->
@@ -253,6 +255,50 @@ let osc_cases =
           ("\x1b]52;c;" ^ big ^ "\x07")
           [ osc [ "52"; "c"; String.make 65531 'a' ] ]);
   ]
+
+let osc_utf8_termination =
+  let cases =
+    List.map
+      (fun (name, prefix) ->
+        ( name,
+          "\x1b]8;;" ^ prefix ^ "\x9clabel",
+          osc [ "8"; ""; prefix ] :: prints "label" ))
+      [
+        ("invalid E0 second byte", "\xe0");
+        ("surrogate prefix", "\xed\xa0");
+        ("overlong four-byte prefix", "\xf0\x80");
+        ("out-of-range prefix", "\xf4\x90");
+      ]
+  in
+  let before_limit = String.make 65532 'a' in
+  let at_limit = String.make 65533 'a' in
+  let cases =
+    cases
+    @ [
+        ( "control interrupts prefix",
+          "\x1b]8;;\xc3\000\x9clabel",
+          osc [ "8"; ""; "\xc3" ] :: prints "label" );
+        ( "continuation crosses storage limit",
+          "\x1b]8;;" ^ before_limit ^ "\xc3\xbc\x9clabel",
+          osc [ "8"; ""; before_limit ^ "\xc3" ] :: prints "label" );
+        ( "whole rune beyond storage limit",
+          "\x1b]8;;" ^ at_limit ^ "\xc3\x9c\x9clabel",
+          osc [ "8"; ""; at_limit ] :: prints "label" );
+        ( "legal E0 continuation",
+          "\x1b]8;;\xe0\xa0\x9c\x9clabel",
+          osc [ "8"; ""; "\xe0\xa0\x9c" ] :: prints "label" );
+      ]
+  in
+  List.map
+    (fun (name, input, expected) ->
+      Alcotest.test_case ("osc: " ^ name) `Quick (fun () ->
+          List.iter
+            (fun chunk ->
+              Alcotest.check parser_testable
+                (Printf.sprintf "%s, chunk %d" name chunk)
+                expected (feed_all ~chunk input))
+            [ 0; 1; 7; 65536 ]))
+    cases
 
 let cancel =
   [
@@ -326,6 +372,22 @@ let utf8 =
         check "bare continuation byte is a C1 control" "\x80" [ execute '\x80' ]);
     Alcotest.test_case "utf8: bare 0xa0 ignored" `Quick (fun () ->
         check "bare 0xa0 ignored" "\xa0" []);
+  ]
+
+let utf8_validation =
+  let check_valid name text expected =
+    Alcotest.test_case ("utf8 validation: " ^ name) `Quick (fun () ->
+        Alcotest.check Alcotest.bool name expected (Parser.is_valid_utf8 text))
+  in
+  [
+    check_valid "ascii" "https://example.com/" true;
+    check_valid "two byte rune" "city=\xc3\x9c" true;
+    check_valid "four byte rune" "\xf0\x9f\x91\x8b" true;
+    check_valid "lone continuation" "a\x9cb" false;
+    check_valid "truncated sequence" "a\xc3" false;
+    check_valid "overlong encoding" "\xc0\xaf" false;
+    check_valid "surrogate" "\xed\xa0\x80" false;
+    check_valid "beyond U+10FFFF" "\xf4\x90\x80\x80" false;
   ]
 
 let composite =
@@ -411,9 +473,11 @@ let cases =
       dcs_cases;
       csi_cases;
       osc_cases;
+      osc_utf8_termination;
       cancel;
       limits;
       utf8;
+      utf8_validation;
       partition;
       flush;
       sos_pm_apc;

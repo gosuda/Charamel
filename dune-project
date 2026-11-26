@@ -138,7 +138,6 @@
   base64
   fmt
   lwt
-  uri
   (alcotest :with-test)
   (alcotest-lwt (and (>= 1.9.1) :with-test))
   (qcheck-core :with-test)))

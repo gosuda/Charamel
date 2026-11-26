@@ -36,13 +36,14 @@ let run_of_style style text =
   }
 
 let svg_href url =
-  if url = "" then None
+  if url = "" || not (Charamel_ansi.Parser.is_valid_utf8 url) then None
   else
-    match Uri.scheme (Uri.of_string url) with
-    | Some (("http" | "https" | "mailto") as scheme)
-      when String.index_opt url ':' = Some (String.length scheme) ->
-        Some url
-    | _ -> None
+    match String.index_opt url ':' with
+    | None -> None
+    | Some colon -> (
+        match String.lowercase_ascii (String.sub url 0 colon) with
+        | "http" | "https" | "mailto" -> Some url
+        | _ -> None)
 
 let parse_runs text =
   let parser = Charamel_ansi.Parser.create () in
@@ -64,11 +65,22 @@ let parse_runs text =
     lines := List.rev runs :: !lines;
     pending := []
   in
+  (* A reset closes the hyperlink. Extended color sequences consume their
+     operands the way [Style.of_sgr] does, so the zeroes in [38;2;255;0;0]
+     are channel values, not resets. *)
+  let rec sgr_resets = function
+    | [] -> false
+    | ([] | [ None ] | [ Some 0 ]) :: _ -> true
+    | ([ Some 38 ] | [ Some 48 ] | [ Some 58 ]) :: rest -> (
+        match rest with
+        | [ Some 5 ] :: _ :: more -> sgr_resets more
+        | [ Some 2 ] :: _ :: _ :: _ :: more -> sgr_resets more
+        | _ -> sgr_resets rest)
+    | _ :: rest -> sgr_resets rest
+  in
   let update_sgr params =
     let params = if params = [] then [ [ Some 0 ] ] else params in
-    let resets =
-      List.exists (function [] | None :: _ | Some 0 :: _ -> true | _ -> false) params
-    in
+    let resets = sgr_resets params in
     style :=
       {
         sgr = Charamel_ansi.Style.of_sgr ~params !style.sgr;
@@ -83,7 +95,9 @@ let parse_runs text =
     | Charamel_ansi.Parser.Csi { params; final = 'm'; _ } -> update_sgr params
     | Charamel_ansi.Parser.Osc fields -> (
         match fields with
-        | "8" :: _params :: url :: _ -> style := { !style with link = svg_href url }
+        | "8" :: _params :: url :: rest ->
+            let target = String.concat ";" (url :: rest) in
+            style := { !style with link = svg_href target }
         | _ -> ())
     | Charamel_ansi.Parser.Csi _ | Charamel_ansi.Parser.Execute _
     | Charamel_ansi.Parser.Esc _ | Charamel_ansi.Parser.Dcs _ | Charamel_ansi.Parser.Apc _
