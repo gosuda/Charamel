@@ -918,11 +918,11 @@ let project_trust ~fs_root ~trust ~extra path text =
 let project_layer ~fs_root ~trust ~extra path text json =
   match without_gated json with
   | _, [] -> Lwt.return_ok (json, None)
-  | stripped, gated ->
+  | stripped, gated -> (
       project_trust ~fs_root ~trust ~extra path text >|= function
       | Error _ as failure -> failure
       | Ok (_, true) -> Ok (json, None)
-      | Ok (record, false) -> Ok (stripped, Some { record with gated })
+      | Ok (record, false) -> Ok (stripped, Some { record with gated }))
 
 (* Providers declared only in untrusted layers are withheld from the merged
    configuration, but a selection in an untrusted layer can still name one of
@@ -944,7 +944,7 @@ let provider_ids json =
           List.map fst (Option.value (object_members providers) ~default:[]))
 
 let catalog_selection catalog value =
-  match selection_provider value, object_members value with
+  match (selection_provider value, object_members value) with
   | Some provider_id, Some members -> (
       match member_json "model" members with
       | Some (Jsont.String (model_id, _)) ->
@@ -1034,10 +1034,10 @@ let load_with ~fs_root ~env ~cwd ~extra =
                   drop_dangling_selections ~catalog ~trusted:true dangling stripped
                 in
                 finish stripped ignored
-            | _ ->
+            | _ -> (
                 (match ignored with
-                | Some record -> Lwt.return_ok (record, false)
-                | None -> project_trust ~fs_root ~trust ~extra path text)
+                  | Some record -> Lwt.return_ok (record, false)
+                  | None -> project_trust ~fs_root ~trust ~extra path text)
                 >>= function
                 | Error _ as failure -> Lwt.return failure
                 | Ok (record, trusted) ->
@@ -1048,11 +1048,11 @@ let load_with ~fs_root ~env ~cwd ~extra =
                       if trusted || dropped = [] then ignored
                       else Some { record with gated = record.gated @ dropped }
                     in
-                    finish stripped ignored)
+                    finish stripped ignored))
       in
       clean_layers [] layers >>= function
       | Error _ as failure -> Lwt.return failure
-      | Ok layers ->
+      | Ok layers -> (
           let merged =
             List.fold_left
               (fun merged (_, stripped, _) -> merge_json merged stripped)
@@ -1077,7 +1077,7 @@ let load_with ~fs_root ~env ~cwd ~extra =
                     | path :: _ -> path
                     | [] -> "<expanded configuration>"
                   in
-                  Lwt.return_error (`Parse (path, message))))
+                  Lwt.return_error (`Parse (path, message)))))
 
 let load ~fs_root ~env ~cwd = load_with ~fs_root ~env ~cwd ~extra:[]
 

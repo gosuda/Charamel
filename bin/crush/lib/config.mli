@@ -132,8 +132,8 @@ val search_paths :
   cwd:string -> git_root:string option -> home_config:string -> string list
 (** [search_paths ~cwd ~git_root ~home_config] returns the ordered, duplicate-free
     configuration candidates from the home directory through the project root to [cwd],
-    each candidate ending in [crush.json]. Trailing [/.] components in directory
-    arguments do not introduce duplicate candidates. *)
+    each candidate ending in [crush.json]. Trailing [/.] components in directory arguments
+    do not introduce duplicate candidates. *)
 
 val merge : t -> t -> t
 (** [merge left right] overlays [right] on [left]. Scalar members use right precedence;

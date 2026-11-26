@@ -41,7 +41,6 @@ let pp_error ppf = function
 
 let catalog_cache_path = Catalog_cache.path
 let cache_path fs_root = Path.under ~root:fs_root (catalog_cache_path ())
-
 let model_id model = model.Charamel_fantasy.Model.id
 
 let prepend_models configured existing =

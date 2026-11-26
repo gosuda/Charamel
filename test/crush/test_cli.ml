@@ -358,16 +358,18 @@ let trust_hint_controls_are_copy_safe () =
           Test_tools_test_support.mkdir_p (Filename.concat root ".git");
           let cwd = Filename.concat root name in
           Test_tools_test_support.mkdir_p cwd;
-          write_private (Filename.concat cwd "crush.json")
+          write_private
+            (Filename.concat cwd "crush.json")
             {|{"providers":{"relay":{"type":"anthropic"}}}|};
           let _, _, error = run_child_status root [ "dirs"; "--cwd"; cwd ] in
-          Alcotest.(check bool) "hint has no literal tab" false
-            (String.contains error '\t');
+          Alcotest.(check bool)
+            "hint has no literal tab" false (String.contains error '\t');
           let start = String.index error '`' + 1 in
           let stop = String.index_from error start '`' in
           let hint = String.sub error start (stop - start) in
           let prefix = "crush trust --cwd " in
-          Alcotest.(check bool) "trust command prefix" true
+          Alcotest.(check bool)
+            "trust command prefix" true
             (String.starts_with ~prefix hint);
           let argument =
             String.sub hint (String.length prefix)
@@ -376,12 +378,14 @@ let trust_hint_controls_are_copy_safe () =
           let status, decoded, diagnostics =
             await
             @@ Test_support.run_cli ~exe:"/bin/sh" ~env:(child_environment root)
-                 ~timeout:5. [ "-c"; "printf '%s' " ^ argument ]
+                 ~timeout:5.
+                 [ "-c"; "printf '%s' " ^ argument ]
           in
           Alcotest.(check int) "copyable argument executes" 0 status;
           Alcotest.(check string) "argument has no shell diagnostics" "" diagnostics;
-          Alcotest.(check string) "argument keeps the exact directory"
-            (Unix.realpath cwd) (Unix.realpath decoded);
+          Alcotest.(check string)
+            "argument keeps the exact directory" (Unix.realpath cwd)
+            (Unix.realpath decoded);
           let status, _, diagnostics =
             await
             @@ Test_support.run_cli ~exe:"/bin/sh" ~env:(child_environment root)
@@ -389,7 +393,8 @@ let trust_hint_controls_are_copy_safe () =
                  [ "-c"; Filename.quote executable ^ " trust --cwd " ^ argument ]
           in
           Alcotest.(check int)
-            ("copyable trust command succeeds: " ^ diagnostics) 0 status;
+            ("copyable trust command succeeds: " ^ diagnostics)
+            0 status;
           let status, _, diagnostics = run_child_status root [ "dirs"; "--cwd"; cwd ] in
           Alcotest.(check int) "trusted configuration reloads" 0 status;
           Alcotest.(check bool)
@@ -397,6 +402,39 @@ let trust_hint_controls_are_copy_safe () =
             (Test_support.contains ~needle:"untrusted project configuration"
                ~haystack:diagnostics)))
     [ "tab\tdir"; "line\ndir\n"; "control\x01dir" ]
+
+let trust_without_cache_directory () =
+  let executable =
+    match binary_path () with Some path -> path | None -> Alcotest.skip ()
+  in
+  Test_tools_test_support.with_scratch (fun root ->
+      let config = Filename.concat root "config" in
+      Test_tools_test_support.mkdir_p config;
+      write_private
+        (Filename.concat root "crush.json")
+        {|{"providers":{"openai":{"type":"openai"}}}|};
+      let env =
+        [|
+          "XDG_CONFIG_HOME=" ^ config;
+          "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin";
+        |]
+      in
+      let run () =
+        await
+        @@ Test_support.run_cli ~exe:executable ~env ~cwd:root ~timeout:20.
+             [ "trust"; "--cwd"; root ]
+      in
+      let status, output, error = run () in
+      Alcotest.(check int) ("trust succeeds without a cache path: " ^ error) 0 status;
+      Alcotest.(check bool)
+        "provider approval is recorded" true
+        (Test_support.contains ~needle:"Trusted " ~haystack:output);
+      let status, output, error = run () in
+      Alcotest.(check int) ("approved project reloads: " ^ error) 0 status;
+      Alcotest.(check bool)
+        "the saved approval is reused" true
+        (Test_support.contains ~needle:"No project configuration needs trust."
+           ~haystack:output))
 
 let cases =
   [
@@ -431,4 +469,6 @@ let cases =
       trust_output_sanitizes_control_chars;
     Test_tools_test_support.case "trust hints preserve paths without raw controls" `Quick
       trust_hint_controls_are_copy_safe;
+    Test_tools_test_support.case "trust works without a cache directory" `Quick
+      trust_without_cache_directory;
   ]
