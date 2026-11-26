@@ -384,6 +384,9 @@ let test_wrapper_operands () =
       ({|env GROUP="$group" printenv GROUP|}, "clear");
       ({|env GROUP=$group printf ready|}, "review");
       ({|env GROUP=${group} printf ready|}, "review");
+      ({|env GROUP=$group ./cu''rl.exe --version|}, "blocked");
+      ({|env GROUP=$group ./brew.exe install fixture|}, "blocked");
+      ({|env - GROUP=$group ./brew.exe install fixture|}, "blocked");
       ({|env "$target" printenv|}, "review");
       (* Clusters of no-operand xargs switches and the attached optional
          watch operand leave the command boundary unchanged. *)
@@ -399,6 +402,12 @@ let test_find_data_slots () =
   check_posix_verdicts
     [
       ({|find . -name "$pattern" -print|}, "clear");
+      ({|find . -maxdepth "$depth" -mindepth "$minimum" -type "$kind"|}, "clear");
+      ({|find . -maxdepth $depth -type "$kind"|}, "review");
+      ({|find . -newer -name -exec sh -c "$command" \;|}, "review");
+      ({|find . -newer -name -exec ./cu''rl.exe \;|}, "blocked");
+      ({|find . -future-option -name -exec ./cu''rl.exe \;|}, "blocked");
+      ({|find . -ok printf '{}' + -exec ./cu''rl.exe \;|}, "clear");
       ({|find "$dir" -name '*.ml' -print|}, "review");
       ({|find "./$dir" -name '*.ml' -print|}, "clear");
       ("find . -name $pattern -print", "review");
