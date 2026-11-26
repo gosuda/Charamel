@@ -90,8 +90,8 @@ let config ~base_url (model : Charamel_fantasy.Model.t) =
     models = { large = Some selected; small = Some selected };
   }
 
-let with_agent ?(hooks_config : Config.hook list = [])
-    ?(clock = Charamel_os.Time.lwt) ~queue ~fallback f =
+let with_agent ?(hooks_config : Config.hook list = []) ?(clock = Charamel_os.Time.lwt)
+    ~queue ~fallback f =
   Test_tools_test_support.with_scratch (fun root ->
       let old_data = Sys.getenv_opt "XDG_DATA_HOME" in
       Unix.putenv "XDG_DATA_HOME" root;
@@ -297,8 +297,8 @@ let body_outcome_survives_stop_turn () =
        exit 2; else exit 0; fi"
     in
     let post =
-      "if grep -q allowed.txt; then printf '%s\\n' \"$$\" > .post-pid; printf \
-       'ready\\n' > .body-ready; read release < .post-release; fi; exit 0"
+      "if grep -q allowed.txt; then printf '%s\\n' \"$$\" > .post-pid; printf 'ready\\n' \
+       > .body-ready; read release < .post-release; fi; exit 0"
     in
     let hooks_config : Config.hook list =
       [
@@ -379,7 +379,9 @@ let post_hook_time_is_not_tool_time () =
         {
           event = Config.Post_tool;
           matcher = None;
-          command = "cat >/dev/null; printf 'ready\\n' > .timing-ready; read release < .timing-release";
+          command =
+            "cat >/dev/null; printf 'ready\\n' > .timing-ready; read release < \
+             .timing-release";
           timeout_s = 30;
         };
       ]
@@ -408,11 +410,10 @@ let post_hook_time_is_not_tool_time () =
             await (Lwt_io.close release))
           (fun () ->
             Test_tools_test_support.write_file
-              (Filename.concat root "allowed.txt") "allowed-body";
+              (Filename.concat root "allowed.txt")
+              "allowed-body";
             let pending = Agent.prompt agent "read the file" in
-            ignore
-              (await
-                 (Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line ready)));
+            ignore (await (Lwt_unix.with_timeout 5. (fun () -> Lwt_io.read_line ready)));
             advance 10.;
             await (Lwt_io.write_line release "resume");
             await (Lwt_io.flush release);
@@ -422,8 +423,7 @@ let post_hook_time_is_not_tool_time () =
             let timings =
               List.filter_map
                 (function
-                  | Agent.Tool_finished { elapsed_ms; _ } -> Some elapsed_ms
-                  | _ -> None)
+                  | Agent.Tool_finished { elapsed_ms; _ } -> Some elapsed_ms | _ -> None)
                 !events
             in
             Alcotest.(check (list int)) "post-hook time excluded" [ 0 ] timings))

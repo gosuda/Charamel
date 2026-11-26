@@ -580,7 +580,15 @@ let execute_calls t turn_sw calls =
           (fun job ->
             match job.promise with Some promise -> Lwt.cancel promise | None -> ())
           jobs;
-        Lwt.return_unit);
+        Lwt_list.iter_p
+          (fun job ->
+            match job.promise with
+            | None -> Lwt.return_unit
+            | Some promise ->
+                Lwt.catch
+                  (fun () -> promise >|= fun _ -> ())
+                  (function Lwt.Canceled -> Lwt.return_unit | exn -> Lwt.fail exn))
+          jobs);
   Lwt_list.iter_s
     (fun job ->
       emit t (Tool_started { id = job.call.id; name = job.call.name; input = job.input }))
