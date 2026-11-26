@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -21,49 +21,42 @@ jobs:
       matrix:
         ocaml-compiler: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["5.4.0","5.5.1"]' || '["5.5.1"]') }}
     runs-on: depot-ubuntu-24.04
-    # Backstop against a wedged step, not the cost control: steady-state
-    # cached runs finish in ~2-3 min (see PR body). Cold runs after a
-    # lockfile change may approach this bound and fail safe, never green.
+    # Keep a finite bound; new Depot cold/warm runtimes need measurement.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3
-        with:
-          ocaml-compiler: ${{ matrix.ocaml-compiler }}
-          cache: false
       - id: stamp
         run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
         shell: bash
       - id: opam-restore
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: _opam
+          path: |
+            ${{ runner.os == 'Windows' && 'C:/.opam' || '~/.opam' }}
+            _opam
           key: opam-v1-${{ runner.os }}-${{ runner.arch }}-ocaml${{ matrix.ocaml-compiler }}-${{ hashFiles('dune-project', '*.opam', '.ocamlformat', '.github/workflows/build.yml') }}-${{ steps.stamp.outputs.month }}
-          restore-keys: |
-            opam-v1-${{ runner.os }}-${{ runner.arch }}-ocaml${{ matrix.ocaml-compiler }}-
+      - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-compiler }}
+          cache: false
       - id: deps
         run: opam install . --deps-only --with-test
       - id: fmt-tool
         run: opam install ocamlformat.0.29.0
-      # Cheapest gate first: @fmt fails in seconds, before the build and suite.
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: ${{ !cancelled() && steps.opam-restore.outputs.cache-hit != 'true' && steps.deps.outcome == 'success' && steps.fmt-tool.outcome == 'success' }}
+        with:
+          path: |
+            ${{ runner.os == 'Windows' && 'C:/.opam' || '~/.opam' }}
+            _opam
+          key: ${{ steps.opam-restore.outputs.cache-primary-key }}
+
+      # Save dependencies before a test can hang or fail.
       - run: opam exec -- dune build @fmt
       - run: opam exec -- dune build --profile release
       - run: opam exec -- dune runtest --profile release
-      # Save even on red legs so a failing suite does not force every later
-      # run cold again; only a failed dependency install poisons, so gate
-      # the save on the install steps, not on the suite.
-      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        if: always() && steps.opam-restore.outputs.cache-hit != 'true' && steps.deps.outcome == 'success' && steps.fmt-tool.outcome == 'success'
-        with:
-          path: _opam
-          key: opam-v1-${{ runner.os }}-${{ runner.arch }}-ocaml${{ matrix.ocaml-compiler }}-${{ hashFiles('dune-project', '*.opam', '.ocamlformat', '.github/workflows/build.yml') }}-${{ steps.stamp.outputs.month }}
 
-  # Native runners prove only what Linux cannot: macOS/Windows path,
-  # shell, spawn, and text-mode behavior. The release build, the full
-  # suite, and @fmt already run on Linux above, so this job skips the
-  # ocamlformat install and the @fmt step and keeps one compiler: the
-  # platform slice does not differ by compiler minor, and the 5.4.0
-  # floor is still proved on Linux.
+  # The weekly/manual native suite checks platform-specific behavior.
   native:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
@@ -71,38 +64,36 @@ jobs:
       matrix:
         os: [depot-macos-latest, depot-windows-2025]
     runs-on: ${{ matrix.os }}
-    # Owner cap: native legs must stay under 5 min exec (target <= 4).
-    # The timeout is a backstop against the hung-suite pathology that
-    # burned ~360 min per macos leg, not the enforcer; steady-state
-    # cached exec is ~3-4 min (see PR body). The hang itself is an open
-    # item for the test owner: this keeps the full suite, bounded.
+    # Scheduling less often provides the cost cut; keep the complete suite.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3
-        with:
-          ocaml-compiler: "5.5.1"
-          windows-compiler: mingw
-          cache: false
       - id: stamp
         run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
         shell: bash
       - id: opam-restore
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: _opam
+          path: |
+            ${{ runner.os == 'Windows' && 'C:/.opam' || '~/.opam' }}
+            _opam
           key: opam-v1-${{ runner.os }}-${{ runner.arch }}-ocaml5.5.1-${{ hashFiles('dune-project', '*.opam', '.ocamlformat', '.github/workflows/build.yml') }}-${{ steps.stamp.outputs.month }}
-          restore-keys: |
-            opam-v1-${{ runner.os }}-${{ runner.arch }}-ocaml5.5.1-
+      - uses: ocaml/setup-ocaml@ff66428f72b64472e749b22e0ad4dded4b2ddca6 # v3
+        with:
+          ocaml-compiler: "5.5.1"
+          windows-compiler: mingw
+          cache: false
       - id: deps
         run: opam install . --deps-only --with-test
       # dune runtest builds the libraries first, but not the bin/
       # executables, so the explicit release build stays: it is the only
       # proof the shipped binaries compile on this platform.
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: ${{ !cancelled() && steps.opam-restore.outputs.cache-hit != 'true' && steps.deps.outcome == 'success' }}
+        with:
+          path: |
+            ${{ runner.os == 'Windows' && 'C:/.opam' || '~/.opam' }}
+            _opam
+          key: ${{ steps.opam-restore.outputs.cache-primary-key }}
       - run: opam exec -- dune build --profile release
       - run: opam exec -- dune runtest --profile release
-      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        if: always() && steps.opam-restore.outputs.cache-hit != 'true' && steps.deps.outcome == 'success'
-        with:
-          path: _opam
-          key: opam-v1-${{ runner.os }}-${{ runner.arch }}-ocaml5.5.1-${{ hashFiles('dune-project', '*.opam', '.ocamlformat', '.github/workflows/build.yml') }}-${{ steps.stamp.outputs.month }}
