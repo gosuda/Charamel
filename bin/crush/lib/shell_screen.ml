@@ -1232,12 +1232,22 @@ and analyze_cmd sink ~depth = function
   | [] -> ()
   | name :: args ->
       if not name.fixed then review sink computed_program
-      else if List.mem (program_name (drop_leading '@' name.value)) cmd_runners then
-        List.iter
-          (fun w ->
-            if w.fixed then parse_cmd sink ~depth:(depth + 1) w.value
-            else review sink computed_program)
-          args
+      else
+        let prog = program_name (drop_leading '@' name.value) in
+        (* A [for] header names its loop variable and set, neither of which is
+           code: [%f] and [%%f] expand to file names, and the set is data. The
+           body after [do] is the command, analysed as one unit so an argument
+           holding a loop variable is not read as a program. An absent [do]
+           keeps the old review-every-word shape, so an unsupported form stays
+           under review. *)
+        if String.equal prog "for" then ()
+        else if String.equal prog "do" then analyze_cmd sink ~depth args
+        else if List.mem prog cmd_runners then
+          List.iter
+            (fun w ->
+              if w.fixed then parse_cmd sink ~depth:(depth + 1) w.value
+              else review sink computed_program)
+            args
 
 let screen dialect command =
   let sink = { words = []; commands = []; reviews = [] } in

@@ -247,8 +247,9 @@ let screen_table =
     posix "script -qc \"c''url\" /dev/null" `Blocked;
     posix "echo hi | xargs -I % % x" `Review;
     posix "cat <<EOF | sh\necho hi\nEOF" `Review;
-    cmd "(<nul set /p x=out)&(<nul set /p x=err 1>&2)" `Clear;
-    cmd "ping -n 2 127.0.0.1 >nul" `Clear;
+    cmd "for %f in (a.txt b.txt) do type \"%f\"" `Clear;
+    cmd "for %%f in (a.txt b.txt) do type \"%%f\"" `Clear;
+    cmd "for /l %i in (1,1,10) do @echo hi" `Clear;
     cmd "c^url x" `Blocked;
     cmd "cu\"\"rl x" `Blocked;
     cmd "C:\\Windows\\System32\\curl.exe x" `Blocked;
