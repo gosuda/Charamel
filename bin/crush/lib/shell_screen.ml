@@ -158,8 +158,22 @@ let fd_exec_flags = [ "-x"; "-X"; "--exec"; "--exec-batch" ]
 let fd_data_flags =
   [ "-e"; "--extension"; "-E"; "--exclude"; "-t"; "--type"; "-d"; "--max-depth" ]
 
+(* [fd] glues a value to a short data option ([-tf]) or joins it with [=]
+   ([--type=f]). The glued value is literal text, so the word is data, never
+   an execution action. *)
+let fd_attached_data value =
+  let width = String.length value in
+  width > 2
+  && value.[0] = '-'
+  && value.[1] <> '-'
+  && List.mem (String.sub value 0 2) [ "-t"; "-e"; "-E"; "-d" ]
+  || List.exists
+       (fun option -> String.starts_with ~prefix:(option ^ "=") value)
+       [ "--type"; "--extension"; "--exclude"; "--max-depth" ]
+
 let rec fd_executes = function
   | flag :: _operand :: rest when List.mem flag fd_data_flags -> fd_executes rest
+  | word :: rest when fd_attached_data word -> fd_executes rest
   | "--" :: _ | [] -> false
   | flag :: rest -> List.mem flag fd_exec_flags || fd_executes rest
 
@@ -1602,6 +1616,8 @@ and exec_commands sink ~depth program flags args =
         scan ~ambiguous_checked rest
     | flag :: operand :: rest when flag.fixed && List.mem flag.value data_flags ->
         if not operand.single then review sink computed_program;
+        scan ~ambiguous_checked rest
+    | word :: rest when program = "fd" && word.fixed && fd_attached_data word.value ->
         scan ~ambiguous_checked rest
     | word :: rest when program = "fd" && word.fixed && word.value = "--" ->
         if List.exists (fun word -> not word.single) rest then

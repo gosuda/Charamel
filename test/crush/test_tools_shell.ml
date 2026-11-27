@@ -123,10 +123,20 @@ let test_classifier () =
         (command ^ " has only literal data operands")
         true
         (Tools_shell.is_read_only command))
-    [ "fd -- -X"; "fd -- --exec"; "fd -e -X README.md"; "fd -E --exec README.md" ];
+    [
+      "fd -- -X";
+      "fd -- --exec";
+      "fd -e -X README.md";
+      "fd -E --exec README.md";
+      "fd -t f README.md";
+      "fd -tf README.md";
+    ];
   Alcotest.(check bool)
     "fd option operand does not end option parsing" false
     (Tools_shell.is_read_only "fd -e -- -X touch changed");
+  Alcotest.(check bool)
+    "fd attached filter with an execution action is mutable" false
+    (Tools_shell.is_read_only "fd -tf README.md -x touch changed");
   Alcotest.(check bool)
     "sed in-place is mutable" false
     (Tools_shell.is_read_only "sed -i s/a/b/ file");
@@ -423,6 +433,10 @@ let test_find_data_slots () =
     [
       ("fd -g README.md", "clear");
       ("fd --glob README.md", "clear");
+      ("fd --type f README.md", "clear");
+      ("fd -t f README.md", "clear");
+      ("fd -tf README.md", "clear");
+      ("fd --type=f README.md", "clear");
       ("find -O0 . -print", "clear");
       ("find -O1 . -print", "clear");
       ("find -O2 . -print", "clear");
@@ -452,6 +466,7 @@ let test_find_data_slots () =
       ({|fd "$flag" sh -c 'printf executed'|}, "review");
       ({|fd -- "$pattern"|}, "clear");
       ({|fd -e "$extension" -X printf '%s'|}, "clear");
+      ({|fd -tf README.md -X printf '%s'|}, "clear");
       ({|find . -name '-exec' -print|}, "clear");
       ({|find . -exec printf '%s' '{}' \; -exec curl '{}' \;|}, "blocked");
       ({|find . -exec printf '%s' "$label" \;|}, "review");
