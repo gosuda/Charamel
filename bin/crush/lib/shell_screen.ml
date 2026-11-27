@@ -1916,11 +1916,20 @@ let cmd_payload source =
   let start = first 0 in
   let source = String.sub source start (length - start) in
   if String.length source > 0 && source.[0] = '"' then
-    match String.rindex_opt source '"' with
-    | Some last when last > 0 ->
+    (* The opening quote belongs to the nested payload, so its match is the
+       first quote that follows: the scanner leaves quotes exactly there.
+       A later quote starts an outer redirection target the outer scan
+       already screened, and stays in the tail. *)
+    let rec closing index =
+      if index >= String.length source then None
+      else if source.[index] = '"' then Some index
+      else closing (index + 1)
+    in
+    match closing 1 with
+    | Some last ->
         String.sub source 1 (last - 1)
         ^ String.sub source (last + 1) (String.length source - last - 1)
-    | _ -> source
+    | None -> source
   else source
 
 (* Group discovery uses the same word and Echo context as command screening.

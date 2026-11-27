@@ -523,6 +523,10 @@ let screen_table =
     cmd "cmd /d /c cmd /d /c echo key=value" `Clear;
     cmd "cmd /d /c for /f \"delims==\" %i in (\"key=value\") do @echo %i" `Review;
     cmd "cmd /d /c echo key=value>capture.txt" `Clear;
+    (* A quoted payload ends at its own closing quote: a quoted redirection
+       target after it belongs to the outer command, even when it holds
+       separators or parentheses. *)
+    cmd "cmd /d /c \"echo ready\" > \"capture (sales & support).txt\"" `Clear;
     cmd "cmd /d /c 2>capture.txt echo key=value" `Clear;
     cmd "cmd /d /c =,;echo key=value" `Clear;
     cmd "cmd /d /c for %i in (alpha) do @echo(" `Review;
