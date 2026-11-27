@@ -1707,7 +1707,16 @@ let rec drain sink =
       analyze sink ~depth words;
       drain sink
 
-type cmd_item = Cmd_word of word * string | Cmd_group of string
+(* A word retains its end offset in the original command for nested Cmd payloads. *)
+type cmd_item = Cmd_word of word * int | Cmd_group of string
+
+type cmd_context =
+  | Cmd_start
+  | Cmd_options
+  | Cmd_for_header of bool
+  | Cmd_for_body
+  | Cmd_echo
+  | Cmd_arguments
 
 type cmd_state = {
   chars : Buffer.t;
@@ -1717,20 +1726,50 @@ type cmd_state = {
   mutable in_quotes : bool;
   mutable start : int;
   mutable segment : cmd_item list;
+  mutable context : cmd_context;
 }
+
+let cmd_state () =
+  {
+    chars = Buffer.create 16;
+    computed = false;
+    started = false;
+    awaiting_target = false;
+    in_quotes = false;
+    start = 0;
+    segment = [];
+    context = Cmd_start;
+  }
 
 let cmd_space = function
   | ' ' | '\t' | ',' | ';' | '=' | '\011' | '\012' -> true
   | _ -> false
 
 let cmd_value = function Cmd_word (word, _) -> Some word | Cmd_group _ -> None
-
-let cmd_source = function
-  | Cmd_word (_, source) -> source
-  | Cmd_group source -> "(" ^ source ^ ")"
-
-let cmd_text items = String.concat " " (List.map cmd_source items)
 let cmd_lower word = String.lowercase_ascii word.value
+
+let cmd_context_word context word =
+  match context with
+  | Cmd_echo | Cmd_arguments -> context
+  | Cmd_for_header file_source ->
+      Cmd_for_header (file_source || (word.fixed && cmd_lower word = "/f"))
+  | Cmd_for_body ->
+      if word.fixed && word.unquoted && cmd_lower word = "do" then Cmd_start
+      else Cmd_arguments
+  | Cmd_options ->
+      if word.fixed && List.mem (cmd_lower word) [ "/c"; "/k" ] then Cmd_start
+      else if word.fixed then Cmd_options
+      else Cmd_arguments
+  | Cmd_start ->
+      if not word.fixed then Cmd_arguments
+      else
+        let name = drop_leading '@' (cmd_lower word) in
+        let program = strip_executable_suffix (basename name) in
+        if word.unquoted && name = "echo" then Cmd_echo
+        else if program = "for" then Cmd_for_header false
+        else if program = "cmd" then Cmd_options
+        else if List.mem program [ "do"; "else" ] then Cmd_start
+        else Cmd_arguments
 
 let end_cmd_word sink st source index =
   if st.started || Buffer.length st.chars > 0 then (
@@ -1748,7 +1787,8 @@ let end_cmd_word sink st source index =
           single = not st.computed;
         }
       in
-      st.segment <- Cmd_word (word, raw) :: st.segment);
+      st.context <- cmd_context_word st.context word;
+      st.segment <- Cmd_word (word, index) :: st.segment);
   Buffer.clear st.chars;
   st.computed <- false;
   st.started <- false
@@ -1777,7 +1817,7 @@ let cmd_for_file_mode items =
     (function Cmd_word (word, _) -> String.equal (cmd_lower word) "/f" | _ -> false)
     items
 
-let cmd_group source start ~file_source =
+let cmd_data_group source start ~file_source =
   let length = String.length source in
   let rec first index =
     if index < length && cmd_space source.[index] then first (index + 1) else index
@@ -1865,7 +1905,16 @@ let cmd_for_data sink source =
   sink.words <- Buffer.contents chars :: sink.words
 
 let cmd_payload source =
-  let source = String.trim source in
+  let length = String.length source in
+  let rec first index =
+    if index < length then
+      match source.[index] with
+      | ' ' | '\t' | '\n' | '\r' | '\012' -> first (index + 1)
+      | _ -> index
+    else index
+  in
+  let start = first 0 in
+  let source = String.sub source start (length - start) in
   if String.length source > 0 && source.[0] = '"' then
     match String.rindex_opt source '"' with
     | Some last when last > 0 ->
@@ -1874,38 +1923,43 @@ let cmd_payload source =
     | _ -> source
   else source
 
-let rec parse_cmd sink ~depth source =
-  if depth > max_depth then (
-    review sink too_deep;
-    false)
+(* Group discovery uses the same word and Echo context as command screening.
+   FOR input sets remain data; a closing parenthesis still closes a command
+   block even when its last command is Echo. *)
+let rec cmd_group source start ~nesting ~data ~file_source =
+  if data then cmd_data_group source start ~file_source
+  else if nesting >= max_nesting then None
   else
-    let st =
-      {
-        chars = Buffer.create 16;
-        computed = false;
-        started = false;
-        awaiting_target = false;
-        in_quotes = false;
-        start = 0;
-        segment = [];
-      }
+    let ignored =
+      { words = []; commands = []; reviews = []; refused_executable = None }
     in
-    let length = String.length source in
-    let rec loop index any =
-      if index >= length then (
-        if st.in_quotes then review sink (unreadable "an unclosed Cmd quote");
-        let found = end_segment sink ~depth st source length in
-        any || found)
+    let st = cmd_state () in
+    let discard index =
+      end_cmd_word ignored st source index;
+      st.segment <- [];
+      st.awaiting_target <- false;
+      st.context <- Cmd_start;
+      false
+    in
+    let rec loop index =
+      if index >= String.length source then None
       else if st.in_quotes then (
         cmd_quoted st source.[index];
-        loop (index + 1) any)
+        loop (index + 1))
+      else if source.[index] = ')' then
+        Some (String.sub source (start + 1) (index - start - 1), index + 1)
       else
-        let next, found = cmd_char sink ~depth st source index in
-        loop next (any || found)
+        let next, _ =
+          cmd_char ignored ~nesting:(nesting + 1) ~finish:discard st source index
+        in
+        st.segment <- [];
+        ignored.words <- [];
+        ignored.reviews <- [];
+        loop next
     in
-    loop 0 false
+    loop (start + 1)
 
-and cmd_char sink ~depth st source index =
+and cmd_char sink ~nesting ~finish st source index =
   let begin_word () =
     if not st.started then (
       st.start <- index;
@@ -1933,41 +1987,73 @@ and cmd_char sink ~depth st source index =
       (index + 1, false)
   | '(' -> (
       end_cmd_word sink st source index;
-      let file_source =
-        match List.rev st.segment with
-        | Cmd_word (word, _) :: rest ->
-            String.equal
-              (strip_executable_suffix (basename (drop_leading '@' word.value)))
-              "for"
-            && cmd_for_file_mode rest
-        | _ -> false
-      in
-      match cmd_group source index ~file_source with
-      | None ->
-          review sink (unreadable "an unclosed Cmd group");
-          (String.length source, false)
-      | Some (group, next) ->
-          st.segment <- Cmd_group group :: st.segment;
-          (next, false))
+      if st.context = Cmd_echo then (
+        begin_word ();
+        Buffer.add_char st.chars '(';
+        (index + 1, false))
+      else
+        let data, file_source =
+          match st.context with
+          | Cmd_for_header file_source -> (true, file_source)
+          | _ -> (false, false)
+        in
+        match cmd_group source index ~nesting ~data ~file_source with
+        | None ->
+            review sink (unreadable "an unclosed Cmd group");
+            (String.length source, false)
+        | Some (group, next) ->
+            st.segment <- Cmd_group group :: st.segment;
+            if data then st.context <- Cmd_for_body;
+            (next, false))
+  | ')' when st.context = Cmd_echo ->
+      begin_word ();
+      Buffer.add_char st.chars ')';
+      (index + 1, false)
   | ')' ->
       review sink (unreadable "an unmatched Cmd parenthesis");
-      (index + 1, end_segment sink ~depth st source index)
-  | '&' | '|' | '\n' | '\r' -> (index + 1, end_segment sink ~depth st source index)
+      (index + 1, finish index)
+  | '&' | '|' | '\n' | '\r' -> (index + 1, finish index)
   | '<' | '>' -> (cmd_redirect sink st source index, false)
   | c ->
       begin_word ();
       Buffer.add_char st.chars c;
       (index + 1, false)
 
+let rec parse_cmd sink ~depth source =
+  if depth > max_depth then (
+    review sink too_deep;
+    false)
+  else
+    let st = cmd_state () in
+    let length = String.length source in
+    let rec loop index any =
+      if index >= length then (
+        if st.in_quotes then review sink (unreadable "an unclosed Cmd quote");
+        let found = end_segment sink ~depth st source length in
+        any || found)
+      else if st.in_quotes then (
+        cmd_quoted st source.[index];
+        loop (index + 1) any)
+      else
+        let next, found =
+          cmd_char sink ~nesting:0
+            ~finish:(end_segment sink ~depth st source)
+            st source index
+        in
+        loop next (any || found)
+    in
+    loop 0 false
+
 and end_segment sink ~depth st source index =
   end_cmd_word sink st source index;
   let items = List.rev st.segment in
   st.segment <- [];
+  st.context <- Cmd_start;
   if st.awaiting_target then review sink (unreadable "a missing Cmd redirection target");
   st.awaiting_target <- false;
-  analyze_cmd sink ~depth items
+  analyze_cmd sink ~depth ~source ~end_pos:index items
 
-and for_command sink ~depth args =
+and for_command sink ~depth ~source ~end_pos args =
   let rec split header = function
     | Cmd_group source :: body -> Some (List.rev header, source, body)
     | item :: rest -> split (item :: header) rest
@@ -1977,13 +2063,13 @@ and for_command sink ~depth args =
   | None ->
       review sink for_without_do;
       false
-  | Some (header, source, body) -> (
+  | Some (header, set_source, body) -> (
       match cmd_for_header header with
       | None ->
           review sink (unreadable "a for loop header");
           false
       | Some options -> (
-          cmd_for_data sink source;
+          cmd_for_data sink set_source;
           if cmd_for_file_mode header then (
             let keywords =
               List.concat_map
@@ -2003,14 +2089,14 @@ and for_command sink ~depth args =
                 keywords
             then review sink (unreadable "attached for /f options");
             let usebackq = List.mem "usebackq" keywords in
-            let source = String.trim source in
+            let source = String.trim set_source in
             let quote = if usebackq then '`' else '\'' in
             if String.length source > 0 && source.[0] = quote then
               review sink for_command_source);
           match body with
           | Cmd_word (word, _) :: rest
             when word.fixed && word.unquoted && String.equal (cmd_lower word) "do" ->
-              if analyze_cmd sink ~depth:(depth + 1) rest then true
+              if analyze_cmd sink ~depth:(depth + 1) ~source ~end_pos rest then true
               else (
                 review sink (unreadable "a for loop without a body");
                 false)
@@ -2018,16 +2104,16 @@ and for_command sink ~depth args =
               review sink for_without_do;
               false))
 
-and analyze_cmd sink ~depth items =
+and analyze_cmd sink ~depth ~source ~end_pos items =
   if depth > max_depth then (
     review sink too_deep;
     false)
   else
     match items with
     | [] -> false
-    | Cmd_group source :: rest ->
-        let found = parse_cmd sink ~depth:(depth + 1) source in
-        let following = analyze_cmd sink ~depth rest in
+    | Cmd_group group_source :: rest ->
+        let found = parse_cmd sink ~depth:(depth + 1) group_source in
+        let following = analyze_cmd sink ~depth ~source ~end_pos rest in
         found || following
     | Cmd_word (name, _) :: args ->
         if not name.fixed then (
@@ -2037,31 +2123,32 @@ and analyze_cmd sink ~depth items =
           let base = basename (drop_leading '@' name.value) in
           let prog = strip_executable_suffix base in
           check_executable sink base prog (List.filter_map cmd_value args);
-          if String.equal prog "for" then for_command sink ~depth args
+          if String.equal prog "for" then for_command sink ~depth ~source ~end_pos args
           else if String.equal prog "cmd" then
             let rec payload = function
               | [] -> None
-              | Cmd_word (word, _) :: rest
+              | Cmd_word (word, start) :: rest
                 when word.fixed && List.mem (cmd_lower word) [ "/c"; "/k" ] ->
-                  Some rest
+                  Some (start, rest)
               | Cmd_word (word, _) :: rest when word.fixed -> payload rest
               | _ ->
                   review sink computed_code;
                   None
             in
             match payload args with
-            | Some rest ->
+            | Some (start, rest) ->
                 List.iter
                   (function
                     | Cmd_word (word, _) when not word.fixed -> review sink computed_code
                     | Cmd_word _ | Cmd_group _ -> ())
                   rest;
-                if not (parse_cmd sink ~depth:(depth + 1) (cmd_payload (cmd_text rest)))
-                then review sink (unreadable "an empty Cmd payload");
+                let payload = String.sub source start (end_pos - start) in
+                if not (parse_cmd sink ~depth:(depth + 1) (cmd_payload payload)) then
+                  review sink (unreadable "an empty Cmd payload");
                 true
             | None -> true
           else if List.mem prog [ "do"; "else" ] then
-            analyze_cmd sink ~depth:(depth + 1) args
+            analyze_cmd sink ~depth:(depth + 1) ~source ~end_pos args
           else (
             if List.mem prog cmd_runners then
               List.iter

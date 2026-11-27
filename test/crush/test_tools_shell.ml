@@ -488,6 +488,61 @@ let screen_table =
     cmd "C:\\Windows\\System32\\curl.exe x" `Blocked;
     cmd "cmd /c \"c^url x\"" `Blocked;
     cmd "%CMD% x" `Review;
+    cmd "echo(" `Clear;
+    cmd "@echo(" `Clear;
+    cmd "EcHo(" `Clear;
+    cmd "echo(ready" `Clear;
+    cmd "echo((ready" `Clear;
+    cmd "echo(ready)" `Clear;
+    cmd "echo (ready" `Clear;
+    cmd "echo \"(\"" `Clear;
+    cmd "echo ^(" `Clear;
+    cmd "echo(ready & echo(after" `Clear;
+    cmd "echo literal(for)" `Clear;
+    cmd "(echo( & echo ready)" `Clear;
+    cmd "(echo(ready)" `Clear;
+    cmd "(echo foo(bar))" `Review;
+    cmd "(echo foo(bar^))" `Clear;
+    cmd "for %i in (alpha beta) do @echo(" `Clear;
+    cmd "for %i in (alpha) do (echo( & echo %i)" `Clear;
+    cmd "(echo ready)" `Clear;
+    cmd "for %i in (alpha) do @echo %i" `Clear;
+    cmd "(for %i in (alpha) do @echo %i)" `Clear;
+    cmd "for %i in (alpha)" `Review;
+    cmd "(echo ready" `Review;
+    cmd "cmd /d /c echo(" `Clear;
+    cmd "cmd /d /c \"echo(\"" `Clear;
+    cmd "cmd /d /c cmd /d /c echo(" `Clear;
+    cmd "cmd /d /c echo key=value" `Clear;
+    cmd "cmd /d /c echo key value" `Clear;
+    cmd "cmd /d /c echo first,,second;;third=last" `Clear;
+    cmd "cmd /d /c echo first second third last" `Clear;
+    cmd "cmd /d /c echo key\tvalue" `Clear;
+    cmd "cmd /d /c echo key value" `Clear;
+    cmd "cmd /d /c \"echo key=value\"" `Clear;
+    cmd "cmd /d /c cmd /d /c echo key=value" `Clear;
+    cmd "cmd /d /c for /f \"delims==\" %i in (\"key=value\") do @echo %i" `Review;
+    cmd "cmd /d /c echo key=value>capture.txt" `Clear;
+    cmd "cmd /d /c 2>capture.txt echo key=value" `Clear;
+    cmd "cmd /d /c =,;echo key=value" `Clear;
+    cmd "cmd /d /c for %i in (alpha) do @echo(" `Review;
+    cmd "echo(^&" `Clear;
+    cmd "echo(ready & (echo after)" `Clear;
+    cmd "cmd /d /c echo key=value  " `Clear;
+    cmd "cmd /d /c echo key=value" `Clear;
+    cmd "cmd /d /c   echo key=value" `Clear;
+    cmd "cmd /d /c \"echo key=value\"  " `Clear;
+    cmd "cmd /d /c \"echo key=value  \"" `Clear;
+    cmd "cmd /d /c =,;echo key=value  " `Clear;
+    cmd "echo( & %COMSPEC% /d /c echo reviewed" `Review;
+    cmd "(echo( & %COMSPEC% /d /c echo reviewed)" `Review;
+    cmd "for %i in (alpha) do echo( & %COMSPEC% /d /c echo reviewed" `Review;
+    cmd "cmd /c echo( & %COMSPEC% /d /c echo reviewed" `Review;
+    cmd "echo( & curl.exe" `Blocked;
+    cmd "(echo( & curl.exe)" `Blocked;
+    cmd
+      "(((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((echo()))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))"
+      `Review;
   ]
 
 let test_screen_table () =
@@ -741,6 +796,32 @@ let test_cmd_loop_permissions () =
         "for /f \"tokens=*usebackq\" %i in (`echo 9173`) do @echo RESULT:[%i]";
       ])
 
+let test_cmd_echo_permissions () =
+  if Sys.win32 then (
+    await @@ with_ctx
+    @@ fun ctx ->
+    List.iter
+      (fun command ->
+        let output = output_or_fail (run_command ctx command) in
+        Alcotest.(check bool)
+          ("literal echo exits: " ^ command)
+          false output.Tool.is_error)
+      [
+        "echo(";
+        "@echo(";
+        "cmd /d /c echo(";
+        "(echo( & echo ready)";
+        "for %i in (alpha beta) do @echo(";
+      ];
+    List.iter
+      (fun command ->
+        match run_command ctx command with
+        | Error (`Denied _) -> ()
+        | Ok _ | Error _ -> Alcotest.failf "blanket approval ran %s" command)
+      [
+        "echo( & %COMSPEC% /d /c echo reviewed"; "(echo( & %COMSPEC% /d /c echo reviewed)";
+      ])
+
 let test_foreground_capture () =
   await @@ with_ctx
   @@ fun ctx ->
@@ -838,6 +919,8 @@ let cases =
       test_review_argument_boundaries;
     Test_tools_test_support.case "Cmd loop approval boundary" `Quick
       test_cmd_loop_permissions;
+    Test_tools_test_support.case "Cmd echo approval boundary" `Quick
+      test_cmd_echo_permissions;
     Test_tools_test_support.case "wrapper option and argument boundaries" `Quick
       test_wrapper_operands;
     Test_tools_test_support.case "xargs replacement positions" `Quick
