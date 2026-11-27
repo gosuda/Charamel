@@ -250,6 +250,9 @@ let screen_table =
     cmd "for %f in (a.txt b.txt) do type \"%f\"" `Clear;
     cmd "for %%f in (a.txt b.txt) do type \"%%f\"" `Clear;
     cmd "for /l %i in (1,1,10) do @echo hi" `Clear;
+    cmd "for %f in (a.txt b.txt)" `Review;
+    cmd "for %f in (%FILES%) do type \"%f\"" `Review;
+    cmd "for /f \"tokens=*\" %i in ('dir') do echo %i" `Review;
     cmd "c^url x" `Blocked;
     cmd "cu\"\"rl x" `Blocked;
     cmd "C:\\Windows\\System32\\curl.exe x" `Blocked;

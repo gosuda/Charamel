@@ -177,6 +177,8 @@ let reserved_starters =
   [ "!"; "{"; "}"; "if"; "then"; "else"; "elif"; "fi"; "do"; "done"; "while"; "until" ]
 
 let computed_program = "the shell computes the name of the program it runs"
+let for_without_do = "a for loop without do"
+let for_command_source = "a for /f loop runs a command the screen does not parse"
 let sourced_code = "the command runs shell code the screen cannot read"
 let stdin_code = "a shell reads its code from standard input"
 let computed_code = "a shell runs a computed command string"
@@ -350,6 +352,7 @@ type sink = {
   mutable words : string list;
   mutable commands : (int * word list) list;
   mutable reviews : string list;
+  mutable for_open : bool;
 }
 
 let review sink reason = sink.reviews <- reason :: sink.reviews
@@ -1228,6 +1231,20 @@ and end_segment sink ~depth st =
   st.awaiting_target <- false;
   analyze_cmd sink ~depth words
 
+and for_command sink ~depth args =
+  let folded = List.map (fun w -> String.lowercase_ascii w.value) args in
+  let rec after_do = function
+    | [] -> None
+    | w :: rest ->
+        if String.equal (String.lowercase_ascii w.value) "do" then Some rest
+        else after_do rest
+  in
+  if List.mem "/f" folded then review sink for_command_source
+  else
+    match after_do args with
+    | Some body -> analyze_cmd sink ~depth body
+    | None -> sink.for_open <- true
+
 and analyze_cmd sink ~depth = function
   | [] -> ()
   | name :: args ->
@@ -1237,11 +1254,14 @@ and analyze_cmd sink ~depth = function
         (* A [for] header names its loop variable and set, neither of which is
            code: [%f] and [%%f] expand to file names, and the set is data. The
            body after [do] is the command, analysed as one unit so an argument
-           holding a loop variable is not read as a program. An absent [do]
-           keeps the old review-every-word shape, so an unsupported form stays
-           under review. *)
-        if String.equal prog "for" then ()
-        else if String.equal prog "do" then analyze_cmd sink ~depth args
+           holding a loop variable is not read as a program. A header without
+           [do] leaves [for_open] set, so a loop whose body never arrives stays
+           under review. A [/f] header can read a command source the scanner
+           does not parse, so it stays under review. *)
+        if String.equal prog "for" then for_command sink ~depth args
+        else if String.equal prog "do" then (
+          sink.for_open <- false;
+          analyze_cmd sink ~depth args)
         else if List.mem prog cmd_runners then
           List.iter
             (fun w ->
@@ -1250,12 +1270,14 @@ and analyze_cmd sink ~depth = function
             args
 
 let screen dialect command =
-  let sink = { words = []; commands = []; reviews = [] } in
+  let sink = { words = []; commands = []; reviews = []; for_open = false } in
   (match dialect with
   | Posix ->
       parse_source sink ~depth:0 command;
       drain sink
-  | Cmd -> parse_cmd sink ~depth:0 command);
+  | Cmd ->
+      parse_cmd sink ~depth:0 command;
+      if sink.for_open then review sink for_without_do);
   let names text = List.map program_name (fragments dialect text) in
   let decoded = List.concat_map names (List.rev sink.words) in
   match refused (names command) with
