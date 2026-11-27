@@ -60,9 +60,17 @@ let plain_tokens segment =
       |> List.concat_map (fun item -> String.split_on_char '\t' item)
       |> List.filter (fun item -> item <> "")
     in
-    if List.for_all (fun token -> token <> "" && not (String.contains token '=')) tokens
-    then Some tokens
-    else None
+    match tokens with
+    (* A screened [fd] argument containing [=] is data, not a shell assignment.
+       [safe_simple_command] still checks the execution options. *)
+    | "fd" :: _ -> Some tokens
+    | _ ->
+        if
+          List.for_all
+            (fun token -> token <> "" && not (String.contains token '='))
+            tokens
+        then Some tokens
+        else None
 
 let has_option_prefix prefixes args =
   List.exists

@@ -112,10 +112,15 @@ let test_classifier () =
     (Tools_shell.is_read_only "find . -exec cat {} \\;");
   List.iter
     (fun action ->
+      let command = "fd -g README.md " ^ action ^ " touch changed" in
+      (match Shell_screen.screen Shell_screen.Posix command with
+      | Shell_screen.Clear -> ()
+      | Shell_screen.Blocked _ | Shell_screen.Review _ ->
+          Alcotest.failf "a literal fd action must screen Clear: %s" command);
       Alcotest.(check bool)
         ("fd " ^ action ^ " is mutable")
         false
-        (Tools_shell.is_read_only ("fd -g README.md " ^ action ^ " touch changed")))
+        (Tools_shell.is_read_only command))
     [ "-x"; "-X"; "--exec"; "--exec-batch" ];
   List.iter
     (fun command ->
@@ -134,9 +139,42 @@ let test_classifier () =
   Alcotest.(check bool)
     "fd option operand does not end option parsing" false
     (Tools_shell.is_read_only "fd -e -- -X touch changed");
+  (match Shell_screen.screen Shell_screen.Posix "fd -tf README.md -x touch changed" with
+  | Shell_screen.Clear -> ()
+  | Shell_screen.Blocked _ | Shell_screen.Review _ ->
+      Alcotest.fail "the preserved attached fd action must screen Clear");
   Alcotest.(check bool)
     "fd attached filter with an execution action is mutable" false
     (Tools_shell.is_read_only "fd -tf README.md -x touch changed");
+  List.iter
+    (fun command ->
+      Alcotest.(check bool)
+        (command ^ " stays read-only")
+        true
+        (Tools_shell.is_read_only command))
+    [
+      "fd -tf README";
+      "fd --type=f README";
+      "fd -e-X README";
+      "fd --extension=--exec README";
+    ];
+  List.iter
+    (fun command ->
+      (match Shell_screen.screen Shell_screen.Posix command with
+      | Shell_screen.Clear -> ()
+      | Shell_screen.Blocked _ | Shell_screen.Review _ ->
+          Alcotest.failf "an attached filter must retain the action: %s" command);
+      Alcotest.(check bool)
+        (command ^ " stays mutable") false
+        (Tools_shell.is_read_only command))
+    [ "fd -tf README -x printf ready"; "fd --type=f README --exec-batch printf ready" ];
+  List.iter
+    (fun command ->
+      Alcotest.(check bool)
+        (command ^ " retains its write boundary")
+        false
+        (Tools_shell.is_read_only command))
+    [ "FLAG=value fd --type=f README"; "fd --type=f README > out" ];
   Alcotest.(check bool)
     "sed in-place is mutable" false
     (Tools_shell.is_read_only "sed -i s/a/b/ file");
@@ -375,7 +413,70 @@ let screen_table =
     posix "cat <<EOF | sh\necho hi\nEOF" `Review;
     cmd "cmd /c echo ready for review" `Clear;
     cmd "cmd /c for %i in (*)" `Review;
+    cmd "cmd /c \"echo ready for review\"" `Clear;
+    cmd "cmd /d /c echo do for else" `Clear;
     cmd "for /r do %i in (*.txt) do echo %i" `Clear;
+    cmd "for /r \"do\" %i in (*.txt) do echo %i" `Clear;
+    cmd "for %i in (do) do echo %i" `Clear;
+    cmd "for %i in (alpha) do echo ready for review" `Clear;
+    cmd "for /f %i in (notes.txt) do echo %i" `Clear;
+    cmd "for /f \"tokens=2\" %i in (notes.txt) do echo %i" `Clear;
+    cmd "for /f %i in (\"literal words\") do echo %i" `Clear;
+    cmd "for /f \"usebackq\" %i in (\"notes space.txt\") do echo %i" `Clear;
+    cmd "for /f \"usebackq\" %i in ('literal words') do echo %i" `Clear;
+    cmd "for /f \"usebackq\" %i in (`echo alpha`) do echo %i" `Review;
+    cmd "for /f \"tokens=* usebackq\" %i in (`echo alpha`) do echo %i" `Review;
+    cmd "for /f \"delims=usebackq\" %i in ('echo alpha') do echo %i" `Review;
+    (* Frozen native option/quote observations. Attached keywords are
+       intentionally unparsed and therefore require exact-command approval. *)
+    cmd "for /f %i in ('echo 9173') do @echo RESULT:[%i]" `Review;
+    cmd "for /f %i in (`echo 9173`) do @echo RESULT:[%i]" `Clear;
+    cmd "for /f \"usebackq\" %i in ('echo 9173') do @echo RESULT:[%i]" `Clear;
+    cmd "for /f \"usebackq\" %i in (`echo 9173`) do @echo RESULT:[%i]" `Review;
+    cmd "for /f \"delims=usebackq\" %i in ('echo 9173') do @echo RESULT:[%i]" `Review;
+    cmd "for /f \"delims=usebackq\" %i in (`echo 9173`) do @echo RESULT:[%i]" `Clear;
+    cmd "for /f \"delims= usebackq\" %i in ('echo 9173') do @echo RESULT:[%i]" `Clear;
+    cmd "for /f \"delims= usebackq\" %i in (`echo 9173`) do @echo RESULT:[%i]" `Review;
+    cmd "for /f \"tokens=* delims= usebackq\" %i in ('echo 9173') do @echo RESULT:[%i]"
+      `Clear;
+    cmd "for /f \"tokens=* delims= usebackq\" %i in (`echo 9173`) do @echo RESULT:[%i]"
+      `Review;
+    cmd "for /f \"usebackqdelims=\" %i in ('echo 9173') do @echo RESULT:[%i]" `Review;
+    cmd "for /f \"usebackqdelims=\" %i in (`echo 9173`) do @echo RESULT:[%i]" `Review;
+    cmd "for /f \"tokens=*usebackq\" %i in ('echo 9173') do @echo RESULT:[%i]" `Review;
+    cmd "for /f \"tokens=*usebackq\" %i in (`echo 9173`) do @echo RESULT:[%i]" `Review;
+    cmd "for /f \"usebackq tokens=* delims=\" %i in ('echo 9173') do @echo RESULT:[%i]"
+      `Clear;
+    cmd "for /f \"usebackq tokens=* delims=\" %i in (`echo 9173`) do @echo RESULT:[%i]"
+      `Review;
+    cmd "for /f \"delims=usebackq tokens=*\" %i in ('echo 9173') do @echo RESULT:[%i]"
+      `Review;
+    cmd "for /f \"delims=usebackq tokens=*\" %i in (`echo 9173`) do @echo RESULT:[%i]"
+      `Clear;
+    cmd "for %i in (alpha) do" `Review;
+    cmd "for %i in (alpha) do   " `Review;
+    cmd "for /r do %i in (*.txt) do" `Review;
+    cmd "for %i in (do) do" `Review;
+    cmd "for %i in (alpha) do ()" `Review;
+    cmd "for %i in (alpha) do (())" `Review;
+    cmd "for %i in (alpha) do & echo after" `Review;
+    cmd "for %i in (alpha) & for %j in (beta) do echo %j" `Review;
+    cmd "for %i in (alpha) do echo %i & for %j in (beta)" `Review;
+    cmd "cmd /c for %i in (alpha)" `Review;
+    cmd "cmd /c \"for %i in (alpha) do\"" `Review;
+    cmd "for %i in (alpha do echo ready" `Review;
+    cmd "for in (alpha) do echo ready" `Review;
+    cmd "for %i (alpha) do echo ready" `Review;
+    cmd "for unsupported %i in (alpha) do echo ready" `Review;
+    cmd "for %i in (alpha) do %PROGRAM% %i" `Review;
+    cmd "cmd /c %PROGRAM% ready" `Review;
+    cmd "cmd /c echo %TEXT%" `Review;
+    cmd "for %i in (alpha) do for %j in (beta) do echo %i %j" `Clear;
+    cmd "for %i in (alpha) do (echo %i)" `Clear;
+    cmd "for %i in (alpha) do (echo %i & echo ready for review)" `Clear;
+    cmd "for %i in (c^url) do echo %i" `Blocked;
+    cmd "for %i in (alpha) do c^url x" `Blocked;
+    cmd "for %i in (alpha) do %PROGRAM% & c^url x" `Blocked;
     cmd "for %f in (a.txt b.txt) do type \"%f\"" `Clear;
     cmd "for %%f in (a.txt b.txt) do type \"%%f\"" `Clear;
     cmd "for /l %i in (1,1,10) do @echo hi" `Clear;
@@ -424,7 +525,7 @@ let test_wrapper_operands () =
       ({|env GROUP=$group ./brew.exe install fixture|}, "blocked");
       ({|env - GROUP=$group ./brew.exe install fixture|}, "blocked");
       ({|env -u UNUSED - ./brew.exe install fixture|}, "blocked");
-      ({|env GROUP=value - ./brew.exe install fixture|}, "blocked");
+      ({|env GROUP=value - ./brew.exe install fixture|}, "clear");
       ({|env "$target" printenv|}, "review");
       ({|env GROUP="${@}" printf ready|}, "review");
       (* Clusters of no-operand xargs switches and the attached optional
@@ -435,6 +536,66 @@ let test_wrapper_operands () =
       (* A literal [flock -c] command string is parsed but still needs an
          explicit approval. *)
       ("flock lockfile -c 'printf ready'", "review");
+    ]
+
+let test_review_argument_boundaries () =
+  check_posix_verdicts
+    [
+      ("find . -name \"${pattern:-{@*.txt}\" -print", "clear");
+      ("find . -name \"${pattern:-{!CHAR32_PREFIX@*.txt}\" -print", "clear");
+      ("find . -name \"${pattern:-literal@text}\" -print", "clear");
+      ("env GROUP=value - ./brew.exe install fixture", "clear");
+      ("env -u UNUSED GROUP=value - ./brew.exe install fixture", "clear");
+      ("env -u UNUSED - ./brew.exe install fixture", "blocked");
+      ("env - GROUP=value ./brew.exe install fixture", "blocked");
+      ("env GROUP=value -i ./brew.exe install fixture", "clear");
+      ("env A=\"${@}\" true", "review");
+      ("env A=\"${@:1}\" true", "review");
+      ("env A=\"${@:-fallback}\" true", "review");
+      ("env A=\"${!prefix@}\" true", "review");
+      ("find . -name \"${@}\" -print", "review");
+      ("find . -name \"${@:1}\" -print", "review");
+      ("find . -name \"${@:-fallback}\" -print", "review");
+      ("find . -name \"${!prefix@}\" -print", "review");
+      ("find . -name \"${value:-literal@text}\" -print", "clear");
+      ("find . -name \"${value@Q}\" -print", "clear");
+      ("find . -name \"${!prefix*}\" -print", "clear");
+      ("fd -tf README", "clear");
+      ("fd --type=f README", "clear");
+      ("fd -e.rs README", "clear");
+      ("fd --extension=rs README", "clear");
+      ("fd -Etarget README", "clear");
+      ("fd --exclude=target README", "clear");
+      ("fd -d2 README", "clear");
+      ("fd --max-depth=2 README", "clear");
+      ("fd -tf README -x printf '%s'", "clear");
+      ("fd --type=f README --exec-batch printf '%s'", "clear");
+      ("fd -e-X README", "clear");
+      ("fd --extension=--exec README", "clear");
+      ("fd --typefuture=f README", "review");
+      ("fd -t\"$kind\" README", "review");
+      ("fd -tf README -x \"$PROGRAM\"", "review");
+      ("fd -tf README -x ./cu''rl.exe", "blocked");
+      ("command -v \"$NAME\"", "clear");
+      ("command -pv git", "clear");
+      ("command -pV git", "clear");
+      ("command -vp git", "clear");
+      ("command -p -v git", "clear");
+      ("command -pp printf ready", "clear");
+      ("command -pv -p git", "clear");
+      ("command -pv -- git", "clear");
+      ("command -pz git", "review");
+      ("command -v -z git", "review");
+      ("command -- -pv", "clear");
+      ("command -p ./cu''rl.exe", "blocked");
+      ("command -pv ./cu''rl.exe", "clear");
+      ("env -i - ./cu''rl.exe", "blocked");
+      ("env -u UNUSED - ./cu''rl.exe", "blocked");
+      ("env -i -- - ./cu''rl.exe", "blocked");
+      ("env - -i ./cu''rl.exe", "clear");
+      ("env -i - A=\"$@\" ./cu''rl.exe", "blocked");
+      ("env -i - \"$PROGRAM\"", "review");
+      ("env -i - A=one printf ready", "clear");
     ]
 
 let test_find_data_slots () =
@@ -540,6 +701,46 @@ let test_watch_mode () =
       ("watch --equexit 2 grep -F '(' app.log", "review");
     ]
 
+let test_cmd_loop_permissions () =
+  if Sys.win32 then (
+    let command_source = "for /f %i in ('echo reviewed') do @echo %i" in
+    await @@ with_ctx
+    @@ fun ctx ->
+    List.iter
+      (fun command ->
+        match run_command ctx command with
+        | Error (`Denied _) -> ()
+        | Ok _ | Error _ -> Alcotest.failf "blanket approval ran %s" command)
+      [
+        command_source;
+        "for %i in (alpha) do";
+        "for /f \"usebackqdelims=\" %i in (`echo 9173`) do @echo RESULT:[%i]";
+        "for /f \"tokens=*usebackq\" %i in (`echo 9173`) do @echo RESULT:[%i]";
+      ];
+    let ordinary =
+      output_or_fail (run_command ctx "for /f %i in (\"literal words\") do @echo %i")
+    in
+    Alcotest.(check bool)
+      "a literal source needs no review" true
+      (Test_support.contains ~needle:"literal" ~haystack:ordinary.Tool.content);
+    await
+    @@ with_ctx ~asker:(fun _ -> Permission.Allow_once)
+    @@ fun ctx ->
+    let output = output_or_fail (run_command ctx command_source) in
+    Alcotest.(check bool)
+      "an exact approval permits the command source" true
+      (Test_support.contains ~needle:"reviewed" ~haystack:output.Tool.content);
+    List.iter
+      (fun command ->
+        let output = output_or_fail (run_command ctx command) in
+        Alcotest.(check bool)
+          "an exact approval permits attached command-source options" true
+          (Test_support.contains ~needle:"RESULT:[9173]" ~haystack:output.Tool.content))
+      [
+        "for /f \"usebackqdelims=\" %i in (`echo 9173`) do @echo RESULT:[%i]";
+        "for /f \"tokens=*usebackq\" %i in (`echo 9173`) do @echo RESULT:[%i]";
+      ])
+
 let test_foreground_capture () =
   await @@ with_ctx
   @@ fun ctx ->
@@ -633,6 +834,10 @@ let cases =
     Test_tools_test_support.case "screen clears ordinary commands" `Quick
       test_screen_clears_ordinary;
     Test_tools_test_support.case "screen verdict table" `Quick test_screen_table;
+    Test_tools_test_support.case "review argument boundaries" `Quick
+      test_review_argument_boundaries;
+    Test_tools_test_support.case "Cmd loop approval boundary" `Quick
+      test_cmd_loop_permissions;
     Test_tools_test_support.case "wrapper option and argument boundaries" `Quick
       test_wrapper_operands;
     Test_tools_test_support.case "xargs replacement positions" `Quick

@@ -158,23 +158,17 @@ let fd_exec_flags = [ "-x"; "-X"; "--exec"; "--exec-batch" ]
 let fd_data_flags =
   [ "-e"; "--extension"; "-E"; "--exclude"; "-t"; "--type"; "-d"; "--max-depth" ]
 
-(* [fd] glues a value to a short data option ([-tf]) or joins it with [=]
-   ([--type=f]). The glued value is literal text, so the word is data, never
-   an execution action. *)
 let fd_attached_data value =
-  let width = String.length value in
-  width > 2
-  && value.[0] = '-'
-  && value.[1] <> '-'
-  && List.mem (String.sub value 0 2) [ "-t"; "-e"; "-E"; "-d" ]
-  || List.exists
-       (fun option -> String.starts_with ~prefix:(option ^ "=") value)
-       [ "--type"; "--extension"; "--exclude"; "--max-depth" ]
+  List.exists
+    (fun flag ->
+      let prefix = if String.starts_with ~prefix:"--" flag then flag ^ "=" else flag in
+      String.length value > String.length prefix && String.starts_with ~prefix value)
+    fd_data_flags
 
 let rec fd_executes = function
   | flag :: _operand :: rest when List.mem flag fd_data_flags -> fd_executes rest
-  | word :: rest when fd_attached_data word -> fd_executes rest
   | "--" :: _ | [] -> false
+  | flag :: rest when fd_attached_data flag -> fd_executes rest
   | flag :: rest -> List.mem flag fd_exec_flags || fd_executes rest
 
 let exec_flags =
@@ -395,7 +389,6 @@ type sink = {
   mutable words : string list;
   mutable commands : (int * word list) list;
   mutable reviews : string list;
-  mutable for_open : bool;
   mutable refused_executable : string option;
 }
 
@@ -763,6 +756,15 @@ let double_quoted_parameter_word lx =
   operator > 0
   && match peek lx operator with Some ('-' | '+' | '=' | '?') -> true | _ -> false
 
+let parameter_expands_fields lx =
+  let rec indirect offset =
+    match peek lx offset with
+    | Some '@' -> true
+    | Some c when is_name_char c -> indirect (offset + 1)
+    | _ -> false
+  in
+  peek lx 0 = Some '@' || (peek lx 0 = Some '!' && indirect 1)
+
 let rec lex_word lx b =
   match peek lx 0 with
   | None -> Ok ()
@@ -865,6 +867,7 @@ and dollar lx b ~in_double =
       advance lx 2;
       let literal_apostrophe = in_double && double_quoted_parameter_word lx in
       let scratch = builder () in
+      scratch.is_single <- not (parameter_expands_fields lx);
       let* () = nest lx (fun () -> parameter lx scratch ~literal_apostrophe) in
       Ok (mark_expansion b ~single:(in_double && scratch.is_single))
   | Some c when is_name_start c ->
@@ -936,20 +939,10 @@ and parameter lx scratch ~literal_apostrophe =
       let* () = backquoted lx scratch ~in_double:literal_apostrophe in
       parameter lx scratch ~literal_apostrophe
   | Some c ->
-      (* [${@}], [${@:n}] and [${!prefix@}] expand to one word per element
-         even when quoted, as does [${words[@]}]: a word holding any of them
-         is never a proven single argument. A trailing [@] after a plain name
-         ([${var@Q}]) only transforms one value, so it stays single. *)
-      if c = '@' && lx.pos > 0 then (
-        let prev = lx.source.[lx.pos - 1] in
-        if prev = '[' || prev = '{' then scratch.is_single <- false
-        else
-          let start = ref (lx.pos - 1) in
-          while !start >= 0 && is_name_char lx.source.[!start] do
-            decr start
-          done;
-          if !start >= 1 && lx.source.[!start] = '!' && lx.source.[!start - 1] = '{' then
-            scratch.is_single <- false);
+      (* [${words[@]}] expands to one word per element even when quoted, so a
+         word holding it is never a proven single argument. *)
+      if c = '@' && lx.pos > 0 && lx.source.[lx.pos - 1] = '[' then
+        scratch.is_single <- false;
       advance lx 1;
       parameter lx scratch ~literal_apostrophe
 
@@ -1151,38 +1144,42 @@ let rec env_command = function
   | w :: _ when (not w.fixed) && ((not w.assignment) || not w.single) ->
       Error computed_program
   | w :: rest when String.contains w.value '=' -> env_command rest
-  (* A lone [-] ends option processing like [--]: GNU [env] runs the command
-     after it whatever options came first, so it is skipped, never a program. *)
-  | w :: rest when w.fixed && String.equal w.value "-" -> env_command rest
   | words -> Ok words
 
 (* The [command] builtin has an execution mode and a lookup mode: [-v] and [-V]
    only report how the shell resolves a name without invoking it, so their
    operands are names, never commands to analyze. *)
+let command_arguments args =
+  let rec options lookup = function
+    | w :: _ as words when not w.fixed ->
+        if lookup then Ok (true, words) else Error computed_program
+    | w :: rest when w.value = "--" -> Ok (lookup, rest)
+    | w :: rest when String.length w.value > 1 && w.value.[0] = '-' ->
+        let group = suffix_from w.value 1 in
+        if String.for_all (fun c -> c = 'p' || c = 'v' || c = 'V') group then
+          options (lookup || String.contains group 'v' || String.contains group 'V') rest
+        else Error wrapper_syntax
+    | words -> Ok (lookup, words)
+  in
+  options false args
 
-(* [command] glues its lookup switches into one word ([-pv]): a group drawn
-   only from [p], [v] and [V] that names [v] or [V] only resolves a name. *)
-let is_command_lookup_group value =
-  let width = String.length value in
-  width > 2
-  && value.[0] = '-'
-  && String.for_all
-       (fun c -> c = 'p' || c = 'v' || c = 'V')
-       (String.sub value 1 (width - 1))
-  && (String.contains value 'v' || String.contains value 'V')
-
-let rec command_lookup = function
-  | w :: _ when w.fixed && (String.equal w.value "-v" || String.equal w.value "-V") ->
-      true
-  | w :: rest when w.fixed && String.equal w.value "-p" -> command_lookup rest
-  | w :: _ when w.fixed && is_command_lookup_group w.value -> true
-  | _ -> false
+let env_options args =
+  let switches, arguments = wrapper_options "env" in
+  let* words = option_prefix ~switches ~arguments args in
+  match words with
+  | word :: rest when word.fixed && word.value = "-" -> Ok rest
+  | _ -> Ok words
 
 let wrapped_command program args =
-  if String.equal program "command" && command_lookup args then Ok []
+  if String.equal program "command" then
+    let* lookup, words = command_arguments args in
+    Ok (if lookup then [] else words)
   else
     let switches, arguments = wrapper_options program in
-    let* words = option_prefix ~switches ~arguments args in
+    let* words =
+      if program = "env" then env_options args
+      else option_prefix ~switches ~arguments args
+    in
     match (program, words) with
     | "env", _ -> env_command words
     | "flock", _ :: mode :: _ when is_option mode -> Error wrapper_syntax
@@ -1392,13 +1389,7 @@ and wrapped sink ~depth program args =
   | Error reason ->
       review sink reason;
       (if program = "env" then
-         let args =
-           match args with
-           | word :: rest when word.fixed && word.value = "-" -> rest
-           | _ -> args
-         in
-         let switches, arguments = wrapper_options program in
-         match option_prefix ~switches ~arguments args with
+         match env_options args with
          | Error _ -> ()
          | Ok words ->
              let rec assignments = function
@@ -1625,10 +1616,10 @@ and exec_commands sink ~depth program flags args =
       when program = "find" && flag.fixed && flag.value = "-fprintf" ->
         if not (file.single && format.single) then review sink computed_program;
         scan ~ambiguous_checked rest
+    | word :: rest when program = "fd" && word.fixed && fd_attached_data word.value ->
+        scan ~ambiguous_checked rest
     | flag :: operand :: rest when flag.fixed && List.mem flag.value data_flags ->
         if not operand.single then review sink computed_program;
-        scan ~ambiguous_checked rest
-    | word :: rest when program = "fd" && word.fixed && fd_attached_data word.value ->
         scan ~ambiguous_checked rest
     | word :: rest when program = "fd" && word.fixed && word.value = "--" ->
         if List.exists (fun word -> not word.single) rest then
@@ -1716,38 +1707,57 @@ let rec drain sink =
       analyze sink ~depth words;
       drain sink
 
+type cmd_item = Cmd_word of word * string | Cmd_group of string
+
 type cmd_state = {
   chars : Buffer.t;
   mutable computed : bool;
   mutable started : bool;
   mutable awaiting_target : bool;
   mutable in_quotes : bool;
-  mutable segment : word list;
+  mutable start : int;
+  mutable segment : cmd_item list;
 }
 
-let end_cmd_word sink st =
+let cmd_space = function
+  | ' ' | '\t' | ',' | ';' | '=' | '\011' | '\012' -> true
+  | _ -> false
+
+let cmd_value = function Cmd_word (word, _) -> Some word | Cmd_group _ -> None
+
+let cmd_source = function
+  | Cmd_word (_, source) -> source
+  | Cmd_group source -> "(" ^ source ^ ")"
+
+let cmd_text items = String.concat " " (List.map cmd_source items)
+let cmd_lower word = String.lowercase_ascii word.value
+
+let end_cmd_word sink st source index =
   if st.started || Buffer.length st.chars > 0 then (
     let value = Buffer.contents st.chars in
     sink.words <- value :: sink.words;
     if st.awaiting_target then st.awaiting_target <- false
     else
-      st.segment <-
+      let raw = String.sub source st.start (index - st.start) in
+      let word =
         {
           value;
           fixed = not st.computed;
-          unquoted = true;
+          unquoted = not (String.contains raw '"');
           assignment = false;
           single = not st.computed;
         }
-        :: st.segment);
+      in
+      st.segment <- Cmd_word (word, raw) :: st.segment);
   Buffer.clear st.chars;
   st.computed <- false;
   st.started <- false
 
 let cmd_redirect sink st source index =
-  if is_all_digits (Buffer.contents st.chars) && not st.computed then
-    Buffer.clear st.chars
-  else end_cmd_word sink st;
+  if is_all_digits (Buffer.contents st.chars) && not st.computed then (
+    Buffer.clear st.chars;
+    st.started <- false)
+  else end_cmd_word sink st source index;
   st.awaiting_target <- true;
   let length = String.length source in
   let next = index + 1 in
@@ -1762,8 +1772,112 @@ let cmd_quoted st c =
       Buffer.add_char st.chars c
   | _ -> Buffer.add_char st.chars c
 
+let cmd_for_file_mode items =
+  List.exists
+    (function Cmd_word (word, _) -> String.equal (cmd_lower word) "/f" | _ -> false)
+    items
+
+let cmd_group source start ~file_source =
+  let length = String.length source in
+  let rec first index =
+    if index < length && cmd_space source.[index] then first (index + 1) else index
+  in
+  let first = first (start + 1) in
+  let source_quote =
+    if file_source && first < length then
+      match source.[first] with ('\'' | '`') as quote -> Some (first, quote) | _ -> None
+    else None
+  in
+  let rec loop index level quoted =
+    if index >= length then None
+    else
+      match quoted with
+      | Some quote ->
+          if source.[index] = quote then loop (index + 1) level None
+          else loop (index + 1) level quoted
+      | None -> (
+          if source_quote = Some (index, source.[index]) || source.[index] = '"' then
+            loop (index + 1) level (Some source.[index])
+          else
+            match source.[index] with
+            | '^' -> loop (index + 2) level None
+            | '(' -> loop (index + 1) (level + 1) None
+            | ')' ->
+                if level = 1 then
+                  Some (String.sub source (start + 1) (index - start - 1), index + 1)
+                else loop (index + 1) (level - 1) None
+            | _ -> loop (index + 1) level None)
+  in
+  loop (start + 1) 1 None
+
+let cmd_for_variable value =
+  let length = String.length value in
+  let index = if length > 1 && value.[0] = '%' && value.[1] = '%' then 2 else 1 in
+  length = index + 1
+  && value.[0] = '%'
+  && match value.[index] with 'a' .. 'z' | 'A' .. 'Z' -> true | _ -> false
+
+let cmd_for_options options =
+  let flag name word =
+    word.fixed && word.unquoted && String.equal (cmd_lower word) name
+  in
+  match options with
+  | [] -> true
+  | [ word ] -> List.exists (fun name -> flag name word) [ "/d"; "/r"; "/l"; "/f" ]
+  | [ mode; root ] when flag "/r" mode -> root.fixed
+  | [ mode; keywords ] when flag "/f" mode -> keywords.fixed && not keywords.unquoted
+  | [ directories; recursive ] -> flag "/d" directories && flag "/r" recursive
+  | [ directories; recursive; root ] ->
+      flag "/d" directories && flag "/r" recursive && root.fixed
+  | _ -> false
+
+let cmd_for_header items =
+  let words = List.filter_map cmd_value items in
+  if List.length words <> List.length items then None
+  else
+    match List.rev words with
+    | keyword :: variable :: options
+      when keyword.fixed && keyword.unquoted
+           && String.equal (cmd_lower keyword) "in"
+           && cmd_for_variable variable.value ->
+        let options = List.rev options in
+        if cmd_for_options options then Some options else None
+    | _ -> None
+
+let cmd_for_data sink source =
+  let chars = Buffer.create (String.length source) in
+  let rec loop index quoted =
+    if index < String.length source then
+      match source.[index] with
+      | '"' -> loop (index + 1) (not quoted)
+      | '^' when (not quoted) && index + 1 < String.length source ->
+          Buffer.add_char chars source.[index + 1];
+          loop (index + 2) quoted
+      | ('%' | '!') as c ->
+          review sink computed_code;
+          Buffer.add_char chars c;
+          loop (index + 1) quoted
+      | c ->
+          Buffer.add_char chars c;
+          loop (index + 1) quoted
+  in
+  loop 0 false;
+  sink.words <- Buffer.contents chars :: sink.words
+
+let cmd_payload source =
+  let source = String.trim source in
+  if String.length source > 0 && source.[0] = '"' then
+    match String.rindex_opt source '"' with
+    | Some last when last > 0 ->
+        String.sub source 1 (last - 1)
+        ^ String.sub source (last + 1) (String.length source - last - 1)
+    | _ -> source
+  else source
+
 let rec parse_cmd sink ~depth source =
-  if depth > max_depth then review sink too_deep
+  if depth > max_depth then (
+    review sink too_deep;
+    false)
   else
     let st =
       {
@@ -1772,114 +1886,207 @@ let rec parse_cmd sink ~depth source =
         started = false;
         awaiting_target = false;
         in_quotes = false;
+        start = 0;
         segment = [];
       }
     in
     let length = String.length source in
-    let rec loop index =
-      if index >= length then end_segment sink ~depth st
+    let rec loop index any =
+      if index >= length then (
+        if st.in_quotes then review sink (unreadable "an unclosed Cmd quote");
+        let found = end_segment sink ~depth st source length in
+        any || found)
       else if st.in_quotes then (
         cmd_quoted st source.[index];
-        loop (index + 1))
-      else loop (cmd_char sink ~depth st source index)
+        loop (index + 1) any)
+      else
+        let next, found = cmd_char sink ~depth st source index in
+        loop next (any || found)
     in
-    loop 0
+    loop 0 false
 
 and cmd_char sink ~depth st source index =
+  let begin_word () =
+    if not st.started then (
+      st.start <- index;
+      st.started <- true)
+  in
   match source.[index] with
   | '"' ->
+      begin_word ();
       st.in_quotes <- true;
-      st.started <- true;
-      index + 1
+      (index + 1, false)
   | '^' ->
+      begin_word ();
       (if index + 1 < String.length source then
          match source.[index + 1] with
          | '\n' | '\r' -> ()
          | next -> Buffer.add_char st.chars next);
-      index + 2
+      (min (index + 2) (String.length source), false)
   | ('%' | '!') as c ->
+      begin_word ();
       st.computed <- true;
       Buffer.add_char st.chars c;
-      index + 1
-  | ' ' | '\t' | ',' | ';' | '=' | '\011' | '\012' ->
-      end_cmd_word sink st;
-      index + 1
-  | '&' | '|' | '(' | ')' | '\n' | '\r' ->
-      end_segment sink ~depth st;
-      index + 1
-  | '<' | '>' -> cmd_redirect sink st source index
+      (index + 1, false)
+  | c when cmd_space c ->
+      end_cmd_word sink st source index;
+      (index + 1, false)
+  | '(' -> (
+      end_cmd_word sink st source index;
+      let file_source =
+        match List.rev st.segment with
+        | Cmd_word (word, _) :: rest ->
+            String.equal
+              (strip_executable_suffix (basename (drop_leading '@' word.value)))
+              "for"
+            && cmd_for_file_mode rest
+        | _ -> false
+      in
+      match cmd_group source index ~file_source with
+      | None ->
+          review sink (unreadable "an unclosed Cmd group");
+          (String.length source, false)
+      | Some (group, next) ->
+          st.segment <- Cmd_group group :: st.segment;
+          (next, false))
+  | ')' ->
+      review sink (unreadable "an unmatched Cmd parenthesis");
+      (index + 1, end_segment sink ~depth st source index)
+  | '&' | '|' | '\n' | '\r' -> (index + 1, end_segment sink ~depth st source index)
+  | '<' | '>' -> (cmd_redirect sink st source index, false)
   | c ->
+      begin_word ();
       Buffer.add_char st.chars c;
-      index + 1
+      (index + 1, false)
 
-and end_segment sink ~depth st =
-  end_cmd_word sink st;
-  let words = List.rev st.segment in
+and end_segment sink ~depth st source index =
+  end_cmd_word sink st source index;
+  let items = List.rev st.segment in
   st.segment <- [];
+  if st.awaiting_target then review sink (unreadable "a missing Cmd redirection target");
   st.awaiting_target <- false;
-  analyze_cmd sink ~depth words
+  analyze_cmd sink ~depth items
 
 and for_command sink ~depth args =
-  let folded = List.map (fun w -> String.lowercase_ascii w.value) args in
-  (* The body delimiter is the first [do] after the loop set closes: a word
-     before the set (such as the directory in [for /r do ...]) is data, not
-     the delimiter. A bare [for] with no header at all names no loop, so it
-     leaves [for_open] alone the way an uppercase [FOR] already does. *)
-  let rec after_do seen_close = function
+  let rec split header = function
+    | Cmd_group source :: body -> Some (List.rev header, source, body)
+    | item :: rest -> split (item :: header) rest
     | [] -> None
-    | w :: rest ->
-        if seen_close && String.equal (String.lowercase_ascii w.value) "do" then Some rest
-        else after_do (seen_close || String.contains w.value ')') rest
   in
-  if List.mem "/f" folded then review sink for_command_source
-  else
-    match after_do false args with
-    | Some body -> analyze_cmd sink ~depth body
-    | None -> if args <> [] then sink.for_open <- true
+  match split [] args with
+  | None ->
+      review sink for_without_do;
+      false
+  | Some (header, source, body) -> (
+      match cmd_for_header header with
+      | None ->
+          review sink (unreadable "a for loop header");
+          false
+      | Some options -> (
+          cmd_for_data sink source;
+          if cmd_for_file_mode header then (
+            let keywords =
+              List.concat_map
+                (fun word ->
+                  String.split_on_char ' ' (String.lowercase_ascii word.value)
+                  |> List.concat_map (String.split_on_char '\t'))
+                options
+            in
+            (* Cmd also accepts attached keywords. Keep those unparsed forms
+                behind review instead of assuming the default quote mode. *)
+            if
+              List.exists
+                (fun keyword ->
+                  keyword <> "usebackq"
+                  && (not (String.starts_with ~prefix:"delims=" keyword))
+                  && contains_substring ~needle:"usebackq" keyword)
+                keywords
+            then review sink (unreadable "attached for /f options");
+            let usebackq = List.mem "usebackq" keywords in
+            let source = String.trim source in
+            let quote = if usebackq then '`' else '\'' in
+            if String.length source > 0 && source.[0] = quote then
+              review sink for_command_source);
+          match body with
+          | Cmd_word (word, _) :: rest
+            when word.fixed && word.unquoted && String.equal (cmd_lower word) "do" ->
+              if analyze_cmd sink ~depth:(depth + 1) rest then true
+              else (
+                review sink (unreadable "a for loop without a body");
+                false)
+          | _ ->
+              review sink for_without_do;
+              false))
 
-and analyze_cmd sink ~depth = function
-  | [] -> ()
-  | name :: args ->
-      if not name.fixed then review sink computed_program
-      else
-        let base = basename (drop_leading '@' name.value) in
-        let program = strip_executable_suffix base in
-        check_executable sink base program args;
-        (* A [for] header names its loop variable and set, neither of which is
-           code: [%f] and [%%f] expand to file names, and the set is data. The
-           body after [do] is the command, analysed as one unit so an argument
-           holding a loop variable is not read as a program. A header without
-           [do] leaves [for_open] set, so a loop whose body never arrives stays
-           under review. A [/f] header can read a command source the scanner
-           does not parse, so it stays under review. *)
-        if String.equal program "for" then for_command sink ~depth args
-        else if String.equal program "do" then (
-          sink.for_open <- false;
-          analyze_cmd sink ~depth args)
-        else if List.mem program cmd_runners then
-          List.iter
-            (fun w ->
-              if w.fixed then parse_cmd sink ~depth:(depth + 1) w.value
-              else review sink computed_program)
-            args
+and analyze_cmd sink ~depth items =
+  if depth > max_depth then (
+    review sink too_deep;
+    false)
+  else
+    match items with
+    | [] -> false
+    | Cmd_group source :: rest ->
+        let found = parse_cmd sink ~depth:(depth + 1) source in
+        let following = analyze_cmd sink ~depth rest in
+        found || following
+    | Cmd_word (name, _) :: args ->
+        if not name.fixed then (
+          review sink computed_program;
+          true)
+        else
+          let base = basename (drop_leading '@' name.value) in
+          let prog = strip_executable_suffix base in
+          check_executable sink base prog (List.filter_map cmd_value args);
+          if String.equal prog "for" then for_command sink ~depth args
+          else if String.equal prog "cmd" then
+            let rec payload = function
+              | [] -> None
+              | Cmd_word (word, _) :: rest
+                when word.fixed && List.mem (cmd_lower word) [ "/c"; "/k" ] ->
+                  Some rest
+              | Cmd_word (word, _) :: rest when word.fixed -> payload rest
+              | _ ->
+                  review sink computed_code;
+                  None
+            in
+            match payload args with
+            | Some rest ->
+                List.iter
+                  (function
+                    | Cmd_word (word, _) when not word.fixed -> review sink computed_code
+                    | Cmd_word _ | Cmd_group _ -> ())
+                  rest;
+                if not (parse_cmd sink ~depth:(depth + 1) (cmd_payload (cmd_text rest)))
+                then review sink (unreadable "an empty Cmd payload");
+                true
+            | None -> true
+          else if List.mem prog [ "do"; "else" ] then
+            analyze_cmd sink ~depth:(depth + 1) args
+          else (
+            if List.mem prog cmd_runners then
+              List.iter
+                (function
+                  | Cmd_word (word, _) ->
+                      if word.fixed then
+                        ignore (parse_cmd sink ~depth:(depth + 1) word.value)
+                      else review sink computed_program
+                  | Cmd_group source -> ignore (parse_cmd sink ~depth:(depth + 1) source))
+                args
+            else
+              List.iter
+                (function
+                  | Cmd_group source -> ignore (parse_cmd sink ~depth:(depth + 1) source)
+                  | Cmd_word _ -> ())
+                args;
+            true)
 
 let screen dialect command =
-  let sink =
-    {
-      words = [];
-      commands = [];
-      reviews = [];
-      refused_executable = None;
-      for_open = false;
-    }
-  in
+  let sink = { words = []; commands = []; reviews = []; refused_executable = None } in
   (match dialect with
   | Posix ->
       parse_source sink ~depth:0 command;
       drain sink
-  | Cmd ->
-      parse_cmd sink ~depth:0 command;
-      if sink.for_open then review sink for_without_do);
+  | Cmd -> ignore (parse_cmd sink ~depth:0 command));
   let names text = List.map basename (fragments dialect text) in
   match refused (names command) with
   | Some program -> Blocked program
