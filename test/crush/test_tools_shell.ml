@@ -445,6 +445,9 @@ let test_find_data_slots () =
       ("find . -name $pattern -print", "review");
       ("find $dir -print", "review");
       ({|find . -name "$@" -print|}, "review");
+      ({|find . -name "${@}" -print|}, "review");
+      ({|find . -name "${@:1}" -print|}, "review");
+      ({|find . -name "${!prefix@}" -print|}, "review");
       ({|find . "$flag" sh -c 'printf executed' \;|}, "review");
       ({|fd "$flag" sh -c 'printf executed'|}, "review");
       ({|fd -- "$pattern"|}, "clear");

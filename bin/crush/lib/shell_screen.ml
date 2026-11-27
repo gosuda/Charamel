@@ -922,10 +922,20 @@ and parameter lx scratch ~literal_apostrophe =
       let* () = backquoted lx scratch ~in_double:literal_apostrophe in
       parameter lx scratch ~literal_apostrophe
   | Some c ->
-      (* [${words[@]}] expands to one word per element even when quoted, so a
-         word holding it is never a proven single argument. *)
-      if c = '@' && lx.pos > 0 && lx.source.[lx.pos - 1] = '[' then
-        scratch.is_single <- false;
+      (* [${@}], [${@:n}] and [${!prefix@}] expand to one word per element
+         even when quoted, as does [${words[@]}]: a word holding any of them
+         is never a proven single argument. A trailing [@] after a plain name
+         ([${var@Q}]) only transforms one value, so it stays single. *)
+      if c = '@' && lx.pos > 0 then (
+        let prev = lx.source.[lx.pos - 1] in
+        if prev = '[' || prev = '{' then scratch.is_single <- false
+        else
+          let start = ref (lx.pos - 1) in
+          while !start >= 0 && is_name_char lx.source.[!start] do
+            decr start
+          done;
+          if !start >= 1 && lx.source.[!start] = '!' && lx.source.[!start - 1] = '{' then
+            scratch.is_single <- false);
       advance lx 1;
       parameter lx scratch ~literal_apostrophe
 
