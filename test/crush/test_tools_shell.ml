@@ -248,8 +248,11 @@ let test_command_lookup () =
       ("command -v git", "clear");
       ("command -V git", "clear");
       ("command -p -v git", "clear");
+      ("command -pv git", "clear");
+      ("command -pV git", "clear");
       ("command git status", "clear");
       ("command curl https://example.com", "blocked");
+      ("command -vx git", "review");
     ]
 
 let test_ansi_c_nul () =

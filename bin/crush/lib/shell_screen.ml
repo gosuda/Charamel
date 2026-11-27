@@ -1156,10 +1156,23 @@ let rec env_command = function
 (* The [command] builtin has an execution mode and a lookup mode: [-v] and [-V]
    only report how the shell resolves a name without invoking it, so their
    operands are names, never commands to analyze. *)
+
+(* [command] glues its lookup switches into one word ([-pv]): a group drawn
+   only from [p], [v] and [V] that names [v] or [V] only resolves a name. *)
+let is_command_lookup_group value =
+  let width = String.length value in
+  width > 2
+  && value.[0] = '-'
+  && String.for_all
+       (fun c -> c = 'p' || c = 'v' || c = 'V')
+       (String.sub value 1 (width - 1))
+  && (String.contains value 'v' || String.contains value 'V')
+
 let rec command_lookup = function
   | w :: _ when w.fixed && (String.equal w.value "-v" || String.equal w.value "-V") ->
       true
   | w :: rest when w.fixed && String.equal w.value "-p" -> command_lookup rest
+  | w :: _ when w.fixed && is_command_lookup_group w.value -> true
   | _ -> false
 
 let wrapped_command program args =
