@@ -527,6 +527,8 @@ let screen_table =
        target after it belongs to the outer command, even when it holds
        separators or parentheses. *)
     cmd "cmd /d /c \"echo ready\" > \"capture (sales & support).txt\"" `Clear;
+    cmd "cmd /d /c \"echo (ready)\" > \"cap (x&y).txt\"" `Clear;
+    cmd "cmd /d /c \"echo key=value\" > capture.txt" `Clear;
     cmd "cmd /d /c 2>capture.txt echo key=value" `Clear;
     cmd "cmd /d /c =,;echo key=value" `Clear;
     cmd "cmd /d /c for %i in (alpha) do @echo(" `Review;
@@ -816,6 +818,19 @@ let test_cmd_echo_permissions () =
         "cmd /d /c echo(";
         "(echo( & echo ready)";
         "for %i in (alpha beta) do @echo(";
+      ];
+    (* The approval covers the exact bytes the shell prints: a payload
+       regression that keeps the verdict would still change this text. *)
+    List.iter
+      (fun (command, needle) ->
+        let output = output_or_fail (run_command ctx command) in
+        Alcotest.(check bool)
+          ("approved echo prints its payload: " ^ command)
+          true
+          (Test_support.contains ~needle ~haystack:output.Tool.content))
+      [
+        ("cmd /d /c echo key=value", "key=value");
+        ("cmd /d /c echo key value", "key value");
       ];
     List.iter
       (fun command ->
