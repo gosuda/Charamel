@@ -566,6 +566,326 @@ let test_screen_table () =
   in
   Alcotest.(check (list string)) "every command gets its expected verdict" [] mismatched
 
+let cmd_payload_cases =
+  [
+    ( "nested_equal",
+      "cmd /d /c echo key=value",
+      "clear",
+      [ "cmd /d /c echo key=value"; "echo key=value" ] );
+    ( "nested_equal_spaced",
+      "cmd /d /c echo key value",
+      "clear",
+      [ "cmd /d /c echo key value"; "echo key value" ] );
+    ( "nested_punctuation",
+      "cmd /d /c echo first,,second;;third=last",
+      "clear",
+      [ "cmd /d /c echo first,,second;;third=last"; "echo first,,second;;third=last" ] );
+    ( "nested_punctuation_spaced",
+      "cmd /d /c echo first second third last",
+      "clear",
+      [ "cmd /d /c echo first second third last"; "echo first second third last" ] );
+    ( "nested_tab",
+      "cmd /d /c echo key\tvalue",
+      "clear",
+      [ "cmd /d /c echo key\tvalue"; "echo key\tvalue" ] );
+    ( "nested_tab_spaced",
+      "cmd /d /c echo key value",
+      "clear",
+      [ "cmd /d /c echo key value"; "echo key value" ] );
+    ("nested_blank", "cmd /d /c echo(", "clear", [ "cmd /d /c echo("; "echo(" ]);
+    ( "nested_quoted_blank",
+      "cmd /d /c \"echo(\"",
+      "clear",
+      [ "cmd /d /c \"echo(\""; "echo(" ] );
+    ( "nested_double_blank",
+      "cmd /d /c cmd /d /c echo(",
+      "clear",
+      [ "cmd /d /c cmd /d /c echo("; "cmd /d /c echo("; "echo(" ] );
+    ( "nested_quoted_equal",
+      "cmd /d /c \"echo key=value\"",
+      "clear",
+      [ "cmd /d /c \"echo key=value\""; "echo key=value" ] );
+    ( "nested_double_equal",
+      "cmd /d /c cmd /d /c echo key=value",
+      "clear",
+      [
+        "cmd /d /c cmd /d /c echo key=value"; "cmd /d /c echo key=value"; "echo key=value";
+      ] );
+    ( "nested_for_equal",
+      "cmd /d /c for /f \"delims==\" %i in (\"key=value\") do @echo %i",
+      "review",
+      [
+        "cmd /d /c for /f \"delims==\" %i in (\"key=value\") do @echo %i";
+        "for /f \"delims==\" %i in (\"key=value\") do @echo %i";
+      ] );
+    ( "nested_redirect_equal",
+      "cmd /d /c echo key=value>capture.txt",
+      "clear",
+      [ "cmd /d /c echo key=value>capture.txt"; "echo key=value" ] );
+    ( "nested_redirect_prefix",
+      "cmd /d /c 2>capture.txt echo key=value",
+      "clear",
+      [ "cmd /d /c 2>capture.txt echo key=value"; "echo key=value" ] );
+    ( "nested_prefix_separators",
+      "cmd /d /c =,;echo key=value",
+      "clear",
+      [ "cmd /d /c =,;echo key=value"; "=,;echo key=value" ] );
+    ( "nested_loop_blank",
+      "cmd /d /c for %i in (alpha) do @echo(",
+      "review",
+      [ "cmd /d /c for %i in (alpha) do @echo("; "for %i in (alpha) do @echo(" ] );
+    ( "trailing_plain",
+      "cmd /d /c echo key=value  ",
+      "clear",
+      [ "cmd /d /c echo key=value  "; "echo key=value  " ] );
+    ( "trailing_trimmed_control",
+      "cmd /d /c echo key=value",
+      "clear",
+      [ "cmd /d /c echo key=value"; "echo key=value" ] );
+    ( "leading_plain",
+      "cmd /d /c   echo key=value",
+      "clear",
+      [ "cmd /d /c   echo key=value"; "echo key=value" ] );
+    ( "quoted_trailing_outside",
+      "cmd /d /c \"echo key=value\"  ",
+      "clear",
+      [ "cmd /d /c \"echo key=value\"  "; "echo key=value  " ] );
+    ( "quoted_trailing_inside",
+      "cmd /d /c \"echo key=value  \"",
+      "clear",
+      [ "cmd /d /c \"echo key=value  \""; "echo key=value  " ] );
+    ( "prefix_trailing",
+      "cmd /d /c =,;echo key=value  ",
+      "clear",
+      [ "cmd /d /c =,;echo key=value  "; "=,;echo key=value  " ] );
+    ( "for-body-source-offset",
+      "for %i in (alpha) do cmd /d /c echo key=value",
+      "clear",
+      [ "for %i in (alpha) do cmd /d /c echo key=value"; "echo key=value" ] );
+    ( "group-local-source-offset",
+      "(cmd /d /c echo key=value)",
+      "clear",
+      [ "(cmd /d /c echo key=value)"; "cmd /d /c echo key=value"; "echo key=value" ] );
+    ( "reported_quoted_outer",
+      "cmd /d /c \"echo ready\" > \"capture (sales & support).txt\"",
+      "clear",
+      [ "cmd /d /c \"echo ready\" > \"capture (sales & support).txt\""; "echo ready " ] );
+    ( "quoted_outer_stderr",
+      "cmd /d /c \"echo ready\" 2> \"capture (sales & support).txt\"",
+      "clear",
+      [ "cmd /d /c \"echo ready\" 2> \"capture (sales & support).txt\""; "echo ready " ]
+    );
+    ( "quoted_outer_both",
+      "cmd /d /c \"echo ready\" > \"capture (sales & support).txt\" 2>&1",
+      "clear",
+      [
+        "cmd /d /c \"echo ready\" > \"capture (sales & support).txt\" 2>&1"; "echo ready ";
+      ] );
+    ( "quoted_outer_append",
+      "cmd /d /c \"echo ready\" >> \"capture (sales & support).txt\"",
+      "clear",
+      [ "cmd /d /c \"echo ready\" >> \"capture (sales & support).txt\""; "echo ready " ]
+    );
+    ( "redirect_before_payload",
+      "cmd /d /c > \"capture (sales & support).txt\" \"echo ready\"",
+      "clear",
+      [ "cmd /d /c > \"capture (sales & support).txt\" \"echo ready\""; "echo ready" ] );
+    ( "redirect_before_switch",
+      "cmd > \"capture (sales & support).txt\" /d /c \"echo ready\"",
+      "clear",
+      [ "cmd > \"capture (sales & support).txt\" /d /c \"echo ready\""; "echo ready" ] );
+    ( "quoted_inner",
+      "cmd /d /c \"echo ready>capture.txt\"",
+      "clear",
+      [ "cmd /d /c \"echo ready>capture.txt\""; "echo ready>capture.txt" ] );
+    ( "inner_plus_outer",
+      "cmd /d /c \"echo ready>capture.txt\" > \"capture (sales & support).txt\"",
+      "clear",
+      [
+        "cmd /d /c \"echo ready>capture.txt\" > \"capture (sales & support).txt\"";
+        "echo ready>capture.txt ";
+      ] );
+    ( "quoted_literal_greater",
+      "cmd /d /c echo \"ready>text\"",
+      "clear",
+      [ "cmd /d /c echo \"ready>text\""; "echo \"ready>text\"" ] );
+    ( "two_outer_targets",
+      "cmd /d /c \"echo ready\" > \"capture (sales & support).txt\" 2>error.txt",
+      "clear",
+      [
+        "cmd /d /c \"echo ready\" > \"capture (sales & support).txt\" 2>error.txt";
+        "echo ready ";
+      ] );
+    ( "following_command",
+      "cmd /d /c \"echo ready\" > \"capture (sales & support).txt\" & echo done",
+      "clear",
+      [
+        "cmd /d /c \"echo ready\" > \"capture (sales & support).txt\" & echo done";
+        "echo ready  ";
+      ] );
+    ( "grouped_outer",
+      "(cmd /d /c \"echo ready\" > \"capture (sales & support).txt\")",
+      "clear",
+      [
+        "(cmd /d /c \"echo ready\" > \"capture (sales & support).txt\")";
+        "cmd /d /c \"echo ready\" > \"capture (sales & support).txt\"";
+        "echo ready ";
+      ] );
+    ( "for_body_outer",
+      "for %I in (1) do cmd /d /c \"echo ready\" > \"capture (sales & support).txt\"",
+      "clear",
+      [
+        "for %I in (1) do cmd /d /c \"echo ready\" > \"capture (sales & support).txt\"";
+        "echo ready ";
+      ] );
+    ( "trailing_space_outer",
+      "cmd /d /c \"echo ready\"  > \"capture (sales & support).txt\"  ",
+      "clear",
+      [
+        "cmd /d /c \"echo ready\"  > \"capture (sales & support).txt\"  ";
+        "echo ready    ";
+      ] );
+    ( "echo_two_spaces",
+      "cmd /d /c echo ready >capture.txt  2>\"capture (sales & support).txt\"",
+      "clear",
+      [
+        "cmd /d /c echo ready >capture.txt  2>\"capture (sales & support).txt\"";
+        "echo ready ";
+      ] );
+    ( "echo_tab_gap",
+      "cmd /d /c echo ready >capture.txt\t2>\"capture (sales & support).txt\"",
+      "clear",
+      [
+        "cmd /d /c echo ready >capture.txt\t2>\"capture (sales & support).txt\"";
+        "echo ready ";
+      ] );
+    ( "echo_argument_between",
+      "cmd /d /c echo ready >capture.txt tail >\"capture (sales & support).txt\"",
+      "clear",
+      [
+        "cmd /d /c echo ready >capture.txt tail >\"capture (sales & support).txt\"";
+        "echo ready  tail ";
+      ] );
+    ( "echo_duplication_before",
+      "cmd /d /c echo ready 2>&1 >\"capture (sales & support).txt\"",
+      "clear",
+      [ "cmd /d /c echo ready 2>&1 >\"capture (sales & support).txt\""; "echo ready " ] );
+    ( "echo_comma_gap",
+      "cmd /d /c echo ready >capture.txt , 2>\"capture (sales & support).txt\"",
+      "clear",
+      [
+        "cmd /d /c echo ready >capture.txt , 2>\"capture (sales & support).txt\"";
+        "echo ready ";
+      ] );
+    ( "echo_quoted_digit",
+      "cmd /d /c echo \"2\">capture.txt",
+      "clear",
+      [ "cmd /d /c echo \"2\">capture.txt"; "echo \"2\"" ] );
+    ( "echo_quoted_digits",
+      "cmd /d /c echo \"12\">capture.txt",
+      "clear",
+      [ "cmd /d /c echo \"12\">capture.txt"; "echo \"12\"" ] );
+    ( "echo_two_digits",
+      "cmd /d /c echo 12>capture.txt",
+      "clear",
+      [ "cmd /d /c echo 12>capture.txt"; "echo 12" ] );
+    ( "echo_escaped_digit",
+      "cmd /d /c echo ^2>capture.txt",
+      "clear",
+      [ "cmd /d /c echo ^2>capture.txt"; "echo ^2" ] );
+    ( "echo_ordinary_digit",
+      "cmd /d /c echo 2>capture.txt",
+      "clear",
+      [ "cmd /d /c echo 2>capture.txt"; "echo " ] );
+  ]
+
+let cmd_quoted_filename_cases =
+  [
+    ( "quoted-type_reported",
+      "cmd /d /s /c \"type \"draft (for review).txt\"\"",
+      "clear",
+      [
+        "cmd /d /s /c \"type \"draft (for review).txt\"\"";
+        "type \"draft (for review).txt\"";
+      ] );
+    ( "quoted-type_without_s",
+      "cmd /d /c \"type \"draft (for review).txt\"\"",
+      "clear",
+      [
+        "cmd /d /c \"type \"draft (for review).txt\"\""; "type \"draft (for review).txt\"";
+      ] );
+    ( "quoted-type_plain_control",
+      "cmd /d /s /c \"type plain.txt\"",
+      "clear",
+      [ "cmd /d /s /c \"type plain.txt\""; "type plain.txt" ] );
+    ( "quoted-type_unwrapped_control",
+      "cmd /d /s /c type \"draft (for review).txt\"",
+      "clear",
+      [
+        "cmd /d /s /c type \"draft (for review).txt\""; "type \"draft (for review).txt\"";
+      ] );
+    ( "quoted-type_spaces",
+      "cmd /d /s /c \"type \"draft review.txt\"\"",
+      "clear",
+      [ "cmd /d /s /c \"type \"draft review.txt\"\""; "type \"draft review.txt\"" ] );
+    ( "quoted-type_outer_redirect",
+      "cmd /d /s /c \"type \"draft (for review).txt\"\" > \"capture (sales & \
+       support).txt\"",
+      "clear",
+      [
+        "cmd /d /s /c \"type \"draft (for review).txt\"\" > \"capture (sales & \
+         support).txt\"";
+        "type \"draft (for review).txt\" ";
+      ] );
+    ( "quoted-type_prefix_redirect",
+      "cmd > \"capture (sales & support).txt\" /d /s /c \"type \"draft (for \
+       review).txt\"\"",
+      "clear",
+      [
+        "cmd > \"capture (sales & support).txt\" /d /s /c \"type \"draft (for \
+         review).txt\"\"";
+        "type \"draft (for review).txt\"";
+      ] );
+    ( "quoted-type_inner_redirect",
+      "cmd /d /s /c \"type \"draft (for review).txt\">capture.txt\"",
+      "clear",
+      [
+        "cmd /d /s /c \"type \"draft (for review).txt\">capture.txt\"";
+        "type \"draft (for review).txt\">capture.txt";
+      ] );
+    ( "quoted-type_for_body",
+      "for %I in (1) do cmd /d /s /c \"type \"draft (for review).txt\"\"",
+      "clear",
+      [
+        "for %I in (1) do cmd /d /s /c \"type \"draft (for review).txt\"\"";
+        "type \"draft (for review).txt\"";
+      ] );
+  ]
+
+let check_cmd_payload_sources cases =
+  let kind = function
+    | Shell_screen.Clear -> "clear"
+    | Shell_screen.Blocked _ -> "blocked"
+    | Shell_screen.Review _ -> "review"
+  in
+  List.iter
+    (fun (label, command, expected_kind, expected_sources) ->
+      let verdict, sources = Shell_screen.For_test.screen_cmd command in
+      Alcotest.(check (list string))
+        ("exact Cmd parser inputs: " ^ label)
+        expected_sources sources;
+      Alcotest.(check string) ("Cmd verdict: " ^ label) expected_kind (kind verdict);
+      Alcotest.(check bool)
+        ("observation keeps the public verdict: " ^ label)
+        true
+        (verdict = Shell_screen.screen Shell_screen.Cmd command))
+    cases
+
+let test_cmd_payload_sources () = check_cmd_payload_sources cmd_payload_cases
+
+let test_cmd_quoted_filename_sources () =
+  check_cmd_payload_sources cmd_quoted_filename_cases
+
 let test_wrapper_operands () =
   check_posix_verdicts
     [
@@ -819,8 +1139,8 @@ let test_cmd_echo_permissions () =
         "(echo( & echo ready)";
         "for %i in (alpha beta) do @echo(";
       ];
-    (* The approval covers the exact bytes the shell prints: a payload
-       regression that keeps the verdict would still change this text. *)
+    (* Native output checks retain the execution contract. The separate
+       payload trace cases detect changes in the recursive screening text. *)
     List.iter
       (fun (command, needle) ->
         let output = output_or_fail (run_command ctx command) in
@@ -840,6 +1160,46 @@ let test_cmd_echo_permissions () =
       [
         "echo( & %COMSPEC% /d /c echo reviewed"; "(echo( & %COMSPEC% /d /c echo reviewed)";
       ])
+
+let test_cmd_redirection_permissions () =
+  if Sys.win32 then
+    await @@ with_ctx
+    @@ fun ctx ->
+    let capture = Filename.temp_file "capture (sales & support)" ".txt" in
+    Fun.protect
+      ~finally:(fun () -> Sys.remove capture)
+      (fun () ->
+        let command = Printf.sprintf "cmd /d /c \"echo ready\" > \"%s\"" capture in
+        let output = output_or_fail (run_command ctx command) in
+        Alcotest.(check bool) "literal redirection exits" false output.Tool.is_error;
+        let text = In_channel.with_open_bin capture In_channel.input_all in
+        Alcotest.(check string)
+          "outer redirection keeps the native trailing space" "ready \r\n" text)
+
+let test_cmd_quoted_filename_permissions () =
+  if Sys.win32 then
+    await @@ with_ctx
+    @@ fun ctx ->
+    let input = Filename.temp_file "draft (for review)" ".txt" in
+    Fun.protect
+      ~finally:(fun () -> Sys.remove input)
+      (fun () ->
+        let capture = Filename.temp_file "capture (quoted file)" ".txt" in
+        Fun.protect
+          ~finally:(fun () -> Sys.remove capture)
+          (fun () ->
+            let expected = "owned quoted filename fixture\r\n" in
+            Out_channel.with_open_bin input (fun channel ->
+                Out_channel.output_string channel expected);
+            let command =
+              Printf.sprintf "cmd /d /s /c \"type \"%s\"\" > \"%s\"" input capture
+            in
+            let output = output_or_fail (run_command ctx command) in
+            Alcotest.(check bool)
+              "quoted filename read exits without exact approval" false
+              output.Tool.is_error;
+            let actual = In_channel.with_open_bin capture In_channel.input_all in
+            Alcotest.(check string) "quoted filename bytes reach TYPE" expected actual))
 
 let test_foreground_capture () =
   await @@ with_ctx
@@ -940,6 +1300,14 @@ let cases =
       test_cmd_loop_permissions;
     Test_tools_test_support.case "Cmd echo approval boundary" `Quick
       test_cmd_echo_permissions;
+    Test_tools_test_support.case "Cmd payload source bytes" `Quick
+      test_cmd_payload_sources;
+    Test_tools_test_support.case "Cmd redirection approval boundary" `Quick
+      test_cmd_redirection_permissions;
+    Test_tools_test_support.case "Cmd quoted filename source bytes" `Quick
+      test_cmd_quoted_filename_sources;
+    Test_tools_test_support.case "Cmd quoted filename approval boundary" `Quick
+      test_cmd_quoted_filename_permissions;
     Test_tools_test_support.case "wrapper option and argument boundaries" `Quick
       test_wrapper_operands;
     Test_tools_test_support.case "xargs replacement positions" `Quick

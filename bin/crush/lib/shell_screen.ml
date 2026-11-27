@@ -1722,7 +1722,8 @@ type cmd_state = {
   chars : Buffer.t;
   mutable computed : bool;
   mutable started : bool;
-  mutable awaiting_target : bool;
+  mutable redirect_start : int option;
+  mutable redirects : (int * int) list;
   mutable in_quotes : bool;
   mutable start : int;
   mutable segment : cmd_item list;
@@ -1734,7 +1735,8 @@ let cmd_state () =
     chars = Buffer.create 16;
     computed = false;
     started = false;
-    awaiting_target = false;
+    redirect_start = None;
+    redirects = [];
     in_quotes = false;
     start = 0;
     segment = [];
@@ -1771,34 +1773,55 @@ let cmd_context_word context word =
         else if List.mem program [ "do"; "else" ] then Cmd_start
         else Cmd_arguments
 
+(* Consecutive redirects consume the separator gap between them as well. *)
+let cmd_redirect_span st source start stop =
+  let rec only_space index =
+    index >= start || (cmd_space source.[index] && only_space (index + 1))
+  in
+  st.redirects <-
+    (match st.redirects with
+    | (first, last) :: rest when last <= start && only_space last -> (first, stop) :: rest
+    | spans -> (start, stop) :: spans)
+
 let end_cmd_word sink st source index =
   if st.started || Buffer.length st.chars > 0 then (
     let value = Buffer.contents st.chars in
     sink.words <- value :: sink.words;
-    if st.awaiting_target then st.awaiting_target <- false
-    else
-      let raw = String.sub source st.start (index - st.start) in
-      let word =
-        {
-          value;
-          fixed = not st.computed;
-          unquoted = not (String.contains raw '"');
-          assignment = false;
-          single = not st.computed;
-        }
-      in
-      st.context <- cmd_context_word st.context word;
-      st.segment <- Cmd_word (word, index) :: st.segment);
+    match st.redirect_start with
+    | Some start ->
+        cmd_redirect_span st source start index;
+        st.redirect_start <- None
+    | None ->
+        let raw = String.sub source st.start (index - st.start) in
+        let word =
+          {
+            value;
+            fixed = not st.computed;
+            unquoted = not (String.contains raw '"');
+            assignment = false;
+            single = not st.computed;
+          }
+        in
+        st.context <- cmd_context_word st.context word;
+        st.segment <- Cmd_word (word, index) :: st.segment);
   Buffer.clear st.chars;
   st.computed <- false;
   st.started <- false
 
 let cmd_redirect sink st source index =
-  if is_all_digits (Buffer.contents st.chars) && not st.computed then (
+  (* Quoted, escaped and multi-digit words remain arguments. *)
+  let descriptor =
+    Option.is_none st.redirect_start
+    && index - st.start = 1
+    && is_all_digits (Buffer.contents st.chars)
+    && not st.computed
+  in
+  let start = if descriptor then st.start else index in
+  if descriptor then (
     Buffer.clear st.chars;
     st.started <- false)
   else end_cmd_word sink st source index;
-  st.awaiting_target <- true;
+  st.redirect_start <- Some start;
   let length = String.length source in
   let next = index + 1 in
   let next = if next < length && source.[next] = '>' then next + 1 else next in
@@ -1904,6 +1927,22 @@ let cmd_for_data sink source =
   loop 0 false;
   sink.words <- Buffer.contents chars :: sink.words
 
+(* Redirections already consumed by this Cmd level are absent from its child
+   command line. Keep every other byte, including spaces around those spans. *)
+let cmd_source_without_redirects source ~start ~end_pos redirects =
+  let output = Buffer.create (end_pos - start) in
+  let rec copy index = function
+    | [] -> Buffer.add_substring output source index (end_pos - index)
+    | (_, stop) :: rest when stop <= index -> copy index rest
+    | (first, _) :: _ when first >= end_pos -> copy index []
+    | (first, stop) :: rest ->
+        let first = max index first in
+        Buffer.add_substring output source index (first - index);
+        copy (min end_pos stop) rest
+  in
+  copy start redirects;
+  Buffer.contents output
+
 let cmd_payload source =
   let length = String.length source in
   let rec first index =
@@ -1916,20 +1955,11 @@ let cmd_payload source =
   let start = first 0 in
   let source = String.sub source start (length - start) in
   if String.length source > 0 && source.[0] = '"' then
-    (* The opening quote belongs to the nested payload, so its match is the
-       first quote that follows: the scanner leaves quotes exactly there.
-       A later quote starts an outer redirection target the outer scan
-       already screened, and stays in the tail. *)
-    let rec closing index =
-      if index >= String.length source then None
-      else if source.[index] = '"' then Some index
-      else closing (index + 1)
-    in
-    match closing 1 with
-    | Some last ->
+    match String.rindex_opt source '"' with
+    | Some last when last > 0 ->
         String.sub source 1 (last - 1)
         ^ String.sub source (last + 1) (String.length source - last - 1)
-    | None -> source
+    | _ -> source
   else source
 
 (* Group discovery uses the same word and Echo context as command screening.
@@ -1946,7 +1976,8 @@ let rec cmd_group source start ~nesting ~data ~file_source =
     let discard index =
       end_cmd_word ignored st source index;
       st.segment <- [];
-      st.awaiting_target <- false;
+      st.redirect_start <- None;
+      st.redirects <- [];
       st.context <- Cmd_start;
       false
     in
@@ -2028,7 +2059,8 @@ and cmd_char sink ~nesting ~finish st source index =
       Buffer.add_char st.chars c;
       (index + 1, false)
 
-let rec parse_cmd sink ~depth source =
+let rec parse_cmd sink ~trace ~depth source =
+  trace source;
   if depth > max_depth then (
     review sink too_deep;
     false)
@@ -2038,7 +2070,7 @@ let rec parse_cmd sink ~depth source =
     let rec loop index any =
       if index >= length then (
         if st.in_quotes then review sink (unreadable "an unclosed Cmd quote");
-        let found = end_segment sink ~depth st source length in
+        let found = end_segment sink ~trace ~depth st source length in
         any || found)
       else if st.in_quotes then (
         cmd_quoted st source.[index];
@@ -2046,23 +2078,26 @@ let rec parse_cmd sink ~depth source =
       else
         let next, found =
           cmd_char sink ~nesting:0
-            ~finish:(end_segment sink ~depth st source)
+            ~finish:(end_segment sink ~trace ~depth st source)
             st source index
         in
         loop next (any || found)
     in
     loop 0 false
 
-and end_segment sink ~depth st source index =
+and end_segment sink ~trace ~depth st source index =
   end_cmd_word sink st source index;
   let items = List.rev st.segment in
   st.segment <- [];
   st.context <- Cmd_start;
-  if st.awaiting_target then review sink (unreadable "a missing Cmd redirection target");
-  st.awaiting_target <- false;
-  analyze_cmd sink ~depth ~source ~end_pos:index items
+  if Option.is_some st.redirect_start then
+    review sink (unreadable "a missing Cmd redirection target");
+  st.redirect_start <- None;
+  let redirects = List.rev st.redirects in
+  st.redirects <- [];
+  analyze_cmd sink ~trace ~depth ~source ~end_pos:index ~redirects items
 
-and for_command sink ~depth ~source ~end_pos args =
+and for_command sink ~trace ~depth ~source ~end_pos ~redirects args =
   let rec split header = function
     | Cmd_group source :: body -> Some (List.rev header, source, body)
     | item :: rest -> split (item :: header) rest
@@ -2105,7 +2140,10 @@ and for_command sink ~depth ~source ~end_pos args =
           match body with
           | Cmd_word (word, _) :: rest
             when word.fixed && word.unquoted && String.equal (cmd_lower word) "do" ->
-              if analyze_cmd sink ~depth:(depth + 1) ~source ~end_pos rest then true
+              if
+                analyze_cmd sink ~trace ~depth:(depth + 1) ~source ~end_pos ~redirects
+                  rest
+              then true
               else (
                 review sink (unreadable "a for loop without a body");
                 false)
@@ -2113,7 +2151,7 @@ and for_command sink ~depth ~source ~end_pos args =
               review sink for_without_do;
               false))
 
-and analyze_cmd sink ~depth ~source ~end_pos items =
+and analyze_cmd sink ~trace ~depth ~source ~end_pos ~redirects items =
   if depth > max_depth then (
     review sink too_deep;
     false)
@@ -2121,8 +2159,8 @@ and analyze_cmd sink ~depth ~source ~end_pos items =
     match items with
     | [] -> false
     | Cmd_group group_source :: rest ->
-        let found = parse_cmd sink ~depth:(depth + 1) group_source in
-        let following = analyze_cmd sink ~depth ~source ~end_pos rest in
+        let found = parse_cmd sink ~trace ~depth:(depth + 1) group_source in
+        let following = analyze_cmd sink ~trace ~depth ~source ~end_pos ~redirects rest in
         found || following
     | Cmd_word (name, _) :: args ->
         if not name.fixed then (
@@ -2132,7 +2170,8 @@ and analyze_cmd sink ~depth ~source ~end_pos items =
           let base = basename (drop_leading '@' name.value) in
           let prog = strip_executable_suffix base in
           check_executable sink base prog (List.filter_map cmd_value args);
-          if String.equal prog "for" then for_command sink ~depth ~source ~end_pos args
+          if String.equal prog "for" then
+            for_command sink ~trace ~depth ~source ~end_pos ~redirects args
           else if String.equal prog "cmd" then
             let rec payload = function
               | [] -> None
@@ -2151,38 +2190,42 @@ and analyze_cmd sink ~depth ~source ~end_pos items =
                     | Cmd_word (word, _) when not word.fixed -> review sink computed_code
                     | Cmd_word _ | Cmd_group _ -> ())
                   rest;
-                let payload = String.sub source start (end_pos - start) in
-                if not (parse_cmd sink ~depth:(depth + 1) (cmd_payload payload)) then
-                  review sink (unreadable "an empty Cmd payload");
+                let payload =
+                  cmd_source_without_redirects source ~start ~end_pos redirects
+                in
+                if not (parse_cmd sink ~trace ~depth:(depth + 1) (cmd_payload payload))
+                then review sink (unreadable "an empty Cmd payload");
                 true
             | None -> true
           else if List.mem prog [ "do"; "else" ] then
-            analyze_cmd sink ~depth:(depth + 1) ~source ~end_pos args
+            analyze_cmd sink ~trace ~depth:(depth + 1) ~source ~end_pos ~redirects args
           else (
             if List.mem prog cmd_runners then
               List.iter
                 (function
                   | Cmd_word (word, _) ->
                       if word.fixed then
-                        ignore (parse_cmd sink ~depth:(depth + 1) word.value)
+                        ignore (parse_cmd sink ~trace ~depth:(depth + 1) word.value)
                       else review sink computed_program
-                  | Cmd_group source -> ignore (parse_cmd sink ~depth:(depth + 1) source))
+                  | Cmd_group source ->
+                      ignore (parse_cmd sink ~trace ~depth:(depth + 1) source))
                 args
             else
               List.iter
                 (function
-                  | Cmd_group source -> ignore (parse_cmd sink ~depth:(depth + 1) source)
+                  | Cmd_group source ->
+                      ignore (parse_cmd sink ~trace ~depth:(depth + 1) source)
                   | Cmd_word _ -> ())
                 args;
             true)
 
-let screen dialect command =
+let screen_with_cmd_trace ~trace dialect command =
   let sink = { words = []; commands = []; reviews = []; refused_executable = None } in
   (match dialect with
   | Posix ->
       parse_source sink ~depth:0 command;
       drain sink
-  | Cmd -> ignore (parse_cmd sink ~depth:0 command));
+  | Cmd -> ignore (parse_cmd sink ~trace ~depth:0 command));
   let names text = List.map basename (fragments dialect text) in
   match refused (names command) with
   | Some program -> Blocked program
@@ -2196,3 +2239,13 @@ let screen dialect command =
               match List.rev sink.reviews with
               | reason :: _ -> Review reason
               | [] -> Clear)))
+
+let screen dialect command = screen_with_cmd_trace ~trace:ignore dialect command
+
+module For_test = struct
+  let screen_cmd command =
+    let sources = ref [] in
+    let trace source = sources := source :: !sources in
+    let verdict = screen_with_cmd_trace ~trace Cmd command in
+    (verdict, List.rev !sources)
+end
