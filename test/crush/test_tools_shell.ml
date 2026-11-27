@@ -420,7 +420,10 @@ let test_wrapper_operands () =
       ({|env GROUP=$group ./cu''rl.exe --version|}, "blocked");
       ({|env GROUP=$group ./brew.exe install fixture|}, "blocked");
       ({|env - GROUP=$group ./brew.exe install fixture|}, "blocked");
+      ({|env -u UNUSED - ./brew.exe install fixture|}, "blocked");
+      ({|env GROUP=value - ./brew.exe install fixture|}, "blocked");
       ({|env "$target" printenv|}, "review");
+      ({|env GROUP="${@}" printf ready|}, "review");
       (* Clusters of no-operand xargs switches and the attached optional
          watch operand leave the command boundary unchanged. *)
       ({|printf 'a' | xargs -0r printf '%s'|}, "clear");

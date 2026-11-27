@@ -1151,6 +1151,9 @@ let rec env_command = function
   | w :: _ when (not w.fixed) && ((not w.assignment) || not w.single) ->
       Error computed_program
   | w :: rest when String.contains w.value '=' -> env_command rest
+  (* A lone [-] ends option processing like [--]: GNU [env] runs the command
+     after it whatever options came first, so it is skipped, never a program. *)
+  | w :: rest when w.fixed && String.equal w.value "-" -> env_command rest
   | words -> Ok words
 
 (* The [command] builtin has an execution mode and a lookup mode: [-v] and [-V]
@@ -1176,11 +1179,6 @@ let rec command_lookup = function
   | _ -> false
 
 let wrapped_command program args =
-  let args =
-    match (program, args) with
-    | "env", w :: rest when w.fixed && String.equal w.value "-" -> rest
-    | _ -> args
-  in
   if String.equal program "command" && command_lookup args then Ok []
   else
     let switches, arguments = wrapper_options program in
