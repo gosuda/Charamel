@@ -1821,17 +1821,21 @@ and end_segment sink ~depth st =
 
 and for_command sink ~depth args =
   let folded = List.map (fun w -> String.lowercase_ascii w.value) args in
-  let rec after_do = function
+  (* The body delimiter is the first [do] after the loop set closes: a word
+     before the set (such as the directory in [for /r do ...]) is data, not
+     the delimiter. A bare [for] with no header at all names no loop, so it
+     leaves [for_open] alone the way an uppercase [FOR] already does. *)
+  let rec after_do seen_close = function
     | [] -> None
     | w :: rest ->
-        if String.equal (String.lowercase_ascii w.value) "do" then Some rest
-        else after_do rest
+        if seen_close && String.equal (String.lowercase_ascii w.value) "do" then Some rest
+        else after_do (seen_close || String.contains w.value ')') rest
   in
   if List.mem "/f" folded then review sink for_command_source
   else
-    match after_do args with
+    match after_do false args with
     | Some body -> analyze_cmd sink ~depth body
-    | None -> sink.for_open <- true
+    | None -> if args <> [] then sink.for_open <- true
 
 and analyze_cmd sink ~depth = function
   | [] -> ()

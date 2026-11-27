@@ -373,6 +373,9 @@ let screen_table =
     posix "script -qc \"c''url\" /dev/null" `Blocked;
     posix "echo hi | xargs -I % % x" `Review;
     posix "cat <<EOF | sh\necho hi\nEOF" `Review;
+    cmd "cmd /c echo ready for review" `Clear;
+    cmd "cmd /c for %i in (*)" `Review;
+    cmd "for /r do %i in (*.txt) do echo %i" `Clear;
     cmd "for %f in (a.txt b.txt) do type \"%f\"" `Clear;
     cmd "for %%f in (a.txt b.txt) do type \"%%f\"" `Clear;
     cmd "for /l %i in (1,1,10) do @echo hi" `Clear;
